@@ -1,0 +1,37 @@
+{
+  "id": "ai-temperate",
+  "name": "ai-temperate",
+  "displayName": "AI Temperate",
+  "version": "1.0.0",
+  "description": "AI Temperate 认证与个人中心前端。",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:auth-email": "node --test pages/auth/email-validation.test.cjs",
+    "test:auth-country": "node --test pages/auth/phone-country-search.test.cjs pages/auth/phone-country-default.test.cjs pages/auth/phone-country-assets.test.cjs",
+    "test:auth-phone": "node --test pages/auth/phone-validation.test.cjs",
+    "test:auth-password": "node --test common/auth/password-policy.test.cjs common/auth/password-request-gate.test.cjs",
+    "test:auth-session": "node --test common/auth/browser-cookies.test.cjs common/auth/session-credentials.test.cjs common/auth/session-retry-policy.test.cjs common/auth/android-keystore.test.cjs",
+    "test:auth-https": "node --test common/auth/https-configuration.test.cjs",
+    "test:auth-guard": "node --test common/auth/protected-routes.test.cjs common/auth/page-guard-contract.test.cjs",
+    "test:auth-registration-flow": "node --test common/auth/registration-flow-policy.test.cjs common/auth/registration-flow-guard-contract.test.cjs",
+    "test:auth-turnstile": "node --test common/auth/turnstile-response-diagnostics.test.cjs pages/auth/turnstile-lifecycle.test.cjs",
+    "test:auth": "node --test pages/auth/email-validation.test.cjs pages/auth/phone-country-search.test.cjs pages/auth/phone-country-default.test.cjs pages/auth/phone-country-assets.test.cjs pages/auth/auth-ui-structure.test.cjs pages/auth/phone-delivery-method.test.cjs pages/auth/phone-validation.test.cjs pages/auth/turnstile-lifecycle.test.cjs common/auth/password-policy.test.cjs common/auth/password-request-gate.test.cjs common/auth/browser-cookies.test.cjs common/auth/session-credentials.test.cjs common/auth/session-retry-policy.test.cjs common/auth/android-keystore.test.cjs common/auth/https-configuration.test.cjs common/auth/protected-routes.test.cjs common/auth/page-guard-contract.test.cjs common/auth/turnstile-response-diagnostics.test.cjs common/auth/registration-flow-policy.test.cjs common/auth/registration-flow-guard-contract.test.cjs",
+    "test:profile": "node --test pages/account/profile/phone-presentation.test.cjs pages/account/profile/current-user-profile.test.cjs pages/account/profile/navigation-contract.test.cjs"
+  },
+  "keywords": [
+    "uni-app",
+    "authentication",
+    "account"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "libphonenumber-js": "1.13.8",
+    "validator": "13.15.35"
+  },
+  "engines": {
+    "HBuilderX": "^3.1.0",
+    "uni-app": "^4.03",
+    "uni-app-x": ""
+  }
+}

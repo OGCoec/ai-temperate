@@ -1,0 +1,33 @@
+# 本地 HTTPS Profile 只为开发机上的受信任 TLS 联调提供配置。
+server:
+  # 本地服务只监听回环地址，外部设备统一通过 Cloudflare Tunnel 访问。
+  address: 127.0.0.1
+  # Spring Boot 内置 Web 服务器的 TLS 配置。
+  ssl:
+    # 激活本 Profile 后，6655 端口只接受 HTTPS 连接。
+    enabled: true
+    # 本地证书文件固定放在当前用户目录，普通 IDE 启动时不再依赖路径环境变量。
+    key-store: "file:${user.home}/.ai-temperate/certs/local-https.p12"
+    # 本地证书库固定使用 PKCS12，与生成脚本输出的文件格式保持一致。
+    key-store-type: PKCS12
+    # 证书库密码必须由 DPAPI 启动器临时注入，禁止设置默认值。
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD}
+    # 本地服务器证书别名固定为生成脚本约定的开发证书别名。
+    key-alias: ai-temperate-local
+    # 本地联调仅允许当前安全基线支持的 TLS 协议版本。
+    enabled-protocols: TLSv1.3,TLSv1.2
+
+# 本地 HTTPS 联调使用独立的安全和 Redis Key 环境命名空间。
+app:
+  # 本机 HTTPS Profile 仅信任同机 Cloudflare Tunnel 的回环连接。
+  phone-country:
+    # 环境变量可以覆盖；默认只允许 IPv4 和 IPv6 回环代理提供真实客户端 IP。
+    trusted-proxy-ranges: "${AUTH_PHONE_COUNTRY_TRUSTED_PROXY_RANGES:127.0.0.1/32,::1/128}"
+  # 认证配置在本地 Profile 下允许显式 localhost 白名单。
+  security:
+    # LOCAL 环境不会套用禁止 localhost 的生产策略。
+    env: LOCAL
+  # 注册流程的 Redis Key 必须与生产命名空间隔离。
+  registration:
+    # 本地注册状态统一写入 local 环境段。
+    environment: LOCAL

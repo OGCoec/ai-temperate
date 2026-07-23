@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
+<properties>
+    <comment>AI 模型业务词典配置</comment>
+    <entry key="ext_dict">ik/ai-model.dic</entry>
+    <entry key="ext_stopwords">ik/ai-stopwords.dic</entry>
+</properties>

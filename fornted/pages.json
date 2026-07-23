@@ -1,0 +1,72 @@
+{
+	"pages": [
+		{
+			"path": "pages/launch/session-gate",
+			"style": {
+				"navigationBarTitleText": "正在启动",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/auth/login",
+			"style": {
+				"navigationBarTitleText": "登录",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/auth/register",
+			"style": {
+				"navigationBarTitleText": "注册",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/auth/password-reset",
+			"style": {
+				"navigationBarTitleText": "找回密码",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/account/profile",
+			"style": {
+				"navigationBarTitleText": "个人",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c"
+			}
+		}
+	],
+	"globalStyle": {
+		"pageOrientation": "portrait",
+		"navigationBarTitleText": "AI Temperate",
+		"navigationBarTextStyle": "white",
+		"navigationBarBackgroundColor": "#0b0d0c",
+		"backgroundColor": "#0b0d0c",
+		"backgroundColorTop": "#0b0d0c",
+		"backgroundColorBottom": "#0b0d0c",
+		"h5": {
+			"maxWidth": 1190,
+			"navigationBarTextStyle": "white",
+			"navigationBarBackgroundColor": "#0b0d0c"
+		}
+	}
+}

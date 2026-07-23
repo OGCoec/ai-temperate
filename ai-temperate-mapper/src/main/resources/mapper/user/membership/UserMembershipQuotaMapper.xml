@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper">
+
+    <resultMap id="UserMembershipQuotaResultMap"
+               type="com.example.temperate.model.user.entity.UserMembershipQuota">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="membershipTier" column="membership_tier"/>
+        <result property="quotaBalanceMinor" column="quota_balance_minor"/>
+    </resultMap>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.user.entity.UserMembershipQuota"
+            useGeneratedKeys="true"
+            keyProperty="id"
+            keyColumn="id">
+        INSERT INTO user_membership_quota (
+            login_identity_id
+        )
+        VALUES (
+            #{loginIdentityId,jdbcType=BIGINT}
+        )
+    </insert>
+
+    <select id="findByLoginIdentityId"
+            resultMap="UserMembershipQuotaResultMap">
+        SELECT
+            id,
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor
+        FROM user_membership_quota
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+</mapper>

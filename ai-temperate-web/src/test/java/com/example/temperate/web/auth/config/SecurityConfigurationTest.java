@@ -1,0 +1,132 @@
+package com.example.temperate.web.auth.config;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import java.lang.reflect.Method;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+
+/**
+ * 验证 H5 与 Android 安全过滤链、CSRF 仓库和 CORS 装配边界。
+ */
+class SecurityConfigurationTest {
+
+    @Test
+    void providesTheSingleDelegatingPasswordEncoderContract() throws Exception {
+        Method factoryMethod = SecurityConfiguration.class.getDeclaredMethod("passwordEncoder");
+        factoryMethod.trySetAccessible();
+        PasswordEncoder encoder =
+                (PasswordEncoder) factoryMethod.invoke(new SecurityConfiguration());
+
+        String rawPassword = "test-password-only";
+        String encoded = encoder.encode(rawPassword);
+        String secondEncoded = encoder.encode(rawPassword);
+
+        assertThat(encoded).startsWith("{bcrypt}");
+        assertThat(secondEncoded).startsWith("{bcrypt}").isNotEqualTo(encoded);
+        assertThat(encoded).isNotEqualTo(rawPassword);
+        assertThat(encoder.matches(rawPassword, encoded)).isTrue();
+        assertThat(encoder.matches(rawPassword, secondEncoded)).isTrue();
+        assertThat(encoder.matches("different-password", encoded)).isFalse();
+        assertThat(encoder.upgradeEncoding(encoded)).isFalse();
+
+        String weakBcrypt = "{bcrypt}" + new BCryptPasswordEncoder(4).encode("test-password-only");
+        assertThat(encoder.upgradeEncoding(weakBcrypt)).isTrue();
+    }
+
+    @Test
+    void configuresTheH5CsrfCookieAndHeaderContract() {
+        CookieCsrfTokenRepository repository =
+                new SecurityConfiguration().csrfTokenRepository(propertiesWithCookieDomain(""));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setSecure(true);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        CsrfToken token = repository.generateToken(request);
+        repository.saveToken(token, request, response);
+
+        assertThat(token.getHeaderName()).isEqualTo("X-CSRF-Token");
+        assertThat(response.getHeader(HttpHeaders.SET_COOKIE))
+                .contains("XSRF-TOKEN=")
+                .contains("Path=/")
+                .contains("Secure")
+                .contains("SameSite=Strict")
+                .doesNotContain("HttpOnly")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Domain=");
+    }
+
+    @Test
+    void configuresTheH5CsrfCookieDomainForPublicSubdomainSessions() {
+        CookieCsrfTokenRepository repository =
+                new SecurityConfiguration().csrfTokenRepository(
+                        propertiesWithCookieDomain("niko000o.site"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setSecure(true);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        CsrfToken token = repository.generateToken(request);
+        repository.saveToken(token, request, response);
+
+        assertThat(response.getHeader(HttpHeaders.SET_COOKIE))
+                .contains("XSRF-TOKEN=")
+                .contains("Domain=niko000o.site");
+    }
+
+    @Test
+    void exposesAuthTraceAndCloudflareDiagnosticHeaders() {
+        CorsConfigurationSource source = new SecurityConfiguration()
+                .corsConfigurationSource(propertiesWithCookieDomain(""));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/auth/register/turnstile");
+
+        CorsConfiguration configuration = source.getCorsConfiguration(request);
+
+        assertThat(configuration).isNotNull();
+        assertThat(configuration.getAllowedHeaders())
+                .contains("X-Turnstile-Attempt-Id");
+        assertThat(configuration.getExposedHeaders())
+                .contains("X-Trace-Id", "CF-Ray", "cf-mitigated");
+    }
+
+    private static AuthSecurityProperties propertiesWithCookieDomain(String domain) {
+        AuthSecurityProperties properties = mock(AuthSecurityProperties.class);
+        when(properties.cors()).thenReturn(
+                new AuthSecurityProperties.Cors(List.of("https://niko000o.site")));
+        AuthSecurityProperties.CookieSettings csrf = new AuthSecurityProperties.CookieSettings(
+                true, false, AuthSecurityProperties.SameSite.STRICT, "/");
+        when(properties.cookies()).thenReturn(new AuthSecurityProperties.Cookies(
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT, "/api"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/session"),
+                csrf,
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/register"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/register"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/password-reset"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/password-reset/complete"),
+                domain));
+        return properties;
+    }
+}

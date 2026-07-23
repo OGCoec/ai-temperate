@@ -1,0 +1,243 @@
+# Spring Boot 测试环境配置。
+spring:
+  # 测试环境自动配置控制。
+  autoconfigure:
+    # 测试时关闭需要真实外部基础设施的自动配置。
+    exclude:
+      # 测试时不初始化 PostgreSQL 数据源。
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      # 测试时不初始化 Redis 连接工厂。
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      # 测试时不初始化 RabbitMQ 连接工厂。
+      - org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration
+  # 测试邮件配置只使用明确的非生产假值。
+  mail:
+    # 测试 SMTP 密码不对应任何真实服务。
+    password: test-mail-password
+  # 测试数据库配置只用于覆盖生产环境占位符。
+  datasource:
+    # 测试数据库密码是假值且数据源自动配置已关闭。
+    password: test-postgres-password
+  # 测试 Spring Data 配置只用于覆盖生产环境占位符。
+  data:
+    # 测试 Redis 配置不会创建真实连接。
+    redis:
+      # 测试 Redis 密码是不对应任何实例的假值。
+      password: test-redis-password
+  # 测试 RabbitMQ 配置只用于覆盖生产环境占位符。
+  rabbitmq:
+    # 测试 RabbitMQ 密码是不对应任何 Broker 的假值。
+    password: test-rabbitmq-password
+
+# 测试认证与安全配置。
+app:
+  # 测试属性仍执行与生产相同的绑定和边界校验。
+  security:
+    # 明确标记为 TEST，允许测试使用本机 HTTP Origin。
+    env: TEST
+    # 测试 JWT 签名配置。
+    jwt:
+      # 该规范 Base64 值仅由固定测试字节构造，不是生产密钥。
+      secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 测试 HMAC 配置。
+    hmac:
+      # 该规范 Base64 值仅由另一组固定测试字节构造。
+      secret-base64: YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk=
+    # 测试 Turnstile 配置。
+    turnstile:
+      # 使用 Cloudflare 文档测试格式的非生产 Site Key。
+      site-key: 1x00000000000000000000AA
+      # 使用 Cloudflare 文档测试格式的非生产 Secret Key。
+      secret-key: 1x0000000000000000000000000000000AA
+      # 测试只接受本机 hostname。
+      allowed-hosts: localhost
+    # 测试环境使用与生产相同的认证与流程 Cookie 隔离策略。
+    cookies:
+      # 测试 Access Token Cookie 的安全属性和路径。
+      access:
+        # 测试 Access Token Cookie 保持 Secure。
+        secure: true
+        # 测试 Access Token Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试 Access Token Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试 Access Token Cookie 仅作用于 API。
+        path: /api
+      # 测试 Refresh Token Cookie 的安全属性和路径。
+      refresh:
+        # 测试 Refresh Token Cookie 保持 Secure。
+        secure: true
+        # 测试 Refresh Token Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试 Refresh Token Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试 Refresh Token Cookie 仅作用于会话端点。
+        path: /api/auth/session
+      # 测试 CSRF Cookie 的可读属性和路径。
+      csrf:
+        # 测试 CSRF Cookie 保持 Secure。
+        secure: true
+        # 测试 CSRF Cookie 允许前端读取。
+        http-only: false
+        # 测试 CSRF Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试 CSRF Cookie 作用于整个站点。
+        path: /
+      # 测试注册流程 Token Cookie 的安全属性和路径。
+      register-flow:
+        # 测试注册流程 Token Cookie 保持 Secure。
+        secure: true
+        # 测试注册流程 Token Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试注册流程 Token Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试注册流程 Token Cookie 只作用于注册端点。
+        path: /api/auth/register
+      # 测试注册 Challenge Cookie 的安全属性和路径。
+      register-challenge:
+        # 测试注册 Challenge Cookie 保持 Secure。
+        secure: true
+        # 测试注册 Challenge Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试注册 Challenge Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试注册 Challenge Cookie 只作用于注册端点。
+        path: /api/auth/register
+      # 测试找回密码流程 Token Cookie 的安全属性和路径。
+      password-reset-flow:
+        # 测试找回密码流程 Token Cookie 保持 Secure。
+        secure: true
+        # 测试找回密码流程 Token Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试找回密码流程 Token Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试找回密码流程 Token Cookie 只作用于找回密码端点。
+        path: /api/auth/password-reset
+      # 测试找回密码一次性凭证 Cookie 的安全属性和路径。
+      password-reset-forget:
+        # 测试找回密码一次性凭证 Cookie 保持 Secure。
+        secure: true
+        # 测试找回密码一次性凭证 Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试找回密码一次性凭证 Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试找回密码一次性凭证 Cookie 只作用于完成端点。
+        path: /api/auth/password-reset/complete
+    # 测试 CORS 白名单配置。
+    cors:
+      # TEST 环境允许本机开发服务器的显式 Origin。
+      allowed-origins: http://localhost:5173
+    # 测试 TTL 使用生产允许范围内的固定值。
+    ttl:
+      # 测试 Access Token 签发与 Cookie Max-Age 共用十分钟 TTL。
+      access-token: 10m
+      # 测试验证码 TTL 为 5 分钟。
+      verification-code: 5m
+      # 测试正向缓存 TTL 为 10 分钟。
+      positive-cache: 10m
+      # 测试空值缓存 TTL 为 45 秒。
+      empty-cache: 45s
+
+  # 测试环境关闭本地 IP2Location BIN 读取，避免依赖开发机文件。
+  phone-country:
+    # 普通 Spring 上下文测试不加载本地 BIN。
+    enabled: false
+    # 测试路径仅用于满足属性绑定，不对应真实地理数据库。
+    bin-path: disabled-test-ip2location.bin
+    # 测试默认不信任任何反向代理转发头。
+    trusted-proxy-ranges: ""
+
+  # 普通测试环境关闭访问审计，避免连接 RabbitMQ 或依赖审计数据表。
+  access-audit:
+    # 单元与上下文测试默认不注册访问审计基础设施。
+    enabled: false
+    # 固定测试密钥仅用于属性完整性，不对应任何生产环境密钥。
+    hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 测试保留期与生产默认值保持一致。
+    retention: 30d
+    # 测试批量大小保持在项目允许边界内。
+    batch-size: 200
+    # 测试批量等待时间使用固定五百毫秒。
+    batch-timeout: 500ms
+    # 测试数据库写入截止时间保持在 RabbitMQ ACK 超时之前。
+    store-timeout-seconds: 15
+    # 测试清理单批上限为一千条。
+    cleanup-batch-size: 1000
+    # 测试单轮最多清理五十批。
+    cleanup-max-batches: 50
+
+  # 测试登录限流与刷新会话配置使用明确的非生产值。
+  auth-session:
+    # 测试会话 HMAC 密钥由固定测试字节构造，不可用于生产。
+    hmac-secret-base64: c2Vzc2lvbi10ZXN0LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVm
+    # 测试固定 Refresh Token 使用三小时滑动空闲有效期。
+    refresh-token-ttl: 3h
+    # 测试单用户最多保留十个刷新会话。
+    max-sessions-per-user: 10
+    # 测试全部撤销操作最多处理一百个会话。
+    absolute-revoke-bound: 100
+    # 测试登录失败仅按设备统计，密码与验证码使用相互独立的失败桶。
+    login-limit:
+      # 测试设备失败计数窗口为固定五分钟。
+      window: 5m
+      # 测试前五次失败允许累计，第六次失败触发设备封禁。
+      max-failures: 5
+      # 测试封禁持续十五分钟。
+      block-duration: 15m
+
+  # 测试注册服务配置全部使用不可用于生产的固定假值。
+  registration:
+    # 测试 Redis Key 使用独立 test 环境段。
+    environment: test
+    # 测试 HMAC 密钥与生产无关且满足至少 32 字节要求。
+    hmac-secret-base64: YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk=
+    # 测试注册流程仍保持固定 600 秒生命周期。
+    flow-ttl: 600s
+    # 测试冲突滑动窗口为五分钟。
+    conflict-window: 5m
+    # 测试第五次冲突后的封禁时长为两小时。
+    conflict-block-duration: 2h
+    # 测试验证码有效期为五分钟。
+    code-ttl: 5m
+    # 测试发送冷却时间为六十秒。
+    send-cooldown: 60s
+    # 测试每渠道最多发送三次。
+    max-sends-per-channel: 3
+    # 测试验证码最多允许五次错误尝试。
+    max-code-attempts: 5
+    # 测试 Turnstile 服务端配置。
+    turnstile:
+      # 使用 Cloudflare 文档中的非生产测试 Secret。
+      secret-key: 1x0000000000000000000000000000000AA
+      # 测试 Turnstile 仅允许 localhost hostname。
+      allowed-hosts: localhost
+    # 测试邮件投递配置。
+    mail:
+      # 测试发件地址不对应真实邮箱身份。
+      from: no-reply@example.test
+    # 测试验证码异步投递消息保护配置。
+    delivery:
+      # 测试 payload 加密密钥由固定 32 字节构造，不对应任何生产密钥。
+      payload-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      # 测试供应商总保护时间与主配置一致，但 Mock 不会等待真实网络。
+      provider-timeout: 25s
+      # 测试 RabbitMQ 投递参数只用于属性绑定，不连接真实 Broker。
+      rabbit:
+        # 普通测试上下文关闭 RabbitMQ 投递基础设施，由 MockitoBean 提供 Publisher。
+        enabled: false
+        # 测试发布确认超时使用固定五秒。
+        confirm-timeout: 5s
+        # 测试邮箱消费者数量保持默认单消费者。
+        email-consumers: 1
+        # 测试短信消费者数量保持默认单消费者。
+        sms-consumers: 1
+    # 测试阿里云短信配置使用明确的非生产假值。
+    sms:
+      # 测试 AccessKey ID 不对应任何真实账号。
+      access-key-id: test-access-key-id
+      # 测试 AccessKey Secret 不对应任何真实账号。
+      access-key-secret: test-access-key-secret
+      # 测试短信签名不用于真实外发。
+      sign-name: 测试签名
+      # 测试短信模板编号不对应生产模板。
+      template-code: SMS_TEST_TEMPLATE

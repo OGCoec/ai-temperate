@@ -1,0 +1,129 @@
+package com.example.temperate.web.auth.session.transport;
+
+import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import jakarta.servlet.http.HttpServletResponse;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
+import org.springframework.stereotype.Component;
+
+/**
+ * 统一写入和清理 H5 认证 Cookie。
+ *
+ * <p>该组件负责按安全配置写入 access_token、refresh_token 和可读的 XSRF-TOKEN，并按相同
+ * Path 和 Domain 清理当前及旧版 Cookie。它不负责生成 Token，也不负责判断会话是否有效。</p>
+ */
+@Component
+public final class AuthCookieWriter {
+
+    public static final String ACCESS_COOKIE = "access_token";
+    public static final String REFRESH_COOKIE = "refresh_token";
+    public static final String CSRF_COOKIE = "XSRF-TOKEN";
+    public static final String LEGACY_REFRESH_COOKIE = "rt";
+
+    private final AuthSecurityProperties properties;
+    private final Clock clock;
+
+    public AuthCookieWriter(AuthSecurityProperties properties, Clock clock) {
+        this.properties = properties;
+        this.clock = clock;
+    }
+
+    public void writeSession(
+            HttpServletResponse response,
+            String accessToken,
+            String refreshToken,
+            String csrfToken,
+            Instant refreshExpiresAt) {
+        // 三个 Cookie 作为同一 H5 会话快照一起写入，避免部分更新遗留旧 CSRF 或旧 AT。
+        writeAccessToken(response, accessToken);
+        writeRefreshToken(response, refreshToken, refreshExpiresAt);
+        writeCsrfToken(response, csrfToken);
+        clearLegacyRefreshToken(response);
+    }
+
+    public void writeAccessToken(HttpServletResponse response, String accessToken) {
+        add(response, ACCESS_COOKIE, accessToken, properties.ttl().accessToken(),
+                properties.cookies().access());
+    }
+
+    public void writeRefreshToken(
+            HttpServletResponse response, String refreshToken, Instant expiresAt) {
+        add(response, REFRESH_COOKIE, refreshToken, remaining(expiresAt),
+                properties.cookies().refresh());
+    }
+
+    public void writeCsrfToken(HttpServletResponse response, String csrfToken) {
+        add(response, CSRF_COOKIE, csrfToken, null, properties.cookies().csrf());
+    }
+
+    public void clearSession(HttpServletResponse response) {
+        // 清理必须复用写入时的 Path 和 Domain，否则浏览器会保留旧 Cookie。
+        clear(response, ACCESS_COOKIE, properties.cookies().access());
+        clear(response, REFRESH_COOKIE, properties.cookies().refresh());
+        clear(response, CSRF_COOKIE, properties.cookies().csrf());
+        clearLegacyRefreshToken(response);
+    }
+
+    public void clearAccessToken(HttpServletResponse response) {
+        clear(response, ACCESS_COOKIE, properties.cookies().access());
+    }
+
+    private void clearLegacyRefreshToken(HttpServletResponse response) {
+        AuthSecurityProperties.CookieSettings refresh = properties.cookies().refresh();
+        AuthSecurityProperties.CookieSettings legacy =
+                new AuthSecurityProperties.CookieSettings(
+                        refresh.secure(), refresh.httpOnly(), refresh.sameSite(), "/");
+        // 历史 rt 使用根路径，必须单独按原路径清除，不能复用当前 refresh_token 的专用路径。
+        clear(response, LEGACY_REFRESH_COOKIE, legacy);
+    }
+
+    private Duration remaining(Instant expiresAt) {
+        Duration maxAge = Duration.between(clock.instant(), expiresAt);
+        return maxAge.isNegative() || maxAge.isZero() ? Duration.ofSeconds(1) : maxAge;
+    }
+
+    private void clear(
+            HttpServletResponse response,
+            String name,
+            AuthSecurityProperties.CookieSettings settings) {
+        add(response, name, "", Duration.ZERO, settings);
+    }
+
+    private void add(
+            HttpServletResponse response,
+            String name,
+            String value,
+            Duration maxAge,
+            AuthSecurityProperties.CookieSettings settings) {
+        add(response, name, value, maxAge, settings, properties.cookies().domain());
+    }
+
+    private static void add(
+            HttpServletResponse response,
+            String name,
+            String value,
+            Duration maxAge,
+            AuthSecurityProperties.CookieSettings settings,
+            String domain) {
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(name, value)
+                .secure(settings.secure())
+                .httpOnly(settings.httpOnly())
+                .sameSite(sameSite(settings.sameSite()))
+                .path(settings.path());
+        if (maxAge != null) {
+            builder.maxAge(maxAge);
+        }
+        if (domain != null && !domain.isBlank()) {
+            builder.domain(domain);
+        }
+        response.addHeader(HttpHeaders.SET_COOKIE, builder.build().toString());
+    }
+
+    private static String sameSite(AuthSecurityProperties.SameSite sameSite) {
+        String name = sameSite.name().toLowerCase();
+        return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+}

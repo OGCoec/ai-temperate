@@ -1,0 +1,59 @@
+# 本地开发配置根节点，仅供隔离测试环境使用。
+spring:
+  # 本地开发配置激活规则，防止该文件在其他环境中自动生效。
+  config:
+    # 按 Spring Profile 限制本地凭据的加载范围。
+    activate:
+      # 只有显式启用 local-dev 时才加载本文件。
+      on-profile: local-dev
+
+  # 本地 PostgreSQL 单主库连接配置。
+  datasource:
+    # 本地数据库使用项目约定的 5431 端口和 ai_temperate 数据库名。
+    url: ${POSTGRES_URL:jdbc:postgresql://127.0.0.1:5431/ai_temperate}
+    # 本地 PostgreSQL 测试账号。
+    username: ${POSTGRES_USERNAME:postgres}
+    # 本地 PostgreSQL 测试密码，部署前必须由环境变量配置替代。
+    password: ${POSTGRES_PASSWORD}
+
+  # 本地 Spring Data 连接配置。
+  data:
+    # 本地 Redis 7 连接与认证配置。
+    redis:
+      # 本地 Redis 服务地址。
+      host: 127.0.0.1
+      # 本地 Redis 默认使用项目约定的 6378 服务端口。
+      port: ${REDIS_PORT:6378}
+      # Redis 7 默认 ACL 用户。
+      username: default
+      # 本地 Redis 测试密码，部署前必须由环境变量配置替代。
+      password: "Redis_7_Strong_2026"
+
+  # 本地 RabbitMQ 连接与认证配置。
+  rabbitmq:
+    # 本地 RabbitMQ 服务地址。
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    # 本地 RabbitMQ 使用项目约定的 5673 AMQP 端口。
+    port: ${RABBITMQ_PORT:5673}
+    # 本地 RabbitMQ 应用测试账号。
+    username: ${RABBITMQ_USERNAME:appuser}
+    # 本地 RabbitMQ 测试密码，部署前必须由环境变量配置替代。
+    password: ${RABBITMQ_PASSWORD:Rabbit_Strong_2026}
+    # 本地 RabbitMQ 使用默认虚拟主机。
+    virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+
+# MyBatis 本地 SQL 调试配置，仅在 local-dev Profile 下生效。
+mybatis:
+  # MyBatis 运行时配置用于定位 Mapper SQL 与参数绑定问题。
+  configuration:
+    # Slf4jImpl 将 MyBatis SQL 交给 Spring Boot 日志系统，输出格式与普通应用日志一致。
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+# 本地开发日志配置仅用于排查 SQL 与服务边界问题。
+logging:
+  # 日志级别配置统一通过 Spring Boot Logback 输出。
+  level:
+    # Mapper 包 DEBUG 会按 Spring Boot 日志格式打印 MyBatis SQL、参数和影响行数。
+    com.example.temperate.mapper: DEBUG
+    # 本地默认输出验证码投递结构化 DEBUG 事件，仍禁止记录验证码、完整目标地址和供应商原始响应。
+    com.example.temperate.service.registration.verification: ${VERIFICATION_DELIVERY_LOG_LEVEL:DEBUG}

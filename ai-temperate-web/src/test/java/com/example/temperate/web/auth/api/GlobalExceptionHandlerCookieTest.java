@@ -1,0 +1,237 @@
+package com.example.temperate.web.auth.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+
+import com.example.temperate.service.auth.login.enums.LoginErrorCode;
+import com.example.temperate.service.auth.login.exception.LoginException;
+import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
+import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
+import com.example.temperate.service.auth.passwordreset.PasswordResetErrorCode;
+import com.example.temperate.service.auth.passwordreset.PasswordResetException;
+import com.example.temperate.service.registration.enums.RegistrationDiagnosticCode;
+import com.example.temperate.service.registration.enums.RegistrationErrorCode;
+import com.example.temperate.service.registration.exception.RegistrationException;
+import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
+import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import java.time.Clock;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+/**
+ * 验证终止性 H5 会话错误会按平台和错误类型清理正确 Cookie 的测试。
+ */
+class GlobalExceptionHandlerCookieTest {
+
+    private AuthCookieWriter cookieWriter;
+    private AuthFlowCookieWriter flowCookieWriter;
+    private GlobalExceptionHandler handler;
+
+    @BeforeEach
+    void setUp() {
+        cookieWriter = mock(AuthCookieWriter.class);
+        flowCookieWriter = mock(AuthFlowCookieWriter.class);
+        handler = new GlobalExceptionHandler(Clock.systemUTC(), cookieWriter, flowCookieWriter);
+    }
+
+    @Test
+    void passwordPolicyErrorsUseStableBadRequestAndConflictStatuses() {
+        var registrationResponse = handler.handleRegistration(
+                new RegistrationException(
+                        RegistrationErrorCode.PASSWORD_STRENGTH_INSUFFICIENT,
+                        "internal message"),
+                new MockHttpServletRequest(),
+                new MockHttpServletResponse());
+        var resetResponse = handler.handlePasswordReset(
+                new PasswordResetException(
+                        PasswordResetErrorCode.PASSWORD_STRENGTH_INSUFFICIENT,
+                        "密码强度不足。"),
+                new MockHttpServletRequest(),
+                new MockHttpServletResponse());
+        var loginResponse = handler.handleLogin(
+                new LoginException(
+                        LoginErrorCode.PASSWORD_RESET_REQUIRED,
+                        "必须先重置密码。"));
+
+        assertThat(registrationResponse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(registrationResponse.getBody()).isNotNull();
+        assertThat(registrationResponse.getBody().code())
+                .isEqualTo("PASSWORD_STRENGTH_INSUFFICIENT");
+        assertThat(resetResponse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(resetResponse.getBody()).isNotNull();
+        assertThat(resetResponse.getBody().code())
+                .isEqualTo("PASSWORD_STRENGTH_INSUFFICIENT");
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(loginResponse.getBody()).isNotNull();
+        assertThat(loginResponse.getBody().code()).isEqualTo("PASSWORD_RESET_REQUIRED");
+    }
+
+    @Test
+    void h5AccessExpiryClearsOnlyTheShortLivedAccessCookie() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleSession(
+                exception(SessionAuthenticationErrorCode.ACCESS_TOKEN_EXPIRED, true),
+                request,
+                response);
+
+        verify(cookieWriter).clearAccessToken(response);
+        verify(cookieWriter, never()).clearSession(response);
+    }
+
+    @Test
+    void h5TerminalSessionErrorsClearAllAuthenticationCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleSession(
+                exception(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID, true),
+                request,
+                response);
+
+        verify(cookieWriter).clearSession(response);
+    }
+
+    @Test
+    void androidSessionErrorsNeverWriteBrowserCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "ANDROID");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleSession(
+                exception(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID, true),
+                request,
+                response);
+
+        verify(cookieWriter, never()).clearAccessToken(response);
+        verify(cookieWriter, never()).clearSession(response);
+    }
+
+    @Test
+    void h5RegistrationFlowExpiryClearsRegistrationFlowCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleRegistration(
+                new RegistrationException(
+                        RegistrationErrorCode.REGISTRATION_FLOW_EXPIRED,
+                        "expired"),
+                request,
+                response);
+
+        verify(flowCookieWriter).clearRegistration(response);
+    }
+
+    @Test
+    void turnstileDiagnosticReasonNeverEntersThePublicErrorBody() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+
+        var response = handler.handleRegistration(
+                new RegistrationException(
+                        RegistrationErrorCode.TURNSTILE_REJECTED,
+                        "internal provider detail",
+                        RegistrationDiagnosticCode.TOKEN_TIMEOUT_OR_DUPLICATE),
+                request,
+                new MockHttpServletResponse());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("TURNSTILE_REJECTED");
+        assertThat(response.getBody().message()).isEqualTo("请先完成人机验证。");
+        assertThat(response.getBody().toString())
+                .doesNotContain("TOKEN_TIMEOUT_OR_DUPLICATE")
+                .doesNotContain("internal provider detail");
+    }
+
+    @Test
+    void h5PasswordResetCompletionFailureClearsResetFlowCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handlePasswordReset(
+                new PasswordResetException(
+                        PasswordResetErrorCode.SESSION_REVOCATION_FAILED,
+                        "revocation failed"),
+                request,
+                response);
+
+        verify(flowCookieWriter).clearPasswordReset(response);
+    }
+
+    @Test
+    void androidFlowErrorsNeverWriteBrowserFlowCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "ANDROID");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleRegistration(
+                new RegistrationException(
+                        RegistrationErrorCode.REGISTRATION_FLOW_EXPIRED,
+                        "expired"),
+                request,
+                response);
+        handler.handlePasswordReset(
+                new PasswordResetException(
+                        PasswordResetErrorCode.FORGET_TOKEN_INVALID,
+                        "invalid"),
+                request,
+                response);
+
+        verify(flowCookieWriter, never()).clearRegistration(response);
+        verify(flowCookieWriter, never()).clearPasswordReset(response);
+    }
+
+    @Test
+    void csrfSessionErrorsUseTheStableForbiddenStatus() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+
+        var response = handler.handleSession(
+                exception(SessionAuthenticationErrorCode.CSRF_INVALID, false),
+                request,
+                new MockHttpServletResponse());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void sessionInfrastructureErrorsUseServiceUnavailableStatus() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "ANDROID");
+
+        var response = handler.handleSession(
+                exception(SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE, false),
+                request,
+                new MockHttpServletResponse());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    void missingStaticResourcesReturnNotFoundInsteadOfUnexpectedServerError() {
+        var response = handler.handleResourceNotFound(
+                new NoResourceFoundException(HttpMethod.GET, "favicon.ico"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("RESOURCE_NOT_FOUND");
+    }
+
+    private static SessionAuthenticationException exception(
+            SessionAuthenticationErrorCode code, boolean clearCookies) {
+        return new SessionAuthenticationException(code, "session failure", clearCookies);
+    }
+}

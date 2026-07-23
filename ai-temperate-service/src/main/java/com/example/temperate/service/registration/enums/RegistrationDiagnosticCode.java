@@ -1,0 +1,33 @@
+package com.example.temperate.service.registration.enums;
+
+/**
+ * 枚举注册流程仅供服务端排障使用的有限诊断原因。
+ *
+ * <p>这些原因用于把 Turnstile、流程状态和基础设施失败定位到具体阶段；传输层不得把它们作为响应字段返回，
+ * 防止客户端获得可用于探测安全策略的内部细节。</p>
+ */
+public enum RegistrationDiagnosticCode {
+    EDGE_REQUEST_NOT_REACHED,
+    INPUT_INVALID,
+    CONFIGURATION_INVALID,
+    SITEVERIFY_CONNECT_TIMEOUT,
+    SITEVERIFY_READ_TIMEOUT,
+    SITEVERIFY_HTTP_ERROR,
+    SITEVERIFY_TRANSPORT_ERROR,
+    SITEVERIFY_MALFORMED_RESPONSE,
+    CLOUDFLARE_TOKEN_REJECTED,
+    TOKEN_TIMEOUT_OR_DUPLICATE,
+    HOSTNAME_MISMATCH,
+    ACTION_MISMATCH,
+    CDATA_MISMATCH,
+    TIMESTAMP_INVALID,
+    TIMESTAMP_FUTURE,
+    TIMESTAMP_EXPIRED,
+    FLOW_NOT_FOUND,
+    FLOW_EXPIRED,
+    FLOW_ACCESS_REJECTED,
+    REDIS_FLOW_LOOKUP_FAILED,
+    CHALLENGE_ALREADY_CONSUMED,
+    REDIS_FINALIZE_FAILED,
+    CLIENT_IP_BINDING_MISMATCH
+}

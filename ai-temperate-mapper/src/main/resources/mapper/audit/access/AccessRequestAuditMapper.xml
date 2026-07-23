@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.audit.access.AccessRequestAuditMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO access_request_audit (
+            message_id,
+            user_id,
+            trace_id,
+            occurred_at,
+            http_method,
+            route_template,
+            status_code,
+            duration_ms,
+            client_platform,
+            ip_family,
+            ip_prefix,
+            ip_hmac
+        )
+        VALUES
+        <foreach collection="records" item="record" separator=",">
+            (
+                #{record.messageId,jdbcType=OTHER},
+                #{record.userId,jdbcType=BIGINT},
+                #{record.traceId,jdbcType=OTHER},
+                #{record.occurredAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{record.httpMethod,jdbcType=VARCHAR},
+                #{record.routeTemplate,jdbcType=VARCHAR},
+                #{record.statusCode,jdbcType=SMALLINT},
+                #{record.durationMillis,jdbcType=BIGINT},
+                #{record.clientPlatform,jdbcType=VARCHAR},
+                #{record.ipFamily,jdbcType=SMALLINT},
+                #{record.ipPrefix,jdbcType=VARCHAR},
+                #{record.ipHmac,jdbcType=VARCHAR}
+            )
+        </foreach>
+        ON CONFLICT (message_id) DO NOTHING
+    </insert>
+
+    <delete id="deleteExpiredBatch">
+        WITH expired AS (
+            SELECT id
+            FROM access_request_audit
+            WHERE occurred_at &lt; #{cutoff,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            ORDER BY occurred_at, id
+            LIMIT #{limit,jdbcType=INTEGER}
+        )
+        DELETE FROM access_request_audit audit
+        USING expired
+        WHERE audit.id = expired.id
+    </delete>
+</mapper>

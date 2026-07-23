@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.user.identity.UserLoginIdentityMapper">
+
+    <resultMap id="UserLoginIdentityResultMap"
+               type="com.example.temperate.model.user.entity.UserLoginIdentity">
+        <id property="id" column="id"/>
+        <result property="email" column="email"/>
+        <result property="phone" column="phone"/>
+        <result property="passwordHash" column="password_hash"/>
+        <result property="passwordVersion" column="password_version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <resultMap id="AuthenticationContextResultMap"
+               type="com.example.temperate.model.auth.domain.AuthenticationContext">
+        <constructor>
+            <idArg column="identity_id" javaType="_long"/>
+            <arg column="password_hash" javaType="java.lang.String"/>
+            <arg column="password_version" javaType="_long"/>
+            <arg column="account_status"
+                 javaType="com.example.temperate.model.auth.enums.AccountStatus"/>
+            <arg column="display_name" javaType="java.lang.String"/>
+            <arg column="email" javaType="java.lang.String"/>
+            <arg column="phone" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="CurrentUserProfileResultMap"
+               type="com.example.temperate.model.user.domain.CurrentUserProfile">
+        <constructor>
+            <arg column="display_name" javaType="java.lang.String"/>
+            <arg column="email" javaType="java.lang.String"/>
+            <arg column="phone" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="IdentityColumns">
+        id,
+        email,
+        phone,
+        password_hash,
+        password_version,
+        created_at,
+        updated_at
+    </sql>
+
+    <sql id="AuthenticationContextColumns">
+        uli.id AS identity_id,
+        uli.password_hash,
+        uli.password_version,
+        CASE up.account_status
+            WHEN 0 THEN 'ACTIVE'
+            WHEN 1 THEN 'FROZEN'
+            WHEN 2 THEN 'DISABLED'
+            ELSE 'DISABLED'
+        END AS account_status,
+        up.display_name
+        , uli.email
+        , uli.phone
+    </sql>
+
+    <sql id="IdentityContactColumns">
+        id,
+        email,
+        phone
+    </sql>
+
+    <select id="findConflicts" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityContactColumns"/>
+        FROM userloginidentity
+        WHERE (
+            #{normalizedEmail,jdbcType=VARCHAR} IS NOT NULL
+            AND LOWER(email) = #{normalizedEmail,jdbcType=VARCHAR}
+        )
+        OR (
+            #{normalizedPhone,jdbcType=VARCHAR} IS NOT NULL
+            AND phone = #{normalizedPhone,jdbcType=VARCHAR}
+        )
+        ORDER BY id
+        LIMIT 2
+    </select>
+
+    <select id="findByNormalizedEmail" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE LOWER(email) = #{normalizedEmail,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findByNormalizedPhone" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE phone = #{normalizedPhone,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findAuthenticationByNormalizedEmail"
+            resultMap="AuthenticationContextResultMap">
+        SELECT
+        <include refid="AuthenticationContextColumns"/>
+        FROM userloginidentity uli
+        LEFT JOIN user_profile up ON up.login_identity_id = uli.id
+        WHERE LOWER(uli.email) = #{normalizedEmail,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findAuthenticationByNormalizedPhone"
+            resultMap="AuthenticationContextResultMap">
+        SELECT
+        <include refid="AuthenticationContextColumns"/>
+        FROM userloginidentity uli
+        LEFT JOIN user_profile up ON up.login_identity_id = uli.id
+        WHERE uli.phone = #{normalizedPhone,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findAuthenticationById"
+            resultMap="AuthenticationContextResultMap">
+        SELECT
+        <include refid="AuthenticationContextColumns"/>
+        FROM userloginidentity uli
+        LEFT JOIN user_profile up ON up.login_identity_id = uli.id
+        WHERE uli.id = #{identityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="findCurrentUserProfileById"
+            resultMap="CurrentUserProfileResultMap">
+        SELECT
+            up.display_name,
+            uli.email,
+            uli.phone
+        FROM userloginidentity uli
+        INNER JOIN user_profile up ON up.login_identity_id = uli.id
+        WHERE uli.id = #{identityId,jdbcType=BIGINT}
+          AND up.account_status = 0
+    </select>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.user.entity.UserLoginIdentity">
+        INSERT INTO userloginidentity (
+            id,
+            email,
+            phone,
+            password_hash
+        )
+        VALUES (
+            #{id,jdbcType=BIGINT},
+            #{email,jdbcType=VARCHAR},
+            #{phone,jdbcType=VARCHAR},
+            #{passwordHash,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <update id="updatePasswordHash">
+        UPDATE userloginidentity
+        SET password_hash = #{passwordHash,jdbcType=VARCHAR}
+        WHERE id = #{id,jdbcType=BIGINT}
+    </update>
+
+    <update id="updatePasswordHashAndIncrementVersion">
+        UPDATE userloginidentity
+        SET password_hash = #{passwordHash,jdbcType=VARCHAR},
+            password_version = password_version + 1
+        WHERE id = #{id,jdbcType=BIGINT}
+    </update>
+
+    <update id="upgradePasswordHashCas">
+        UPDATE userloginidentity
+        SET password_hash = #{upgradedPasswordHash,jdbcType=VARCHAR}
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND password_hash = #{expectedPasswordHash,jdbcType=VARCHAR}
+    </update>
+</mapper>

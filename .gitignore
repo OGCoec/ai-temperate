@@ -1,0 +1,8 @@
+target/
+**/target/
+.idea/
+.vscode/
+*.iml
+*.log
+.env
+/IP2LOCATION-LITE-DB11.IPV6.BIN
