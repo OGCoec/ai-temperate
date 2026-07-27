@@ -46,7 +46,8 @@ class AccessAuditConfigurationTest {
                 .isEqualTo(200);
         assertThat(ReflectionTestUtils.getField(factory, "prefetchCount"))
                 .isEqualTo(200);
-        assertThat(factory.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.MANUAL);
+        assertThat(ReflectionTestUtils.getField(factory, "acknowledgeMode"))
+                .isEqualTo(AcknowledgeMode.MANUAL);
         assertThat(ReflectionTestUtils.getField(factory, "defaultRequeueRejected"))
                 .isEqualTo(false);
         assertThat(ReflectionTestUtils.getField(factory, "receiveTimeout"))

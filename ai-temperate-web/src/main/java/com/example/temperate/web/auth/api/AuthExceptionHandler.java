@@ -2,7 +2,9 @@ package com.example.temperate.web.auth.api;
 
 import com.example.temperate.service.auth.login.exception.LoginException;
 import com.example.temperate.service.auth.passwordreset.PasswordResetException;
+import com.example.temperate.service.auth.phonecountry.service.exception.PhoneCountryTimeoutException;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
+import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.exception.RegistrationException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -13,7 +15,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 /**
  * 认证相关异常到统一 HTTP 错误响应的映射接口。
  *
- * <p>用途：约束注册、登录、会话、密码重置和基础设施异常使用一致的外部错误结构。</p>
+ * <p>用途：约束注册、登录、会话、密码重置、国家识别和基础设施异常使用一致的外部错误结构。</p>
  */
 public interface AuthExceptionHandler {
 
@@ -34,12 +36,24 @@ public interface AuthExceptionHandler {
             HttpServletRequest request,
             HttpServletResponse response);
 
+    ResponseEntity<ApiErrorResponse> handlePhoneCountryTimeout(
+            PhoneCountryTimeoutException exception);
+
+    ResponseEntity<ApiErrorResponse> handleHumanVerificationUnavailable(
+            HumanVerificationUnavailableException exception,
+            HttpServletRequest request);
+
     ResponseEntity<ApiErrorResponse> handleUnreadableMessage(
             HttpMessageNotReadableException exception);
 
     ResponseEntity<ApiErrorResponse> handleInvalidInput(Exception exception);
 
+    ResponseEntity<ApiErrorResponse> handleWebInvalidInput(
+            WebInvalidInputException exception);
+
     ResponseEntity<ApiErrorResponse> handleDataIntegrity(DataIntegrityViolationException exception);
 
-    ResponseEntity<ApiErrorResponse> handleUnexpected(Exception exception);
+    ResponseEntity<ApiErrorResponse> handleUnexpected(
+            Exception exception,
+            HttpServletRequest request);
 }

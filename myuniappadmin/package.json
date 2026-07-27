@@ -4,6 +4,12 @@
   "displayName": "AI Temperate Admin",
   "version": "1.0.0",
   "description": "AI Temperate administrator login frontend.",
+  "scripts": {
+    "test:auth-network-risk": "node --test ../shared-frontend/auth/risk-challenge-state-machine.test.cjs common/admin/admin-network-risk-contract.test.cjs",
+    "test:auth-hcaptcha": "node --test common/admin/admin-html-resource-separation.test.cjs common/admin/admin-hcaptcha-error.test.cjs common/admin/admin-csrf-policy.test.cjs common/admin/admin-auth-contract.test.cjs common/admin/admin-api-routing.test.cjs common/admin/admin-network-risk-contract.test.cjs",
+    "test:ip2location-keys": "node --test common/admin/ip2location-key-presenter.test.cjs common/admin/admin-ip2location-key-api.test.cjs common/admin/ip2location-key-file-picker.test.cjs common/admin/admin-ip2location-key-contract.test.cjs",
+    "test:ai-models": "node --test common/admin/admin-request-body.test.cjs common/admin/admin-ai-model-api.test.cjs common/admin/admin-ai-model-icon-api.test.cjs common/admin/admin-ai-model-form.test.cjs common/admin/admin-ai-model-ui-contract.test.cjs pages/ai-model-icons/index.test.cjs"
+  },
   "keywords": [
     "uni-app",
     "admin",

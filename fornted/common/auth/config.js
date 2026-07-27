@@ -1,9 +1,11 @@
 let authApiBaseUrl = 'https://api.niko000o.site'
 // #ifdef H5
-// H5 本地开发仍直连本机后端；公网 H5 页面使用 API 二级域名，避免一级域名同时承担前后端入口。
+// H5 本地开发仍直连本机后端；正式根域通过 Cloudflare Worker 使用同源 /api。
 const h5Hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : ''
 if (h5Hostname === 'localhost' || h5Hostname === '127.0.0.1') {
 	authApiBaseUrl = 'https://localhost:6655'
+} else if (h5Hostname === 'niko000o.site') {
+	authApiBaseUrl = ''
 }
 // #endif
 

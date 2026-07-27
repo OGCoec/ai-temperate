@@ -21,6 +21,15 @@ class VerificationEmailContentFactoryTest {
     }
 
     @Test
+    void createsDedicatedAdministratorRegistrationCopy() {
+        VerificationEmailContent content = VerificationEmailContentFactory.create(
+                VerificationPurpose.ADMIN_REGISTRATION, "012345");
+
+        assertThat(content.subject()).isEqualTo("管理员注册验证码");
+        assertThat(content.body()).isEqualTo("您的管理员注册验证码是 012345，5 分钟内有效。");
+    }
+
+    @Test
     void rejectsCodeThatIsNotExactlySixDigits() {
         assertThatThrownBy(() -> VerificationEmailContentFactory.create(
                         VerificationPurpose.LOGIN, "12345"))

@@ -132,7 +132,6 @@ public final class RedisLoginFailureStore implements LoginFailureStore {
         if (attempt == null
                 || attempt.identifierHash() == null
                 || attempt.actorHash() == null
-                || attempt.networkHash() == null
                 || attempt.globalDeviceHash() == null) {
             throw new IllegalArgumentException("Protected login attempt is required.");
         }

@@ -24,14 +24,13 @@ class LoginLimitDeviceOnlyContractTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
 
     @Test
-    void protectedAttemptKeepsACompatibilityNetworkFieldWithoutASeparateRiskBucket() {
+    void protectedAttemptContainsOnlyTheIdentifiersUsedByDeviceRateLimiting() {
         assertThat(Arrays.stream(ProtectedLoginAttempt.class.getRecordComponents())
                         .map(java.lang.reflect.RecordComponent::getName))
-                .containsExactly(
-                        "identifierHash", "actorHash", "networkHash", "globalDeviceHash");
+                .containsExactly("identifierHash", "actorHash", "globalDeviceHash");
         assertThat(Arrays.stream(AuthSessionSecretProtector.class.getMethods())
                         .map(java.lang.reflect.Method::getName))
-                .contains("loginNetwork");
+                .doesNotContain("loginNetwork");
     }
 
     @Test

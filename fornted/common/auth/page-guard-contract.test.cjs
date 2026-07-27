@@ -23,12 +23,24 @@ test('page guard verifies protected routes through the backend-backed session fl
 	assert.match(source, /isProtectedRoute/)
 })
 
-test('auth UI preview restores and exits without backend requests', () => {
+test('protected authentication flows contain no local preview bypass', () => {
 	const httpClient = read('common/auth/http-client.js')
+	const sessionGate = read('pages/launch/session-gate.vue')
+	const currentUserApi = read('common/user/current-user-api.js')
+	const cookieMigration = read('common/auth/cookie-scope-migration.js')
+	const combined = [httpClient, sessionGate, currentUserApi, cookieMigration].join('\n')
+	const previewModule = path.resolve(
+		__dirname,
+		'..',
+		'..',
+		'common/auth/ui-preview-session.js'
+	)
 
-	assert.match(httpClient, /isAuthUiPreviewEnabled/)
-	assert.match(httpClient, /restorePersistedSession\(\)[\s\S]*preview:\s*true/)
-	assert.match(httpClient, /logoutSession\(\)[\s\S]*clearAuthUiPreviewSession\(\)/)
+	assert.doesNotMatch(
+		combined,
+		/AuthUiPreview|authUiPreview|ui-preview-session|preview:\s*true/
+	)
+	assert.equal(fs.existsSync(previewModule), false)
 })
 
 test('navigation guard intercepts all uni-app navigation methods', () => {

@@ -5,6 +5,7 @@ import com.example.temperate.service.auth.session.refresh.dto.command.NewRefresh
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionRevocation;
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionSnapshot;
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionValidation;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 
 /**
  * 定义刷新会话的创建、原子续期、CSRF 轮换和撤销存储契约。
@@ -24,6 +25,18 @@ public interface RefreshSessionStore {
             HmacIdentifier refreshTokenHash,
             HmacIdentifier deviceHash,
             HmacIdentifier newCsrfHash);
+
+    RefreshSessionValidation validateAndRenewWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash,
+            PreAuthSessionBinding preAuthBinding);
+
+    RefreshSessionValidation bootstrapAndRenewWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier newCsrfHash,
+            PreAuthSessionBinding preAuthBinding);
 
     RefreshSessionRevocation revoke(
             HmacIdentifier refreshTokenHash,

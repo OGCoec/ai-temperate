@@ -59,3 +59,22 @@ test('force reload replaces the cached profile and clear removes it', async () =
 	assert.equal(module.getCurrentUserProfile(), null)
 	delete globalThis.__requestCurrentUserProfile
 })
+
+test('confirmed avatar only updates the in-memory current profile', async () => {
+	const module = await loadProfileModule(async () => ({
+		displayName: 'Alice',
+		email: 'alice@example.test',
+		phone: null,
+		avatarUrl: null
+	}))
+	await module.loadCurrentUserProfile()
+
+	const updated = module.updateCurrentUserAvatar('https://cdn.example.test/avatar.webp')
+
+	assert.equal(updated.avatarUrl, 'https://cdn.example.test/avatar.webp')
+	assert.equal(
+		module.getCurrentUserProfile().avatarUrl,
+		'https://cdn.example.test/avatar.webp'
+	)
+	delete globalThis.__requestCurrentUserProfile
+})

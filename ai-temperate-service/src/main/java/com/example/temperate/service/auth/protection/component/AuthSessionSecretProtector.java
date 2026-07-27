@@ -21,7 +21,6 @@ public final class AuthSessionSecretProtector {
     private static final String NUL = Character.toString(0);
     private static final Pattern E164 = Pattern.compile("^\\+[1-9][0-9]{7,14}$");
     private static final Pattern NANO_ID = Pattern.compile("^[A-Za-z0-9_-]{38}$");
-    private static final Pattern IPV6_LITERAL = Pattern.compile("^[0-9A-Fa-f:]{2,45}$");
     private static final Pattern CSRF = Pattern.compile("^[A-Za-z0-9_-]{43}$");
     private static final Base64.Decoder BASE64_URL_DECODER = Base64.getUrlDecoder();
     private static final Base64.Encoder BASE64_URL_ENCODER =
@@ -37,8 +36,7 @@ public final class AuthSessionSecretProtector {
         LoginAttempt valid = Objects.requireNonNull(attempt, "attempt must not be null");
         return new ProtectedLoginAttempt(
                 loginSubject(valid.getNormalizedIdentifier()),
-                loginActor(valid.getDeviceInstallationId(), valid.getCanonicalClientIp()),
-                loginNetwork(valid.getCanonicalClientIp()),
+                loginActor(valid.getDeviceInstallationId()),
                 deviceBlock(valid.getDeviceInstallationId()));
     }
 
@@ -50,14 +48,9 @@ public final class AuthSessionSecretProtector {
         return identify("auth:login:subject", identifier);
     }
 
-    public HmacIdentifier loginActor(
-            String deviceInstallationId, String canonicalClientIp) {
+    public HmacIdentifier loginActor(String deviceInstallationId) {
         String device = requireDevice(deviceInstallationId);
         return identify("auth:login:device", device);
-    }
-
-    public HmacIdentifier loginNetwork(String canonicalClientIp) {
-        return identify("auth:login:network", requireCanonicalIp(canonicalClientIp));
     }
 
     public HmacIdentifier loginFlowToken(String rawFlowToken) {
@@ -181,124 +174,6 @@ public final class AuthSessionSecretProtector {
         return value;
     }
 
-    private static String requireCanonicalIp(String value) {
-        String valid = requireText("canonical client IP", value, 45);
-        if (isCanonicalIpv4(valid)) {
-            return valid;
-        }
-        int[] ipv6Groups = parseIpv6Literal(valid);
-        if (ipv6Groups != null && toRfc5952(ipv6Groups).equals(valid)) {
-            return valid;
-        }
-        throw invalid("Client IP must be a canonical IPv4 or IPv6 literal.");
-    }
-
-    private static int[] parseIpv6Literal(String value) {
-        if (value.indexOf(':') < 0 || !IPV6_LITERAL.matcher(value).matches()) {
-            return null;
-        }
-
-        int compression = value.indexOf("::");
-        if (compression >= 0 && compression != value.lastIndexOf("::")) {
-            return null;
-        }
-
-        String[] left;
-        String[] right;
-        if (compression >= 0) {
-            left = splitIpv6Side(value.substring(0, compression));
-            right = splitIpv6Side(value.substring(compression + 2));
-            if (left == null || right == null || left.length + right.length >= 8) {
-                return null;
-            }
-        } else {
-            left = splitIpv6Side(value);
-            right = new String[0];
-            if (left == null || left.length != 8) {
-                return null;
-            }
-        }
-
-        int[] groups = new int[8];
-        int index = 0;
-        for (String group : left) {
-            groups[index++] = parseIpv6Group(group);
-        }
-        index = 8 - right.length;
-        for (String group : right) {
-            groups[index++] = parseIpv6Group(group);
-        }
-        return groups;
-    }
-
-    private static String[] splitIpv6Side(String side) {
-        if (side.isEmpty()) {
-            return new String[0];
-        }
-        String[] groups = side.split(":", -1);
-        for (String group : groups) {
-            if (group.isEmpty() || group.length() > 4 || !isHex(group)) {
-                return null;
-            }
-        }
-        return groups;
-    }
-
-    private static int parseIpv6Group(String group) {
-        return Integer.parseInt(group, 16);
-    }
-
-    private static boolean isHex(String value) {
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            boolean hex = character >= '0' && character <= '9'
-                    || character >= 'a' && character <= 'f'
-                    || character >= 'A' && character <= 'F';
-            if (!hex) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static String toRfc5952(int[] groups) {
-        int bestStart = -1;
-        int bestLength = 0;
-        for (int index = 0; index < groups.length;) {
-            if (groups[index] != 0) {
-                index++;
-                continue;
-            }
-            int end = index;
-            while (end < groups.length && groups[end] == 0) {
-                end++;
-            }
-            int length = end - index;
-            if (length >= 2 && length > bestLength) {
-                bestStart = index;
-                bestLength = length;
-            }
-            index = end;
-        }
-
-        if (bestStart < 0) {
-            return joinIpv6Groups(groups, 0, groups.length);
-        }
-        String prefix = joinIpv6Groups(groups, 0, bestStart);
-        String suffix = joinIpv6Groups(groups, bestStart + bestLength, groups.length);
-        return prefix + "::" + suffix;
-    }
-
-    private static String joinIpv6Groups(int[] groups, int start, int end) {
-        StringBuilder result = new StringBuilder();
-        for (int index = start; index < end; index++) {
-            if (!result.isEmpty()) {
-                result.append(':');
-            }
-            result.append(Integer.toHexString(groups[index]));
-        }
-        return result.toString();
-    }
 
     private static boolean isNormalizedEmail(String value) {
         int at = value.indexOf('@');
@@ -307,25 +182,6 @@ public final class AuthSessionSecretProtector {
                 && at < value.length() - 1
                 && value.equals(value.toLowerCase(Locale.ROOT))
                 && value.chars().noneMatch(Character::isWhitespace);
-    }
-
-    private static boolean isCanonicalIpv4(String value) {
-        String[] parts = value.split("\\.", -1);
-        if (parts.length != 4) {
-            return false;
-        }
-        for (String part : parts) {
-            if (part.isEmpty()
-                    || part.length() > 3
-                    || (part.length() > 1 && part.charAt(0) == '0')
-                    || !part.chars().allMatch(character -> character >= '0' && character <= '9')) {
-                return false;
-            }
-            if (Integer.parseInt(part) > 255) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static String requireText(String name, String value, int maximumLength) {

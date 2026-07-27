@@ -19,19 +19,32 @@ HBuilderX
   -> 独立 frontend-dev Tunnel
   -> https://localhost:3000
 
-前端 API 请求
+普通 H5 API 请求
+  -> https://niko000o.site/api/**
+  -> Cloudflare Worker
+  -> https://api.niko000o.site
+  -> 独立 API Tunnel
+  -> https://localhost:6655
+
+管理员 H5 API 请求
+  -> https://admin.niko000o.site/api/admin/**
+  -> 同一个 Cloudflare Worker
   -> https://api.niko000o.site
   -> 独立 API Tunnel
   -> https://localhost:6655
 ```
 
-`niko000o.site` 不再长期回源 HBuilderX/Vite。这样公网浏览器不会请求 `.vue`、`/@vite/`、`/@fs/` 或 HMR WebSocket，也不会依赖开发电脑、HBuilderX 进程或本地 Keep-Alive 状态。
+两个生产 H5 都通过当前页面 Host 的同源 `/api` 调用后端。Worker 保持路径不变，只允许普通
+站点进入普通命名空间、管理员站点进入 `/api/admin/**`，因此后端仍然只有一个 Spring Boot
+实例。所有业务 Cookie 都不设置 `Domain`。
 
 ## 当前迁移状态
 
 - 旧 `frontend` Profile 仍将 `niko000o.site` 回源到 `https://localhost:3000`，仅作为迁移期回滚通道。
 - 新 `frontend-dev` Profile 固定使用 `dev.niko000o.site`。独立 Tunnel ID `16698f57-7037-4252-adfe-4cc1319bf55c` 由 `scripts/cloudflare/windows-legacy-tunnel/start-cloudflare-frontend-dev.bat` 注入，禁止与旧前端 Tunnel 共用同一个 Tunnel ID；凭据 JSON 仍只保存在用户目录，不进入仓库。
 - `api` Profile 和 `api.niko000o.site` 不变。
+- 中央 Worker 源码位于 `cloudflare/api-gateway`；正式 Routes 启用前不能把后端切换为
+  `EDGE_PROXY_MODE=REQUIRED`。
 - Cloudflare 临时 Configuration Rule `52a5bd8bfb6f499d854e43fdaed8ddd4` 只对根域名的 Vite 开发资源关闭 Browser Integrity Check。生产切到 Pages 并完成观察后应删除该规则。
 
 ## 第一阶段：生成 H5 生产文件
@@ -64,9 +77,23 @@ ai-temperate-frontend
 4. `index.html` 不长期缓存；带内容哈希的 `/assets/*` 可以长期缓存。
 5. Console 没有动态模块加载、Mixed Content、证书或 Service Worker 旧版本错误。
 
-完整登录预览需要把实际 `*.pages.dev` 主机名精确加入后端 CORS 与 Turnstile 允许列表。禁止使用 `*` 配合凭据请求；完成预览后应移除临时预览域名。
+`*.pages.dev` 只用于静态资源与路由回退预览，不直连生产 API。新的 CSP 和 API Base URL
+刻意不为预览域开放跨域认证；完整登录必须等自定义域名与对应 Worker Route 生效后再验收，
+避免临时 CORS 配置重新引入父域 Cookie 或双入口问题。
 
-## 第三阶段：生产域名切换
+## 第三阶段：部署中央 Worker
+
+1. 在 Cloudflare Worker Secret 和 Spring Boot 环境中配置同一份独立
+   `EDGE_PROXY_HMAC_SECRET_BASE64`。
+2. 后端先使用 `EDGE_PROXY_MODE=OPTIONAL`。
+3. 发布 `cloudflare/api-gateway`，保持 `workers.dev` 和 preview URL 关闭。
+4. 配置 `niko000o.site/api/*` 与
+   `admin.niko000o.site/api/admin/*` 两条 Route，并在 Cloudflare 控制台选择失败关闭。
+5. 为两条 API Route 配置缓存绕过；认证响应必须保持 `Cache-Control: no-store`。
+
+Worker 发布与 Route 修改属于第二阶段外部状态操作，必须在用户明确批准后执行。
+
+## 第四阶段：生产域名切换
 
 预览通过后，在 Pages 项目中添加自定义域名：
 
@@ -80,26 +107,33 @@ niko000o.site
 
 1. 新建普通 Chrome、Edge 或无痕会话均能打开登录页。
 2. 页面资源哈希与 Pages 预览一致。
-3. `GET https://api.niko000o.site/api/auth/csrf` 返回预期状态并签发 `XSRF-TOKEN`。
-4. Cookie 的 Domain、Secure、SameSite 与当前跨子域认证设计一致。
-5. API Tunnel 的请求量随操作增长，前端旧 Tunnel 不再收到生产页面流量。
+3. `GET https://niko000o.site/api/auth/csrf` 经 Worker 返回预期状态并签发
+   Host-only `XSRF-TOKEN`。
+4. `https://admin.niko000o.site/api/admin/auth/state` 只签发 Host-only
+   `ADMIN-XSRF-TOKEN`，不出现普通 `XSRF-TOKEN`。
+5. 删除生产环境中的 `AUTH_COOKIE_DOMAIN`、`ADMIN_COOKIE_DOMAIN` 和
+   `ADMIN_CSRF_COOKIE_DOMAIN`，再把后端改为 `EDGE_PROXY_MODE=REQUIRED` 并重启。
+6. 同一个新浏览器配置往返两个站点后，两边仍只包含各自业务 CSRF Cookie。
+7. API Tunnel 的请求量随操作增长，前端旧 Tunnel 不再收到生产页面流量。
 
-## 第四阶段：收口安全例外
+## 第五阶段：收口安全例外
 
 生产观察稳定后：
 
 1. 停止旧 `frontend` Profile，但暂时保留 Tunnel 凭据和脚本。
 2. 删除临时 Configuration Rule `52a5bd8bfb6f499d854e43fdaed8ddd4`。Pages 生产包不需要 Vite 源码例外。
 3. 如需远程开发，单独创建 `dev.niko000o.site` DNS/Tunnel 路由并启用 Cloudflare Access；否则不要公开该子域名。
-4. API Tunnel、API 域名和后端 Cookie 策略保持不变。
+4. API Tunnel 和 API 域名保持不变；后端稳定保持 `EDGE_PROXY_MODE=REQUIRED`。
 
 ## 回滚
 
 如果 Pages 切换后出现严重故障：
 
-1. 把 `niko000o.site` 恢复到切换前记录的旧 frontend Tunnel 路由。
-2. 启动 `scripts/cloudflare/windows-legacy-tunnel/start-cloudflare-frontend.bat`，确认它仍使用旧 `CF_FRONTEND_TUNNEL_ID`。
-3. 必要时重新启用临时 Browser Integrity Check 例外规则。
-4. 不回滚 `api.niko000o.site`，除非证据表明 API Tunnel 本身故障。
+1. 先把后端切换为 `EDGE_PROXY_MODE=OPTIONAL`，避免旧 H5 被 REQUIRED 签名边界阻断。
+2. 恢复两个前端的绝对 API Base URL，并暂停 Worker Routes。
+3. 如需恢复旧架构，再恢复切换前的 Cookie Domain 配置；所有 H5 用户仍必须重新登录。
+4. 把 `niko000o.site` 恢复到切换前记录的旧 frontend Tunnel 路由。
+5. 启动 `scripts/cloudflare/windows-legacy-tunnel/start-cloudflare-frontend.bat`，确认它仍使用旧 `CF_FRONTEND_TUNNEL_ID`。
+6. 不回滚 `api.niko000o.site`，除非证据表明 API Tunnel 本身故障。
 
 回滚后重新收集浏览器 Network、两个 Tunnel 指标和同一时间段日志，再决定下一次切换。

@@ -1,5 +1,5 @@
 import { parsePhoneNumberFromString } from 'libphonenumber-js/max'
-import { getPhoneCountryByIso2 } from '../auth/phone-country-search.js'
+import { getPhoneCountryByIso2 } from '@shared-auth/phone-country-search.js'
 
 const UNKNOWN_COUNTRY = '未知国家或地区'
 

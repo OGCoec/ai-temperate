@@ -2,6 +2,7 @@ package com.example.temperate.web.user.profile.controller;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -36,7 +37,10 @@ class CurrentUserAccessTokenTransportTest {
         when(accessSessionService.authenticate("valid-access-token"))
                 .thenReturn(new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice"));
         when(profileService.getRequired(10001L)).thenReturn(new CurrentUserProfile(
-                "Alice", "alice@example.test", "+14155550123"));
+                "Alice",
+                "alice@example.test",
+                "+14155550123",
+                null));
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new CurrentUserController(profileService))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
@@ -55,7 +59,8 @@ class CurrentUserAccessTokenTransportTest {
                         .header("X-Client-Platform", "H5")
                         .cookie(new Cookie("access_token", "valid-access-token")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.email").value("alice@example.test"));
+                .andExpect(jsonPath("$.email").value("alice@example.test"))
+                .andExpect(jsonPath("$.avatarUrl").value(nullValue()));
     }
 
     @Test

@@ -112,7 +112,7 @@
 </template>
 
 <script>
-	import { filterPhoneCountries, findPhoneCountryById } from '@/common/auth/phone-country-search.js'
+	import { filterPhoneCountries, findPhoneCountryById } from '@shared-auth/phone-country-search.js'
 
 	export default {
 		name: 'PhoneCountryPicker',

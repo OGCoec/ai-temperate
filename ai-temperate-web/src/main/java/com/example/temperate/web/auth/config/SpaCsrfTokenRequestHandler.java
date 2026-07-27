@@ -12,13 +12,14 @@ import org.springframework.util.StringUtils;
 /**
  * 兼容单页应用 Cookie CSRF 传输的 Spring CSRF 请求处理器。
  *
- * <p>用途：促使 Spring 写入延迟生成的 {@code XSRF-TOKEN} Cookie，并在前端显式提交 {@code X-CSRF-Token}
- * Header 时按原始 Token 校验。</p>
+ * <p>用途：促使 Spring 写入当前安全链 Cookie 仓库配置的延迟 CSRF Cookie，并在前端显式提交仓库配置的
+ * Header 时按原始 Token 校验。普通用户链使用 {@code XSRF-TOKEN}，管理员链使用独立的
+ * {@code ADMIN-XSRF-TOKEN}，两者不会共用仓库或请求头。</p>
  *
  * <p>安全原理：Header 存在时使用非 XOR 处理器匹配 Cookie 原始值；Header 缺失时保留 Spring 的 XOR 请求属性
  * 行为，避免混淆两个编码表示。</p>
  */
-final class SpaCsrfTokenRequestHandler implements CsrfTokenRequestHandler {
+public final class SpaCsrfTokenRequestHandler implements CsrfTokenRequestHandler {
 
     private final CsrfTokenRequestHandler plain = new CsrfTokenRequestAttributeHandler();
     private final CsrfTokenRequestHandler xor = new XorCsrfTokenRequestAttributeHandler();

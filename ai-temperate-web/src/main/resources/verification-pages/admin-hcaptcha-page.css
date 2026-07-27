@@ -1,0 +1,73 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #080b0d;
+  color: #f3f8f8;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+section {
+  width: min(100%, 420px);
+  padding: 28px;
+  border: 1px solid rgba(105, 212, 226, 0.3);
+  border-radius: 16px;
+  background: #10161a;
+  box-sizing: border-box;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+#status {
+  min-height: 20px;
+  margin: 0 0 14px;
+  color: #a9bdc0;
+  font-size: 14px;
+}
+
+#widget {
+  min-height: 70px;
+}
+
+#error {
+  margin-top: 14px;
+  color: #ffb8b8;
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.actions button {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+#retry {
+  border: 0;
+  background: #69d4e2;
+  color: #071014;
+}
+
+#cancel {
+  border: 1px solid rgba(179, 204, 208, 0.3);
+  background: transparent;
+  color: #d8e7e9;
+}

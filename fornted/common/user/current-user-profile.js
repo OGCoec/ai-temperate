@@ -7,7 +7,8 @@ function normalizeProfile(profile) {
 	return {
 		displayName: String(profile?.displayName || '').trim() || '用户',
 		email: String(profile?.email || '').trim(),
-		phone: profile?.phone == null ? null : String(profile.phone).trim()
+		phone: profile?.phone == null ? null : String(profile.phone).trim(),
+		avatarUrl: profile?.avatarUrl == null ? null : String(profile.avatarUrl).trim() || null
 	}
 }
 
@@ -27,4 +28,13 @@ export function loadCurrentUserProfile({ force = false } = {}) {
 
 export function clearCurrentUserProfile() {
 	clearProfileVault()
+}
+
+export function updateCurrentUserAvatar(avatarUrl) {
+	const current = readProfileVault()
+	if (!current) return null
+	return writeProfileVault({
+		...current,
+		avatarUrl: String(avatarUrl || '').trim() || null
+	})
 }

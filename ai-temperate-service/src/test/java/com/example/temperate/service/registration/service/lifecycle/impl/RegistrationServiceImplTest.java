@@ -22,6 +22,11 @@ import com.example.temperate.model.user.entity.UserLoginIdentity;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.entity.UserProfile;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
+import com.example.temperate.service.humanverification.HumanVerificationCommand;
+import com.example.temperate.service.humanverification.HumanVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
+import com.example.temperate.service.humanverification.HumanVerificationType;
+import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.component.executor.RegistrationAfterCommitExecutor;
 import com.example.temperate.service.registration.component.id.RegistrationIdGenerator;
 import com.example.temperate.service.registration.component.normalizer.RegistrationInputNormalizer;
@@ -51,7 +56,6 @@ import com.example.temperate.service.registration.flow.security.RegistrationAcce
 import com.example.temperate.service.registration.flow.security.RegistrationTokenProtector;
 import com.example.temperate.service.registration.flow.store.RegistrationFlowStore;
 import com.example.temperate.service.registration.service.lifecycle.RegistrationService;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
 import com.example.temperate.service.registration.verification.delivery.coordinator.VerificationDeliveryCoordinator;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryRequest;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryResult;
@@ -72,6 +76,8 @@ import java.time.ZoneOffset;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -79,6 +85,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 /**
  * 验证注册业务编排、验证码投递、冲突隐藏和完成流程的单元测试。
@@ -106,7 +113,7 @@ class RegistrationServiceImplTest {
         flowStore = new InMemoryFlowStore();
         afterCommitExecutor = new CapturingAfterCommitExecutor();
         deliveryPublisher = new CapturingPublisher();
-        turnstile = new TurnstileProbe();
+        turnstile = new TurnstileProbe(flowStore);
 
         when(identityMapper.findConflicts(any(), any())).thenReturn(List.of());
         when(identityMapper.insert(any())).thenReturn(1);
@@ -148,7 +155,9 @@ class RegistrationServiceImplTest {
                 deliveryCoordinator,
                 serviceRegistry,
                 new LibphonenumberVerificationProviderResolver(),
-                turnstile,
+                new HumanVerificationServiceRegistry(Map.of(
+                        "turnstile", turnstile,
+                        "hcaptcha", new HcaptchaProbe())),
                 passwordEncoder,
                 ids,
                 new PublicIdCodec(),
@@ -209,11 +218,15 @@ class RegistrationServiceImplTest {
                                 .isEqualTo(RegistrationErrorCode.HUMAN_VERIFICATION_REQUIRED));
         assertThat(flowStore.releaseCalls).isZero();
 
-        RegistrationStatusResult humanVerified = service.verifyTurnstile(
-                new RegistrationTurnstileCommand(access, "turnstile-response"));
+        RegistrationStatusResult humanVerified = verifyTurnstile(
+                new RegistrationTurnstileCommand(
+                        access, "turnstile-response"));
         assertThat(turnstile.responseToken).isEqualTo("turnstile-response");
         assertThat(turnstile.remoteIp).isEqualTo("203.0.113.7");
         assertThat(turnstile.challengeHandle).isEqualTo("challenge-handle");
+        assertThat(turnstile.expectedAction).isEqualTo("register");
+        assertThat(turnstile.flowLoadedBeforeVerify).isTrue();
+        assertThat(flowStore.markHumanVerifiedCalls).hasValue(1);
         assertThat(humanVerified.email()).isEqualTo("alice@example.com");
         assertThat(humanVerified.phoneE164()).isEqualTo("+13125550100");
 
@@ -235,15 +248,12 @@ class RegistrationServiceImplTest {
         RegistrationAccess access = startAndAccess();
         RegistrationTurnstileCommand command =
                 new RegistrationTurnstileCommand(access, "turnstile-response");
-        service.verifyTurnstile(command);
+        verifyTurnstile(command);
 
-        assertThatThrownBy(() -> service.verifyTurnstile(command))
-                .isInstanceOfSatisfying(RegistrationException.class, exception -> {
-                    assertThat(exception.code())
-                            .isEqualTo(RegistrationErrorCode.TURNSTILE_REJECTED);
-                    assertThat(exception.diagnosticCode())
-                            .contains(RegistrationDiagnosticCode.CHALLENGE_ALREADY_CONSUMED);
-                });
+        assertTurnstileRejected(
+                service.verifyTurnstile(command),
+                RegistrationErrorCode.TURNSTILE_REJECTED,
+                RegistrationDiagnosticCode.CHALLENGE_ALREADY_CONSUMED);
     }
 
     @Test
@@ -251,20 +261,54 @@ class RegistrationServiceImplTest {
         RegistrationAccess access = startAndAccess();
         flowStore.failHumanFinalize = true;
 
-        assertThatThrownBy(() -> service.verifyTurnstile(
-                        new RegistrationTurnstileCommand(access, "turnstile-response")))
-                .isInstanceOfSatisfying(RegistrationException.class, exception -> {
-                    assertThat(exception.code())
-                            .isEqualTo(RegistrationErrorCode.AUTH_REGISTER_UNAVAILABLE);
-                    assertThat(exception.diagnosticCode())
-                            .contains(RegistrationDiagnosticCode.REDIS_FINALIZE_FAILED);
-                });
+        assertTurnstileRejected(
+                service.verifyTurnstile(new RegistrationTurnstileCommand(
+                        access, "turnstile-response")),
+                RegistrationErrorCode.AUTH_REGISTER_UNAVAILABLE,
+                RegistrationDiagnosticCode.REDIS_FINALIZE_FAILED);
+    }
+
+    @Test
+    void providerFailureNeverMarksTheRegistrationFlow() {
+        RegistrationAccess access = startAndAccess();
+        turnstile.failure = new RegistrationException(
+                RegistrationErrorCode.TURNSTILE_REJECTED,
+                "Turnstile verification was rejected.",
+                RegistrationDiagnosticCode.CLOUDFLARE_TOKEN_REJECTED);
+
+        assertTurnstileRejected(
+                service.verifyTurnstile(new RegistrationTurnstileCommand(
+                        access, "turnstile-response")),
+                RegistrationErrorCode.TURNSTILE_REJECTED,
+                RegistrationDiagnosticCode.CLOUDFLARE_TOKEN_REJECTED);
+
+        assertThat(flowStore.markHumanVerifiedCalls).hasValue(0);
+    }
+
+    @Test
+    void providerUnavailablePropagatesWithoutMarkingTheRegistrationFlow() {
+        RegistrationAccess access = startAndAccess();
+        HumanVerificationUnavailableException unavailable =
+                new HumanVerificationUnavailableException(
+                        HumanVerificationType.TURNSTILE,
+                        new IllegalStateException("simulated transport failure"));
+        turnstile.failure = unavailable;
+
+        StepVerifier.create(service.verifyTurnstile(
+                        new RegistrationTurnstileCommand(
+                                access, "turnstile-response")))
+                .expectErrorSatisfies(failure -> assertThat(failure)
+                        .isSameAs(unavailable))
+                .verify();
+
+        assertThat(flowStore.markHumanVerifiedCalls).hasValue(0);
     }
 
     @Test
     void sendCodePublishFailureCompensatesTheCurrentCodeState() {
         RegistrationAccess access = startAndAccess();
-        service.verifyTurnstile(new RegistrationTurnstileCommand(access, "turnstile-response"));
+        verifyTurnstile(new RegistrationTurnstileCommand(
+                access, "turnstile-response"));
         deliveryPublisher.failPublish = true;
 
         assertThatThrownBy(() -> service.sendCode(
@@ -280,7 +324,8 @@ class RegistrationServiceImplTest {
     @Test
     void internationalWhatsappUsesTheSharedPhoneCodeSlot() {
         RegistrationAccess access = startAndAccess();
-        service.verifyTurnstile(new RegistrationTurnstileCommand(access, "turnstile-response"));
+        verifyTurnstile(new RegistrationTurnstileCommand(
+                access, "turnstile-response"));
 
         service.sendCode(new RegistrationSendCodeCommand(
                 access,
@@ -415,10 +460,38 @@ class RegistrationServiceImplTest {
 
     private RegistrationAccess fullyVerifiedAccess() {
         RegistrationAccess access = startAndAccess();
-        service.verifyTurnstile(new RegistrationTurnstileCommand(access, "turnstile-response"));
+        verifyTurnstile(new RegistrationTurnstileCommand(
+                access, "turnstile-response"));
         sendAndVerify(access, VerificationChannel.EMAIL);
         sendAndVerify(access, VerificationChannel.SMS);
         return access;
+    }
+
+    private RegistrationStatusResult verifyTurnstile(
+            RegistrationTurnstileCommand command) {
+        AtomicReference<RegistrationStatusResult> result =
+                new AtomicReference<>();
+        StepVerifier.create(service.verifyTurnstile(command))
+                .assertNext(result::set)
+                .verifyComplete();
+        return result.get();
+    }
+
+    private static void assertTurnstileRejected(
+            Mono<RegistrationStatusResult> operation,
+            RegistrationErrorCode expectedErrorCode,
+            RegistrationDiagnosticCode expectedDiagnosticCode) {
+        StepVerifier.create(operation)
+                .expectErrorSatisfies(failure -> {
+                    assertThat(failure)
+                            .isInstanceOf(RegistrationException.class);
+                    RegistrationException exception =
+                            (RegistrationException) failure;
+                    assertThat(exception.code()).isEqualTo(expectedErrorCode);
+                    assertThat(exception.diagnosticCode())
+                            .contains(expectedDiagnosticCode);
+                })
+                .verify();
     }
 
     private RegistrationAccess startAndAccess() {
@@ -503,23 +576,49 @@ class RegistrationServiceImplTest {
         }
     }
 
-    private static final class TurnstileProbe implements TurnstileVerificationService {
+    private static final class TurnstileProbe implements HumanVerificationService {
 
+        private final InMemoryFlowStore flowStore;
         private String responseToken;
         private String remoteIp;
         private String challengeHandle;
         private String expectedAction;
+        private boolean flowLoadedBeforeVerify;
+        private RuntimeException failure;
+
+        private TurnstileProbe(InMemoryFlowStore flowStore) {
+            this.flowStore = flowStore;
+        }
 
         @Override
-        public void verify(
-                String responseToken,
-                String remoteIp,
-                String challengeHandle,
-                String expectedAction) {
-            this.responseToken = responseToken;
-            this.remoteIp = remoteIp;
-            this.challengeHandle = challengeHandle;
-            this.expectedAction = expectedAction;
+        public HumanVerificationType type() {
+            return HumanVerificationType.TURNSTILE;
+        }
+
+        @Override
+        public Mono<Void> verify(HumanVerificationCommand command) {
+            this.responseToken = command.responseToken();
+            this.remoteIp = command.canonicalClientIp();
+            this.challengeHandle = command.challengeId();
+            this.expectedAction = command.expectedAction();
+            this.flowLoadedBeforeVerify = flowStore.flowReadCalls.get() > 0;
+            if (failure != null) {
+                return Mono.error(failure);
+            }
+            return Mono.empty();
+        }
+    }
+
+    private static final class HcaptchaProbe implements HumanVerificationService {
+
+        @Override
+        public HumanVerificationType type() {
+            return HumanVerificationType.HCAPTCHA;
+        }
+
+        @Override
+        public Mono<Void> verify(HumanVerificationCommand command) {
+            return Mono.empty();
         }
     }
 
@@ -637,6 +736,9 @@ class RegistrationServiceImplTest {
         private boolean deleted;
         private boolean failHumanFinalize;
         private int releaseCalls;
+        private final AtomicInteger flowReadCalls = new AtomicInteger();
+        private final AtomicInteger markHumanVerifiedCalls =
+                new AtomicInteger();
         private final Map<VerificationChannel, HmacIdentifier> codes =
                 new EnumMap<>(VerificationChannel.class);
         private final Map<VerificationChannel, HmacIdentifier> deliveryOperations =
@@ -671,12 +773,14 @@ class RegistrationServiceImplTest {
         public RegistrationFlowSnapshot getRequired(
                 ProtectedRegistrationAccess access, Instant now) {
             requireFlow(access, now);
+            flowReadCalls.incrementAndGet();
             return snapshot();
         }
 
         @Override
         public RegistrationFlowSnapshot markHumanVerified(
                 ProtectedRegistrationAccess access, Instant now) {
+            markHumanVerifiedCalls.incrementAndGet();
             requireFlow(access, now);
             if (failHumanFinalize) {
                 throw error(RegistrationErrorCode.AUTH_REGISTER_UNAVAILABLE);

@@ -6,3 +6,7 @@ target/
 *.log
 .env
 /IP2LOCATION-LITE-DB11.IPV6.BIN
+/.admin/
+/.superpowers/
+/cloudflare/api-gateway/node_modules/
+/cloudflare/api-gateway/.wrangler/

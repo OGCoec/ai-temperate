@@ -40,6 +40,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
 
 /**
  * 新用户注册状态机的 HTTP 接口控制器。
@@ -119,7 +120,7 @@ public final class RegistrationController {
 
     @PostMapping("/turnstile")
     @Operation(summary = "服务端校验注册流程的 Cloudflare Turnstile 响应")
-    public RegistrationStatusResponse turnstile(
+    public Mono<RegistrationStatusResponse> turnstile(
             @Valid @RequestBody TurnstileRequest body,
             @RequestHeader(value = TOKEN_HEADER, required = false) String token,
             @RequestHeader(value = FLOW_CSRF_HEADER, required = false) String flowCsrf,
@@ -131,9 +132,11 @@ public final class RegistrationController {
         RegistrationAccess access = access(token, flowCsrf, challenge, device, platformHeader,
                 request);
         preventSensitiveResponseCaching(response);
-        return statusResponse(registrationService.verifyTurnstile(
-                new RegistrationTurnstileCommand(access, body.turnstileToken())),
-                access.challengeHandle());
+        return registrationService.verifyTurnstile(
+                        new RegistrationTurnstileCommand(
+                                access, body.turnstileToken()))
+                .map(result -> statusResponse(
+                        result, access.challengeHandle()));
     }
 
     @PostMapping("/codes/email/send")

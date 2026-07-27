@@ -53,6 +53,41 @@
 				"navigationBarBackgroundColor": "#0b0d0c",
 				"backgroundColor": "#0b0d0c"
 			}
+		},
+		{
+			"path": "pages/risk/challenge-complete",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/risk/challenge-failed",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#1c2118"
+			}
+		},
+		{
+			"path": "pages/risk/blocked",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#f1f0ec"
+			}
+		},
+		{
+			"path": "pages/risk/webrtc-probe",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/risk/webrtc-failed",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
 		}
 	],
 	"globalStyle": {

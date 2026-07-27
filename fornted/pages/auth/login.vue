@@ -161,15 +161,6 @@
 			<view class="auth-links">
 				<button class="auth-link" type="button" :disabled="busy" @click="goRegister">创建账号</button>
 				<button class="auth-link" type="button" :disabled="busy" @click="goReset">忘记密码</button>
-				<button
-					v-if="authUiPreviewAvailable"
-					class="auth-link"
-					type="button"
-					:disabled="busy"
-					@click="previewAuthenticatedPages"
-				>
-					本地预览登录后页面
-				</button>
 			</view>
 		</view>
 	</view>
@@ -183,19 +174,16 @@
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
 	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import { initializeBrowserCsrf } from '@/common/auth/http-client.js'
-	import { isValidEmailAddress } from '@/common/auth/email-validation.js'
+	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
+	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
 	import {
 		getCurrentPhoneCountrySelection,
 		resolveInitialPhoneCountry,
 		selectPhoneCountry
 	} from '@/common/auth/phone-country-default.js'
-	import { findPhoneCountryById } from '@/common/auth/phone-country-search.js'
-	import { isValidLocalPhoneNumber } from '@/common/auth/phone-validation.js'
-	import { classifyPassword } from '@/common/auth/password-policy.js'
-	import {
-		enableAuthUiPreviewSession,
-		isAuthUiPreviewAvailable
-	} from '@/common/auth/ui-preview-session.js'
+	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
+	import { isValidLocalPhoneNumber } from '@shared-auth/phone-validation.js'
+	import { classifyPassword } from '@shared-auth/password-policy.js'
 
 	function emptyFieldErrors() {
 		return { email: '', phoneNumber: '', password: '', passwordConfirmation: '', code: '' }
@@ -236,8 +224,7 @@
 				fieldErrors: emptyFieldErrors(),
 				focusedField: '',
 				countryPickerOpen: false,
-				turnstileOpen: false,
-				authUiPreviewAvailable: isAuthUiPreviewAvailable()
+				turnstileOpen: false
 			}
 		},
 		computed: {
@@ -291,6 +278,7 @@
 					error.code = 'CSRF_INVALID'
 					throw error
 				} catch (error) {
+					if (presentRiskBlock(error)) return
 					this.error = authErrorMessage(error)
 				}
 			},
@@ -417,7 +405,7 @@
 					? { email: this.email }
 					: { countryIso2: this.country?.iso2.toUpperCase() || '', phoneNumber: this.phoneNumber }
 			},
-			async run(action) {
+			async run(action, onFailure) {
 				if (this.busy) return null
 				this.busy = true
 				this.error = ''
@@ -431,6 +419,7 @@
 					} else {
 						this.error = authErrorMessage(error)
 					}
+					if (typeof onFailure === 'function') onFailure()
 					return null
 				} finally { this.busy = false }
 			},
@@ -475,8 +464,22 @@
 				if (result) this.flow = result
 			},
 			async verifyHuman(token) {
-				const result = await this.run(() => authApi.loginCodeTurnstile(this.flow, token))
-				if (result?.accepted) this.humanVerified = true
+				let verificationFailed = false
+				const result = await this.run(
+					() => authApi.loginCodeTurnstile(this.flow, token),
+					() => { verificationFailed = true }
+				)
+				if (result?.accepted) {
+					this.humanVerified = true
+					return
+				}
+				if (verificationFailed) {
+					this.$nextTick(() => {
+						this.$refs.turnstile?.resetAfterServerRejection(
+							'验证结果未被服务器确认，请重新验证。'
+						)
+					})
+				}
 			},
 			async sendCode() {
 				if (this.busy || this.cooldown > 0) return
@@ -499,20 +502,7 @@
 				}
 			},
 			goRegister() { if (!this.busy) uni.navigateTo({ url: AUTH_ROUTES.register }) },
-			goReset() { if (!this.busy) uni.navigateTo({ url: AUTH_ROUTES.passwordReset }) },
-			previewAuthenticatedPages() {
-				if (this.busy || !enableAuthUiPreviewSession()) return
-				this.successMessage = '已进入本地预览'
-				uni.reLaunch({
-					url: AUTH_ROUTES.profile,
-					success: () => {
-						uni.showToast({ title: '本地预览已开启', icon: 'none' })
-					},
-					fail: () => {
-						this.error = '本地预览已开启，但页面跳转失败，请重试。'
-					}
-				})
-			}
+			goReset() { if (!this.busy) uni.navigateTo({ url: AUTH_ROUTES.passwordReset }) }
 		}
 	}
 </script>

@@ -22,6 +22,7 @@ public final class VerificationEmailContentFactory {
         }
         String purposeText = switch (purpose) {
             case REGISTRATION -> "注册";
+            case ADMIN_REGISTRATION -> "管理员注册";
             case LOGIN -> "登录";
             case PASSWORD_RESET -> "找回密码";
         };

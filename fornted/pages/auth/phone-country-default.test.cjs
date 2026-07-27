@@ -36,7 +36,7 @@ async function loadDefaultCountryModule({ api, osLanguage = '', locale = '' }) {
 	const authDirectory = path.resolve(__dirname, '../../common/auth')
 	const source = fs.readFileSync(path.join(authDirectory, 'phone-country-default.js'), 'utf8')
 		.replace("from './auth-api.js'", `from '${authApiUrl}'`)
-		.replace("from './phone-country-search.js'", `from '${searchUrl}'`)
+		.replace("from '@shared-auth/phone-country-search.js'", `from '${searchUrl}'`)
 		.concat(`\n// fresh-module-${moduleNonce}`)
 	const loadedModule = await import(sourceUrl(source))
 	delete globalThis[apiGlobalKey]
@@ -85,11 +85,11 @@ test('uses an explicit device region when the IP result is unavailable', async (
 	})
 })
 
-test('keeps the selection empty when neither IP nor device region resolves', async () => {
+test('keeps the selection empty after an API failure even when device region is available', async () => {
 	const failedApi = { phoneCountry: async () => { throw new Error('offline') } }
-	const languageOnlyModule = await loadDefaultCountryModule({ api: failedApi, osLanguage: 'en' })
+	const deviceModule = await loadDefaultCountryModule({ api: failedApi, osLanguage: 'zh-CN' })
 
-	assert.deepEqual(await languageOnlyModule.resolveInitialPhoneCountry(), {
+	assert.deepEqual(await deviceModule.resolveInitialPhoneCountry(), {
 		countryId: '',
 		source: 'FALLBACK'
 	})

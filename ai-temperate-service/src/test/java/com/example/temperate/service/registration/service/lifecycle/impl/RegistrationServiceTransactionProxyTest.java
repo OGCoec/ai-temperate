@@ -19,6 +19,7 @@ import com.example.temperate.service.registration.component.executor.impl.Spring
 import com.example.temperate.service.registration.component.normalizer.RegistrationInputNormalizer;
 import com.example.temperate.service.registration.component.observer.RegistrationCleanupObserver;
 import com.example.temperate.service.auth.password.policy.PasswordStrengthPolicy;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
 import com.example.temperate.service.registration.component.token.RegistrationTokenGenerator;
 import com.example.temperate.service.registration.dto.command.RegistrationCompleteCommand;
 import com.example.temperate.service.registration.exception.RegistrationException;
@@ -28,7 +29,6 @@ import com.example.temperate.service.registration.flow.security.RegistrationAcce
 import com.example.temperate.service.registration.flow.security.RegistrationTokenProtector;
 import com.example.temperate.service.registration.flow.store.RegistrationFlowStore;
 import com.example.temperate.service.registration.service.lifecycle.RegistrationService;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
 import com.example.temperate.service.registration.verification.delivery.coordinator.VerificationDeliveryCoordinator;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
 import com.example.temperate.service.registration.verification.service.registry.SixDigitVerificationCodeServiceRegistry;
@@ -154,7 +154,7 @@ class RegistrationServiceTransactionProxyTest {
                 mock(VerificationDeliveryCoordinator.class),
                 mock(SixDigitVerificationCodeServiceRegistry.class),
                 mock(VerificationProviderResolver.class),
-                mock(TurnstileVerificationService.class),
+                mock(HumanVerificationServiceRegistry.class),
                 passwordEncoder,
                 () -> 42L,
                 new PublicIdCodec(),

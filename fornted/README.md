@@ -9,5 +9,3 @@
 - 注册：`pages/auth/register`
 - 找回密码：`pages/auth/password-reset`
 - 个人中心：`pages/account/profile`
-
-本地预览登录后页面会进入个人中心，不依赖后端接口、不使用原生多项底部栏。

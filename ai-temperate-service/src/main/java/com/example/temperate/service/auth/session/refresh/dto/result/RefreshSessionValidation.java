@@ -12,6 +12,7 @@ public record RefreshSessionValidation(Status status, RefreshSessionSnapshot ses
         MISSING_OR_EXPIRED,
         DEVICE_MISMATCH,
         CSRF_MISMATCH,
-        INDEX_MISSING
+        INDEX_MISSING,
+        PREAUTH_MISMATCH
     }
 }

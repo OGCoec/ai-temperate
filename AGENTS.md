@@ -211,6 +211,17 @@ Java 注释用于说明非直观机制的“为什么”、安全或一致性不
 
 以下场景默认不强制添加注释：简单 CRUD、Getter/Setter、显而易见的空值或长度校验、框架标准注解、直接字段映射和无业务分支的样板代码。不得为了满足数量要求给每一行 Java 代码添加注释。
 
+### 1.5 前后端展示代码完全分离规范
+
+- Java 后端源码中禁止出现 HTML、CSS、JavaScript、Vue、React、UniApp 或其他前端展示代码，包括 Java Text Block、字符串拼接、注解字符串和运行时生成脚本。
+- `Controller` 只能负责请求参数校验、认证授权、HTTP 状态与响应头编排，以及返回 classpath 静态资源、视图名称或结构化 DTO；禁止在 `Controller` 中构造、替换或转义前端页面内容。
+- H5、Android WebView 和其他浏览器页面必须存放在前端工程，或 `ai-temperate-web/src/main/resources/verification-pages` 等明确的页面资源目录中；HTML、CSS 和 JavaScript 的实现与维护必须在对应前端文件内完成。需要先经过 Controller 安全校验的页面禁止放入可绕过该入口直接访问的公开静态目录。
+- 页面需要运行时数据时，必须通过受控 JSON API、经过白名单校验的 Query/Fragment 或框架标准视图模型传递；禁止为了注入变量而把前端模板重新拼接回 Java 代码。
+- Secret、一次性 Token、完整 challenge、密码、验证码和敏感身份信息禁止写入静态资源、页面源码、日志或非必要 URL；公开 Site Key 也不得输出到日志。
+- 静态页面必须保持无缓存、安全响应头和 CSP 等原有安全边界；资源拆分不得绕过服务端参数校验、认证、Siteverify 或一次性 Token 防重放。
+- 新增或修改返回页面的 Controller 时，必须提供契约测试，确认响应来自独立资源文件，并检查 Controller 源码不包含 `<html>`、`<style>`、`<script>` 或前端 SDK 地址。
+- 因框架限制确需违反本节时，必须先编写 ADR，说明无法使用静态资源或标准视图机制的原因、安全影响、替代方案与回滚方式。
+
 ## 2. API 与 PathVariable 规范
 
 ### 2.1 Base64URL 资源 ID
@@ -641,6 +652,7 @@ mvn dependency:tree
 
 修改代码前后必须检查：
 
+- Controller、Service、Mapper 和其他 Java 后端源码是否包含 HTML、CSS、JavaScript、前端模板字符串或前端 SDK 地址；页面响应是否来自独立资源文件。
 - 是否在循环中调用 Mapper、Redis、MQ 或外部 API。
 - 是否可以改成批量 SQL、MGET/MSET、Pipeline 或 Lua。
 - 是否创建了新的数据库连接池或数据源。

@@ -81,7 +81,7 @@ class RedisLoginFailureStoreIntegrationTest {
 
     @Test
     void deviceAllowsFiveFailuresAndBlocksTheSixth() {
-        ProtectedLoginAttempt attempt = attempt(1, 1, "203.0.113.10");
+        ProtectedLoginAttempt attempt = attempt(1, 1);
 
         assertFirstFailuresAllowed(attempt, LoginFailureBucket.PASSWORD, 5);
         assertThat(store.recordFailure(attempt, LoginFailureBucket.PASSWORD))
@@ -98,12 +98,12 @@ class RedisLoginFailureStoreIntegrationTest {
     void sameDeviceAcrossDifferentSubjectsBlocksOnTheSixthFailure() {
         for (int index = 1; index <= 5; index++) {
             assertThat(store.recordFailure(
-                            attempt(index, 1, "203.0.113.20"),
+                            attempt(index, 1),
                             LoginFailureBucket.PASSWORD))
                     .isEqualTo(LoginLimitDecision.ALLOWED);
         }
 
-        ProtectedLoginAttempt sixth = attempt(6, 1, "203.0.113.20");
+        ProtectedLoginAttempt sixth = attempt(6, 1);
         assertThat(store.recordFailure(sixth, LoginFailureBucket.PASSWORD))
                 .isEqualTo(LoginLimitDecision.BLOCKED);
         assertThat(redisTemplate.hasKey(KEY_FACTORY.loginBlockKey(sixth.actorHash())))
@@ -115,24 +115,22 @@ class RedisLoginFailureStoreIntegrationTest {
     }
 
     @Test
-    void sameNetworkAcrossDifferentDevicesDoesNotParticipateInRiskControl() {
+    void differentDevicesDoNotShareASeparateNetworkFailureBucket() {
         for (int index = 1; index <= 20; index++) {
             assertThat(store.recordFailure(
-                            attempt(index, index, "203.0.113.30"),
+                            attempt(index, index),
                             LoginFailureBucket.PASSWORD))
                     .isEqualTo(LoginLimitDecision.ALLOWED);
         }
 
-        ProtectedLoginAttempt twentieth = attempt(20, 20, "203.0.113.30");
-        assertThat(redisTemplate.hasKey(KEY_FACTORY.loginBlockKey(twentieth.networkHash())))
-                .isFalse();
+        ProtectedLoginAttempt twentieth = attempt(20, 20);
         assertThat(redisTemplate.hasKey(KEY_FACTORY.loginBlockKey(twentieth.actorHash())))
                 .isFalse();
     }
 
     @Test
     void successfulAuthenticationClearsBothDeviceFailureBuckets() {
-        ProtectedLoginAttempt attempt = attempt(1, 1, "203.0.113.40");
+        ProtectedLoginAttempt attempt = attempt(1, 1);
         assertFirstFailuresAllowed(attempt, LoginFailureBucket.PASSWORD, 4);
         assertFirstFailuresAllowed(attempt, LoginFailureBucket.CODE, 3);
 
@@ -154,7 +152,7 @@ class RedisLoginFailureStoreIntegrationTest {
                 Duration.ofMillis(250),
                 5,
                 Duration.ofMillis(500));
-        ProtectedLoginAttempt attempt = attempt(1, 1, "203.0.113.50");
+        ProtectedLoginAttempt attempt = attempt(1, 1);
 
         for (int index = 0; index < 5; index++) {
             assertThat(shortStore.recordFailure(attempt, LoginFailureBucket.PASSWORD))
@@ -194,11 +192,11 @@ class RedisLoginFailureStoreIntegrationTest {
         }
     }
 
-    private static ProtectedLoginAttempt attempt(int subjectNumber, int deviceNumber, String ip) {
+    private static ProtectedLoginAttempt attempt(int subjectNumber, int deviceNumber) {
         String subject = "person" + subjectNumber + "@example.test";
         String device = String.format(
                 "00000000-0000-4000-a000-%012x", deviceNumber);
-        return PROTECTOR.protect(new LoginAttempt(subject, device, ip));
+        return PROTECTOR.protect(new LoginAttempt(subject, device));
     }
 
     private static void awaitCondition(BooleanSupplier condition, Duration timeout) {

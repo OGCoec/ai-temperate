@@ -38,6 +38,39 @@ final class HmacSha256IdentifierTest {
     }
 
     @Test
+    void createsVersionedBinaryIdentifierUsingPurposeDelimiterAndPayload() {
+        HmacSha256Identifier identifier = new HmacSha256Identifier(TEST_KEY);
+
+        HmacIdentifier actual = identifier.identify(
+                "risk-ip:v2",
+                new byte[] {0x04, (byte) 203, 0, 113, 10});
+
+        assertEquals("IJ06ZYXsMrHnbdFrdZSI4GWc4Y97dyCbhTtsIuA6W_Y", actual.value());
+        assertNotEquals(actual, identifier.identify(
+                "risk-ip:v3",
+                new byte[] {0x04, (byte) 203, 0, 113, 10}));
+        assertNotEquals(actual, identifier.identify(
+                "risk-ip:v2",
+                new byte[] {0x06, (byte) 203, 0, 113, 10}));
+    }
+
+    @Test
+    void rejectsAmbiguousBinaryIdentifierInputs() {
+        HmacSha256Identifier identifier = new HmacSha256Identifier(TEST_KEY);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> identifier.identify(null, new byte[] {1}));
+        assertThrows(IllegalArgumentException.class,
+                () -> identifier.identify(" ", new byte[] {1}));
+        assertThrows(IllegalArgumentException.class,
+                () -> identifier.identify("risk\u0000ip", new byte[] {1}));
+        assertThrows(IllegalArgumentException.class,
+                () -> identifier.identify("risk-ip:v2", null));
+        assertThrows(IllegalArgumentException.class,
+                () -> identifier.identify("risk-ip:v2", new byte[0]));
+    }
+
+    @Test
     void rejectsMissingOrShortSecrets() {
         assertThrows(IllegalArgumentException.class, () -> new HmacSha256Identifier(null));
         assertThrows(IllegalArgumentException.class, () -> new HmacSha256Identifier(new byte[0]));

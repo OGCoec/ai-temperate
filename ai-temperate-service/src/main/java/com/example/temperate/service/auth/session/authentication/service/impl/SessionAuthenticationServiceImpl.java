@@ -18,6 +18,7 @@ import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSess
 import com.example.temperate.service.auth.session.refresh.store.RefreshSessionStore;
 import com.example.temperate.service.auth.session.token.dto.result.VerifiedAccessToken;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Objects;
@@ -61,6 +62,17 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
      */
     @Override
     public SessionAuthenticationResult authenticate(SessionAuthenticationCommand command) {
+        return authenticate(command, null);
+    }
+
+    /**
+     * 在启用网络风控时，把 Refresh Session、用户索引与认证 PreAuth 的校验和 TTL 续期合并到
+     * 同一个 Redis Lua；未传绑定的兼容调用保留原有会话原子边界。
+     */
+    @Override
+    public SessionAuthenticationResult authenticate(
+            SessionAuthenticationCommand command,
+            PreAuthSessionBinding preAuthBinding) {
         requireRefreshCommand(command == null ? null : command.getRefreshToken());
         if (isBlank(command.getPresentedCsrfToken())) {
             throw error(SessionAuthenticationErrorCode.CSRF_INVALID,
@@ -71,10 +83,16 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
         try {
             // 由 Lua 在一次 Redis 执行中校验三项会话凭据并同步续期会话与用户索引；
             // 若拆成多次读写，并发登出或续期可能留下只续期一侧键的失配状态。
-            session = requireValid(refreshSessionStore.validateAndRenew(
-                    secretProtector.refreshToken(command.getRefreshToken()),
-                    secretProtector.device(command.getDeviceInstallationId()),
-                    secretProtector.csrf(command.getPresentedCsrfToken())));
+            session = requireValid(preAuthBinding == null
+                    ? refreshSessionStore.validateAndRenew(
+                            secretProtector.refreshToken(command.getRefreshToken()),
+                            secretProtector.device(command.getDeviceInstallationId()),
+                            secretProtector.csrf(command.getPresentedCsrfToken()))
+                    : refreshSessionStore.validateAndRenewWithPreAuth(
+                            secretProtector.refreshToken(command.getRefreshToken()),
+                            secretProtector.device(command.getDeviceInstallationId()),
+                            secretProtector.csrf(command.getPresentedCsrfToken()),
+                            preAuthBinding));
         } catch (SessionAuthenticationException exception) {
             throw exception;
         } catch (IllegalArgumentException exception) {
@@ -99,16 +117,32 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
      */
     @Override
     public SessionAuthenticationResult bootstrap(SessionBootstrapCommand command) {
+        return bootstrap(command, null);
+    }
+
+    /**
+     * 在恢复浏览器会话时原子完成 CSRF 轮换、Refresh Session 续期和认证 PreAuth 续期。
+     */
+    @Override
+    public SessionAuthenticationResult bootstrap(
+            SessionBootstrapCommand command,
+            PreAuthSessionBinding preAuthBinding) {
         requireRefreshCommand(command == null ? null : command.getRefreshToken());
         VerifiedAccessToken optionalAccess = verifyOptionalAccess(command.getAccessToken());
         // 原始 CSRF 仅在本次响应中返回；Redis 只保存其受保护标识，避免长期存放可直接重放的值。
         String newCsrfToken = authTokenService.newCsrfToken();
         RefreshSessionSnapshot session;
         try {
-            session = requireValid(refreshSessionStore.bootstrapAndRenew(
-                    secretProtector.refreshToken(command.getRefreshToken()),
-                    secretProtector.device(command.getDeviceInstallationId()),
-                    secretProtector.csrf(newCsrfToken)));
+            session = requireValid(preAuthBinding == null
+                    ? refreshSessionStore.bootstrapAndRenew(
+                            secretProtector.refreshToken(command.getRefreshToken()),
+                            secretProtector.device(command.getDeviceInstallationId()),
+                            secretProtector.csrf(newCsrfToken))
+                    : refreshSessionStore.bootstrapAndRenewWithPreAuth(
+                            secretProtector.refreshToken(command.getRefreshToken()),
+                            secretProtector.device(command.getDeviceInstallationId()),
+                            secretProtector.csrf(newCsrfToken),
+                            preAuthBinding));
         } catch (SessionAuthenticationException exception) {
             throw exception;
         } catch (IllegalArgumentException exception) {
@@ -217,6 +251,10 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
             case CSRF_MISMATCH -> throw error(
                     SessionAuthenticationErrorCode.CSRF_INVALID,
                     "CSRF token is invalid.", false);
+            case PREAUTH_MISMATCH -> throw error(
+                    SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
+                    "Authenticated PreAuth is missing or no longer bound to this session.",
+                    false);
         };
     }
 

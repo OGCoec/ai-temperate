@@ -10,6 +10,7 @@ import com.example.temperate.service.registration.dto.result.RegistrationComplet
 import com.example.temperate.service.registration.dto.result.RegistrationStartResult;
 import com.example.temperate.service.registration.dto.result.RegistrationStatusResult;
 import com.example.temperate.service.registration.dto.result.VerificationDispatchResult;
+import reactor.core.publisher.Mono;
 
 /**
  * 注册生命周期的业务服务接口。
@@ -22,7 +23,7 @@ public interface RegistrationService {
 
     RegistrationStatusResult status(RegistrationStatusQuery query);
 
-    RegistrationStatusResult verifyTurnstile(RegistrationTurnstileCommand command);
+    Mono<RegistrationStatusResult> verifyTurnstile(RegistrationTurnstileCommand command);
 
     VerificationDispatchResult sendCode(RegistrationSendCodeCommand command);
 

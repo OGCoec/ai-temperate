@@ -8,7 +8,7 @@ import {
 import {
 	containsSessionCredentialUpdate,
 	emptySessionCredentials,
-	hasCompleteSessionCredentials,
+	hasPersistableAndroidCredentials,
 	mergeSessionCredentials
 } from './session-credentials.js'
 import { clearProfileVault } from '../user/profile-vault.js'
@@ -52,7 +52,7 @@ export function saveSession(response) {
 	}
 	if (!containsSessionCredentialUpdate(response)) return
 	const credentials = mergeSessionCredentials(loadAndroidSessionCredentials(), response)
-	if (hasCompleteSessionCredentials(credentials)) {
+	if (hasPersistableAndroidCredentials(credentials)) {
 		saveAndroidSessionCredentials(credentials)
 	} else {
 		clearAndroidSessionCredentials()

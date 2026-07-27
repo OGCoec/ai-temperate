@@ -14,7 +14,9 @@ import com.example.temperate.service.registration.dto.result.RegistrationStatusR
 import com.example.temperate.service.registration.dto.result.VerificationDispatchResult;
 import com.example.temperate.service.registration.service.lifecycle.RegistrationService;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Mono;
 
 /**
  * 验证注册服务接口与实现约束的架构测试。
@@ -26,7 +28,7 @@ class RegistrationServiceContractTest {
         assertThat(RegistrationService.class).isInterface();
         assertReturnType("start", RegistrationStartCommand.class, RegistrationStartResult.class);
         assertReturnType("status", RegistrationStatusQuery.class, RegistrationStatusResult.class);
-        assertReturnType(
+        assertReactiveReturnType(
                 "verifyTurnstile",
                 RegistrationTurnstileCommand.class,
                 RegistrationStatusResult.class);
@@ -42,5 +44,19 @@ class RegistrationServiceContractTest {
             String methodName, Class<?> parameterType, Class<?> returnType) throws Exception {
         Method method = RegistrationService.class.getMethod(methodName, parameterType);
         assertThat(method.getReturnType()).isEqualTo(returnType);
+    }
+
+    private static void assertReactiveReturnType(
+            String methodName,
+            Class<?> parameterType,
+            Class<?> elementType) throws Exception {
+        Method method =
+                RegistrationService.class.getMethod(methodName, parameterType);
+        assertThat(method.getReturnType()).isEqualTo(Mono.class);
+        assertThat(method.getGenericReturnType())
+                .isInstanceOfSatisfying(
+                        ParameterizedType.class,
+                        type -> assertThat(type.getActualTypeArguments())
+                                .containsExactly(elementType));
     }
 }

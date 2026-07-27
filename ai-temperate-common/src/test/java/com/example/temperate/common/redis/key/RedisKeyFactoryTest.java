@@ -211,6 +211,53 @@ final class RedisKeyFactoryTest {
     }
 
     @Test
+    void createsOnlyV4PreAuthKeysWithoutIndependentRiskStateKeys()
+            throws Exception {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        HmacIdentifier hmac = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef"
+                        .getBytes(StandardCharsets.UTF_8))
+                .identify("preauth-token");
+
+        assertEquals(
+                "ait:prod:risk:preauth-user:v4:token:" + hmac.value(),
+                factory.userPreAuthKey(hmac));
+        assertEquals(
+                "ait:prod:risk:preauth-admin:v4:token:" + hmac.value(),
+                factory.adminPreAuthKey(hmac));
+        assertThrows(NoSuchMethodException.class, () ->
+                RedisKeyFactory.class.getMethod(
+                        "userRiskChallengeKey",
+                        HmacIdentifier.class));
+        assertThrows(NoSuchMethodException.class, () ->
+                RedisKeyFactory.class.getMethod(
+                        "userImpossibleTravelEventsKey",
+                        HmacIdentifier.class));
+    }
+
+    @Test
+    void createsOnlyV3IpIntelligenceKeys() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        HmacIdentifier hmac = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8))
+                .identify("risk-ip-v3");
+
+        assertEquals(
+                "ait:prod:risk:ipintel:v3:ip:" + hmac.value(),
+                factory.ipIntelligenceCacheKey(hmac));
+        assertEquals(
+                "ait:prod:risk:ipintel:v3:single-flight:" + hmac.value(),
+                factory.ipIntelligenceSingleFlightKey(hmac));
+    }
+
+    @Test
+    void createsFixedAiModelEnabledSnapshotKey() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+
+        assertEquals("ait:prod:ai:model:v2:enabled", factory.aiModelEnabledSnapshotKey());
+    }
+
+    @Test
     void exposesTypedSessionPrefixesForBoundedLuaIndexTraversal() {
         RedisKeyFactory factory = new RedisKeyFactory("test");
 

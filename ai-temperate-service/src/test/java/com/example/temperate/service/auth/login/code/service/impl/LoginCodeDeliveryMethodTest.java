@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
@@ -26,10 +27,17 @@ import com.example.temperate.service.auth.login.session.LoginSessionIssuer;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.humanverification.HumanVerificationCommand;
+import com.example.temperate.service.humanverification.HumanVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
+import com.example.temperate.service.humanverification.HumanVerificationType;
+import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.component.normalizer.RegistrationInputNormalizer;
+import com.example.temperate.service.registration.enums.RegistrationDiagnosticCode;
+import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.enums.VerificationChannel;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
+import com.example.temperate.service.registration.exception.RegistrationException;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
 import com.example.temperate.service.registration.verification.generator.VerificationCodeGenerator;
@@ -38,6 +46,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 /**
  * 验证手机号登录选择 WhatsApp 时仍复用 SMS 验证因子状态，并在服务端拒绝中国号码和渠道错配。
@@ -53,6 +64,8 @@ class LoginCodeDeliveryMethodTest {
     private LoginRateLimitService rateLimitService;
     private VerificationCodeGenerator codeGenerator;
     private VerificationDeliveryPublisher publisher;
+    private HumanVerificationServiceRegistry humanVerificationServices;
+    private HumanVerificationService turnstileService;
     private LoginCodeFlowServiceImpl service;
 
     @BeforeEach
@@ -62,6 +75,10 @@ class LoginCodeDeliveryMethodTest {
         rateLimitService = mock(LoginRateLimitService.class);
         codeGenerator = mock(VerificationCodeGenerator.class);
         publisher = mock(VerificationDeliveryPublisher.class);
+        humanVerificationServices = mock(HumanVerificationServiceRegistry.class);
+        turnstileService = mock(HumanVerificationService.class);
+        when(humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE))
+                .thenReturn(turnstileService);
         when(protector.loginFlowToken(anyString())).thenReturn(HMAC);
         when(protector.loginChallenge(anyString())).thenReturn(HMAC);
         when(protector.device(anyString())).thenReturn(HMAC);
@@ -77,7 +94,7 @@ class LoginCodeDeliveryMethodTest {
                 flowStore,
                 protector,
                 mock(AuthTokenService.class),
-                mock(TurnstileVerificationService.class),
+                humanVerificationServices,
                 codeGenerator,
                 new VerificationDeliveryOperationIdGenerator(),
                 publisher,
@@ -85,6 +102,73 @@ class LoginCodeDeliveryMethodTest {
                 rateLimitService,
                 mock(LoginSessionIssuer.class),
                 Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    void turnstileLoadsFlowThenVerifiesLoginActionAndMarksOnce() {
+        when(flowStore.getRequired(any(), eq(NOW)))
+                .thenReturn(phoneFlow("+447911123456"));
+        when(turnstileService.verify(any(HumanVerificationCommand.class)))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(service.verifyTurnstile(
+                        access(), "turnstile-token"))
+                .verifyComplete();
+
+        InOrder ordered = inOrder(flowStore, turnstileService);
+        ordered.verify(flowStore).getRequired(any(), eq(NOW));
+        ordered.verify(turnstileService).verify(
+                org.mockito.ArgumentMatchers.argThat(command ->
+                        "turnstile-token".equals(command.responseToken())
+                                && "203.0.113.10".equals(command.canonicalClientIp())
+                                && "challenge".equals(command.challengeId())
+                                && "login".equals(command.expectedAction())));
+        verify(humanVerificationServices)
+                .getRequired(HumanVerificationType.TURNSTILE);
+        ordered.verify(flowStore).markHumanVerified(any(), eq(NOW));
+        verify(flowStore).markHumanVerified(any(), eq(NOW));
+    }
+
+    @Test
+    void turnstileFailureMapsToLoginErrorAndNeverMarksFlow() {
+        when(flowStore.getRequired(any(), eq(NOW)))
+                .thenReturn(phoneFlow("+447911123456"));
+        when(turnstileService.verify(any(HumanVerificationCommand.class)))
+                .thenReturn(Mono.error(new RegistrationException(
+                        RegistrationErrorCode.TURNSTILE_REJECTED,
+                        "Turnstile verification was rejected.",
+                        RegistrationDiagnosticCode.CLOUDFLARE_TOKEN_REJECTED)));
+
+        StepVerifier.create(service.verifyTurnstile(
+                        access(), "turnstile-token"))
+                .expectErrorSatisfies(failure -> {
+                    assertThat(failure).isInstanceOf(LoginException.class);
+                    assertThat(((LoginException) failure).code())
+                            .isEqualTo(LoginErrorCode.TURNSTILE_REJECTED);
+                })
+                .verify();
+
+        verify(flowStore, never()).markHumanVerified(any(), any());
+    }
+
+    @Test
+    void turnstileUnavailablePropagatesWithoutMarkingLoginFlow() {
+        when(flowStore.getRequired(any(), eq(NOW)))
+                .thenReturn(phoneFlow("+447911123456"));
+        HumanVerificationUnavailableException unavailable =
+                new HumanVerificationUnavailableException(
+                        HumanVerificationType.TURNSTILE,
+                        new IllegalStateException("simulated transport failure"));
+        when(turnstileService.verify(any(HumanVerificationCommand.class)))
+                .thenReturn(Mono.error(unavailable));
+
+        StepVerifier.create(service.verifyTurnstile(
+                        access(), "turnstile-token"))
+                .expectErrorSatisfies(failure -> assertThat(failure)
+                        .isSameAs(unavailable))
+                .verify();
+
+        verify(flowStore, never()).markHumanVerified(any(), any());
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.example.temperate.web.auth.phonecountry.component;
 
+import com.example.temperate.common.net.ip.IpAddressIdentity;
 import com.example.temperate.web.auth.phonecountry.config.properties.PhoneCountryProperties;
 import com.example.temperate.web.auth.phonecountry.support.IpNetworkRange;
 import com.example.temperate.web.auth.phonecountry.support.PublicIpAddressPolicy;
@@ -99,7 +100,7 @@ public final class TrustedClientIpResolver {
         if (!PublicIpAddressPolicy.isPublic(address)) {
             return Optional.empty();
         }
-        String value = address.getHostAddress();
+        String value = IpAddressIdentity.fromAddress(address).canonicalText();
         return value == null || value.isBlank() ? Optional.empty() : Optional.of(value);
     }
 }

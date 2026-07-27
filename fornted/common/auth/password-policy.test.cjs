@@ -4,7 +4,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 async function loadModule() {
-	const source = fs.readFileSync(path.resolve(__dirname, 'password-policy.js'), 'utf8')
+	const source = fs.readFileSync(
+		path.resolve(__dirname, '../../../shared-frontend/auth/password-policy.js'),
+		'utf8'
+	)
 	const sourceUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 	return import(sourceUrl)
 }

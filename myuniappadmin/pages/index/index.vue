@@ -1,648 +1,549 @@
 <template>
 	<view class="admin-page">
 		<view class="admin-shell">
-			<view class="admin-intro" aria-hidden="true">
-				<view class="admin-mark">
-					<view class="admin-mark-core"></view>
-				</view>
-				<text class="admin-kicker">AI Temperate Admin</text>
-				<text class="admin-title">管理员登录</text>
-				<text class="admin-copy">独立管理端入口，当前仅启用本地前端校验。</text>
-				<view class="status-list">
-					<view class="status-item">
-						<text class="status-dot"></text>
-						<text class="status-copy">HTTPS 3001 独立端口</text>
-					</view>
+			<view class="admin-intro">
+				<view class="admin-mark" aria-hidden="true"><view class="admin-mark-core" /></view>
+				<text class="admin-kicker">AI TEMPERATE · ADMIN</text>
+				<text class="admin-title">{{ pageTitle }}</text>
+				<text class="admin-copy">{{ pageCopy }}</text>
+				<view class="security-note">
+					<text>单管理员 · hCaptcha 后端校验 · 六小时滑动会话</text>
 				</view>
 			</view>
 
-			<view class="login-panel" :aria-busy="busy">
-				<view class="panel-header">
-					<text class="panel-title">安全登录</text>
-					<text class="panel-subtitle">邮箱、电话与密码强度全部通过后，才进入后续安全验证。</text>
-				</view>
-
-				<view v-if="message" class="admin-banner" :class="messageType" role="status" aria-live="polite">
+			<view class="admin-panel">
+				<view v-if="message" class="admin-banner" :class="messageType" role="alert">
 					{{ message }}
 				</view>
 
-				<identifier-fields
-					ref="emailFields"
-					type="EMAIL"
-					:email="email"
-					:errors="fieldErrors"
-					:focus-field="focusedField"
-					@update:email="email = $event"
-					@field-blur="validateField"
-				/>
+				<view v-if="screenState === 'LOADING'" class="center-state" aria-live="polite">
+					<view class="loading-ring" aria-hidden="true" />
+					<text>正在检查管理员配置与会话…</text>
+				</view>
 
-				<identifier-fields
-					ref="phoneFields"
-					type="PHONE"
-					:country-id="countryId"
-					:country-resolving="false"
-					:phone="phoneNumber"
-					:errors="fieldErrors"
-					:focus-field="focusedField"
-					@update:country-id="countryId = $event"
-					@update:phone="phoneNumber = $event"
-					@field-blur="validateField"
-					@country-picker-visibility-change="countryPickerOpen = $event"
-				/>
+				<view v-else-if="screenState === 'CORRUPT' || screenState === 'DISABLED'" class="center-state">
+					<text class="state-title">{{ screenState === 'CORRUPT' ? '管理员配置需要检查' : '管理员已停用' }}</text>
+					<text class="state-copy">
+						{{ screenState === 'CORRUPT'
+							? '请检查 .admin/complete.yaml 与初始化标记。系统已关闭注册和登录。'
+							: '管理员配置当前为 DISABLED，认证与管理接口均不可用。' }}
+					</text>
+					<button class="primary-button" type="button" :loading="busy" @click="loadState(true)">重新检查</button>
+				</view>
 
-				<view class="auth-field">
-					<label class="auth-label" for="admin-password">密码</label>
-					<view class="auth-control password-row" :class="{ invalid: fieldErrors.password }">
-						<input
-							id="admin-password"
-							v-model="password"
-							class="auth-control-input password-input"
-							:type="showPassword ? 'text' : 'password'"
-							maxlength="16"
-							passwordrules="required: minlength(8); maxlength(16);"
-							autocomplete="current-password"
-							placeholder="输入管理员密码"
-							:focus="focusedField === 'password'"
-							:aria-invalid="Boolean(fieldErrors.password)"
-							:aria-describedby="fieldErrors.password ? 'admin-password-error' : 'admin-password-help'"
-							@blur="validateField('password')"
+				<view v-else-if="screenState === 'AUTHENTICATED'" class="dashboard">
+					<view class="profile-badge">{{ profileFlag }}</view>
+					<text class="state-title">管理员会话已验证</text>
+					<view class="profile-row">
+						<text class="profile-label">邮箱</text>
+						<text class="profile-value">{{ profile.email }}</text>
+					</view>
+					<view class="profile-row">
+						<text class="profile-label">国际手机号</text>
+						<text class="profile-value">{{ profile.phoneE164 }}</text>
+					</view>
+					<view class="profile-row">
+						<text class="profile-label">会话到期</text>
+						<text class="profile-value">{{ expiresLabel }}</text>
+					</view>
+					<button class="credential-button" type="button" :disabled="busy" @click="navigateToIp2LocationKeys">
+						<text class="credential-kicker">NETWORK RISK</text>
+						<text class="credential-title">IP 信誉凭据</text>
+						<text class="credential-copy">导入、查看和撤销 IP2Location 加密调用凭据</text>
+					</button>
+					<button class="credential-button model-catalog-button" type="button" :disabled="busy" @click="navigateToAiModels">
+						<text class="credential-kicker">MODEL OPERATIONS</text>
+						<text class="credential-title">AI 模型目录</text>
+						<text class="credential-copy">分页查询、新增、编辑并单个或批量启停模型</text>
+					</button>
+					<button class="credential-button model-catalog-button" type="button" :disabled="busy" @click="navigateToAiModelIcons">
+						<text class="credential-kicker">MODEL ASSETS</text>
+						<text class="credential-title">模型图标库</text>
+						<text class="credential-copy">上传 OSS 图片、登记外部 URL 并维护模型复用图标</text>
+					</button>
+					<button class="primary-button" type="button" :loading="busy" @click="refreshProfile">刷新会话</button>
+					<button class="secondary-button" type="button" :disabled="busy" @click="logoutCurrent">退出当前设备</button>
+					<button class="danger-button" type="button" :disabled="busy" @click="logoutEverywhere">退出所有设备</button>
+				</view>
+
+				<view v-else-if="screenState === 'UNINITIALIZED'">
+					<view class="step-row" aria-label="注册进度">
+						<view v-for="(label, index) in registerSteps" :key="label" class="step-item">
+							<view class="step-dot" :class="{ active: index <= registerStepIndex }">{{ index + 1 }}</view>
+							<text>{{ label }}</text>
+						</view>
+					</view>
+
+					<view v-if="registerStep === 'IDENTITY'">
+						<text class="panel-title">初始化唯一管理员</text>
+						<text class="panel-copy">邮箱和国际手机号将同时成为登录凭证，初始化后不能在线修改。</text>
+						<identity-form
+							v-model:email="form.email"
+							:country-id="form.countryId"
+							:country-resolving="countryResolving"
+							v-model:phone="form.phoneNumber"
+							:errors="fieldErrors"
+							@update:country-id="selectCountry"
 						/>
-						<button
-							class="password-icon-toggle"
-							type="button"
-							:aria-label="showPassword ? '隐藏密码' : '显示密码'"
-							:aria-pressed="showPassword"
-							@click="showPassword = !showPassword"
-						>
-							<uni-icons
-								:type="showPassword ? 'eye-slash' : 'eye'"
-								size="22"
-								color="#dceced"
-							/>
+						<button class="primary-button" type="button" :loading="busy" @click="startRegistration">
+							继续并完成人机验证
 						</button>
 					</view>
-					<text id="admin-password-help" class="auth-help">密码必须达到中等或更高强度。</text>
-					<text v-if="fieldErrors.password" id="admin-password-error" class="auth-error" role="alert">{{ fieldErrors.password }}</text>
+
+					<view v-else-if="registerStep === 'VERIFICATION'">
+						<text class="panel-title">验证邮箱与手机号</text>
+						<text class="panel-copy">两个验证码必须在同一次提交中同时正确。</text>
+						<view class="dispatch-grid">
+							<button class="secondary-button" type="button" :disabled="busy" @click="sendEmailCode">发送邮箱验证码</button>
+							<button class="secondary-button" type="button" :disabled="busy" @click="sendPhoneCode">发送手机验证码</button>
+						</view>
+						<view v-if="allowWhatsApp" class="delivery-row" role="radiogroup" aria-label="手机验证码投递方式">
+							<button type="button" :class="{ selected: deliveryMethod === 'SMS' }" @click="deliveryMethod = 'SMS'">SMS</button>
+							<button type="button" :class="{ selected: deliveryMethod === 'WHATSAPP' }" @click="deliveryMethod = 'WHATSAPP'">WhatsApp</button>
+						</view>
+						<verification-code-fields
+							:email-code="form.emailCode"
+							:phone-code="form.phoneCode"
+							:errors="fieldErrors"
+							@update:email-code="updateEmailCode"
+							@update:phone-code="updatePhoneCode"
+						/>
+						<button class="primary-button" type="button" :loading="busy" @click="verifyCodes">同时校验两个验证码</button>
+					</view>
+
+					<view v-else>
+						<text class="panel-title">设置管理员密码</text>
+						<text class="panel-copy">密码强度至少为中，且不得超过 72 个 UTF-8 字节。</text>
+						<password-fields
+							v-model:password="form.password"
+							v-model:confirmation="form.passwordConfirmation"
+							:errors="fieldErrors"
+						/>
+						<button class="primary-button" type="button" :loading="busy" @click="completeRegistration">完成初始化</button>
+					</view>
 				</view>
 
-				<button class="admin-submit" type="button" :loading="busy" :disabled="busy" @click="submitLogin">
-					<text class="admin-submit-label">{{ busy ? '正在确认' : '确认登录' }}</text>
-				</button>
-			</view>
-		</view>
-
-		<view
-			v-if="securityOverlayVisible"
-			class="security-overlay"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="security-overlay-title"
-		>
-			<view class="security-backdrop" @click="closeSecurityOverlay"></view>
-			<view class="security-dialog">
-				<button
-					class="security-close"
-					type="button"
-					aria-label="关闭安全验证"
-					@click="closeSecurityOverlay"
-				>
-					<uni-icons type="closeempty" size="24" color="#f4f8ea" />
-				</button>
-				<view class="security-lock">
-					<uni-icons type="locked-filled" size="26" color="#0b1108" />
-				</view>
-				<text id="security-overlay-title" class="security-title">安全验证</text>
-				<text class="security-copy">邮箱、电话和密码强度已经通过本地校验。后续接入 hCaptcha 后，验证码会在这里显示。</text>
-				<view class="hcaptcha-frame" aria-hidden="true">
-					<text class="hcaptcha-brand">hCaptcha</text>
-					<text class="hcaptcha-copy">验证容器预留</text>
+				<view v-else>
+					<text class="panel-title">管理员登录</text>
+					<text class="panel-copy">邮箱、国际手机号和密码必须全部匹配；每次登录均需完成 hCaptcha。</text>
+					<identity-form
+						v-model:email="form.email"
+						:country-id="form.countryId"
+						:country-resolving="countryResolving"
+						v-model:phone="form.phoneNumber"
+						:errors="fieldErrors"
+						@update:country-id="selectCountry"
+					/>
+					<login-password-field
+						:model-value="form.password"
+						:error="fieldErrors.password"
+						@update:model-value="updateLoginPassword"
+					/>
+					<button class="primary-button" type="button" :loading="busy" @click="login">hCaptcha 验证并登录</button>
 				</view>
 			</view>
 		</view>
 	</view>
 </template>
 
-<script>
-	import IdentifierFields from '@/components/auth/identifier-fields.vue'
-	import { isValidEmailAddress } from '@/common/auth/email-validation.js'
-	import { DEFAULT_PHONE_COUNTRY_ID } from '@/common/auth/phone-countries.js'
-	import { findPhoneCountryById } from '@/common/auth/phone-country-search.js'
-	import { isValidLocalPhoneNumber } from '@/common/auth/phone-validation.js'
-	import { classifyPassword, passwordError } from '@/common/auth/password-policy.js'
+	<script>
+	import IdentityForm from '@/components/admin/admin-identity-form.vue'
+	import PasswordFields from '@/components/admin/admin-password-fields.vue'
+	import VerificationCodeFields from '@/components/admin/admin-verification-code-fields.vue'
+	import LoginPasswordField from '@/components/admin/admin-login-password-field.vue'
+	import { adminApi } from '@/common/admin/admin-api.js'
+	import { requestAdminHcaptchaToken } from '@/common/admin/admin-hcaptcha.js'
+	import { clearAdminFlow } from '@/common/admin/admin-secure-vault.js'
+	import {
+		getCurrentAdminPhoneCountrySelection,
+		resolveInitialAdminPhoneCountry,
+		selectAdminPhoneCountry
+	} from '@/common/admin/admin-phone-country-default.js'
+	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
+	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
+	import { digitsOnlyPhoneInput, isValidLocalPhoneNumber } from '@shared-auth/phone-validation.js'
+	import { passwordError } from '@shared-auth/password-policy.js'
 
-	function emptyFieldErrors() {
-		return { email: '', phoneNumber: '', password: '' }
-	}
+	const flagFromIso2 = iso2 => String(iso2 || '').toUpperCase().replace(/[A-Z]/g,
+		character => String.fromCodePoint(127397 + character.charCodeAt(0)))
+
+	const emptyErrors = () => ({
+		email: '',
+		phoneNumber: '',
+		emailCode: '',
+		phoneCode: '',
+		password: '',
+		passwordConfirmation: ''
+	})
 
 	export default {
-		components: { IdentifierFields },
+		components: { IdentityForm, PasswordFields, VerificationCodeFields, LoginPasswordField },
 		data() {
 			return {
-				email: '',
-				countryId: DEFAULT_PHONE_COUNTRY_ID,
-				phoneNumber: '',
-				password: '',
-				showPassword: false,
+				screenState: 'LOADING',
+				registerStep: 'IDENTITY',
+				registerSteps: ['身份', '双重验证', '密码'],
 				busy: false,
 				message: '',
 				messageType: '',
-				securityOverlayVisible: false,
-				fieldErrors: emptyFieldErrors(),
-				focusedField: '',
-				countryPickerOpen: false
+				countryResolving: false,
+				siteKey: '',
+				deliveryMethod: 'SMS',
+				fieldErrors: emptyErrors(),
+				profile: {},
+				form: {
+					email: '',
+					countryId: '',
+					phoneNumber: '',
+					emailCode: '',
+					phoneCode: '',
+					password: '',
+					passwordConfirmation: ''
+				}
 			}
 		},
 		computed: {
-			country() { return findPhoneCountryById(this.countryId) }
-		},
-		watch: {
-			email() { this.fieldErrors.email = ''; this.clearMessage() },
-			countryId() { this.fieldErrors.phoneNumber = ''; this.clearMessage() },
-			phoneNumber() { this.fieldErrors.phoneNumber = ''; this.clearMessage() },
-			password() { this.fieldErrors.password = ''; this.clearMessage() }
-		},
-		onBackPress() {
-			if (this.securityOverlayVisible) {
-				this.closeSecurityOverlay()
-				return true
+			registerStepIndex() {
+				return { IDENTITY: 0, VERIFICATION: 1, PASSWORD: 2 }[this.registerStep] || 0
+			},
+			country() { return findPhoneCountryById(this.form.countryId) },
+			allowWhatsApp() { return this.country?.iso2 !== 'CN' },
+			phoneE164() {
+				const dial = digitsOnlyPhoneInput(this.country?.dialCode || '')
+				const local = digitsOnlyPhoneInput(this.form.phoneNumber)
+				return dial && local ? `+${dial}${local}` : ''
+			},
+			pageTitle() {
+				if (this.screenState === 'AUTHENTICATED') return '管理员控制台'
+				if (this.screenState === 'UNINITIALIZED') return '首次安全初始化'
+				return '管理员身份入口'
+			},
+			pageCopy() {
+				if (this.screenState === 'UNINITIALIZED') return '一次性创建唯一管理员。完成后注册入口永久关闭。'
+				if (this.screenState === 'AUTHENTICATED') return '会话已绑定当前设备；任何受保护操作都会滑动续期。'
+				return '配置状态、凭证校验与会话边界均由后端强制执行。'
+			},
+			profileFlag() { return flagFromIso2(this.profile.countryIso2) || 'A' },
+			expiresLabel() {
+				if (!this.profile.expiresAt) return '未知'
+				return new Date(this.profile.expiresAt).toLocaleString()
 			}
-			if (!this.countryPickerOpen) return false
-			this.$refs.phoneFields?.closeCountryPicker()
-			return true
+		},
+		onLoad() {
+			this.loadState(false)
+			this.resolveInitialCountry()
 		},
 		methods: {
+			navigateToIp2LocationKeys() {
+				uni.navigateTo({ url: '/pages/risk/ip2location-keys' })
+			},
+			navigateToAiModels() {
+				uni.navigateTo({ url: '/pages/ai-models/index' })
+			},
+			navigateToAiModelIcons() {
+				uni.navigateTo({ url: '/pages/ai-model-icons/index' })
+			},
+			updateEmailCode(value) {
+				this.form.emailCode = value
+				this.fieldErrors.emailCode = ''
+			},
+			updatePhoneCode(value) {
+				this.form.phoneCode = value
+				this.fieldErrors.phoneCode = ''
+			},
+			updateLoginPassword(value) {
+				this.form.password = value
+				this.fieldErrors.password = ''
+			},
+			async resolveInitialCountry() {
+				const current = getCurrentAdminPhoneCountrySelection()
+				if (current.countryId) {
+					this.form.countryId = current.countryId
+					return
+				}
+				this.countryResolving = true
+				try {
+					const resolved = await resolveInitialAdminPhoneCountry()
+					this.form.countryId = resolved.countryId || ''
+				} finally {
+					this.countryResolving = false
+				}
+			},
+			selectCountry(countryId) {
+				const selected = selectAdminPhoneCountry(countryId)
+				this.form.countryId = selected.countryId
+			},
+			setError(error) {
+				this.message = error?.message || '请求未完成，请稍后重试。'
+				this.messageType = 'error'
+			},
 			clearMessage() {
 				this.message = ''
 				this.messageType = ''
 			},
-			closeSecurityOverlay() {
-				this.securityOverlayVisible = false
-			},
-			passwordStrengthError() {
-				const policyError = passwordError(this.password, this.password)
-				if (policyError) return policyError
-				const level = classifyPassword(this.password).level
-				if (!['中', '强'].includes(level)) return '密码强度至少需要达到中等。'
-				return ''
-			},
-			validateField(field) {
-				if (field === 'email') {
-					this.fieldErrors.email = isValidEmailAddress(this.email) ? '' : '请输入有效邮箱。'
-				}
-				if (field === 'phoneNumber') {
-					this.fieldErrors.phoneNumber = this.country && isValidLocalPhoneNumber(this.phoneNumber, this.country.iso2)
-						? ''
-						: this.country
-							? '请输入与所选国家或地区匹配的有效本地手机号。'
-							: '请选择国家或地区。'
-				}
-				if (field === 'password') {
-					this.fieldErrors.password = this.passwordStrengthError()
-				}
-				return !this.fieldErrors[field]
-			},
-			focusFirstInvalid() {
-				const field = ['email', 'phoneNumber', 'password'].find(name => this.fieldErrors[name])
-				if (!field) return
-				this.focusedField = ''
-				this.$nextTick(() => { this.focusedField = field })
-			},
-			submitLogin() {
+			async run(action) {
 				if (this.busy) return
+				this.busy = true
 				this.clearMessage()
-				const emailValid = this.validateField('email')
-				const phoneValid = this.validateField('phoneNumber')
-				const passwordValid = this.validateField('password')
-				if (!emailValid || !phoneValid || !passwordValid) {
-					this.message = '请先修正标记字段，再继续。'
-					this.messageType = 'warning'
-					this.focusFirstInvalid()
+				try {
+					return await action()
+				} catch (error) {
+					this.setError(error)
+					throw error
+				} finally {
+					this.busy = false
+				}
+			},
+			async loadState(recheck) {
+				if (this.busy) return
+				this.screenState = 'LOADING'
+				try {
+					await this.run(async () => {
+						const state = await adminApi.state()
+						if (!['UNINITIALIZED', 'ACTIVE', 'CORRUPT', 'DISABLED'].includes(state?.state)) {
+							throw new Error('管理员配置状态响应无效。')
+						}
+						this.screenState = state.state
+						if (state.state === 'UNINITIALIZED') {
+							if (adminApi.hasRegistrationFlow()) {
+								try {
+									const registration = await adminApi.registerStatus()
+									if (registration.emailVerified && registration.phoneVerified) {
+										this.registerStep = 'PASSWORD'
+									} else if (registration.humanVerified) {
+										this.registerStep = 'VERIFICATION'
+									}
+								} catch (_) {
+									clearAdminFlow('register')
+									this.registerStep = 'IDENTITY'
+								}
+							} else {
+								this.registerStep = 'IDENTITY'
+							}
+						}
+						if (state.state === 'ACTIVE') {
+							try {
+								this.profile = await adminApi.bootstrap()
+								this.screenState = 'AUTHENTICATED'
+							} catch (error) {
+								if (error.code !== 'ADMIN_SESSION_INVALID') throw error
+								this.screenState = 'ACTIVE'
+							}
+						}
+					})
+				} catch (_) {
+					// 无法确认配置状态时前端同样 Fail Closed，绝不猜测为可登录或可注册。
+					if (this.screenState === 'LOADING') this.screenState = 'CORRUPT'
+				}
+			},
+			validateIdentity() {
+				this.fieldErrors = emptyErrors()
+				if (!isValidEmailAddress(this.form.email)) this.fieldErrors.email = '请输入有效邮箱。'
+				if (!this.country || !isValidLocalPhoneNumber(this.form.phoneNumber, this.country.iso2)) {
+					this.fieldErrors.phoneNumber = this.country
+						? '请输入与所选国家或地区匹配的有效手机号。'
+						: '请选择国家或地区。'
+				}
+				return !this.fieldErrors.email && !this.fieldErrors.phoneNumber
+			},
+			async hcaptchaToken(siteKey, challengeId) {
+				const key = siteKey || this.siteKey || (await adminApi.hcaptchaConfig()).siteKey
+				this.siteKey = key
+				// 一次性 Token 仅存在于当前调用栈；提交或异常后不写入组件状态、日志或持久化存储。
+				return requestAdminHcaptchaToken(key, challengeId)
+			},
+			async startRegistration() {
+				if (!this.validateIdentity()) return
+				try {
+					await this.run(async () => {
+						const started = await adminApi.registerStart({
+							email: this.form.email.trim(),
+							countryIso2: this.country.iso2,
+							phoneNumber: this.phoneE164
+						})
+						const token = await this.hcaptchaToken(started.siteKey, started.challengeId)
+						await adminApi.registerHcaptcha(token)
+						this.registerStep = 'VERIFICATION'
+						this.message = 'hCaptcha 已通过，请发送并填写两个验证码。'
+						this.messageType = 'success'
+					})
+				} catch (_) {}
+			},
+			async sendEmailCode() {
+				try {
+					await this.run(() => adminApi.registerSendEmail())
+					this.message = '邮箱验证码发送请求已受理。'
+					this.messageType = 'success'
+				} catch (_) {}
+			},
+			async sendPhoneCode() {
+				if (!this.allowWhatsApp) this.deliveryMethod = 'SMS'
+				try {
+					await this.run(() => adminApi.registerSendPhone(this.deliveryMethod))
+					this.message = `${this.deliveryMethod} 验证码发送请求已受理。`
+					this.messageType = 'success'
+				} catch (_) {}
+			},
+			async verifyCodes() {
+				this.fieldErrors.emailCode = /^\d{6}$/.test(this.form.emailCode)
+					? ''
+					: '请输入 6 位邮箱验证码。'
+				this.fieldErrors.phoneCode = /^\d{6}$/.test(this.form.phoneCode)
+					? ''
+					: '请输入 6 位手机验证码。'
+				if (this.fieldErrors.emailCode || this.fieldErrors.phoneCode) {
+					this.message = '邮箱和手机验证码都必须是 6 位数字。'
+					this.messageType = 'error'
 					return
 				}
-				this.busy = true
-				setTimeout(() => {
-					this.busy = false
-					this.securityOverlayVisible = true
-				}, 180)
+				try {
+					await this.run(() => adminApi.registerVerify(this.form.emailCode, this.form.phoneCode))
+					this.form.emailCode = ''
+					this.form.phoneCode = ''
+					this.registerStep = 'PASSWORD'
+				} catch (_) {}
+			},
+			async completeRegistration() {
+				const error = passwordError(this.form.password, this.form.passwordConfirmation)
+				this.fieldErrors.password = error
+				if (error) return
+				try {
+					await this.run(() => adminApi.registerComplete(
+						this.form.password, this.form.passwordConfirmation))
+					this.form.password = ''
+					this.form.passwordConfirmation = ''
+					this.registerStep = 'IDENTITY'
+					this.screenState = 'ACTIVE'
+					this.message = '管理员初始化完成，请使用三项凭证登录。'
+					this.messageType = 'success'
+				} catch (_) {}
+			},
+			async login() {
+				if (!this.validateIdentity()) return
+				if (!this.form.password) {
+					this.fieldErrors.password = '请输入管理员密码。'
+					return
+				}
+				try {
+					await this.run(async () => {
+						const started = await adminApi.loginStart()
+						const hcaptchaToken = await this.hcaptchaToken(
+							started.siteKey, started.challengeId)
+						const response = await adminApi.loginComplete({
+							email: this.form.email.trim(),
+							countryIso2: this.country.iso2,
+							phoneNumber: this.phoneE164,
+							password: this.form.password,
+							hcaptchaToken
+						})
+						this.form.password = ''
+						this.profile = response.admin
+						this.screenState = 'AUTHENTICATED'
+					})
+				} catch (_) {
+					this.form.password = ''
+					clearAdminFlow('login')
+				}
+			},
+			async refreshProfile() {
+				try {
+					await this.run(async () => {
+						this.profile = await adminApi.me()
+						this.message = '管理员会话已续期。'
+						this.messageType = 'success'
+					})
+				} catch (error) {
+					if (error.code === 'ADMIN_SESSION_INVALID') this.screenState = 'ACTIVE'
+				}
+			},
+			async logoutCurrent() {
+				try {
+					await this.run(() => adminApi.logout())
+					this.profile = {}
+					this.screenState = 'ACTIVE'
+				} catch (_) {}
+			},
+			async logoutEverywhere() {
+				try {
+					await this.run(() => adminApi.logoutAll())
+					this.profile = {}
+					this.screenState = 'ACTIVE'
+				} catch (_) {}
 			}
 		}
 	}
 </script>
 
 <style lang="scss">
-	@import '@/common/auth/auth-controls.scss';
-
-	page {
-		min-height: 100%;
-		background: #080b0d;
-	}
-
+	page { min-height: 100%; background: #080b0d; }
+	button::after { border: 0; }
 	.admin-page {
 		min-height: 100vh;
-		min-height: 100dvh;
-		padding: calc(28rpx + env(safe-area-inset-top)) 28rpx calc(34rpx + env(safe-area-inset-bottom));
+		padding: calc(30rpx + env(safe-area-inset-top)) 28rpx calc(36rpx + env(safe-area-inset-bottom));
+		box-sizing: border-box;
+		color: #f3f8f8;
 		background:
-			radial-gradient(circle at 12% 18%, rgba(57, 214, 210, .18), transparent 28%),
+			radial-gradient(circle at 12% 16%, rgba(57, 214, 210, .17), transparent 28%),
 			linear-gradient(135deg, #080b0d 0%, #0e1519 54%, #07090b 100%);
-		box-sizing: border-box;
-		color: #f3f8f8;
 	}
-
-	.admin-shell {
-		width: 100%;
-		max-width: 1180px;
-		min-height: calc(100vh - 62rpx);
-		margin: 0 auto;
-		display: flex;
-		flex-direction: column;
-		gap: 28rpx;
-		justify-content: center;
-	}
-
-	.admin-intro,
-	.login-panel {
-		box-sizing: border-box;
-	}
-
-	.admin-intro {
-		padding: 10rpx 4rpx 0;
-	}
-
+	.admin-shell { width: 100%; max-width: 1180px; margin: 0 auto; display: grid; gap: 30rpx; }
+	.admin-intro { padding: 10rpx 4rpx; }
 	.admin-mark {
-		width: 72rpx;
-		height: 72rpx;
-		margin-bottom: 24rpx;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 1px solid rgba(105, 212, 226, .36);
-		border-radius: 18rpx;
-		background: rgba(20, 29, 34, .78);
-		box-shadow: 0 10rpx 24rpx rgba(0, 0, 0, .22);
+		width: 72rpx; height: 72rpx; display: flex; align-items: center; justify-content: center;
+		border: 1px solid rgba(105, 212, 226, .36); border-radius: 18rpx; background: rgba(20, 29, 34, .78);
 	}
-
-	.admin-mark-core {
-		width: 28rpx;
-		height: 28rpx;
-		border-radius: 50%;
-		background: #39d6d2;
-		box-shadow: 0 0 20rpx rgba(57, 214, 210, .42);
+	.admin-mark-core { width: 28rpx; height: 28rpx; border-radius: 50%; background: #39d6d2; box-shadow: 0 0 20rpx rgba(57,214,210,.42); }
+	.admin-kicker, .admin-title, .admin-copy, .panel-title, .panel-copy, .state-title, .state-copy { display: block; }
+	.admin-kicker { margin-top: 22rpx; color: #69d4e2; font-size: 24rpx; font-weight: 700; }
+	.admin-title { margin-top: 12rpx; font-size: 54rpx; font-weight: 760; line-height: 1.08; }
+	.admin-copy { max-width: 620rpx; margin-top: 18rpx; color: #a8b8bd; font-size: 27rpx; line-height: 1.55; }
+	.security-note { margin-top: 24rpx; color: #c6d2d5; font-size: 23rpx; }
+	.admin-panel {
+		padding: 34rpx 30rpx; border: 1px solid rgba(105, 212, 226, .22); border-radius: 18rpx;
+		background: rgba(16, 22, 26, .84); backdrop-filter: blur(18px); box-shadow: 0 20rpx 60rpx rgba(0,0,0,.28);
 	}
-
-	.admin-kicker,
-	.admin-title,
-	.admin-copy,
-	.panel-title,
-	.panel-subtitle,
-	.status-copy,
-	.security-title,
-	.security-copy,
-	.hcaptcha-brand,
-	.hcaptcha-copy {
-		display: block;
+	.panel-title, .state-title { color: #f3f8f8; font-size: 36rpx; font-weight: 760; line-height: 1.2; }
+	.panel-copy, .state-copy { margin: 10rpx 0 26rpx; color: #91a2a8; font-size: 24rpx; line-height: 1.55; }
+	.admin-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-radius: 10rpx; background: rgba(57,214,210,.1); color: #d9fbfb; font-size: 24rpx; }
+	.admin-banner.error { background: rgba(232,98,98,.12); color: #ffb8b8; }
+	.admin-banner.success { background: rgba(57,214,210,.12); color: #c8ffff; }
+	.center-state { min-height: 360rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20rpx; text-align: center; color: #a8b8bd; }
+	.loading-ring { width: 48rpx; height: 48rpx; border: 4rpx solid rgba(105,212,226,.2); border-top-color: #69d4e2; border-radius: 50%; animation: spin .8s linear infinite; }
+	.step-row { display: flex; justify-content: space-between; margin-bottom: 30rpx; color: #91a2a8; font-size: 20rpx; }
+	.step-item { display: flex; align-items: center; gap: 8rpx; }
+	.step-dot { width: 38rpx; height: 38rpx; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #263238; }
+	.step-dot.active { background: #39d6d2; color: #071012; }
+	.primary-button, .secondary-button, .danger-button {
+		width: 100%; min-height: 86rpx; margin: 24rpx 0 0; border: 0; border-radius: 12rpx;
+		display: flex; align-items: center; justify-content: center; font-size: 27rpx; font-weight: 740;
 	}
-
-	.admin-kicker {
-		color: #69d4e2;
-		font-size: 24rpx;
-		font-weight: 700;
-		line-height: 1.35;
+	.primary-button { background: linear-gradient(135deg, #d2e85c, #97c93f); color: #101707; }
+	.secondary-button { border: 1px solid rgba(105,212,226,.34); background: rgba(57,214,210,.08); color: #d9fbfb; }
+	.danger-button { border: 1px solid rgba(232,98,98,.35); background: rgba(232,98,98,.08); color: #ffb8b8; }
+	.credential-button {
+		width: 100%; min-height: 126rpx; margin-top: 28rpx; padding: 22rpx 24rpx; border: 1px solid rgba(57,214,210,.32);
+		border-radius: 14rpx; background: rgba(57,214,210,.06); color: #f3f8f8; text-align: left;
+		display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
 	}
-
-	.admin-title {
-		margin-top: 12rpx;
-		color: #f3f8f8;
-		font-size: 56rpx;
-		font-weight: 760;
-		line-height: 1.08;
-		letter-spacing: 0;
-	}
-
-	.admin-copy {
-		max-width: 560rpx;
-		margin-top: 18rpx;
-		color: #a8b8bd;
-		font-size: 28rpx;
-		line-height: 1.55;
-	}
-
-	.status-list {
-		margin-top: 28rpx;
-		display: flex;
-		flex-direction: column;
-		gap: 14rpx;
-	}
-
-	.status-item {
-		display: flex;
-		align-items: center;
-		gap: 12rpx;
-	}
-
-	.status-dot {
-		width: 14rpx;
-		height: 14rpx;
-		border-radius: 50%;
-		background: #39d6d2;
-		box-shadow: 0 0 16rpx rgba(57, 214, 210, .36);
-	}
-
-	.status-dot.amber {
-		background: #f0bd62;
-		box-shadow: 0 0 16rpx rgba(240, 189, 98, .28);
-	}
-
-	.status-copy {
-		color: #c6d2d5;
-		font-size: 24rpx;
-		line-height: 1.45;
-	}
-
-	.login-panel {
-		width: 100%;
-		padding: 34rpx 30rpx;
-		border: 1px solid rgba(105, 212, 226, .22);
-		border-radius: 16rpx;
-		background: rgba(16, 22, 26, .78);
-		backdrop-filter: blur(18px) saturate(150%);
-		box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, .28);
-		animation: panel-in 280ms cubic-bezier(.2, .8, .2, 1);
-	}
-
-	.panel-header {
-		margin-bottom: 26rpx;
-	}
-
-	.panel-title {
-		color: #f3f8f8;
-		font-size: 38rpx;
-		font-weight: 760;
-		line-height: 1.2;
-	}
-
-	.panel-subtitle {
-		margin-top: 8rpx;
-		color: #91a2a8;
-		font-size: 24rpx;
-		line-height: 1.5;
-	}
-
-	.admin-banner {
-		margin-bottom: 22rpx;
-		padding: 18rpx 20rpx;
-		border: 1px solid rgba(105, 212, 226, .24);
-		border-radius: 10rpx;
-		background: rgba(57, 214, 210, .09);
-		color: #d9fbfb;
-		font-size: 24rpx;
-		line-height: 1.45;
-	}
-
-	.admin-banner.warning {
-		border-color: rgba(240, 189, 98, .38);
-		background: rgba(240, 189, 98, .1);
-		color: #ffe2a8;
-	}
-
-	.admin-banner.success {
-		border-color: rgba(57, 214, 210, .38);
-	}
-
-	.password-icon-toggle {
-		width: 72rpx;
-		height: 72rpx;
-		min-width: 72rpx;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		border-radius: 10rpx;
-		background: transparent;
-		line-height: 1;
-		transition: background-color 160ms ease, transform 160ms ease;
-	}
-
-	.password-icon-toggle::after,
-	.admin-submit::after,
-	.security-close::after {
-		border: 0;
-	}
-
-	.password-icon-toggle:active {
-		background: rgba(57, 214, 210, .1);
-		transform: scale(.96);
-	}
-
-	.admin-submit {
-		width: 100%;
-		height: 92rpx;
-		min-height: 92rpx;
-		margin: 0;
-		padding: 0 24rpx;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		border-radius: 12rpx;
-		background: linear-gradient(135deg, #d2e85c 0%, #97c93f 100%);
-		color: #101707;
-		font-size: 30rpx;
-		font-weight: 780;
-		line-height: 1.15;
-		text-align: center;
-		box-shadow: 0 12rpx 26rpx rgba(151, 201, 63, .24);
-		transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-	}
-
-	.admin-submit-label {
-		width: 100%;
-		line-height: 1.15;
-		text-align: center;
-	}
-
-	.admin-submit:active {
-		background: linear-gradient(135deg, #c8df52 0%, #86b837 100%);
-		transform: scale(.985);
-		box-shadow: 0 7rpx 18rpx rgba(151, 201, 63, .2);
-	}
-
-	.admin-submit[disabled] {
-		opacity: .58;
-		box-shadow: none;
-	}
-
-	.security-overlay {
-		position: fixed;
-		inset: 0;
-		z-index: 50;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: calc(32rpx + env(safe-area-inset-top)) 28rpx calc(32rpx + env(safe-area-inset-bottom));
-		box-sizing: border-box;
-	}
-
-	.security-backdrop {
-		position: absolute;
-		inset: 0;
-		background: rgba(3, 7, 9, .72);
-		backdrop-filter: blur(18px) saturate(126%);
-	}
-
-	.security-dialog {
-		position: relative;
-		z-index: 1;
-		width: 100%;
-		max-width: 520rpx;
-		padding: 54rpx 34rpx 34rpx;
-		border: 1px solid rgba(214, 232, 92, .32);
-		border-radius: 18rpx;
-		background: rgba(15, 20, 18, .92);
-		box-shadow: 0 30rpx 80rpx rgba(0, 0, 0, .42);
-		box-sizing: border-box;
-		animation: security-in 260ms cubic-bezier(.2, .8, .2, 1);
-	}
-
-	.security-close {
-		position: absolute;
-		top: 14rpx;
-		right: 14rpx;
-		width: 60rpx;
-		height: 60rpx;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		border-radius: 999px;
-		background: rgba(255, 255, 255, .06);
-		line-height: 1;
-	}
-
-	.security-lock {
-		width: 64rpx;
-		height: 64rpx;
-		margin-bottom: 22rpx;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 18rpx;
-		background: #d2e85c;
-		box-shadow: 0 0 26rpx rgba(210, 232, 92, .24);
-	}
-
-	.security-title {
-		color: #f4f8ea;
-		font-size: 38rpx;
-		font-weight: 780;
-		line-height: 1.2;
-	}
-
-	.security-copy {
-		margin-top: 12rpx;
-		color: #b7c2bb;
-		font-size: 24rpx;
-		line-height: 1.55;
-	}
-
-	.hcaptcha-frame {
-		min-height: 132rpx;
-		margin-top: 28rpx;
-		padding: 24rpx;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		border: 1px dashed rgba(214, 232, 92, .4);
-		border-radius: 14rpx;
-		background: rgba(214, 232, 92, .08);
-		box-sizing: border-box;
-	}
-
-	.hcaptcha-brand {
-		color: #edf6a6;
-		font-size: 28rpx;
-		font-weight: 780;
-		line-height: 1.25;
-	}
-
-	.hcaptcha-copy {
-		margin-top: 8rpx;
-		color: #c7cda8;
-		font-size: 22rpx;
-		line-height: 1.45;
-	}
-
-	@keyframes panel-in {
-		from { opacity: 0; transform: translateY(14rpx) scale(.99); }
-		to { opacity: 1; transform: translateY(0) scale(1); }
-	}
-
-	@keyframes security-in {
-		from { opacity: 0; transform: translateY(18rpx) scale(.98); }
-		to { opacity: 1; transform: translateY(0) scale(1); }
-	}
-
+	.model-catalog-button { border-color: rgba(105,212,226,.42); background: linear-gradient(135deg, rgba(57,214,210,.08), rgba(105,212,226,.04)); }
+	.credential-kicker { color: #39d6d2; font-size: 18rpx; font-weight: 760; letter-spacing: .12em; }
+	.credential-title { margin-top: 6rpx; font-size: 28rpx; font-weight: 760; }
+	.credential-copy { margin-top: 6rpx; color: #91a2a8; font-size: 21rpx; line-height: 1.45; }
+	.dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx; }
+	.delivery-row { display: flex; gap: 12rpx; margin-top: 16rpx; }
+	.delivery-row button { flex: 1; margin: 0; border: 1px solid rgba(145,162,168,.3); background: transparent; color: #a8b8bd; font-size: 23rpx; }
+	.delivery-row button.selected { border-color: #39d6d2; background: rgba(57,214,210,.12); color: #d9fbfb; }
+	.profile-badge { width: 88rpx; height: 88rpx; margin-bottom: 20rpx; display: flex; align-items: center; justify-content: center; border-radius: 24rpx; background: rgba(57,214,210,.12); font-size: 45rpx; }
+	.profile-row { padding: 22rpx 0; border-bottom: 1px solid rgba(145,162,168,.16); }
+	.profile-label, .profile-value { display: block; }
+	.profile-label { color: #91a2a8; font-size: 21rpx; }
+	.profile-value { margin-top: 7rpx; color: #f3f8f8; font-size: 27rpx; overflow-wrap: anywhere; }
+	@keyframes spin { to { transform: rotate(360deg); } }
 	@media screen and (min-width: 760px) {
-		.admin-page {
-			padding: 56px 42px;
-		}
-		.admin-shell {
-			min-height: calc(100vh - 112px);
-			display: grid;
-			grid-template-columns: minmax(300px, 1fr) minmax(360px, 460px);
-			align-items: center;
-			gap: 56px;
-		}
-		.admin-intro {
-			padding-top: 0;
-		}
-		.admin-title {
-			font-size: 44px;
-		}
-		.admin-copy {
-			font-size: 17px;
-		}
-		.login-panel {
-			padding: 34px 32px;
-		}
+		.admin-page { padding: 56px 42px; }
+		.admin-shell { min-height: calc(100vh - 112px); grid-template-columns: minmax(300px, 1fr) minmax(400px, 500px); align-items: center; gap: 60px; }
+		.admin-title { font-size: 44px; }
+		.admin-panel { padding: 36px 34px; }
 	}
-
-	@media (hover: hover) and (pointer: fine) {
-		.password-icon-toggle:hover {
-			background: rgba(57, 214, 210, .1);
-		}
-		.admin-submit:hover {
-			background: linear-gradient(135deg, #dbef66 0%, #a7d84c 100%);
-		}
-		.security-close:hover {
-			background: rgba(255, 255, 255, .1);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.login-panel,
-		.security-dialog {
-			animation: none;
-		}
-		.password-icon-toggle,
-		.admin-submit,
-		.security-close {
-			transition: none;
-		}
-	}
-
-	@media (prefers-reduced-transparency: reduce) {
-		.login-panel,
-		.security-dialog {
-			background: #10161a;
-			backdrop-filter: none;
-		}
-		.security-backdrop {
-			background: rgba(3, 7, 9, .9);
-			backdrop-filter: none;
-		}
-	}
+	@media (prefers-reduced-motion: reduce) { .loading-ring { animation: none; } }
 </style>

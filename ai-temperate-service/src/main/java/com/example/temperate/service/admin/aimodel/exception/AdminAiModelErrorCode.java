@@ -1,0 +1,19 @@
+package com.example.temperate.service.admin.aimodel.exception;
+
+/**
+ * 定义管理员 AI 模型接口可以安全对外映射的稳定业务错误码。
+ */
+public enum AdminAiModelErrorCode {
+    AI_MODEL_INPUT_INVALID,
+    AI_MODEL_PATCH_INVALID,
+    AI_MODEL_VERSION_REQUIRED,
+    AI_MODEL_VERSION_CONFLICT,
+    AI_MODEL_PUBLIC_ID_INVALID,
+    AI_MODEL_NOT_FOUND,
+    AI_MODEL_ICON_PUBLIC_ID_INVALID,
+    AI_MODEL_ICON_NOT_FOUND,
+    AI_MODEL_NAME_CONFLICT,
+    AI_MODEL_CAPABILITY_INVALID,
+    AI_MODEL_CAPABILITY_DUPLICATED,
+    AI_MODEL_BATCH_ID_DUPLICATED
+}

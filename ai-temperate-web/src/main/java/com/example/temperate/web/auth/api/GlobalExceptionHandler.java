@@ -4,8 +4,10 @@ import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
 import com.example.temperate.service.auth.passwordreset.PasswordResetErrorCode;
 import com.example.temperate.service.auth.passwordreset.PasswordResetException;
+import com.example.temperate.service.auth.phonecountry.service.exception.PhoneCountryTimeoutException;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
+import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.exception.RegistrationException;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
@@ -18,13 +20,17 @@ import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -108,6 +114,7 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     private static HttpStatus sessionStatus(SessionAuthenticationErrorCode code) {
         return switch (code) {
             case CSRF_INVALID -> HttpStatus.FORBIDDEN;
+            case PREAUTH_REQUIRED -> HttpStatus.PRECONDITION_REQUIRED;
             case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.UNAUTHORIZED;
         };
@@ -189,6 +196,41 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     }
 
     @Override
+    @ExceptionHandler(PhoneCountryTimeoutException.class)
+    public ResponseEntity<ApiErrorResponse> handlePhoneCountryTimeout(
+            PhoneCountryTimeoutException exception) {
+        // 该 429 表示产品定义的单次查询期限，而不是频率限制，因此只返回稳定错误体且不附加 Retry-After。
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .cacheControl(CacheControl.noStore().cachePrivate())
+                .body(new ApiErrorResponse(
+                        "PHONE_COUNTRY_TIMEOUT",
+                        "国家或地区识别超时，请手动选择。",
+                        clock.instant()));
+    }
+
+    @Override
+    @ExceptionHandler(HumanVerificationUnavailableException.class)
+    public ResponseEntity<ApiErrorResponse> handleHumanVerificationUnavailable(
+            HumanVerificationUnavailableException exception,
+            HttpServletRequest request) {
+        // 这里只记录稳定分类和追踪号；底层异常消息可能包含 URI 或网络细节，禁止进入日志模板和响应体。
+        LOGGER.warn(
+                "auth_human_verification_unavailable traceId={} verificationType={} "
+                        + "causeType={}",
+                diagnosticAttribute(request, AuthRequestTraceFilter.TRACE_ATTRIBUTE),
+                exception.verificationType(),
+                exception.getCause() == null
+                        ? "none"
+                        : exception.getCause().getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .cacheControl(CacheControl.noStore().cachePrivate())
+                .body(new ApiErrorResponse(
+                        "HUMAN_VERIFICATION_UNAVAILABLE",
+                        "人机验证服务暂时不可用，请稍后重试。",
+                        clock.instant()));
+    }
+
+    @Override
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleUnreadableMessage(
             HttpMessageNotReadableException exception) {
@@ -196,9 +238,21 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     }
 
     @Override
-    @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class,
-            IllegalArgumentException.class})
+    @ExceptionHandler({
+        MethodArgumentNotValidException.class,
+        BindException.class,
+        ServletRequestBindingException.class,
+        HandlerMethodValidationException.class,
+        MethodArgumentTypeMismatchException.class
+    })
     public ResponseEntity<ApiErrorResponse> handleInvalidInput(Exception exception) {
+        return response(HttpStatus.BAD_REQUEST, "INVALID_INPUT", "请求参数不正确。");
+    }
+
+    @Override
+    @ExceptionHandler(WebInvalidInputException.class)
+    public ResponseEntity<ApiErrorResponse> handleWebInvalidInput(
+            WebInvalidInputException exception) {
         return response(HttpStatus.BAD_REQUEST, "INVALID_INPUT", "请求参数不正确。");
     }
 
@@ -226,8 +280,14 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
 
     @Override
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception exception) {
-        LOGGER.error("未处理的 Web 异常已转换为通用 500 响应。", exception);
+    public ResponseEntity<ApiErrorResponse> handleUnexpected(
+            Exception exception,
+            HttpServletRequest request) {
+        // 异常消息可能包含第三方响应或输入片段，只记录追踪号和类型，不把消息或堆栈写入认证日志。
+        LOGGER.error(
+                "auth_unexpected_exception traceId={} exceptionClass={}",
+                diagnosticAttribute(request, AuthRequestTraceFilter.TRACE_ATTRIBUTE),
+                exception.getClass().getName());
         return response(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

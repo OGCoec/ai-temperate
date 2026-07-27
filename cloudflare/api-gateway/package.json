@@ -1,0 +1,12 @@
+{
+  "name": "@ai-temperate/api-gateway",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "4.114.0"
+  }
+}

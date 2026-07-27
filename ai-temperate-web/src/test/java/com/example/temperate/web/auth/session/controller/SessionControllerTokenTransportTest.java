@@ -17,8 +17,11 @@ import com.example.temperate.service.auth.session.authentication.dto.result.Sess
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
+import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.PreAuthTransport;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,7 +46,12 @@ class SessionControllerTokenTransportTest {
     void setUp() {
         service = mock(SessionAuthenticationService.class);
         cookieWriter = mock(AuthCookieWriter.class);
-        controller = new SessionController(service, cookieWriter);
+        controller = new SessionController(
+                service,
+                cookieWriter,
+                mock(PreAuthService.class),
+                mock(PreAuthTransport.class),
+                mock(NetworkRiskProperties.class));
         when(service.authenticate(any())).thenReturn(result());
         when(service.bootstrap(any())).thenReturn(result());
     }

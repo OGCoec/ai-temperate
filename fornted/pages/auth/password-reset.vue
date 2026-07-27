@@ -135,21 +135,21 @@
 	import PhoneDeliveryMethod from '@/components/auth/phone-delivery-method.vue'
 	import { authApi } from '@/common/auth/auth-api.js'
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
-	import { passwordError } from '@/common/auth/password-policy.js'
+	import { passwordError } from '@shared-auth/password-policy.js'
 	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import {
 		clearAndroidPasswordResetFlow,
 		loadAndroidPasswordResetFlow,
 		saveAndroidPasswordResetFlow
 	} from '@/common/auth/android-flow-keystore.js'
-	import { isValidEmailAddress } from '@/common/auth/email-validation.js'
+	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
 	import {
 		getCurrentPhoneCountrySelection,
 		resolveInitialPhoneCountry,
 		selectPhoneCountry
 	} from '@/common/auth/phone-country-default.js'
-	import { findPhoneCountryById } from '@/common/auth/phone-country-search.js'
-	import { isValidLocalPhoneNumber } from '@/common/auth/phone-validation.js'
+	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
+	import { isValidLocalPhoneNumber } from '@shared-auth/phone-validation.js'
 
 	function emptyFieldErrors() {
 		return { email: '', phoneNumber: '', password: '', passwordConfirmation: '', code: '' }
@@ -311,13 +311,14 @@
 				}
 				return !this.fieldErrors[field]
 			},
-			async run(action) {
+			async run(action, onFailure) {
 				if (this.busy) return null
 				this.busy = true
 				this.error = ''
 				try { return await action() }
 				catch (error) {
 					this.error = authErrorMessage(error)
+					if (typeof onFailure === 'function') onFailure()
 					return null
 				} finally { this.busy = false }
 			},
@@ -350,8 +351,22 @@
 				}
 			},
 			async verifyHuman(token) {
-				const result = await this.run(() => authApi.passwordResetTurnstile(this.flow, token))
-				if (result?.accepted) this.stage = 'CODE'
+				let verificationFailed = false
+				const result = await this.run(
+					() => authApi.passwordResetTurnstile(this.flow, token),
+					() => { verificationFailed = true }
+				)
+				if (result?.accepted) {
+					this.stage = 'CODE'
+					return
+				}
+				if (verificationFailed) {
+					this.$nextTick(() => {
+						this.$refs.turnstile?.resetAfterServerRejection(
+							'验证结果未被服务器确认，请重新验证。'
+						)
+					})
+				}
 			},
 			async send() {
 				if (this.busy || this.cooldown > 0) return

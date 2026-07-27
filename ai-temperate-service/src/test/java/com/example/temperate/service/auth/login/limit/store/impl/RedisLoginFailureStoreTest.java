@@ -52,7 +52,6 @@ class RedisLoginFailureStoreTest {
         attempt = new ProtectedLoginAttempt(
                 hmac.identify("subject"),
                 hmac.identify("actor"),
-                hmac.identify("network"),
                 hmac.identify("global-device"));
     }
 

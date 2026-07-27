@@ -49,7 +49,15 @@ public class AuthWebMvcConfiguration implements WebMvcConfigurer {
         // 普通业务 API 才需要 AT；认证流程本身使用各自的短期或刷新凭据。
         registry.addInterceptor(accessTokenInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/auth/**", "/api/health");
+                // 管理员命名空间由独立会话过滤器处理；PreAuth 与 Challenge 必须先于 AT 建立安全上下文。
+                .excludePathPatterns(
+                        "/api/auth/**",
+                        "/api/admin/**",
+                        "/api/_edge/pre-auth",
+                        "/api/_edge/risk-challenge",
+                        "/api/_edge/webrtc/start",
+                        "/api/_edge/webrtc/report",
+                        "/api/health");
         // 全设备退出虽然位于认证路由下，仍必须使用 Access Token 确定撤销目标用户。
         registry.addInterceptor(accessTokenInterceptor)
                 .addPathPatterns("/api/auth/session/logout-all");

@@ -26,14 +26,24 @@ test('normalizes H5 direct URLs and uni-app route paths', async () => {
 	)
 })
 
-test('allows only authentication bootstrap and public auth pages without login', async () => {
+test('allows authentication bootstrap and pre-auth security pages without login', async () => {
 	const { isPublicRoute, isProtectedRoute } = await loadModule()
 
-	assert.equal(isPublicRoute('/pages/launch/session-gate'), true)
-	assert.equal(isPublicRoute('/pages/auth/login'), true)
-	assert.equal(isPublicRoute('/pages/auth/register'), true)
-	assert.equal(isPublicRoute('/pages/auth/password-reset'), true)
-	assert.equal(isProtectedRoute('/pages/auth/login'), false)
+	const anonymousRoutes = [
+		'/pages/launch/session-gate',
+		'/pages/auth/login',
+		'/pages/auth/register',
+		'/pages/auth/password-reset',
+		'/pages/risk/blocked',
+		'/pages/risk/challenge-complete',
+		'/pages/risk/challenge-failed',
+		'/pages/risk/webrtc-probe',
+		'/pages/risk/webrtc-failed'
+	]
+	for (const route of anonymousRoutes) {
+		assert.equal(isPublicRoute(route), true)
+		assert.equal(isProtectedRoute(route), false)
+	}
 })
 
 test('protects account and future internal pages by default', async () => {

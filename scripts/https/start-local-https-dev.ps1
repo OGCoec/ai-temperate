@@ -88,6 +88,13 @@ function Start-ProcessWithLocalHttpsEnvironment {
   }
 
   $processEnvironment = [Environment]::GetEnvironmentVariables("Process")
+  # Cookie Domain 已迁移为 Host-only；启动子进程前必须移除父进程可能残留的旧父域配置。
+  foreach ($cookieDomainVariable in @(
+      "AUTH_COOKIE_DOMAIN",
+      "ADMIN_COOKIE_DOMAIN",
+      "ADMIN_CSRF_COOKIE_DOMAIN")) {
+    [void]$processEnvironment.Remove($cookieDomainVariable)
+  }
   if ($null -ne $startInfo.PSObject.Properties["Environment"]) {
     $startInfo.Environment.Clear()
     foreach ($name in $processEnvironment.Keys) {
@@ -351,6 +358,15 @@ try {
     exit 0
   }
 
+  $edgeProxyMode = Get-OptionalConfiguredValue -Name "EDGE_PROXY_MODE"
+  if ([string]::IsNullOrWhiteSpace($edgeProxyMode)) {
+    $edgeProxyMode = "DISABLED"
+  }
+  $edgeProxyMode = $edgeProxyMode.ToUpperInvariant()
+  if ($edgeProxyMode -notin @("DISABLED", "OPTIONAL", "REQUIRED")) {
+    throw "EDGE_PROXY_MODE 只能是 DISABLED、OPTIONAL 或 REQUIRED。"
+  }
+
   $requiredStoppedProcesses = @("HBuilderX")
   if (-not $HBuilderXOnly) {
     $requiredStoppedProcesses = @("Antigravity", "HBuilderX")
@@ -367,7 +383,7 @@ try {
     "LOCAL_HTTPS_P12_PATH" = $p12Path
     "CORS_ALLOWED_ORIGINS" = (Merge-OriginList)
     "TURNSTILE_ALLOWED_HOSTS" = (Merge-HostnameList)
-    "AUTH_COOKIE_DOMAIN" = (Get-OptionalConfiguredValue -Name "AUTH_COOKIE_DOMAIN")
+    "EDGE_PROXY_MODE" = $edgeProxyMode
   }
 
   if (-not $HBuilderXOnly) {

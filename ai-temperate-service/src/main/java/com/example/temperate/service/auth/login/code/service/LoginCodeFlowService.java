@@ -7,6 +7,7 @@ import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
+import reactor.core.publisher.Mono;
 
 /**
  * 定义验证码登录的流程启动、人机校验、发码和最终登录编排能力。
@@ -17,7 +18,7 @@ public interface LoginCodeFlowService {
 
     LoginCodeStartResult start(LoginCodeStartCommand command);
 
-    void verifyTurnstile(LoginCodeAccess access, String turnstileToken);
+    Mono<Void> verifyTurnstile(LoginCodeAccess access, String turnstileToken);
 
     void sendCode(LoginCodeAccess access);
 

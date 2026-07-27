@@ -87,7 +87,10 @@ Java `Long` 类型在 HTTP JSON 中统一序列化成字符串，防止超过 Ja
 
 H5 登录前若缺少 CSRF Cookie，先调用 `GET /api/auth/csrf`。该接口返回 204，并初始化 JavaScript 可读的 `XSRF-TOKEN` 会话 Cookie。
 
-由于三个 Cookie 都不设置 `Domain`，生产 H5 页面与 API 必须使用相同主机名（端口可以不同），或通过同主机名的 HTTPS 反向代理暴露 `/api`。仅同站但使用不同子域时，H5 JavaScript 无法读取 API Host-only 的 `XSRF-TOKEN`。
+所有业务 Cookie 都不设置 `Domain`。生产普通 H5 通过
+`https://niko000o.site/api/**` 的 Cloudflare Worker 同源入口访问后端，管理员 H5
+通过 `https://admin.niko000o.site/api/admin/**` 访问同一个 Worker。Worker 原路径转发到
+`api.niko000o.site`，浏览器只会把后端响应中的 Host-only Cookie 保存到当前前端 Host。
 
 H5 登录成功响应不返回任何 Token：
 
@@ -193,5 +196,48 @@ H5 的 Spring Cookie/Header 校验、会话 CSRF HMAC 校验或会话端点 Orig
 | --- | --- | --- |
 | GET | `/api/auth/turnstile/config` | 只公开 Site Key，不公开 Secret |
 | GET | `/api/auth/turnstile/page` | Android 第一方受控 WebView 页面；action 只允许 register、login、password_reset |
+| GET | `/api/auth/turnstile/page.css` | Turnstile WebView 的无状态样式资源；`no-store` |
+| GET | `/api/auth/turnstile/page.js` | Turnstile WebView 的无状态客户端状态机；`no-store` |
+| GET | `/api/admin/auth/hcaptcha/page` | Android 管理员第一方受控 hCaptcha WebView 页面 |
+| GET | `/api/admin/auth/hcaptcha/page.css` | 管理员 hCaptcha WebView 的无状态样式资源；`private, no-store` |
+| GET | `/api/admin/auth/hcaptcha/page.js` | 管理员 hCaptcha WebView 的无状态客户端状态机；`private, no-store` |
 
 H5 注册提交一次性 Token 前先调用注册状态接口核对当前 challenge。新标签页创建注册流程后会通知同源旧标签页停止提交旧 challenge；服务端未返回 `humanVerified=true` 时，前端必须重置绿色组件并生成新 Token。
+
+Turnstile Siteverify 的失败按可信结论分层：Cloudflare 明确拒绝 Token，或 hostname、action、cData、有效时间窗绑定失败时，普通用户认证接口返回 HTTP 403 和 `TURNSTILE_REJECTED`；连接、TLS、读取超时、非 2xx、空响应、畸形响应、供应商配置错误或无法识别的供应商错误码表示服务端未取得可信验证结论，返回 HTTP 503 和 `HUMAN_VERIFICATION_UNAVAILABLE`。503 响应固定使用“人机验证服务暂时不可用，请稍后重试。”，携带 `Cache-Control: private, no-store` 且不携带 `Retry-After`。
+
+上述两类失败都不会把当前 Flow 标记为 `humanVerified`，供应商不可用也不会清理注册、验证码登录或找回密码 Flow Cookie。由于请求中断时无法确认一次性 Token 是否已被供应商消费，客户端不得自动重复提交旧 Token；注册、登录和找回密码页面必须重置 Turnstile 组件并生成新 Token 后再由用户重试。响应和日志禁止包含 Token、Secret、完整客户端 IP、供应商正文或底层异常消息；服务端只保留 traceId、受控诊断分类、CF-Ray 和异常类型等脱敏信息。
+
+Android Turnstile 与管理员 hCaptcha 页面分别维护为 `turnstile-page.html/.css/.js` 和 `admin-hcaptcha-page.html/.css/.js` 三个独立 classpath 资源。两个 Controller 只执行参数、HTTP 安全边界与独立资源传输，禁止包含或拼接 HTML、CSS、JavaScript。受控 HTML 页面没有放在 Spring 自动公开的 `static` 目录，客户端必须经过对应 Controller 路由进入；公开的 CSS/JavaScript 子资源不包含 Site Key、challenge、Token、Secret 或会话数据。
+
+Turnstile 页面从当前 Query 读取已由 Controller 白名单校验的 challenge 和 action，并调用现有 `/api/auth/turnstile/config` 获取公开 Site Key。管理员应用把既有 login/register flow 返回的公开 Site Key 与 challenge 放入受控 WebView 的临时 URL Fragment；Fragment 不进入 HTTP 请求、反向代理或服务器访问日志，页面在使用前仍执行字符集和长度校验。最终 token 继续由后端 Siteverify 校验，静态资源拆分不改变认证信任边界。
+
+普通用户 Turnstile 与管理员 hCaptcha 的客户端采用供应商显式渲染模式。客户端必须等到供应商 `onload` ready 回调确认 `render` API 可用后再创建 widget；DOM `script.onload` 和轮询到全局对象都不能作为 SDK 已完成初始化的依据。每个验证会话只保留一个有效 widget，并使用渲染代次忽略旧异步回调。可重试错误只自动恢复一次，仍失败时停在手动“重新验证”状态；手动重试会恢复一次自动重试额度，但不会重新创建注册或登录流程。
+
+管理员 H5 使用按用途隔离的双提交 CSRF Cookie，并统一复制到 `X-Admin-CSRF-Token` 请求头。请求路径决定后端比较哪个 Cookie；请求头名称不需要包含 register 或 login：
+
+| 场景 | JavaScript 读取的 Cookie | 请求头 |
+| --- | --- | --- |
+| 普通用户会话写请求 | `XSRF-TOKEN` | `X-CSRF-Token` |
+| 管理员首次注册 Flow | `admin_register_csrf` | `X-Admin-CSRF-Token` |
+| 管理员登录 Flow | `admin_login_csrf` | `X-Admin-CSRF-Token` |
+| 管理员登录后会话写请求 | `ADMIN-XSRF-TOKEN` | `X-Admin-CSRF-Token` |
+
+一条请求只使用对应的一组。普通用户 `XSRF-TOKEN` 只能由普通站点同源入口签发，
+管理员 `ADMIN-XSRF-TOKEN` 只能由管理员同源入口签发。公开的 `state`、`phone-country`
+和 `hcaptcha/config` 会主动解析管理员 CSRF，使 H5 刷新后写入或保持
+`ADMIN-XSRF-TOKEN`；该 Cookie 只承担管理员双提交 CSRF，不代表已经建立
+`admin_session`。`register/start`、`login/start` 和 `session/bootstrap` 不要求已有管理员
+CSRF Cookie，但成功响应必须生成下一阶段可读的 Cookie。后端只接受经 HMAC 验签的 Worker
+外部 Host，不信任 `Forwarded` 或 `X-Forwarded-Host`。浏览器策略阻止新 Cookie 后，前端使用
+本地错误 `ADMIN_CSRF_COOKIE_UNAVAILABLE` 并停止网络提交。
+
+管理员注册 `/register/hcaptcha` 和登录 `/login/complete` 必须先通过用途 Cookie 与 `X-Admin-CSRF-Token` 的常量时间比较，随后才能调用 hCaptcha Siteverify。CSRF 失败不是供应商验证失败，不能触发携带同一个一次性 hCaptcha token 的自动重试。
+
+人机验证存在三个彼此独立的超时边界：
+
+- 客户端 SDK ready 超时为 15 秒，只约束供应商脚本从插入到明确 ready；失败时删除失效脚本并允许重新下载。
+- 前端 API 请求超时约束浏览器或应用调用本项目认证接口，不代表供应商 SDK ready，也不能代替 Siteverify 超时。
+- 一次性 token 产生并提交后，后端调用供应商 Siteverify 的连接与响应超时保持 8 秒；客户端尚未取得 token 时不会进入该阶段。
+
+页面可以显示经过白名单或格式校验的供应商错误码用于排障。错误码不是凭据；日志、Storage、监控标签和新增 URL 位置禁止记录 token、Site Key、完整 challenge、邮箱、手机号或其他敏感身份信息。Turnstile 只显示六位数字代码，否则显示 `unknown`；hCaptcha 只显示客户端错误白名单中的稳定代码，否则显示 `unknown`。

@@ -35,6 +35,7 @@
             <arg column="display_name" javaType="java.lang.String"/>
             <arg column="email" javaType="java.lang.String"/>
             <arg column="phone" javaType="java.lang.String"/>
+            <arg column="avatar_url" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
 
@@ -131,7 +132,8 @@
         SELECT
             up.display_name,
             uli.email,
-            uli.phone
+            uli.phone,
+            up.avatar_url
         FROM userloginidentity uli
         INNER JOIN user_profile up ON up.login_identity_id = uli.id
         WHERE uli.id = #{identityId,jdbcType=BIGINT}

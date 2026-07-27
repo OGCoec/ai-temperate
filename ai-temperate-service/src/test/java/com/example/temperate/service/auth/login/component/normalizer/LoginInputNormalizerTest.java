@@ -101,21 +101,19 @@ class LoginInputNormalizerTest {
     }
 
     @Test
-    void requiresStrictDeviceInstallationIdAndCanonicalClientIp() {
+    void requiresStrictDeviceInstallationIdAndCanonicalizesNumericClientIp() {
         assertThat(normalizer.normalizeDeviceInstallationId(DEVICE_ID)).isEqualTo(DEVICE_ID);
-        assertThat(normalizer.normalize(commandWithIp("2001:db8::1"))
+        assertThat(normalizer.normalize(commandWithIp(
+                        "2001:0DB8:0000:0000:0000:0000:0000:0001"))
                 .getCanonicalClientIp()).isEqualTo("2001:db8::1");
+        assertThat(normalizer.normalize(commandWithIp("::ffff:203.0.113.10"))
+                .getCanonicalClientIp()).isEqualTo("203.0.113.10");
 
         assertInvalid(new LoginCommand(
                 "person@example.test", "password", "short", CLIENT_IP));
-        assertInvalid(new LoginCommand(
-                "person@example.test", "password", DEVICE_ID, "example.test"));
-        assertInvalid(new LoginCommand(
-                "person@example.test", "password", DEVICE_ID, "203.000.113.10"));
-        assertInvalid(new LoginCommand(
-                "person@example.test", "password", DEVICE_ID, "2001:0db8::1"));
-        assertInvalid(new LoginCommand(
-                "person@example.test", "password", DEVICE_ID, "2001:DB8::1"));
+        assertInternalIpFailure("example.test");
+        assertInternalIpFailure("203.000.113.10");
+        assertInternalIpFailure("2001:db8::1::2");
     }
 
     private static LoginCommand command(String identifier, String password) {
@@ -130,5 +128,10 @@ class LoginInputNormalizerTest {
         assertThatThrownBy(() -> new LoginInputNormalizer().normalize(command))
                 .isInstanceOfSatisfying(LoginException.class, exception ->
                         assertThat(exception.code()).isEqualTo(LoginErrorCode.INVALID_INPUT));
+    }
+
+    private static void assertInternalIpFailure(String clientIp) {
+        assertThatThrownBy(() -> new LoginInputNormalizer().normalize(commandWithIp(clientIp)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

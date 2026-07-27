@@ -20,8 +20,6 @@ class AuthSessionSecretProtectorTest {
 
     private static final String DEVICE_ID = "550e8400-e29b-41d4-a716-446655440000";
     private static final String NANO_ID = "A2345678901234567890123456789012345678";
-    private static final String CLIENT_IP = "203.0.113.10";
-
     private AuthSessionSecretProtector protector;
 
     @BeforeEach
@@ -33,12 +31,11 @@ class AuthSessionSecretProtectorTest {
     @Test
     void domainSeparatesLoginSubjectActorRefreshDeviceAndCsrf() {
         String csrf = Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]);
-        LoginAttempt attempt = new LoginAttempt("person@example.test", DEVICE_ID, CLIENT_IP);
+        LoginAttempt attempt = new LoginAttempt("person@example.test", DEVICE_ID);
 
         ProtectedLoginAttempt protectedAttempt = protector.protect(attempt);
         HmacIdentifier loginSubject = protector.loginSubject("person@example.test");
-        HmacIdentifier loginActor = protector.loginActor(DEVICE_ID, CLIENT_IP);
-        HmacIdentifier loginNetwork = protector.loginNetwork(CLIENT_IP);
+        HmacIdentifier loginActor = protector.loginActor(DEVICE_ID);
         HmacIdentifier refresh = protector.refreshToken(NANO_ID);
         HmacIdentifier device = protector.device(DEVICE_ID);
         HmacIdentifier deviceBlock = protector.deviceBlock(DEVICE_ID);
@@ -46,20 +43,17 @@ class AuthSessionSecretProtectorTest {
 
         assertThat(protectedAttempt.identifierHash()).isEqualTo(loginSubject);
         assertThat(protectedAttempt.actorHash()).isEqualTo(loginActor);
-        assertThat(protectedAttempt.networkHash()).isEqualTo(loginNetwork);
         assertThat(protectedAttempt.globalDeviceHash()).isEqualTo(deviceBlock);
         assertThat(Set.of(
                         loginSubject.value(),
                         loginActor.value(),
-                        loginNetwork.value(),
                         refresh.value(),
                         device.value(),
                         deviceBlock.value(),
                         protectedCsrf.value()))
-                .hasSize(7);
+                .hasSize(6);
         assertThat(refresh).isNotEqualTo(device);
         assertThat(deviceBlock).isNotEqualTo(device);
-        assertThat(loginActor).isNotEqualTo(loginNetwork);
     }
 
     @Test
@@ -74,9 +68,7 @@ class AuthSessionSecretProtectorTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> protector.loginSubject("15551234567"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor("short", CLIENT_IP))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, "example.test"))
+        assertThatThrownBy(() -> protector.loginActor("short"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> protector.refreshToken(NANO_ID.substring(1)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -87,59 +79,14 @@ class AuthSessionSecretProtectorTest {
     }
 
     @Test
-    void acceptsOnlyCanonicalRfc5952Ipv6LiteralsWithoutActorPartInjection() {
-        assertThat(protector.loginActor(DEVICE_ID, "::1").value())
-                .matches("^[A-Za-z0-9_-]{43}$");
-        assertThat(protector.loginActor(DEVICE_ID, "2001:db8::1").value())
-                .matches("^[A-Za-z0-9_-]{43}$");
-        assertThat(protector.loginActor(DEVICE_ID, "2001:db8:0:1:2:3:4:5").value())
-                .matches("^[A-Za-z0-9_-]{43}$");
-
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, ":::"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, "1:::2"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, "2001:db8::1::"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, "2001:DB8::1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(DEVICE_ID, "2001:0db8::1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(
-                        DEVICE_ID, "2001:db8:0:0:0:0:0:1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(
-                        DEVICE_ID, "2001:db8::1:1:1:1:1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(
-                        DEVICE_ID + Character.toString(0) + "split", "::1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginActor(
-                        DEVICE_ID, "::1" + Character.toString(0) + "split"))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void ipv4AcceptsOnlyAsciiDigitsAndNetworkHasItsOwnDomain() {
-        HmacIdentifier actor = protector.loginActor(DEVICE_ID, "127.0.0.1");
-        HmacIdentifier network = protector.loginNetwork("127.0.0.1");
-
-        assertThat(network).isNotEqualTo(actor);
-        assertThatThrownBy(() -> protector.loginNetwork("１２７.０.０.１"))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> protector.loginNetwork("一二七.零.零.一"))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
     void sensitiveInputsDoNotAppearInObjectRepresentations() {
-        LoginAttempt attempt = new LoginAttempt("person@example.test", DEVICE_ID, CLIENT_IP);
+        LoginAttempt attempt = new LoginAttempt("person@example.test", DEVICE_ID);
         ProtectedLoginAttempt protectedAttempt = protector.protect(attempt);
 
         assertThat(attempt.toString())
-                .doesNotContain("person@example.test", DEVICE_ID, CLIENT_IP);
+                .doesNotContain("person@example.test", DEVICE_ID);
         assertThat(protectedAttempt.toString())
-                .doesNotContain("person@example.test", DEVICE_ID, CLIENT_IP)
+                .doesNotContain("person@example.test", DEVICE_ID)
                 .contains("redacted");
         assertThat(protector.toString())
                 .doesNotContain("auth-session-test-secret");

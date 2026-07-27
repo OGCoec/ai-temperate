@@ -63,6 +63,10 @@ class PersistenceSqlContractTest {
                 PROJECT_ROOT.resolve("sql/checks/user_profile_orphans.sql")));
 
         assertTrue(profileSchema.contains("unique (login_identity_id)"));
+        assertTrue(profileSchema.contains(
+                "create index idx_user_profile_account_status_display_name_id "
+                        + "on user_profile ( account_status asc, "
+                        + "display_name asc nulls last, id asc )"));
         assertTrue(orphanCheck.contains("from user_profile up"));
         assertTrue(orphanCheck.contains(
                 "left join userloginidentity uli on uli.id = up.login_identity_id"));

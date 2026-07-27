@@ -4,16 +4,35 @@ import {
 	requiresCsrf
 } from './browser-cookies.js'
 import { AUTH_API_BASE_URL, AUTH_ROUTES, clientPlatform } from './config.js'
+import {
+	ensureCookieScopeMigration,
+	invalidateCookieScopeMigration
+} from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
+import {
+	currentPreAuthToken,
+	ensurePreAuth,
+	invalidatePreAuth
+} from './pre-auth.js'
+import { presentRiskBlock } from './risk-block-navigation.js'
+import { beginRiskChallenge } from './risk-challenge-navigation.js'
 import { hasCompleteSessionCredentials } from './session-credentials.js'
 import { SessionRenewalMode, sessionRenewalMode } from './session-retry-policy.js'
 import { clearSession, currentSession, saveSession } from './session-vault.js'
-import { clearAuthUiPreviewSession, isAuthUiPreviewEnabled } from './ui-preview-session.js'
 import {
 	applyDiagnosticsToError,
 	inspectAuthResponse,
 	networkFailureDiagnostics
 } from './turnstile-response-diagnostics.js'
+import {
+	isWebRtcFailureCode,
+	isWebRtcRetryCode
+} from '@shared-auth/webrtc-verification-core.js'
+import {
+	ensureWebRtcVerified,
+	invalidateWebRtcVerification,
+	presentWebRtcFailure
+} from './webrtc-verification.js'
 
 const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
@@ -32,7 +51,7 @@ const TERMINAL_SESSION_ERRORS = new Set([
 let refreshInFlight = null
 let csrfInFlight = null
 
-function requestTask(options) {
+function rawRequestTask(options) {
 	return new Promise((resolve, reject) => {
 		uni.request({
 			url: `${AUTH_API_BASE_URL}${options.path}`,
@@ -45,7 +64,7 @@ function requestTask(options) {
 				const diagnostics = inspectAuthResponse(response)
 				notifyResponseObserver(options.onResponse, diagnostics)
 				if (diagnostics.classification === 'EDGE_CHALLENGE') {
-					const edgeError = new Error('Cloudflare 安全检查未完成，请重新完成人机验证。')
+					const edgeError = new Error('Cloudflare 安全检查尚未完成，请重新完成人机验证。')
 					edgeError.code = 'EDGE_CHALLENGE'
 					edgeError.statusCode = response.statusCode
 					reject(applyDiagnosticsToError(edgeError, diagnostics))
@@ -63,6 +82,15 @@ function requestTask(options) {
 					: '请求未完成，请稍后重试。')
 				error.code = response.data?.code || `HTTP_${response.statusCode}`
 				error.statusCode = response.statusCode
+				error.challengeRef = response.data?.challengeRef || ''
+				error.challengePath = response.data?.challengePath || ''
+				error.expiresAt = response.data?.expiresAt || ''
+				error.webRtcStatus = response.data?.webRtcStatus
+				error.httpIp = response.data?.httpIp || ''
+				error.webRtcIps = Array.isArray(response.data?.webRtcIps)
+					? [...response.data.webRtcIps]
+					: []
+				error.retryable = response.data?.retryable === true
 				reject(applyDiagnosticsToError(error, diagnostics))
 			},
 			fail() {
@@ -76,6 +104,11 @@ function requestTask(options) {
 	})
 }
 
+async function requestTask(options) {
+	await ensureCookieScopeMigration()
+	return rawRequestTask(options)
+}
+
 function notifyResponseObserver(observer, diagnostics) {
 	if (typeof observer !== 'function') return
 	try {
@@ -85,51 +118,125 @@ function notifyResponseObserver(observer, diagnostics) {
 	}
 }
 
-function clientContextHeaders(includeClientContext = true) {
+function clientContextHeaders() {
 	const headers = { 'Content-Type': 'application/json' }
-	if (includeClientContext) {
-		headers['X-Device-Installation-Id'] = getDeviceInstallationId()
-		headers['X-Client-Platform'] = clientPlatform()
+	headers['X-Device-Installation-Id'] = getDeviceInstallationId()
+	headers['X-Client-Platform'] = clientPlatform()
+	const preAuthToken = currentPreAuthToken()
+	if (clientPlatform() === 'ANDROID' && preAuthToken) {
+		headers['X-AIT-PreAuth'] = preAuthToken
 	}
 	return headers
 }
 
-export async function initializeBrowserCsrf() {
+export async function initializeBrowserCsrf(
+	migrationRetried = false,
+	preAuthRetried = false,
+	webRtcRetried = false
+) {
 	if (clientPlatform() !== 'H5') return ''
-	const existing = browserCsrfToken()
-	if (existing) return existing
-	if (!csrfInFlight) {
-		csrfInFlight = requestTask({
-			path: CSRF_PATH,
-			method: 'GET',
-			headers: clientContextHeaders()
-		}).finally(() => { csrfInFlight = null })
+	// 必须先清理旧父域 Cookie，再建立 Host-only PreAuth 和读取 CSRF。
+	await ensureCookieScopeMigration()
+	await ensurePreAuth()
+	try {
+		await ensureWebRtcVerified()
+		const existing = browserCsrfToken()
+		if (existing) return existing
+		if (!csrfInFlight) {
+			csrfInFlight = requestTask({
+				path: CSRF_PATH,
+				method: 'GET',
+				headers: clientContextHeaders()
+			}).finally(() => { csrfInFlight = null })
+		}
+		await csrfInFlight
+	} catch (error) {
+		if (presentRiskBlock(error)) throw error
+		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
+		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
+			await recoverWebRtc(error)
+			return initializeBrowserCsrf(migrationRetried, preAuthRetried, true)
+		}
+		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
+			beginRiskChallenge(error)
+		}
+		if (!preAuthRetried && error.code === 'PREAUTH_REQUIRED') {
+			invalidatePreAuth()
+			invalidateWebRtcVerification()
+			await ensurePreAuth()
+			return initializeBrowserCsrf(migrationRetried, true, webRtcRetried)
+		}
+		if (migrationRetried
+			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
+			throw error
+		}
+		invalidateCookieScopeMigration()
+		invalidatePreAuth()
+		invalidateWebRtcVerification()
+		await ensureCookieScopeMigration()
+		return initializeBrowserCsrf(true, preAuthRetried, webRtcRetried)
 	}
-	await csrfInFlight
 	return browserCsrfToken()
 }
 
-export async function publicRequest(path, options = {}) {
-	const method = String(options.method || 'POST').toUpperCase()
-	const headers = clientContextHeaders(options.includeClientContext !== false)
-	Object.assign(headers, options.headers || {})
-	if (clientPlatform() === 'H5' && requiresCsrf(method) && path !== BOOTSTRAP_PATH) {
-		const csrfToken = browserCsrfToken() || await initializeBrowserCsrf()
-		if (!csrfToken) {
-			const error = new Error('CSRF token is unavailable.')
-			error.code = 'CSRF_INVALID'
+export async function publicRequest(
+	path,
+	options = {},
+	migrationRetried = false,
+	preAuthRetried = false,
+	webRtcRetried = false
+) {
+	await ensureCookieScopeMigration()
+	await ensurePreAuth()
+	try {
+		await ensureWebRtcVerified()
+		const method = String(options.method || 'POST').toUpperCase()
+		const headers = clientContextHeaders()
+		Object.assign(headers, options.headers || {})
+		if (clientPlatform() === 'H5' && requiresCsrf(method) && path !== BOOTSTRAP_PATH) {
+			const csrfToken = browserCsrfToken() || await initializeBrowserCsrf()
+			if (!csrfToken) {
+				const error = new Error('CSRF token is unavailable.')
+				error.code = 'CSRF_INVALID'
+				throw error
+			}
+			applyBrowserCsrfHeader(headers, method, csrfToken)
+		}
+		return await requestTask({
+			path,
+			method,
+			data: options.data,
+			headers,
+			timeout: options.timeout,
+			onResponse: options.onResponse
+		})
+	} catch (error) {
+		if (presentRiskBlock(error)) throw error
+		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
+		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
+			await recoverWebRtc(error)
+			return publicRequest(path, options, migrationRetried, preAuthRetried, true)
+		}
+		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
+			beginRiskChallenge(error)
+		}
+		if (!preAuthRetried && error.code === 'PREAUTH_REQUIRED') {
+			invalidatePreAuth()
+			invalidateWebRtcVerification()
+			await ensurePreAuth()
+			return publicRequest(path, options, migrationRetried, true, webRtcRetried)
+		}
+		if (clientPlatform() !== 'H5'
+			|| migrationRetried
+			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
 			throw error
 		}
-		applyBrowserCsrfHeader(headers, method, csrfToken)
+		invalidateCookieScopeMigration()
+		invalidatePreAuth()
+		invalidateWebRtcVerification()
+		await ensureCookieScopeMigration()
+		return publicRequest(path, options, true, preAuthRetried, webRtcRetried)
 	}
-	return requestTask({
-		path,
-		method,
-		data: options.data,
-		headers,
-		timeout: options.timeout,
-		onResponse: options.onResponse
-	})
 }
 
 async function refreshSession(bootstrap = false) {
@@ -162,7 +269,6 @@ export function restoreBrowserSession() {
 }
 
 export function restorePersistedSession() {
-	if (isAuthUiPreviewEnabled()) return Promise.resolve({ restored: true, preview: true })
 	if (clientPlatform() === 'H5') return restoreBrowserSession()
 	const credentials = currentSession()
 	return Promise.resolve(hasCompleteSessionCredentials(credentials)
@@ -217,12 +323,22 @@ function handleTerminalSessionError(error) {
 	uni.reLaunch({ url: AUTH_ROUTES.login })
 }
 
-export async function logoutSession() {
-	if (isAuthUiPreviewEnabled()) {
-		clearAuthUiPreviewSession()
-		clearSession()
-		return
+async function recoverWebRtc(error) {
+	invalidateWebRtcVerification()
+	try {
+		return await ensureWebRtcVerified({
+			force: error.code === 'WEBRTC_NETWORK_CHANGED'
+		})
+	} catch (verificationError) {
+		if (presentRiskBlock(verificationError)) throw verificationError
+		if (isWebRtcFailureCode(verificationError.code)) {
+			presentWebRtcFailure(verificationError)
+		}
+		throw verificationError
 	}
+}
+
+export async function logoutSession() {
 	const platform = clientPlatform()
 	const session = currentSession()
 	const headers = {}
@@ -245,19 +361,17 @@ export async function logoutSession() {
 		}
 	} finally {
 		clearSession()
+		invalidatePreAuth()
+		invalidateWebRtcVerification()
 	}
 }
 
 export async function logoutAllSessions() {
-	if (isAuthUiPreviewEnabled()) {
-		clearAuthUiPreviewSession()
-		clearSession()
-		return
-	}
-
-	// 全设备撤销失败时保留本地凭据，让用户留在当前页重试而不是误报已退出。
+	// 全设备撤销失败时保留本地凭据，让用户留在当前页面重试。
 	await authorizedRequest('/api/auth/session/logout-all', {
 		preserveSessionOnFailure: true
 	})
 	clearSession()
+	invalidatePreAuth()
+	invalidateWebRtcVerification()
 }

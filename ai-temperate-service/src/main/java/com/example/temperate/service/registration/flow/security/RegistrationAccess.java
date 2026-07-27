@@ -11,4 +11,9 @@ public record RegistrationAccess(
         String challengeHandle,
         String deviceInstallationId,
         String canonicalIp) {
+
+    @Override
+    public String toString() {
+        return "RegistrationAccess[redacted]";
+    }
 }

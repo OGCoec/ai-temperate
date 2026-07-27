@@ -1,5 +1,9 @@
 # ai-temperate
 
+## 发布版本
+
+- [v2.0.0 第二版发布说明](docs/releases/v2.0.0.md)：管理员系统、AI 模型与图标管理、网络风险控制、用户头像、Cloudflare API Gateway，以及认证和会话安全升级。
+
 ## IP2Location LITE
 
 认证页面可以使用外部 IP2Location LITE DB11 IPv6 BIN 提供手机号国家或地区的默认建议。BIN 文件不进入代码仓库或应用 JAR，部署、可信代理和更新回滚步骤见 [IP2Location LITE BIN 部署与维护](docs/operations/ip2location-bin.md)。
@@ -78,6 +82,20 @@ Antigravity 或 Codex 已经在运行时，只需要完全退出 HBuilderX，然
 ```
 
 启动器用当前 Windows 用户解密 DPAPI 密码，校验固定证书指纹，再把本地 HTTPS 环境显式注入到 IDE 子进程。默认同时打开 Antigravity 与 HBuilderX；`-HBuilderXOnly` 只打开 HBuilderX，用于当前会话中已经打开 Antigravity 或 Codex 的场景。随后在 Antigravity 中启动 Spring Boot，在 HBuilderX 中运行 H5 或 Android。密码不会写入项目文件、日志或永久环境变量。
+
+生产 H5 通过中央 Cloudflare Worker 使用同源 `/api`：普通站点访问
+`https://niko000o.site/api/**`，管理员站点访问
+`https://admin.niko000o.site/api/admin/**`，Worker 再原路径转发到
+`https://api.niko000o.site`。正式切换后所有普通用户和管理员业务 Cookie 都是
+Host-only，生产环境必须删除 `AUTH_COOKIE_DOMAIN`、`ADMIN_COOKIE_DOMAIN` 和
+`ADMIN_CSRF_COOKIE_DOMAIN`。主配置只为上线迁移和紧急回滚保留空值占位符，Worker 会拒绝
+任何仍带 `Domain=` 的业务响应。
+
+Worker 与 Spring Boot 使用独立的 `EDGE_PROXY_HMAC_SECRET_BASE64` 验证请求。切换期设置
+`EDGE_PROXY_MODE=OPTIONAL`，正式切换并清理旧父域 Cookie 后改为
+`EDGE_PROXY_MODE=REQUIRED`；本地启动器固定注入 `EDGE_PROXY_MODE=DISABLED`。
+Worker 源码、路由、迁移端点和部署说明位于
+[`cloudflare/api-gateway`](cloudflare/api-gateway/README.md)。
 
 本地 HTTPS 地址：
 

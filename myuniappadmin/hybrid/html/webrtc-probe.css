@@ -1,0 +1,18 @@
+html,
+body {
+	min-height: 100%;
+	margin: 0;
+	background: #080b0d;
+	color: #dfe8e3;
+}
+
+body {
+	display: grid;
+	place-items: center;
+	font: 15px/1.6 system-ui, sans-serif;
+}
+
+.status {
+	padding: 24px;
+	text-align: center;
+}

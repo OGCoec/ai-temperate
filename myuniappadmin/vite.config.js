@@ -1,4 +1,5 @@
 import fs from 'fs'
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import uni from '@dcloudio/vite-plugin-uni'
 
@@ -15,10 +16,17 @@ function requiredEnvironment(name) {
 
 export default defineConfig(() => {
 	const plugins = [uni()]
+	const resolve = {
+		alias: {
+			'@shared-auth': fileURLToPath(new URL('../shared-frontend/auth', import.meta.url)),
+			'validator': fileURLToPath(new URL('node_modules/validator', import.meta.url)),
+			'libphonenumber-js': fileURLToPath(new URL('node_modules/libphonenumber-js', import.meta.url))
+		}
+	}
 	const platform = process.env.UNI_PLATFORM
 	const isH5Development = ['h5', 'web'].includes(platform) && process.env.NODE_ENV !== 'production'
 	if (!isH5Development) {
-		return { plugins }
+		return { plugins, resolve }
 	}
 
 	if (process.env.LOCAL_HTTPS_ENABLED !== 'true') {
@@ -33,10 +41,14 @@ export default defineConfig(() => {
 
 	return {
 		plugins,
+		resolve,
 		server: {
 			host: '127.0.0.1',
 			port: 3001,
 			strictPort: true,
+			fs: {
+				allow: [fileURLToPath(new URL('..', import.meta.url))]
+			},
 			https: {
 				pfx: fs.readFileSync(p12Path),
 				passphrase

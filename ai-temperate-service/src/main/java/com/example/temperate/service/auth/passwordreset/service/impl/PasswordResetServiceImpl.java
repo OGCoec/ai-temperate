@@ -25,7 +25,10 @@ import com.example.temperate.service.registration.component.normalizer.Registrat
 import com.example.temperate.service.registration.enums.VerificationChannel;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
 import com.example.temperate.service.registration.exception.RegistrationException;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationCommand;
+import com.example.temperate.service.humanverification.HumanVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
+import com.example.temperate.service.humanverification.HumanVerificationType;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryRequest;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationPurpose;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
@@ -37,11 +40,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.MDC;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 密码重置流程的业务协调器。
@@ -63,7 +69,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
     private final PasswordResetFlowStore flowStore;
     private final AuthSessionSecretProtector protector;
     private final AuthTokenService tokenService;
-    private final TurnstileVerificationService turnstileService;
+    private final HumanVerificationServiceRegistry humanVerificationServices;
     private final VerificationCodeGenerator codeGenerator;
     private final VerificationDeliveryOperationIdGenerator operationIdGenerator;
     private final VerificationDeliveryPublisher deliveryPublisher;
@@ -79,7 +85,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
             PasswordResetFlowStore flowStore,
             AuthSessionSecretProtector protector,
             AuthTokenService tokenService,
-            TurnstileVerificationService turnstileService,
+            HumanVerificationServiceRegistry humanVerificationServices,
             VerificationCodeGenerator codeGenerator,
             VerificationDeliveryOperationIdGenerator operationIdGenerator,
             VerificationDeliveryPublisher deliveryPublisher,
@@ -93,7 +99,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
         this.flowStore = Objects.requireNonNull(flowStore);
         this.protector = Objects.requireNonNull(protector);
         this.tokenService = Objects.requireNonNull(tokenService);
-        this.turnstileService = Objects.requireNonNull(turnstileService);
+        this.humanVerificationServices = Objects.requireNonNull(humanVerificationServices);
         this.codeGenerator = Objects.requireNonNull(codeGenerator);
         this.operationIdGenerator = Objects.requireNonNull(operationIdGenerator);
         this.deliveryPublisher = Objects.requireNonNull(deliveryPublisher);
@@ -134,22 +140,41 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
     }
 
     @Override
-    public void verifyTurnstile(PasswordResetAccess access, String turnstileToken) {
-        ProtectedPasswordResetAccess protectedAccess = protect(access, null);
-        flowStore.getRequired(protectedAccess, clock.instant());
-        try {
-            turnstileService.verify(
-                    turnstileToken,
-                    access.clientIp(),
-                    access.challengeHandle(),
-                    "password_reset");
-        } catch (RuntimeException exception) {
-            throw new PasswordResetException(
-                    PasswordResetErrorCode.TURNSTILE_REJECTED,
-                    "人机验证未通过，请重试。",
-                    exception);
-        }
-        flowStore.markHumanVerified(protectedAccess, clock.instant());
+    public Mono<Void> verifyTurnstile(
+            PasswordResetAccess access, String turnstileToken) {
+        return Mono.defer(() -> {
+            String requestTraceId = traceId();
+            ProtectedPasswordResetAccess protectedAccess = protect(access, null);
+            Mono<Void> loadFlow = Mono.fromCallable(
+                            () -> flowStore.getRequired(
+                                    protectedAccess, clock.instant()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then();
+            HumanVerificationService turnstile =
+                    humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE);
+            Mono<Void> siteverify = Mono.defer(() -> turnstile.verify(
+                            HumanVerificationCommand.turnstile(
+                                    turnstileToken,
+                                    access.clientIp(),
+                                    access.challengeHandle(),
+                                    "password_reset")))
+                    .contextWrite(context -> context.put(
+                            HumanVerificationService.TRACE_ID_CONTEXT_KEY,
+                            requestTraceId))
+                    .onErrorMap(
+                            RegistrationException.class,
+                            exception -> new PasswordResetException(
+                                    PasswordResetErrorCode.TURNSTILE_REJECTED,
+                                    "人机验证未通过，请重试。",
+                                    exception));
+            // 密码重置流程同样只在供应商通过后执行阻塞 Redis 原子标记。
+            Mono<Void> markVerified = Mono.fromRunnable(
+                            () -> flowStore.markHumanVerified(
+                                    protectedAccess, clock.instant()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then();
+            return loadFlow.then(siteverify).then(markVerified);
+        });
     }
 
     @Override
@@ -464,5 +489,10 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
     private static PasswordResetException error(
             PasswordResetErrorCode code, String message) {
         return new PasswordResetException(code, message);
+    }
+
+    private static String traceId() {
+        String value = MDC.get("traceId");
+        return value == null || value.isBlank() ? "absent" : value;
     }
 }

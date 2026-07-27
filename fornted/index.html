@@ -2,14 +2,15 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      var coverSupport = 'CSS' in window && typeof CSS.supports === 'function' && (CSS.supports('top: env(a)') ||
-        CSS.supports('top: constant(a)'))
-      document.write(
-        '<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0' +
-        (coverSupport ? ', viewport-fit=cover' : '') + '" />')
-    </script>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://localhost:6655 https://127.0.0.1:6655 wss://localhost:3000 wss://127.0.0.1:3000 https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://challenges.cloudflare.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <script src="/static/bootstrap/viewport-bootstrap.js"></script>
     <title></title>
+    <link rel="dns-prefetch" href="//challenges.cloudflare.com" />
+    <link rel="preconnect" href="https://challenges.cloudflare.com" />
+    <script src="/static/auth/turnstile-sdk-bootstrap.js"></script>
     <!--preload-links-->
     <!--app-context-->
   </head>

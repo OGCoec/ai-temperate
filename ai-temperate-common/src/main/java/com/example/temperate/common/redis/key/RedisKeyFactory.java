@@ -188,6 +188,100 @@ public final class RedisKeyFactory {
         return authKey(PASSWORD_RESET_OBJECT, IdentifierType.PASSWORD_RESET_TARGET_SEND, identifier);
     }
 
+    /**
+     * 生成管理员短期登录流程 Key，Key 中只包含带业务域的 HMAC 标识。
+     */
+    public String adminLoginFlowKey(HmacIdentifier identifier) {
+        return create(
+                "admin",
+                "login",
+                "v1",
+                IdentifierType.ADMIN_LOGIN_FLOW,
+                requireHmacIdentifier(identifier));
+    }
+
+    /**
+     * 生成唯一管理员全部设备会话共用的小型 Hash Key。
+     *
+     * <p>Hash Field 承载原始 Token 的 HMAC，Key 本身不包含管理员邮箱、手机号或 Token。</p>
+     */
+    public String adminSessionTokensKey() {
+        return String.join(
+                ":", PROJECT_PREFIX, environment, "admin", "session", "v1", "tokens");
+    }
+
+    /**
+     * 生成 IP2Location 加密凭据 Hash Key；Hash Field 使用独立 HMAC 标识，Key 本身不携带凭据。
+     */
+    public String ip2LocationSecretHashKey() {
+        return fixedKey("risk", "ip2location", "v1", "secret");
+    }
+
+    /**
+     * 生成 IP2Location 剩余额度 Hash Key；字段必须与加密凭据 Hash 一一对应。
+     */
+    public String ip2LocationQuotaHashKey() {
+        return fixedKey("risk", "ip2location", "v1", "quota");
+    }
+
+    /**
+     * 生成全部启用 AI 模型共用的版本化加密快照 Key。
+     *
+     * <p>模型名称和厂商等业务内容只存在于加密 Value 中，Key 本身保持固定且不携带模型标识。</p>
+     */
+    public String aiModelEnabledSnapshotKey() {
+        // v2 与模型能力大类的缓存 Schema 同步，旧 v1 快照只依赖原 TTL 自然过期。
+        return fixedKey("ai", "model", "v2", "enabled");
+    }
+
+    /**
+     * 生成独立 IP 信用快照缓存 Key，明文 IP 必须先转换为 HMAC 标识。
+     */
+    public String ipIntelligenceCacheKey(HmacIdentifier identifier) {
+        return create(
+                "risk",
+                "ipintel",
+                "v3",
+                IdentifierType.IP_INTELLIGENCE,
+                requireHmacIdentifier(identifier));
+    }
+
+    /**
+     * 生成同一 IP 外部查询的短期单飞锁 Key，避免多实例同时消耗第三方额度。
+     */
+    public String ipIntelligenceSingleFlightKey(HmacIdentifier identifier) {
+        return create(
+                "risk",
+                "ipintel",
+                "v3",
+                IdentifierType.IP_SINGLE_FLIGHT,
+                requireHmacIdentifier(identifier));
+    }
+
+    /**
+     * 生成普通用户 PreAuth 状态 Key。
+     */
+    public String userPreAuthKey(HmacIdentifier identifier) {
+        return create(
+                "risk",
+                "preauth-user",
+                "v4",
+                IdentifierType.PRE_AUTH,
+                requireHmacIdentifier(identifier));
+    }
+
+    /**
+     * 生成管理员 PreAuth 状态 Key。
+     */
+    public String adminPreAuthKey(HmacIdentifier identifier) {
+        return create(
+                "risk",
+                "preauth-admin",
+                "v4",
+                IdentifierType.PRE_AUTH,
+                requireHmacIdentifier(identifier));
+    }
+
     /** 生成 Twilio Message SID 的 HMAC 索引键，键中不保存第三方返回的原始 SID。 */
     public String twilioMessageStatusKey(HmacIdentifier identifier) {
         return create(AUTH_DOMAIN, "verification", "v1",
@@ -308,6 +402,30 @@ public final class RedisKeyFactory {
         return key;
     }
 
+    private String fixedKey(
+            String domain,
+            String object,
+            String version,
+            String terminalSegment) {
+        String validDomain = requireNamespaceSegment("domain", domain);
+        String validObject = requireNamespaceSegment("object", object);
+        String validVersion = requireNamespaceSegment("version", version);
+        String validTerminal = requireNamespaceSegment("terminalSegment", terminalSegment);
+        String key = String.join(
+                ":",
+                PROJECT_PREFIX,
+                environment,
+                validDomain,
+                validObject,
+                validVersion,
+                validTerminal);
+        int byteLength = key.getBytes(StandardCharsets.UTF_8).length;
+        if (byteLength > ABSOLUTE_MAX_BYTES) {
+            throw new IllegalArgumentException("Redis key exceeds the 256-byte absolute limit.");
+        }
+        return key;
+    }
+
     private static String requireNamespaceSegment(String name, String value) {
         if (value == null || !NAMESPACE_SEGMENT.matcher(value).matches()) {
             throw new IllegalArgumentException(name + " must be a lowercase ASCII namespace segment.");
@@ -353,7 +471,11 @@ public final class RedisKeyFactory {
         PASSWORD_RESET_TARGET_SEND("target-send"),
         TWILIO_MESSAGE_STATUS("twilio-status"),
         SESSION_REFRESH_TOKEN("rt"),
-        SESSION_USER_INDEX("user-rts");
+        SESSION_USER_INDEX("user-rts"),
+        ADMIN_LOGIN_FLOW("flow"),
+        IP_INTELLIGENCE("ip"),
+        IP_SINGLE_FLIGHT("single-flight"),
+        PRE_AUTH("token");
 
         private final String segment;
 

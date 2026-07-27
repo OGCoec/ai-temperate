@@ -1,5 +1,5 @@
 import { authApi } from './auth-api.js'
-import { findPhoneCountryById, getPhoneCountryByIso2 } from './phone-country-search.js'
+import { findPhoneCountryById, getPhoneCountryByIso2 } from '@shared-auth/phone-country-search.js'
 
 const SOURCE = Object.freeze({
 	UNRESOLVED: 'UNRESOLVED',
@@ -63,10 +63,11 @@ async function resolveAutomaticCountry(startedAtVersion) {
 		if (ipCountry) {
 			return commitAutomatic({ countryId: ipCountry.id, source: SOURCE.IP }, startedAtVersion)
 		}
+		return commitAutomatic(automaticFallback(), startedAtVersion)
 	} catch (error) {
-		// Default-country discovery is best effort and must not create an auth error banner.
+		// API failures stay silent and empty so weak networks never fabricate a device-locale country.
+		return commitAutomatic({ countryId: '', source: SOURCE.FALLBACK }, startedAtVersion)
 	}
-	return commitAutomatic(automaticFallback(), startedAtVersion)
 }
 
 export function getCurrentPhoneCountrySelection() {

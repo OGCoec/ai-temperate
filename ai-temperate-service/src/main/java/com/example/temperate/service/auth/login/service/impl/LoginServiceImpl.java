@@ -86,8 +86,7 @@ public final class LoginServiceImpl implements LoginService {
         NormalizedLoginInput input = inputNormalizer.normalize(command);
         LoginAttempt attempt = new LoginAttempt(
                 input.getIdentifier(),
-                input.getDeviceInstallationId(),
-                input.getCanonicalClientIp());
+                input.getDeviceInstallationId());
 
         if (checkLimit(attempt) == LoginLimitDecision.BLOCKED) {
             auditObserver.observe(LoginAuditOutcome.REJECTED, LoginAuditReason.BLOCKED);

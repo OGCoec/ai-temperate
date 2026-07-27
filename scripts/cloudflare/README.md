@@ -49,6 +49,12 @@ CF_FRONTEND_TUNNEL_ID=<根域名旧 Tunnel UUID，仅供迁移回滚>
 CF_API_TUNNEL_ID=<api.niko000o.site 独立 Tunnel UUID>
 ```
 
+生产 H5 不再配置任何 Cookie Domain。普通和管理员页面分别由
+`cloudflare/api-gateway` 的同源 Worker Route 代理到 API Tunnel，后端业务 Cookie
+全部保持 Host-only。Worker 与后端需要配置同一份独立
+`EDGE_PROXY_HMAC_SECRET_BASE64`；本地 HTTPS 启动器固定使用
+`EDGE_PROXY_MODE=DISABLED`，生产稳定态使用 `EDGE_PROXY_MODE=REQUIRED`。
+
 `scripts/cloudflare/windows-legacy-tunnel/start-cloudflare-frontend-dev.bat` 已在自身进程内注入独立开发 Tunnel ID `16698f57-7037-4252-adfe-4cc1319bf55c`，双击时不需要再配置 Windows 用户环境变量。该 ID 不是凭据；真正的凭据仍只保存在用户目录。`frontend-dev` 不回退读取 `CF_FRONTEND_TUNNEL_ID`，防止两组不同 ingress 配置连接到同一个 Tunnel 后产生随机回源。每个 Tunnel 必须有对应凭据：
 
 ```text

@@ -186,7 +186,7 @@
 	import RegistrationIdentitySummary from '@/components/auth/registration-identity-summary.vue'
 	import { authApi } from '@/common/auth/auth-api.js'
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
-	import { passwordError } from '@/common/auth/password-policy.js'
+	import { passwordError } from '@shared-auth/password-policy.js'
 	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import {
 		loadAndroidRegisterFlow,
@@ -196,19 +196,19 @@
 		clearRegistrationFlowState,
 		isRegistrationRedirectHandled
 	} from '@/common/auth/registration-flow-guard.js'
-	import { isValidEmailAddress } from '@/common/auth/email-validation.js'
+	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
 	import { createTurnstileAttemptId } from '@/common/auth/turnstile-response-diagnostics.js'
 	import {
 		getCurrentPhoneCountrySelection,
 		resolveInitialPhoneCountry,
 		selectPhoneCountry
 	} from '@/common/auth/phone-country-default.js'
-	import { findPhoneCountryById } from '@/common/auth/phone-country-search.js'
+	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
 	import {
 		formatLocalPhoneNumberInput,
 		isValidLocalPhoneNumber,
 		normalizePhoneInputForCountry
-	} from '@/common/auth/phone-validation.js'
+	} from '@shared-auth/phone-validation.js'
 	import { derivePhonePresentation } from '@/common/user/phone-presentation.js'
 
 	function emptyFieldErrors() {

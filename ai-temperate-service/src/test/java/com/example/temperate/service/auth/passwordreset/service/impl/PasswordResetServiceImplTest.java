@@ -14,8 +14,8 @@ import com.example.temperate.service.auth.passwordreset.notification.PasswordRes
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
 import com.example.temperate.service.registration.component.normalizer.RegistrationInputNormalizer;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
 import com.example.temperate.service.registration.verification.generator.VerificationCodeGenerator;
@@ -40,7 +40,7 @@ class PasswordResetServiceImplTest {
                 flowStore,
                 mock(AuthSessionSecretProtector.class),
                 mock(AuthTokenService.class),
-                mock(TurnstileVerificationService.class),
+                mock(HumanVerificationServiceRegistry.class),
                 mock(VerificationCodeGenerator.class),
                 new VerificationDeliveryOperationIdGenerator(),
                 mock(VerificationDeliveryPublisher.class),

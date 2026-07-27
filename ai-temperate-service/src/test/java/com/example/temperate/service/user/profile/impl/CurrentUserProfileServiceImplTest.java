@@ -30,7 +30,10 @@ class CurrentUserProfileServiceImplTest {
     @Test
     void returnsTheMinimalProfileForTheAuthenticatedUser() {
         CurrentUserProfile expected = new CurrentUserProfile(
-                "Alice", "alice@example.test", "+14155550123");
+                "Alice",
+                "alice@example.test",
+                "+14155550123",
+                "https://cdn.example.test/avatar.webp");
         when(identityMapper.findCurrentUserProfileById(10001L)).thenReturn(expected);
 
         CurrentUserProfile result = service.getRequired(10001L);

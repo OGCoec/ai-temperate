@@ -4,13 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
+import com.example.temperate.service.auth.phonecountry.service.exception.PhoneCountryTimeoutException;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.passwordreset.PasswordResetErrorCode;
 import com.example.temperate.service.auth.passwordreset.PasswordResetException;
+import com.example.temperate.service.humanverification.HumanVerificationType;
+import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.enums.RegistrationDiagnosticCode;
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.exception.RegistrationException;
@@ -19,6 +23,7 @@ import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import java.time.Clock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -228,6 +233,32 @@ class GlobalExceptionHandlerCookieTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("RESOURCE_NOT_FOUND");
+    }
+
+    @Test
+    void phoneCountryTimeoutUsesTheStableNonCachedTooManyRequestsResponse() {
+        var response = handler.handlePhoneCountryTimeout(new PhoneCountryTimeoutException());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(response.getHeaders().getCacheControl()).contains("private", "no-store");
+        assertThat(response.getHeaders().containsKey(HttpHeaders.RETRY_AFTER)).isFalse();
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("PHONE_COUNTRY_TIMEOUT");
+        assertThat(response.getBody().message()).isEqualTo("国家或地区识别超时，请手动选择。");
+    }
+
+    @Test
+    void humanVerificationUnavailableDoesNotClearAuthenticationOrFlowCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+
+        handler.handleHumanVerificationUnavailable(
+                new HumanVerificationUnavailableException(
+                        HumanVerificationType.TURNSTILE,
+                        new IllegalStateException("simulated transport failure")),
+                request);
+
+        verifyNoInteractions(cookieWriter, flowCookieWriter);
     }
 
     private static SessionAuthenticationException exception(

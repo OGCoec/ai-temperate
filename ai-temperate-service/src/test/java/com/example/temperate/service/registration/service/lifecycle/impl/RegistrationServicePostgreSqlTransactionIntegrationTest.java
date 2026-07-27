@@ -19,6 +19,7 @@ import com.example.temperate.service.registration.component.executor.impl.Spring
 import com.example.temperate.service.registration.component.normalizer.RegistrationInputNormalizer;
 import com.example.temperate.service.registration.component.observer.RegistrationCleanupObserver;
 import com.example.temperate.service.auth.password.policy.PasswordStrengthPolicy;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
 import com.example.temperate.service.registration.component.token.RegistrationTokenGenerator;
 import com.example.temperate.service.registration.dto.command.RegistrationCompleteCommand;
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
@@ -29,7 +30,6 @@ import com.example.temperate.service.registration.flow.security.RegistrationAcce
 import com.example.temperate.service.registration.flow.security.RegistrationTokenProtector;
 import com.example.temperate.service.registration.flow.store.RegistrationFlowStore;
 import com.example.temperate.service.registration.service.lifecycle.RegistrationService;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
 import com.example.temperate.service.registration.verification.delivery.coordinator.VerificationDeliveryCoordinator;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
 import com.example.temperate.service.registration.verification.service.registry.SixDigitVerificationCodeServiceRegistry;
@@ -203,7 +203,7 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
                 mock(VerificationDeliveryCoordinator.class),
                 mock(SixDigitVerificationCodeServiceRegistry.class),
                 mock(VerificationProviderResolver.class),
-                mock(TurnstileVerificationService.class),
+                mock(HumanVerificationServiceRegistry.class),
                 passwordEncoder,
                 () -> 42L,
                 new PublicIdCodec(),
@@ -246,7 +246,9 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
                 "sql/001_create_users.sql",
                 "sql/002_create_user_profile.sql",
                 "sql/003_create_ai_model.sql",
-                "sql/005_create_user_membership_quota.sql");
+                "sql/004_create_ai_model_capability.sql",
+                "sql/005_create_user_membership_quota.sql",
+                "sql/006_create_ai_model_icon.sql");
         try (Connection connection = dataSource.getConnection();
                 Statement statement = connection.createStatement()) {
             for (String migration : migrations) {

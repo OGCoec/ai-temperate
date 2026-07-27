@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import reactor.core.publisher.Mono;
 
 /**
  * 验证找回密码流程 token 在 H5 HttpOnly Cookie 与 Android Header/响应体之间的分流契约。
@@ -48,6 +49,7 @@ class PasswordResetControllerTokenTransportTest {
         when(service.verifyCode(any(), any())).thenReturn(new ForgetTokenResult(
                 "forget-token",
                 FORGET_EXPIRES_AT));
+        when(service.verifyTurnstile(any(), any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -146,6 +148,25 @@ class PasswordResetControllerTokenTransportTest {
                 new MockHttpServletRequest());
 
         verify(service).sendCode(any(), eq(VerificationDeliveryMethod.WHATSAPP));
+    }
+
+    @Test
+    void turnstileCompletesReactiveServiceBeforeReturningAcceptance() {
+        PasswordResetController.AcceptedResponse response =
+                controller.verifyTurnstile(
+                                new PasswordResetController.TurnstileRequest(
+                                        "turnstile-token"),
+                                "reset-flow-token",
+                                "challenge-handle",
+                                "device-1",
+                                "ANDROID",
+                                new MockHttpServletRequest())
+                        .toFuture()
+                        .join();
+
+        assertThat(response.accepted()).isTrue();
+        verify(service).verifyTurnstile(
+                any(), eq("turnstile-token"));
     }
 
     private static PasswordResetController.StartRequest startRequest() {

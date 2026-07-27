@@ -1,0 +1,56 @@
+package com.example.temperate.service.risk.webrtc.validation;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * 验证 WebRTC 报告仅接受有界公网 IP 字面量，并统一 IPv4-Mapped IPv6 与稳定排序。
+ */
+class WebRtcIpNormalizerTest {
+
+    private final WebRtcIpNormalizer normalizer = new WebRtcIpNormalizer();
+
+    @Test
+    void normalizesMappedIpv4DeduplicatesAndSortsBothFamilies() {
+        assertThat(normalizer.normalizeReported(
+                        List.of(
+                                "2606:4700:4700:0:0:0:0:1111",
+                                "::ffff:8.8.8.8",
+                                "8.8.8.8"),
+                        8))
+                .containsExactly("8.8.8.8", "2606:4700:4700::1111");
+    }
+
+    @Test
+    void acceptsEmptyReportButRejectsUntrustedAddressForms() {
+        assertThat(normalizer.normalizeReported(List.of(), 8)).isEmpty();
+
+        for (String invalid : List.of(
+                "candidate.local",
+                "8.8.8.8:3478",
+                "8.8.8.0/24",
+                "fe80::1%eth0",
+                "127.0.0.1",
+                "10.0.0.1",
+                "fe80::1")) {
+            assertThatThrownBy(() -> normalizer.normalizeReported(
+                            List.of(invalid),
+                            8))
+                    .isInstanceOf(WebRtcInvalidReportException.class);
+        }
+    }
+
+    @Test
+    void rejectsMoreThanConfiguredMaximum() {
+        assertThatThrownBy(() -> normalizer.normalizeReported(
+                        List.of(
+                                "8.8.8.1", "8.8.8.2", "8.8.8.3",
+                                "8.8.8.4", "8.8.8.5", "8.8.8.6",
+                                "8.8.8.7", "8.8.8.8", "8.8.4.4"),
+                        8))
+                .isInstanceOf(WebRtcInvalidReportException.class);
+    }
+}

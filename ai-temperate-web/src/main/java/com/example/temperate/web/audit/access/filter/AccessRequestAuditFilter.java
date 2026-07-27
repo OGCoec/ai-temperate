@@ -48,6 +48,8 @@ public final class AccessRequestAuditFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         return !path.startsWith("/api/")
                 || path.startsWith("/api/auth/")
+                || path.equals("/api/admin")
+                || path.startsWith("/api/admin/")
                 || path.equals("/api/health")
                 || path.startsWith("/api/health/");
     }

@@ -1,0 +1,73 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #0b0d0c;
+  color: #f3f5f4;
+  font-family: system-ui, sans-serif;
+}
+
+.shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.card {
+  width: min(100%, 420px);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.hint {
+  margin: 0 0 18px;
+  color: #98a29d;
+  font-size: 14px;
+}
+
+#widget {
+  min-height: 70px;
+}
+
+.status {
+  min-height: 20px;
+  color: #a9b5af;
+  font-size: 14px;
+}
+
+.error {
+  margin-top: 12px;
+  color: #ff8e8e;
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.actions button {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+#retry {
+  border: 0;
+  background: #37d39a;
+  color: #07110d;
+}
+
+#cancel {
+  border: 1px solid #46504b;
+  background: transparent;
+  color: #dce5e0;
+}

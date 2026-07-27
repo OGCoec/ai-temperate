@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/users")
 @Tag(
         name = "用户-当前用户资料",
-        description = "为已通过 Access Token 认证的 H5 和 Android 客户端返回当前用户展示名称、邮箱和手机号。"
+        description = "为已通过 Access Token 认证的 H5 和 Android 客户端返回当前用户展示名称、邮箱、手机号和头像 URL。"
                 + "接口不读取 Refresh Token，不返回内部用户 ID、密码、令牌、设备标识或请求 IP，也不负责修改资料。")
 public final class CurrentUserController {
 
@@ -41,7 +41,8 @@ public final class CurrentUserController {
         CurrentUserResponse response = new CurrentUserResponse(
                 profile.displayName(),
                 profile.email(),
-                profile.phone());
+                profile.phone(),
+                profile.avatarUrl());
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore().cachePrivate())
                 .body(response);

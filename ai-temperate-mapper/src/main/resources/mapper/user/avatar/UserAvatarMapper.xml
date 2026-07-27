@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.user.avatar.UserAvatarMapper">
+
+    <resultMap id="UserAvatarStateResultMap"
+               type="com.example.temperate.model.user.domain.UserAvatarState">
+        <constructor>
+            <arg column="user_id" javaType="_long"/>
+            <arg column="avatar_url" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="UserAvatarStateColumns">
+        login_identity_id AS user_id,
+        avatar_url
+    </sql>
+
+    <select id="findByUserId"
+            resultMap="UserAvatarStateResultMap">
+        SELECT
+        <include refid="UserAvatarStateColumns"/>
+        FROM user_profile
+        WHERE login_identity_id = #{userId,jdbcType=BIGINT}
+          AND account_status = 0
+    </select>
+
+    <select id="findByUserIdForUpdate"
+            resultMap="UserAvatarStateResultMap">
+        SELECT
+        <include refid="UserAvatarStateColumns"/>
+        FROM user_profile
+        WHERE login_identity_id = #{userId,jdbcType=BIGINT}
+          AND account_status = 0
+        FOR UPDATE
+    </select>
+
+    <update id="updateAvatar">
+        UPDATE user_profile
+        SET avatar_url = #{avatarUrl,jdbcType=VARCHAR}
+        WHERE login_identity_id = #{userId,jdbcType=BIGINT}
+          AND account_status = 0
+    </update>
+</mapper>

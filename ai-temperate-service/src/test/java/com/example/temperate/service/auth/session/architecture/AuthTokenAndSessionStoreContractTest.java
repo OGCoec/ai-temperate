@@ -54,7 +54,9 @@ class AuthTokenAndSessionStoreContractTest {
                 .containsExactlyInAnyOrder(
                         "create",
                         "validateAndRenew",
+                        "validateAndRenewWithPreAuth",
                         "bootstrapAndRenew",
+                        "bootstrapAndRenewWithPreAuth",
                         "revoke",
                         "revokeAllForUser");
         assertThat(implementation.getInterfaces()).contains(contract);
@@ -106,8 +108,10 @@ class AuthTokenAndSessionStoreContractTest {
         Set<String> required = Set.of(
                 "create_refresh_session.lua",
                 "validate_refresh_session.lua",
+                "validate_refresh_session_with_preauth.lua",
                 "revoke_refresh_session.lua",
-                "update_refresh_session_csrf.lua");
+                "update_refresh_session_csrf.lua",
+                "update_refresh_session_csrf_with_preauth.lua");
 
         for (String fileName : required) {
             assertThat(Files.isRegularFile(luaDirectory.resolve(fileName)))

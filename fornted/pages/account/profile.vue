@@ -21,13 +21,52 @@
 
 				<template v-else-if="profile">
 					<view class="profile-identity-card">
-						<view class="profile-avatar" aria-hidden="true">
+						<image
+							v-if="displayAvatarUrl"
+							class="profile-avatar profile-avatar-image"
+							:src="displayAvatarUrl"
+							mode="aspectFill"
+							aria-label="当前用户头像"
+						/>
+						<view v-else class="profile-avatar" aria-hidden="true">
 							<text>{{ avatarText }}</text>
 						</view>
 						<view class="profile-identity-copy">
 							<text class="profile-name">{{ profile.displayName }}</text>
 							<text class="profile-status"><text class="profile-status-dot"></text>当前会话有效</text>
 						</view>
+					</view>
+
+					<view class="profile-avatar-actions">
+						<button
+							class="profile-avatar-button"
+							type="button"
+							:disabled="avatarBusy"
+							@click="selectAvatar"
+						>
+							{{ pendingAvatar ? '重新选择头像' : '选择新头像' }}
+						</button>
+						<template v-if="pendingAvatar && pendingAvatar.uploaded">
+							<button
+								class="profile-avatar-button profile-avatar-confirm"
+								type="button"
+								:disabled="avatarBusy"
+								@click="confirmAvatar"
+							>
+								确认使用
+							</button>
+							<button
+								class="profile-avatar-button profile-avatar-cancel"
+								type="button"
+								:disabled="avatarBusy"
+								@click="cancelAvatar"
+							>
+								取消上传
+							</button>
+						</template>
+						<text v-if="pendingAvatar && !pendingAvatar.uploaded" class="profile-avatar-progress">
+							正在上传头像…
+						</text>
 					</view>
 
 					<view class="profile-section">
@@ -79,8 +118,15 @@
 	import { logoutAllSessions, logoutSession } from '@/common/auth/http-client.js'
 	import {
 		getCurrentUserProfile,
-		loadCurrentUserProfile
+		loadCurrentUserProfile,
+		updateCurrentUserAvatar
 	} from '@/common/user/current-user-profile.js'
+	import { currentUserApi } from '@/common/user/current-user-api.js'
+	import {
+		chooseAvatarImage,
+		putAvatarToOss,
+		readAvatarSelection
+	} from '@/common/user/avatar-upload.js'
 	import { derivePhonePresentation } from '@/common/user/phone-presentation.js'
 
 	export default {
@@ -90,6 +136,8 @@
 				loading: false,
 				loggingOut: false,
 				loggingOutAll: false,
+				avatarBusy: false,
+				pendingAvatar: null,
 				error: ''
 			}
 		},
@@ -104,6 +152,9 @@
 			},
 			avatarText() {
 				return String(this.profile?.displayName || 'U').trim().slice(0, 1).toUpperCase()
+			},
+			displayAvatarUrl() {
+				return this.pendingAvatar?.previewUrl || this.profile?.avatarUrl || ''
 			},
 			logoutBusy() {
 				return this.loggingOut || this.loggingOutAll
@@ -123,6 +174,93 @@
 					this.error = '个人资料暂时无法加载，请稍后重试。'
 				} finally {
 					this.loading = false
+				}
+			},
+			async selectAvatar() {
+				if (this.avatarBusy) return
+				try {
+					const selection = await chooseAvatarImage()
+					if (!selection) return
+					const selected = await readAvatarSelection(selection)
+					this.avatarBusy = true
+					if (this.pendingAvatar?.preuploadId) {
+						await currentUserApi.cancelAvatarPreupload(
+							this.pendingAvatar.preuploadId,
+							this.pendingAvatar.format
+						).catch(() => {})
+					}
+					this.pendingAvatar = {
+						previewUrl: selected.previewUrl,
+						format: selected.format,
+						preuploadId: null,
+						uploaded: false
+					}
+					const preupload = await currentUserApi.createAvatarPreupload(
+						selected.format,
+						selected.sizeBytes
+					)
+					this.pendingAvatar.preuploadId = preupload.preuploadId
+					await putAvatarToOss(
+						preupload.uploadUrl,
+						preupload.uploadHeaders,
+						selected.bytes
+					)
+					this.pendingAvatar.uploaded = true
+				} catch (error) {
+					if (this.pendingAvatar?.preuploadId) {
+						await currentUserApi.cancelAvatarPreupload(
+							this.pendingAvatar.preuploadId,
+							this.pendingAvatar.format
+						).catch(() => {})
+					}
+					this.pendingAvatar = null
+					uni.showToast({
+						title: error?.message || '头像上传失败，请稍后重试。',
+						icon: 'none'
+					})
+				} finally {
+					this.avatarBusy = false
+				}
+			},
+			async cancelAvatar() {
+				if (this.avatarBusy || !this.pendingAvatar) return
+				this.avatarBusy = true
+				const pending = this.pendingAvatar
+				try {
+					if (pending.preuploadId) {
+						await currentUserApi.cancelAvatarPreupload(
+							pending.preuploadId,
+							pending.format
+						)
+					}
+					this.pendingAvatar = null
+				} catch (error) {
+					uni.showToast({
+						title: error?.message || '取消头像上传失败，请稍后重试。',
+						icon: 'none'
+					})
+				} finally {
+					this.avatarBusy = false
+				}
+			},
+			async confirmAvatar() {
+				if (this.avatarBusy || !this.pendingAvatar?.uploaded) return
+				this.avatarBusy = true
+				try {
+					const result = await currentUserApi.confirmAvatar(
+						this.pendingAvatar.preuploadId,
+						this.pendingAvatar.format
+					)
+					this.profile = updateCurrentUserAvatar(result.avatarUrl)
+					this.pendingAvatar = null
+					uni.showToast({ title: '头像已更新', icon: 'success' })
+				} catch (error) {
+					uni.showToast({
+						title: error?.message || '头像确认失败，请稍后重试。',
+						icon: 'none'
+					})
+				} finally {
+					this.avatarBusy = false
 				}
 			},
 			async logout() {
@@ -258,6 +396,30 @@
 		font-size: 22px;
 		font-weight: 800;
 	}
+	.profile-avatar-image { display: block; background: #202520; }
+	.profile-avatar-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 10px;
+		margin-top: 12px;
+	}
+	.profile-avatar-button {
+		min-height: 40px;
+		margin: 0;
+		padding: 0 16px;
+		border: 1px solid #3b4a43;
+		border-radius: 12px;
+		background: #151816;
+		color: #dce5e0;
+		font-size: 14px;
+		line-height: 1;
+	}
+	.profile-avatar-button::after { border: 0; }
+	.profile-avatar-confirm { border-color: #37d39a; color: #37d39a; }
+	.profile-avatar-cancel { border-color: #d95d59; color: #f08a82; }
+	.profile-avatar-button:disabled { opacity: .55; }
+	.profile-avatar-progress { color: #8b9690; font-size: 13px; }
 	.profile-identity-copy, .profile-row-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 	.profile-name { color: #f3f5f4; font-size: 20px; font-weight: 700; }
 	.profile-status { margin-top: 6px; color: #8b9690; font-size: 13px; }

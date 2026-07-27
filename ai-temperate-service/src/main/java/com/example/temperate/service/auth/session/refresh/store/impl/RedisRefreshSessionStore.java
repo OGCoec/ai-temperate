@@ -8,6 +8,9 @@ import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSess
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionSnapshot;
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionValidation;
 import com.example.temperate.service.auth.session.refresh.store.RefreshSessionStore;
+import com.example.temperate.service.risk.domain.RiskScope;
+import com.example.temperate.service.risk.domain.RiskSessionType;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -50,6 +53,12 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> BOOTSTRAP_SCRIPT = listScript(
             "update_refresh_session_csrf.lua");
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> VALIDATE_WITH_PREAUTH_SCRIPT = listScript(
+            "validate_refresh_session_with_preauth.lua");
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> BOOTSTRAP_WITH_PREAUTH_SCRIPT = listScript(
+            "update_refresh_session_csrf_with_preauth.lua");
     private static final RedisScript<Long> REVOKE_SCRIPT = longScript(
             "revoke_refresh_session.lua");
 
@@ -149,6 +158,62 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                 Long.toString(refreshTtl.toMillis()),
                 redisKeyFactory.sessionUserIndexKeyPrefix(),
                 validRefresh.value()));
+    }
+
+    @Override
+    public RefreshSessionValidation validateAndRenewWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash,
+            PreAuthSessionBinding preAuthBinding) {
+        HmacIdentifier validRefresh =
+                requireIdentifier("refresh token hash", refreshTokenHash);
+        PreAuthSessionBinding binding = requireUserPreAuthBinding(preAuthBinding);
+        // Refresh Session、用户索引和 PreAuth 只有在三者绑定都有效时才同时续期，防止半续期状态。
+        return validation(executeList(
+                VALIDATE_WITH_PREAUTH_SCRIPT,
+                List.of(
+                        redisKeyFactory.sessionRefreshTokenKey(validRefresh),
+                        redisKeyFactory.userPreAuthKey(binding.tokenDigest())),
+                requireIdentifier("device hash", deviceHash).value(),
+                requireIdentifier("CSRF hash", csrfHash).value(),
+                Long.toString(refreshTtl.toMillis()),
+                redisKeyFactory.sessionUserIndexKeyPrefix(),
+                validRefresh.value(),
+                binding.scope().name(),
+                binding.deviceDigest().value(),
+                binding.sessionType().name(),
+                binding.sessionRefDigest().value(),
+                Long.toString(binding.ttl().toMillis()),
+                binding.promoteAnonymous() ? "1" : "0"));
+    }
+
+    @Override
+    public RefreshSessionValidation bootstrapAndRenewWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier newCsrfHash,
+            PreAuthSessionBinding preAuthBinding) {
+        HmacIdentifier validRefresh =
+                requireIdentifier("refresh token hash", refreshTokenHash);
+        PreAuthSessionBinding binding = requireUserPreAuthBinding(preAuthBinding);
+        // 新 CSRF 绑定、Refresh Session 续期和 PreAuth 续期必须作为一个不可分割的 Redis 状态转换。
+        return validation(executeList(
+                BOOTSTRAP_WITH_PREAUTH_SCRIPT,
+                List.of(
+                        redisKeyFactory.sessionRefreshTokenKey(validRefresh),
+                        redisKeyFactory.userPreAuthKey(binding.tokenDigest())),
+                requireIdentifier("device hash", deviceHash).value(),
+                requireIdentifier("new CSRF hash", newCsrfHash).value(),
+                Long.toString(refreshTtl.toMillis()),
+                redisKeyFactory.sessionUserIndexKeyPrefix(),
+                validRefresh.value(),
+                binding.scope().name(),
+                binding.deviceDigest().value(),
+                binding.sessionType().name(),
+                binding.sessionRefDigest().value(),
+                Long.toString(binding.ttl().toMillis()),
+                binding.promoteAnonymous() ? "1" : "0"));
     }
 
     @Override
@@ -318,8 +383,23 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                     RefreshSessionValidation.Status.CSRF_MISMATCH, null);
             case 4 -> new RefreshSessionValidation(
                     RefreshSessionValidation.Status.INDEX_MISSING, null);
+            case 5 -> new RefreshSessionValidation(
+                    RefreshSessionValidation.Status.PREAUTH_MISMATCH, null);
             default -> throw unavailable("Unexpected refresh session validation result.");
         };
+    }
+
+    private static PreAuthSessionBinding requireUserPreAuthBinding(
+            PreAuthSessionBinding binding) {
+        if (binding == null
+                || binding.scope() != RiskScope.USER
+                || binding.sessionType() != RiskSessionType.USER_REFRESH) {
+            throw new IllegalArgumentException("User Refresh PreAuth binding is invalid.");
+        }
+        requireIdentifier("PreAuth token digest", binding.tokenDigest());
+        requireIdentifier("PreAuth device digest", binding.deviceDigest());
+        requireIdentifier("PreAuth session reference", binding.sessionRefDigest());
+        return binding;
     }
 
     private NewRefreshSession requireNewSession(NewRefreshSession session) {

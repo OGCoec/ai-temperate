@@ -29,7 +29,10 @@ import com.example.temperate.service.registration.component.normalizer.Registrat
 import com.example.temperate.service.registration.enums.VerificationChannel;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
 import com.example.temperate.service.registration.exception.RegistrationException;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationCommand;
+import com.example.temperate.service.humanverification.HumanVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
+import com.example.temperate.service.humanverification.HumanVerificationType;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryRequest;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationPurpose;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
@@ -40,7 +43,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 编排验证码登录的创建、风控、人机校验、异步投递、验证码消费和会话签发。
@@ -56,7 +62,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     private final LoginCodeFlowStore flowStore;
     private final AuthSessionSecretProtector protector;
     private final AuthTokenService tokenService;
-    private final TurnstileVerificationService turnstileService;
+    private final HumanVerificationServiceRegistry humanVerificationServices;
     private final VerificationCodeGenerator codeGenerator;
     private final VerificationDeliveryOperationIdGenerator operationIdGenerator;
     private final VerificationDeliveryPublisher deliveryPublisher;
@@ -71,7 +77,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
             LoginCodeFlowStore flowStore,
             AuthSessionSecretProtector protector,
             AuthTokenService tokenService,
-            TurnstileVerificationService turnstileService,
+            HumanVerificationServiceRegistry humanVerificationServices,
             VerificationCodeGenerator codeGenerator,
             VerificationDeliveryOperationIdGenerator operationIdGenerator,
             VerificationDeliveryPublisher deliveryPublisher,
@@ -84,7 +90,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         this.flowStore = Objects.requireNonNull(flowStore);
         this.protector = Objects.requireNonNull(protector);
         this.tokenService = Objects.requireNonNull(tokenService);
-        this.turnstileService = Objects.requireNonNull(turnstileService);
+        this.humanVerificationServices = Objects.requireNonNull(humanVerificationServices);
         this.codeGenerator = Objects.requireNonNull(codeGenerator);
         this.operationIdGenerator = Objects.requireNonNull(operationIdGenerator);
         this.deliveryPublisher = Objects.requireNonNull(deliveryPublisher);
@@ -100,7 +106,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         requireCodeType(command.strategyType());
         String identifier = normalize(command);
         LoginAttempt attempt = new LoginAttempt(
-                identifier, command.deviceInstallationId(), command.clientIp());
+                identifier, command.deviceInstallationId());
         requireAllowed(attempt);
         UserLoginIdentity identity = command.strategyType() == LoginStrategyType.EMAIL_CODE
                 ? identityMapper.findByNormalizedEmail(identifier)
@@ -118,17 +124,40 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     }
 
     @Override
-    public void verifyTurnstile(LoginCodeAccess access, String turnstileToken) {
-        ProtectedLoginCodeAccess protectedAccess = protect(access);
-        flowStore.getRequired(protectedAccess, clock.instant());
-        try {
-            turnstileService.verify(
-                    turnstileToken, access.clientIp(), access.challengeHandle(), "login");
-        } catch (RuntimeException exception) {
-            throw new LoginException(LoginErrorCode.TURNSTILE_REJECTED,
-                    "Turnstile verification was rejected.", exception);
-        }
-        flowStore.markHumanVerified(protectedAccess, clock.instant());
+    public Mono<Void> verifyTurnstile(LoginCodeAccess access, String turnstileToken) {
+        return Mono.defer(() -> {
+            String requestTraceId = traceId();
+            ProtectedLoginCodeAccess protectedAccess = protect(access);
+            Mono<Void> loadFlow = Mono.fromCallable(
+                            () -> flowStore.getRequired(
+                                    protectedAccess, clock.instant()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then();
+            HumanVerificationService turnstile =
+                    humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE);
+            Mono<Void> siteverify = Mono.defer(() -> turnstile.verify(
+                            HumanVerificationCommand.turnstile(
+                                    turnstileToken,
+                                    access.clientIp(),
+                                    access.challengeHandle(),
+                                    "login")))
+                    .contextWrite(context -> context.put(
+                            HumanVerificationService.TRACE_ID_CONTEXT_KEY,
+                            requestTraceId))
+                    .onErrorMap(
+                            RegistrationException.class,
+                            exception -> new LoginException(
+                                    LoginErrorCode.TURNSTILE_REJECTED,
+                                    "Turnstile verification was rejected.",
+                                    exception));
+            // 只有 Siteverify 成功后才在线程池执行阻塞 Redis Lua，失败时不写入 humanVerified。
+            Mono<Void> markVerified = Mono.fromRunnable(
+                            () -> flowStore.markHumanVerified(
+                                    protectedAccess, clock.instant()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then();
+            return loadFlow.then(siteverify).then(markVerified);
+        });
     }
 
     @Override
@@ -146,7 +175,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
                     "Human verification is required.");
         }
         LoginAttempt attempt = new LoginAttempt(
-                flow.identifier(), access.deviceInstallationId(), access.clientIp());
+                flow.identifier(), access.deviceInstallationId());
         requireAllowed(attempt);
         VerificationChannel channel = flow.strategyType() == LoginStrategyType.EMAIL_CODE
                 ? VerificationChannel.EMAIL : VerificationChannel.SMS;
@@ -206,7 +235,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
                     "Login strategy does not match the flow.");
         }
         LoginAttempt attempt = new LoginAttempt(
-                flow.identifier(), request.deviceInstallationId(), request.clientIp());
+                flow.identifier(), request.deviceInstallationId());
         requireAllowed(attempt);
         final LoginCodeFlowSnapshot verified;
         try {
@@ -277,5 +306,10 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     private static LoginException invalid() {
         return new LoginException(LoginErrorCode.INVALID_INPUT,
                 "Code login request is invalid.");
+    }
+
+    private static String traceId() {
+        String value = MDC.get("traceId");
+        return value == null || value.isBlank() ? "absent" : value;
     }
 }

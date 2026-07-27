@@ -3,6 +3,8 @@ package com.example.temperate.web.auth.config;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
+import com.example.temperate.web.risk.PreAuthTransport;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
@@ -10,6 +12,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -26,6 +29,7 @@ import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 
 /**
  * 装配认证 Web 安全组件和 H5/Android 两套传输过滤链。
@@ -41,6 +45,7 @@ public class SecurityConfiguration {
     private static final String ANDROID = "ANDROID";
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String BOOTSTRAP_PATH = "/api/auth/session/bootstrap";
+    private static final String WEBRTC_REPORT_PATH = "/api/_edge/webrtc/report";
 
     @Bean
     SecretKey jwtSigningKey(AuthSecurityProperties properties) {
@@ -100,6 +105,8 @@ public class SecurityConfiguration {
                 "X-Forget-Token",
                 "X-Turnstile-Challenge",
                 AuthRequestTraceFilter.ATTEMPT_HEADER,
+                PreAuthTransport.APP_HEADER,
+                PreAuthTransport.RESET_HEADER,
                 CSRF_HEADER));
         configuration.setExposedHeaders(List.of(
                 "Retry-After",
@@ -113,26 +120,31 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    @Order(1)
+    @Order(2)
     SecurityFilterChain androidSecurityFilterChain(
             HttpSecurity http,
-            CorsConfigurationSource corsConfigurationSource) throws Exception {
+            @Qualifier("corsConfigurationSource")
+                    CorsConfigurationSource corsConfigurationSource,
+            EdgeProxySignatureFilter edgeProxySignatureFilter) throws Exception {
         // Android 不自动携带浏览器 Cookie，因此不适用 Spring 的双提交 Cookie CSRF 机制。
         configureCommon(http, corsConfigurationSource);
         return http
-                .securityMatcher(request -> ANDROID.equalsIgnoreCase(
-                        request.getHeader(PLATFORM_HEADER)))
+                .securityMatcher(SecurityConfiguration::isAndroidRequest)
                 .csrf(AbstractHttpConfigurer::disable)
+                .addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)
                 .build();
     }
 
     @Bean
-    @Order(2)
+    @Order(3)
     SecurityFilterChain h5SecurityFilterChain(
             HttpSecurity http,
-            CorsConfigurationSource corsConfigurationSource,
-            CookieCsrfTokenRepository csrfTokenRepository,
-            JsonCsrfAccessDeniedHandler csrfAccessDeniedHandler) throws Exception {
+            @Qualifier("corsConfigurationSource")
+                    CorsConfigurationSource corsConfigurationSource,
+            @Qualifier("csrfTokenRepository")
+                    CookieCsrfTokenRepository csrfTokenRepository,
+            JsonCsrfAccessDeniedHandler csrfAccessDeniedHandler,
+            EdgeProxySignatureFilter edgeProxySignatureFilter) throws Exception {
         // H5 由浏览器自动携带 Cookie，bootstrap 保留给后续 Origin、设备和 RT 组合校验。
         configureCommon(http, corsConfigurationSource);
         return http
@@ -143,6 +155,7 @@ public class SecurityConfiguration {
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                         .accessDeniedHandler(csrfAccessDeniedHandler))
+                .addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)
                 .build();
     }
 
@@ -170,8 +183,21 @@ public class SecurityConfiguration {
 
     private static boolean isBootstrapRequest(jakarta.servlet.http.HttpServletRequest request) {
         return HttpMethod.POST.matches(request.getMethod())
-                && (request.getContextPath() + BOOTSTRAP_PATH)
-                        .equals(request.getRequestURI());
+                && ((request.getContextPath() + BOOTSTRAP_PATH)
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath() + "/api/_edge/pre-auth")
+                                .equals(request.getRequestURI())
+                        // WebRTC 报告发生在常规 CSRF 初始化之前，只豁免这一条精确 PreAuth 绑定路径。
+                        || (request.getContextPath() + WEBRTC_REPORT_PATH)
+                                .equals(request.getRequestURI()));
+    }
+
+    private static boolean isAndroidRequest(
+            jakarta.servlet.http.HttpServletRequest request) {
+        String origin = request.getHeader("Origin");
+        // 浏览器不能通过伪造 Android 平台头进入关闭 CSRF 的原生链；带 Origin 的请求始终归入 H5。
+        return ANDROID.equalsIgnoreCase(request.getHeader(PLATFORM_HEADER))
+                && (origin == null || origin.isBlank());
     }
 
     private static String sameSite(AuthSecurityProperties.SameSite sameSite) {

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -94,7 +95,7 @@ class RabbitVerificationDeliveryPublisherTest {
                         eq(VerificationDeliveryRabbitNames.EXCHANGE),
                         eq(VerificationDeliveryRabbitNames.SMS_ROUTING_KEY),
                         any(),
-                        any(MessagePostProcessor.class),
+                        notNull(),
                         any(CorrelationData.class));
         VerificationDeliveryPayloadProtector protector =
                 mock(VerificationDeliveryPayloadProtector.class);
@@ -116,6 +117,52 @@ class RabbitVerificationDeliveryPublisherTest {
                         VerificationDeliveryMessage.class,
                         message -> assertThat(message.deliveryMethod())
                                 .isEqualTo(VerificationDeliveryMethod.WHATSAPP));
+    }
+
+    @Test
+    void adminRegistrationPurposeKeepsRegistrationFlowStateMachine() {
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        AtomicReference<Object> sentPayload = new AtomicReference<>();
+        doAnswer(invocation -> {
+                    sentPayload.set(invocation.getArgument(2));
+                    CorrelationData correlation = invocation.getArgument(4);
+                    correlation.getFuture().complete(new CorrelationData.Confirm(true, null));
+                    return null;
+                })
+                .when(rabbitTemplate)
+                .convertAndSend(
+                        eq(VerificationDeliveryRabbitNames.EXCHANGE),
+                        eq(VerificationDeliveryRabbitNames.EMAIL_ROUTING_KEY),
+                        any(),
+                        notNull(),
+                        any(CorrelationData.class));
+        VerificationDeliveryPayloadProtector protector =
+                mock(VerificationDeliveryPayloadProtector.class);
+        when(protector.protect(any())).thenReturn("protected-payload");
+        RabbitVerificationDeliveryPublisher publisher = publisher(rabbitTemplate, protector);
+        ProtectedRegistrationAccess access = new ProtectedRegistrationAccess(
+                HMAC, HMAC, HMAC, HMAC, HMAC, HMAC, HMAC, HMAC);
+
+        publisher.publishRegistration(
+                access,
+                VerificationChannel.EMAIL,
+                HMAC,
+                new VerificationDeliveryRequest(
+                        "masked@example.invalid",
+                        "012345",
+                        VerificationPurpose.ADMIN_REGISTRATION),
+                NOW.plusSeconds(300));
+
+        assertThat(sentPayload.get())
+                .isInstanceOfSatisfying(
+                        VerificationDeliveryMessage.class,
+                        message -> {
+                            // 管理员初始化复用注册状态机，仅由用途区分模板，避免扩展消息路由协议。
+                            assertThat(message.flowKind())
+                                    .isEqualTo(VerificationDeliveryFlowKind.REGISTRATION);
+                            assertThat(message.purpose())
+                                    .isEqualTo(VerificationPurpose.ADMIN_REGISTRATION);
+                        });
     }
 
     @Test
@@ -175,7 +222,7 @@ class RabbitVerificationDeliveryPublisherTest {
                         eq(VerificationDeliveryRabbitNames.TERMINAL_EXCHANGE),
                         eq(VerificationDeliveryRabbitNames.TERMINAL_ROUTING_KEY),
                         any(),
-                        any(MessagePostProcessor.class),
+                        notNull(),
                         any(CorrelationData.class));
         RabbitVerificationDeliveryPublisher publisher = publisher(rabbitTemplate);
 
@@ -300,7 +347,7 @@ class RabbitVerificationDeliveryPublisherTest {
                         eq(VerificationDeliveryRabbitNames.EXCHANGE),
                         eq(VerificationDeliveryRabbitNames.SMS_ROUTING_KEY),
                         any(),
-                        any(MessagePostProcessor.class),
+                        notNull(),
                         any(CorrelationData.class));
         RabbitVerificationDeliveryPublisher publisher = publisher(rabbitTemplate);
 
@@ -361,7 +408,7 @@ class RabbitVerificationDeliveryPublisherTest {
                         eq(VerificationDeliveryRabbitNames.EXCHANGE),
                         eq(VerificationDeliveryRabbitNames.SMS_ROUTING_KEY),
                         any(),
-                        any(MessagePostProcessor.class),
+                        notNull(),
                         any(CorrelationData.class));
     }
 

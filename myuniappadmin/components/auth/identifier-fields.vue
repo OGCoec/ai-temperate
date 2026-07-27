@@ -57,11 +57,11 @@
 
 <script>
 	import PhoneCountryPicker from './phone-country-picker.vue'
-	import { findPhoneCountryById } from '@/common/auth/phone-country-search.js'
+	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
 	import {
 		formatLocalPhoneNumberInput,
 		normalizePhoneInputForCountry
-	} from '@/common/auth/phone-validation.js'
+	} from '@shared-auth/phone-validation.js'
 
 	export default {
 		name: 'IdentifierFields',

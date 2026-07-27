@@ -1,5 +1,5 @@
 export function emptySessionCredentials() {
-	return { accessToken: '', refreshToken: '', csrfToken: '' }
+	return { accessToken: '', refreshToken: '', csrfToken: '', preAuthToken: '' }
 }
 
 export function mergeSessionCredentials(current, update) {
@@ -8,7 +8,8 @@ export function mergeSessionCredentials(current, update) {
 	return {
 		accessToken: credentialValue(existing, incoming, 'accessToken'),
 		refreshToken: credentialValue(existing, incoming, 'refreshToken'),
-		csrfToken: credentialValue(existing, incoming, 'csrfToken')
+		csrfToken: credentialValue(existing, incoming, 'csrfToken'),
+		preAuthToken: credentialValue(existing, incoming, 'preAuthToken')
 	}
 }
 
@@ -19,8 +20,14 @@ export function hasCompleteSessionCredentials(credentials) {
 }
 
 export function containsSessionCredentialUpdate(value) {
-	return value != null && ['accessToken', 'refreshToken', 'csrfToken']
+	return value != null && ['accessToken', 'refreshToken', 'csrfToken', 'preAuthToken']
 		.some(name => Object.prototype.hasOwnProperty.call(value, name))
+}
+
+export function hasPersistableAndroidCredentials(credentials) {
+	return hasCompleteSessionCredentials(credentials)
+		|| (typeof credentials?.preAuthToken === 'string'
+			&& credentials.preAuthToken.length > 0)
 }
 
 function credentialValue(current, update, name) {

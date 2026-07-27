@@ -11,6 +11,88 @@
 					"softinputMode": "adjustResize"
 				}
 			}
+		},
+		{
+			"path": "pages/risk/challenge-complete",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d"
+			}
+		},
+		{
+			"path": "pages/risk/challenge-failed",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#1c2118"
+			}
+		},
+		{
+			"path": "pages/risk/blocked",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#f1f0ec"
+			}
+		},
+		{
+			"path": "pages/risk/webrtc-probe",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d"
+			}
+		},
+		{
+			"path": "pages/risk/webrtc-failed",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d"
+			}
+		},
+		{
+			"path": "pages/risk/ip2location-keys",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/ai-models/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d"
+			}
+		},
+		{
+			"path": "pages/ai-models/create",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/ai-models/detail",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/ai-model-icons/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
 		}
 	],
 	"globalStyle": {

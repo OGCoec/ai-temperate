@@ -5,8 +5,8 @@ CREATE TABLE user_membership_quota (
     login_identity_id BIGINT NOT NULL,
     membership_tier SMALLINT NOT NULL DEFAULT 0,
     quota_balance_minor BIGINT NOT NULL DEFAULT 5000,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at DATE NOT NULL DEFAULT CURRENT_DATE,
+    updated_at DATE NOT NULL DEFAULT CURRENT_DATE,
 
     CONSTRAINT pk_user_membership_quota PRIMARY KEY (id),
     CONSTRAINT uk_user_membership_quota_login_identity
@@ -22,7 +22,7 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    NEW.updated_at = CURRENT_DATE;
     RETURN NEW;
 END;
 $$;
@@ -37,7 +37,7 @@ COMMENT ON COLUMN user_membership_quota.id IS 'BIGINT 自增主键，对外使�
 COMMENT ON COLUMN user_membership_quota.login_identity_id IS '逻辑关联 userloginidentity.id，不建立物理外键';
 COMMENT ON COLUMN user_membership_quota.membership_tier IS '会员等级：0=FREE，1=GO，2=EDU，3=TEAM，4=PLUS，5=PRO，6=MAX';
 COMMENT ON COLUMN user_membership_quota.quota_balance_minor IS '可用额度的最小单位整数值；固定缩放比例为 100，数据库值 5000 表示实际额度 50.00';
-COMMENT ON COLUMN user_membership_quota.created_at IS '会员额度记录创建时间';
-COMMENT ON COLUMN user_membership_quota.updated_at IS '会员额度记录最后更新时间';
+COMMENT ON COLUMN user_membership_quota.created_at IS '会员额度记录创建日期';
+COMMENT ON COLUMN user_membership_quota.updated_at IS '会员额度记录最后更新日期';
 
 COMMIT;

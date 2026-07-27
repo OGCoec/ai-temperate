@@ -29,8 +29,101 @@ spring:
     # 测试 RabbitMQ 密码是不对应任何 Broker 的假值。
     password: test-rabbitmq-password
 
+# 测试模型图标配置只参与属性绑定和本地 Mock，不连接任何外部官方站点。
+ai-model-icon:
+  # 测试显式启用可信官方 SVG 档位以覆盖 Registry 启动与选择行为。
+  remote-svg:
+    # 测试环境允许由固定假请求上下文选择兼容档位。
+    trusted-official-profile-enabled: true
+    # 测试沿用生产默认厂商主机，但不会发起真实网络请求。
+    trusted-hosts:
+      # OpenAI 测试主机配置。
+      openai: chatgpt.com,openai.com
+      # Anthropic 测试主机配置。
+      anthropic: claude.ai,anthropic.com
+      # Google 测试主机配置保持共享 CDN 精确到 www 主机。
+      google: gemini.google.com,www.gstatic.com
+      # xAI 测试主机配置。
+      xai: grok.com,x.ai
+      # DeepSeek 测试主机配置。
+      deepseek: deepseek.com
+      # 智谱测试主机配置。
+      zhipu: zhipuai.cn,chatglm.cn,bigmodel.cn
+      # Moonshot 与 Kimi 测试主机配置。
+      moonshot: kimi.com,moonshot.cn,moonshot.ai
+      # 通义千问测试主机只用于属性绑定，不发起真实网络请求。
+      qwen: qwen.ai
+
 # 测试认证与安全配置。
 app:
+  # 测试 AI 模型缓存使用固定非生产密钥和生产允许范围内的 TTL，不连接真实 Redis。
+  ai-model-cache:
+    # 固定测试密钥恰好解码为三十二字节，不对应任何生产缓存。
+    encryption-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 测试随机 TTL 下界保持五分钟。
+    minimum-ttl: 5m
+    # 测试随机 TTL 上界保持十五分钟。
+    maximum-ttl: 15m
+    # 测试聚合快照最多允许五百个模型。
+    max-models: 500
+
+  # 测试网络风险使用禁用模式和固定非生产密钥，不连接真实供应商。
+  network-risk:
+    # 上下文测试默认不执行网络风险拦截。
+    mode: DISABLED
+    # 固定测试 HMAC 密钥仅用于属性绑定和单元测试。
+    hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 固定测试加密主密钥不对应任何生产凭据。
+    ip2-location-api-key-encryption-key-base64: YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk=
+    # 测试 IP2Location 地址不会在第一阶段或上下文测试中主动调用。
+    ip2-location-base-url: https://ip2location.test/
+    # 测试 iPing 地址不会在第一阶段或上下文测试中主动调用。
+    iping-base-url: https://iping.test/v1/query
+    # 测试保留 iPing 策略 Bean 以验证 Registry 完整性。
+    iping-enabled: true
+    # 测试外部查询总预算保持八秒上限。
+    lookup-timeout: 8s
+    # 测试完整结果缓存期限使用一小时固定值。
+    positive-cache-ttl: 1h
+    # 测试降级结果缓存期限使用一分钟固定值。
+    fallback-cache-ttl: 1m
+    # 测试 single-flight 锁覆盖一次外部查询。
+    single-flight-ttl: 9s
+    # 测试外部查询最大并发保持四个。
+    max-concurrent-lookups: 4
+    # 测试匿名 PreAuth 使用三十分钟期限。
+    anonymous-pre-auth-ttl: 30m
+    # 测试登录 PreAuth 使用六小时期限。
+    authenticated-pre-auth-ttl: 6h
+    # 测试 Challenge 引用使用五分钟期限。
+    challenge-ttl: 5m
+    # 测试 Challenge 通过状态使用三十分钟期限。
+    challenge-verified-ttl: 30m
+    # 测试不可能旅行使用两百公里最小距离。
+    impossible-travel-minimum-distance-km: 200
+    # 测试不可能旅行比较窗口使用二十四小时。
+    impossible-travel-window: 24h
+    # 测试临时 Block 使用十分钟期限。
+    temporary-block-ttl: 10m
+    # 测试 WebRTC 配置只参与属性绑定，不连接任何公共 STUN 服务。
+    web-rtc:
+      # 测试客户端探测上限固定为十五秒。
+      probe-timeout: 15s
+      # 测试保持生产环境相同的四个 STUN 地址和顺序。
+      stun-urls:
+        # Google STUN 测试配置只作为响应数据。
+        - stun:stun.l.google.com:19302
+        # Cloudflare STUN 测试配置只作为响应数据。
+        - stun:stun.cloudflare.com:3478
+        # Twilio STUN 测试配置只作为响应数据。
+        - stun:global.stun.twilio.com:3478
+        # Nextcloud STUN 测试配置只作为响应数据。
+        - stun:stun.nextcloud.com:3478
+      # 测试单次报告最多接受八个公网地址。
+      max-reported-ips: 8
+      # 固定测试密钥仅用于属性绑定和单元测试，不对应生产凭据。
+      ip-encryption-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
   # 测试属性仍执行与生产相同的绑定和边界校验。
   security:
     # 明确标记为 TEST，允许测试使用本机 HTTP Origin。
@@ -138,12 +231,111 @@ app:
       # 测试空值缓存 TTL 为 45 秒。
       empty-cache: 45s
 
+  # 测试单管理员配置使用隔离路径、假密钥和本机 hCaptcha 域名。
+  admin:
+    # 测试隐藏配置路径不对应生产管理员文件。
+    config-path: target/admin-test/complete.yaml
+    # 固定测试 HMAC 密钥不可用于生产会话。
+    session-hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 测试管理员会话保持六小时滑动期限。
+    session-ttl: 6h
+    # 测试最多允许十个管理员设备会话。
+    max-sessions: 10
+    # 测试管理员注册 Flow 固定十分钟。
+    registration-flow-ttl: 10m
+    # 测试管理员登录 Flow 固定十分钟。
+    login-flow-ttl: 10m
+    # 测试管理员前端只允许本机显式 Origin。
+    allowed-origins: https://localhost:3001
+    # 测试 hCaptcha 配置全部为非生产假值。
+    hcaptcha:
+      # 测试 Site Key 只满足属性绑定。
+      site-key: 10000000-ffff-ffff-ffff-000000000001
+      # 测试 Secret Key 只满足属性绑定。
+      secret-key: 0x0000000000000000000000000000000000000000
+      # 测试响应只允许 localhost。
+      allowed-hosts: localhost
+      # 测试连接超时保持八秒。
+      connect-timeout: 8s
+      # 测试响应超时保持八秒。
+      response-timeout: 8s
+      # 测试挑战最大年龄保持两分钟。
+      max-challenge-age: 2m
+    # 测试管理员 Cookie 仍保持生产安全属性。
+    cookies:
+      # 测试使用 Host-only Cookie。
+      domain: ""
+      # 测试管理员 CSRF Cookie 与生产同样保持 Host-only。
+      csrf-domain: ""
+      # 测试管理员会话 Cookie。
+      session:
+        # 测试会话 Cookie 保持 Secure。
+        secure: true
+        # 测试会话 Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试会话 Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试会话 Cookie 仅作用于管理员 API。
+        path: /api/admin
+      # 测试管理员 CSRF Cookie。
+      csrf:
+        # 测试 CSRF Cookie 保持 Secure。
+        secure: true
+        # 测试 CSRF Cookie 允许前端读取。
+        http-only: false
+        # 测试 CSRF Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试 CSRF Cookie 作用于根路径。
+        path: /
+      # 测试管理员注册 Flow Cookie。
+      register-flow:
+        # 测试注册 Flow Cookie 保持 Secure。
+        secure: true
+        # 测试注册 Flow Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试注册 Flow Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试注册 Flow Cookie 仅作用于注册端点。
+        path: /api/admin/auth/register
+      # 测试管理员注册 CSRF Cookie。
+      register-csrf:
+        # 测试注册 CSRF Cookie 保持 Secure。
+        secure: true
+        # 测试注册 CSRF Cookie 允许前端读取。
+        http-only: false
+        # 测试注册 CSRF Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试注册 CSRF Cookie 允许根页面读取并复制到请求头。
+        path: /
+      # 测试管理员登录 Flow Cookie。
+      login-flow:
+        # 测试登录 Flow Cookie 保持 Secure。
+        secure: true
+        # 测试登录 Flow Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试登录 Flow Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试登录 Flow Cookie 仅作用于登录端点。
+        path: /api/admin/auth/login
+      # 测试管理员登录 CSRF Cookie。
+      login-csrf:
+        # 测试登录 CSRF Cookie 保持 Secure。
+        secure: true
+        # 测试登录 CSRF Cookie 允许前端读取。
+        http-only: false
+        # 测试登录 CSRF Cookie 使用严格同站策略。
+        same-site: Strict
+        # 测试登录 CSRF Cookie 允许根页面读取并复制到请求头。
+        path: /
+
   # 测试环境关闭本地 IP2Location BIN 读取，避免依赖开发机文件。
   phone-country:
     # 普通 Spring 上下文测试不加载本地 BIN。
     enabled: false
     # 测试路径仅用于满足属性绑定，不对应真实地理数据库。
     bin-path: disabled-test-ip2location.bin
+    # 测试环境保持与生产默认值一致的八秒查询期限。
+    lookup-timeout: 8s
     # 测试默认不信任任何反向代理转发头。
     trusted-proxy-ranges: ""
 
@@ -201,8 +393,8 @@ app:
     code-ttl: 5m
     # 测试发送冷却时间为六十秒。
     send-cooldown: 60s
-    # 测试每渠道最多发送三次。
-    max-sends-per-channel: 3
+    # 测试每渠道最多发送五次，与注册状态机的固定安全边界保持一致。
+    max-sends-per-channel: 5
     # 测试验证码最多允许五次错误尝试。
     max-code-attempts: 5
     # 测试 Turnstile 服务端配置。

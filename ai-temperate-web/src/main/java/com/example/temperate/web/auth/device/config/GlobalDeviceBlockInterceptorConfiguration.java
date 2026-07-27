@@ -8,7 +8,7 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * 将全局设备封禁能力注册为最高优先级的 MVC 拦截器。
+ * 将全局设备封禁能力注册在网络风险之后的 MVC 优先级。
  *
  * <p>拦截器优先级只作用于 MVC HandlerInterceptor 链；请求仍会先经过 Servlet Filter 与 Spring Security，再进入 DispatcherServlet 和该拦截器。</p>
  */
@@ -24,7 +24,7 @@ public class GlobalDeviceBlockInterceptorConfiguration implements WebMvcConfigur
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(interceptor)
-                .order(Ordered.HIGHEST_PRECEDENCE)
+                .order(Ordered.HIGHEST_PRECEDENCE + 10)
                 .addPathPatterns(
                         "/api/auth/login",
                         "/api/auth/login/**",

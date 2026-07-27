@@ -18,16 +18,23 @@
 			{{ loading ? '正在打开…' : '开始安全验证' }}
 		</button>
 		<!-- #endif -->
+		<text v-if="retryStatus" class="turnstile-status" role="status" aria-live="polite">{{ retryStatus }}</text>
 		<text v-if="error" class="turnstile-error" role="alert" aria-live="assertive">{{ error }}</text>
-		<button v-if="error" class="turnstile-retry" type="button" :disabled="loading" @click="retry">重新加载</button>
+		<button v-if="error && !autoRetrying" class="turnstile-retry" type="button" :disabled="loading" @click="retry">重新加载</button>
 	</view>
 </template>
 
 <script>
-	import { authApi } from '@/common/auth/auth-api.js'
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
 	import { AUTH_API_BASE_URL } from '@/common/auth/config.js'
+	import { turnstileErrorPolicy } from '@/common/auth/turnstile-client-error.js'
+	import { getTurnstileConfig } from '@/common/auth/turnstile-prewarm.js'
 	const ANDROID_TURNSTILE_WEBVIEW_ID = 'ait-auth-turnstile'
+	const MAX_SILENT_PROVIDER_FAILURES = 2
+
+	function providerAutomaticallyRetries(code) {
+		return /^(?:300|600)\d{3}$/.test(code)
+	}
 
 	export default {
 		name: 'AuthTurnstile',
@@ -42,6 +49,9 @@
 				loading: false,
 				error: '',
 				renderNonce: 0,
+				providerRetryCount: 0,
+				autoRetrying: false,
+				retryStatus: '',
 				androidWebviewOpen: false,
 				tokenDelivered: false
 			}
@@ -58,16 +68,34 @@
 					: null
 			}
 		},
+		watch: {
+			action() { this.resetForNewChallenge() },
+			challenge() { this.resetForNewChallenge() }
+		},
 		mounted() { this.loadConfig() },
 		beforeUnmount() { this.closeVerification() },
 		methods: {
+			advanceRender() {
+				this.providerRetryCount = 0
+				this.autoRetrying = false
+				this.retryStatus = ''
+				this.tokenDelivered = false
+				this.renderNonce += 1
+			},
+			resetForNewChallenge() {
+				this.providerRetryCount = 0
+				this.autoRetrying = false
+				this.retryStatus = ''
+				this.error = ''
+				if (this.siteKey) this.advanceRender()
+			},
 			async loadConfig() {
 				if (this.loading) return
 				this.loading = true
 				this.error = ''
 				try {
-					this.siteKey = (await authApi.turnstileConfig()).siteKey
-					this.renderNonce += 1
+					this.siteKey = (await getTurnstileConfig()).siteKey
+					this.advanceRender()
 				} catch (error) {
 					this.siteKey = ''
 					this.error = authErrorMessage(error, '安全验证暂时无法加载，请稍后重试。')
@@ -77,36 +105,65 @@
 			},
 			retry() {
 				this.error = ''
-				this.tokenDelivered = false
+				this.providerRetryCount = 0
+				this.autoRetrying = false
+				this.retryStatus = ''
 				if (this.siteKey) {
-					this.renderNonce += 1
+					this.advanceRender()
 					return
 				}
 				this.loadConfig()
 			},
 			onTurnstileToken(payload) {
+				if (payload?.renderNonce !== this.renderNonce) return
 				if (this.tokenDelivered) return
 				if (!payload?.token) return
+				this.providerRetryCount = 0
+				this.autoRetrying = false
+				this.retryStatus = ''
 				this.tokenDelivered = true
 				this.error = ''
 				this.$emit('verified', payload.token)
 			},
-			onTurnstileError() {
+			onTurnstileError(payload) {
+				if (payload?.renderNonce !== this.renderNonce) return
 				this.tokenDelivered = false
-				this.error = '安全验证暂时无法加载，请稍后重试。'
+				const policy = turnstileErrorPolicy(payload?.code)
+				const providerWillRetry = policy.retryable && providerAutomaticallyRetries(policy.code)
+				if (providerWillRetry) {
+					this.providerRetryCount += 1
+				}
+				if (providerWillRetry && this.providerRetryCount <= MAX_SILENT_PROVIDER_FAILURES) {
+					this.autoRetrying = true
+					this.retryStatus = `安全验证出现暂时异常（代码：${policy.code}），正在重新验证…`
+					this.error = ''
+					return
+				}
+				this.autoRetrying = false
+				this.retryStatus = ''
+				this.error = policy.message
 			},
-			onTurnstileExpired() {
+			onTurnstileExpired(payload) {
+				if (payload?.renderNonce !== this.renderNonce) return
+				this.autoRetrying = false
+				this.retryStatus = ''
 				this.tokenDelivered = false
 				this.error = '安全验证已过期，请重新验证。'
 			},
-			onTurnstileTimeout() {
+			onTurnstileTimeout(payload) {
+				if (payload?.renderNonce !== this.renderNonce) return
+				this.autoRetrying = false
+				this.retryStatus = ''
 				this.tokenDelivered = false
 				this.error = '安全验证等待超时，请重新验证。'
 			},
 			resetAfterServerRejection(message) {
+				this.providerRetryCount = 0
+				this.autoRetrying = false
+				this.retryStatus = ''
 				this.tokenDelivered = false
 				this.error = message || '验证结果未被服务器确认，请重新验证。'
-				this.renderNonce += 1
+				this.advanceRender()
 				this.closeVerification()
 			},
 			openAndroidWebView() {
@@ -165,43 +222,124 @@
 
 <!-- #ifdef H5 -->
 <script module="turnstile" lang="renderjs">
+	const TURNSTILE_SCRIPT_ID = 'ait-turnstile-sdk'
+	const TURNSTILE_READY_CALLBACK = 'aitTurnstileSdkReady'
+	const TURNSTILE_SDK_PROMISE_KEY = '__AIT_TURNSTILE_SDK_PROMISE__'
+	const SDK_READY_TIMEOUT_MS = 15_000
+
 	export default {
-		data() { return { widgetId: null, scriptPromise: null } },
+		data() { return { widgetId: null, scriptPromise: null, renderGeneration: 0 } },
 		methods: {
 			load() {
-				if (window.turnstile) return Promise.resolve()
+				if (window.turnstile?.render) return Promise.resolve(window.turnstile)
 				if (this.scriptPromise) return this.scriptPromise
-				this.scriptPromise = new Promise((resolve, reject) => {
+				const prewarmedPromise = window[TURNSTILE_SDK_PROMISE_KEY]
+				if (prewarmedPromise) {
+					this.scriptPromise = Promise.resolve(prewarmedPromise)
+						.then(api => {
+							if (!api?.render) throw new Error('Turnstile SDK prewarm did not expose render.')
+							return api
+						})
+						.catch(() => {
+							this.scriptPromise = null
+							return this.loadFresh()
+						})
+					return this.scriptPromise
+				}
+				return this.loadFresh()
+			},
+			loadFresh() {
+				let sharedPromise
+				sharedPromise = new Promise((resolve) => {
+					const staleScript = document.getElementById(TURNSTILE_SCRIPT_ID)
+					if (staleScript) staleScript.remove()
 					const script = document.createElement('script')
-					script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+					script.id = TURNSTILE_SCRIPT_ID
+					script.src = `https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=${TURNSTILE_READY_CALLBACK}`
 					script.async = true
 					script.defer = true
-					script.onload = resolve
-					script.onerror = reject
+					let settled = false
+					let readyTimeout
+					const removeReadyCallback = () => {
+						if (window[TURNSTILE_READY_CALLBACK] === ready) window[TURNSTILE_READY_CALLBACK] = undefined
+					}
+					const fail = error => {
+						if (settled) return
+						settled = true
+						clearTimeout(readyTimeout)
+						script.remove()
+						removeReadyCallback()
+						if (window[TURNSTILE_SDK_PROMISE_KEY] === sharedPromise) {
+							window[TURNSTILE_SDK_PROMISE_KEY] = undefined
+						}
+						resolve(null)
+					}
+					const ready = () => {
+						if (settled) return
+						if (!window.turnstile?.render) {
+							fail(new Error('Turnstile SDK ready callback did not expose render.'))
+							return
+						}
+						settled = true
+						clearTimeout(readyTimeout)
+						removeReadyCallback()
+						resolve(window.turnstile)
+					}
+					// 必须先注册供应商 ready 回调再插入脚本，避免首次下载完成与全局 API 初始化之间的竞态。
+					window[TURNSTILE_READY_CALLBACK] = ready
+					script.onerror = () => fail(new Error('Turnstile SDK script failed to load.'))
+					readyTimeout = setTimeout(
+						() => fail(new Error('Turnstile SDK ready timeout.')),
+						SDK_READY_TIMEOUT_MS
+					)
 					document.head.appendChild(script)
-				}).catch(error => {
-					this.scriptPromise = null
-					throw error
 				})
+				window[TURNSTILE_SDK_PROMISE_KEY] = sharedPromise
+				this.scriptPromise = sharedPromise
+					.then(api => {
+						if (!api?.render) throw new Error('Turnstile SDK failed to load.')
+						return api
+					})
+					.catch(error => {
+						this.scriptPromise = null
+						throw error
+					})
 				return this.scriptPromise
 			},
 			async render(options) {
 				if (!options?.siteKey || !options?.challenge) return
+				const generation = ++this.renderGeneration
 				try {
-					await this.load()
-					if (this.widgetId !== null) window.turnstile.remove(this.widgetId)
-					this.widgetId = window.turnstile.render('#ait-turnstile-widget', {
+					const api = await this.load()
+					if (generation !== this.renderGeneration) return
+					if (this.widgetId !== null) api.remove(this.widgetId)
+					this.widgetId = api.render('#ait-turnstile-widget', {
 						sitekey: options.siteKey,
 						action: options.action,
 						cData: options.challenge,
 						theme: 'dark',
-						callback: token => this.$ownerInstance.callMethod('onTurnstileToken', { token }),
-						'error-callback': () => this.$ownerInstance.callMethod('onTurnstileError'),
-						'expired-callback': () => this.$ownerInstance.callMethod('onTurnstileExpired'),
-						'timeout-callback': () => this.$ownerInstance.callMethod('onTurnstileTimeout')
+						retry: 'auto',
+						'retry-interval': 8000,
+						callback: token => {
+							if (generation !== this.renderGeneration) return
+							this.$ownerInstance.callMethod('onTurnstileToken', { token, renderNonce: options.nonce })
+						},
+						'error-callback': code => {
+							if (generation !== this.renderGeneration) return
+							this.$ownerInstance.callMethod('onTurnstileError', { code, renderNonce: options.nonce })
+						},
+						'expired-callback': () => {
+							if (generation !== this.renderGeneration) return
+							this.$ownerInstance.callMethod('onTurnstileExpired', { renderNonce: options.nonce })
+						},
+						'timeout-callback': () => {
+							if (generation !== this.renderGeneration) return
+							this.$ownerInstance.callMethod('onTurnstileTimeout', { renderNonce: options.nonce })
+						}
 					})
 				} catch (error) {
-					this.$ownerInstance.callMethod('onTurnstileError')
+					if (generation !== this.renderGeneration) return
+					this.$ownerInstance.callMethod('onTurnstileError', { code: '200500', renderNonce: options.nonce })
 				}
 			}
 		}

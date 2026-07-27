@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelMapper">
+
+    <resultMap id="AiModelResultMap"
+               type="com.example.temperate.model.ai.entity.AiModel">
+        <id property="id" column="id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="description" column="description"/>
+        <result property="iconId" column="icon_id"/>
+        <result property="icon" column="icon"/>
+        <result property="tagsJson" column="tags_json"/>
+        <result property="modelNameTokensJson" column="model_name_tokens_json"/>
+        <result property="descriptionTokensJson" column="description_tokens_json"/>
+        <result property="vendor" column="vendor"/>
+        <result property="inputRatio" column="input_ratio"/>
+        <result property="outputRatio" column="output_ratio"/>
+        <result property="enabled" column="is_enabled"/>
+        <result property="rowVersion" column="row_version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="AiModelColumns">
+        model.id AS id,
+        model.model_name AS model_name,
+        model.description AS description,
+        model.icon_id AS icon_id,
+        icon.icon_url AS icon,
+        model.tags::TEXT AS tags_json,
+        model.model_name_tokens::TEXT AS model_name_tokens_json,
+        model.description_tokens::TEXT AS description_tokens_json,
+        model.vendor AS vendor,
+        model.input_ratio AS input_ratio,
+        model.output_ratio AS output_ratio,
+        model.is_enabled AS is_enabled,
+        model.row_version AS row_version,
+        model.created_at AS created_at,
+        model.updated_at AS updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModel">
+        INSERT INTO ai_model (
+            id,
+            model_name,
+            description,
+            icon_id,
+            tags,
+            model_name_tokens,
+            description_tokens,
+            vendor,
+            input_ratio,
+            output_ratio,
+            is_enabled
+        )
+        VALUES (
+            #{id,jdbcType=BIGINT},
+            #{modelName,jdbcType=VARCHAR},
+            #{description,jdbcType=VARCHAR},
+            #{iconId,jdbcType=BIGINT},
+            CAST(#{tagsJson,jdbcType=VARCHAR} AS JSONB),
+            CAST(#{modelNameTokensJson,jdbcType=VARCHAR} AS JSONB),
+            CAST(#{descriptionTokensJson,jdbcType=VARCHAR} AS JSONB),
+            #{vendor,jdbcType=VARCHAR},
+            #{inputRatio,jdbcType=NUMERIC},
+            #{outputRatio,jdbcType=NUMERIC},
+            #{enabled,jdbcType=BOOLEAN}
+        )
+    </insert>
+
+    <update id="updateEditable">
+        UPDATE ai_model
+        SET model_name = #{model.modelName,jdbcType=VARCHAR},
+            description = #{model.description,jdbcType=VARCHAR},
+            icon_id = #{model.iconId,jdbcType=BIGINT},
+            tags = CAST(#{model.tagsJson,jdbcType=VARCHAR} AS JSONB),
+            model_name_tokens =
+                CAST(#{model.modelNameTokensJson,jdbcType=VARCHAR} AS JSONB),
+            description_tokens =
+                CAST(#{model.descriptionTokensJson,jdbcType=VARCHAR} AS JSONB),
+            vendor = #{model.vendor,jdbcType=VARCHAR},
+            input_ratio = #{model.inputRatio,jdbcType=NUMERIC},
+            output_ratio = #{model.outputRatio,jdbcType=NUMERIC},
+            row_version = row_version + 1
+        WHERE id = #{model.id,jdbcType=BIGINT}
+          AND row_version = #{expectedVersion,jdbcType=BIGINT}
+    </update>
+
+    <select id="findById" resultMap="AiModelResultMap">
+        SELECT <include refid="AiModelColumns"/>
+        FROM ai_model model
+        LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
+        WHERE model.id = #{id,jdbcType=BIGINT}
+    </select>
+
+    <select id="findByIds" resultMap="AiModelResultMap">
+        SELECT <include refid="AiModelColumns"/>
+        FROM ai_model model
+        LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
+        WHERE model.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY model.id DESC
+    </select>
+
+    <select id="findPage" resultMap="AiModelResultMap">
+        SELECT <include refid="AiModelColumns"/>
+        FROM ai_model model
+        LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
+        <where>
+            <if test="keyword != null">
+                AND (
+                    LOWER(model.model_name) LIKE CONCAT(#{keyword,jdbcType=VARCHAR}, '%') ESCAPE '\'
+                    OR LOWER(model.vendor) LIKE CONCAT(#{keyword,jdbcType=VARCHAR}, '%') ESCAPE '\'
+                )
+            </if>
+            <if test="enabled != null">
+                AND model.is_enabled = #{enabled,jdbcType=BOOLEAN}
+            </if>
+        </where>
+    </select>
+
+    <select id="findEnabled" resultMap="AiModelResultMap">
+        SELECT <include refid="AiModelColumns"/>
+        FROM ai_model model
+        LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
+        WHERE model.is_enabled = TRUE
+        ORDER BY model.id
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <select id="countByNormalizedModelName" resultType="int">
+        SELECT COUNT(*)
+        FROM ai_model
+        WHERE model_name = LOWER(BTRIM(#{modelName,jdbcType=VARCHAR}))
+    </select>
+
+    <update id="updateEnabled">
+        UPDATE ai_model
+        SET is_enabled = #{enabled,jdbcType=BOOLEAN},
+            row_version = row_version + 1
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND is_enabled IS DISTINCT FROM #{enabled,jdbcType=BOOLEAN}
+    </update>
+
+    <update id="updateEnabledBatch">
+        UPDATE ai_model
+        SET is_enabled = #{enabled,jdbcType=BOOLEAN},
+            row_version = row_version + 1
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id,jdbcType=BIGINT}
+        </foreach>
+          AND is_enabled IS DISTINCT FROM #{enabled,jdbcType=BOOLEAN}
+    </update>
+
+    <select id="findEnabledById" resultType="java.lang.Boolean">
+        SELECT is_enabled
+        FROM ai_model
+        WHERE id = #{id,jdbcType=BIGINT}
+    </select>
+
+    <select id="findTokenBackfillPage" resultMap="AiModelResultMap">
+        SELECT <include refid="AiModelColumns"/>
+        FROM ai_model model
+        LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
+        WHERE model.id &gt; #{afterId,jdbcType=BIGINT}
+        ORDER BY model.id
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <update id="updateSearchTokensBatch">
+        UPDATE ai_model AS model
+        SET model_name_tokens = source.model_name_tokens,
+            description_tokens = source.description_tokens
+        FROM (
+            VALUES
+            <foreach collection="updates" item="update" separator=",">
+                (
+                    #{update.id,jdbcType=BIGINT},
+                    CAST(#{update.modelNameTokensJson,jdbcType=VARCHAR} AS JSONB),
+                    CAST(#{update.descriptionTokensJson,jdbcType=VARCHAR} AS JSONB)
+                )
+            </foreach>
+        ) AS source(id, model_name_tokens, description_tokens)
+        WHERE model.id = source.id
+    </update>
+</mapper>

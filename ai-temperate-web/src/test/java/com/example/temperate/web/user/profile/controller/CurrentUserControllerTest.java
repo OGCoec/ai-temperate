@@ -22,7 +22,10 @@ class CurrentUserControllerTest {
     void returnsOnlyDisplayNameEmailAndPhoneWithoutCaching() {
         CurrentUserProfileService service = mock(CurrentUserProfileService.class);
         when(service.getRequired(10001L)).thenReturn(new CurrentUserProfile(
-                "Alice", "alice@example.test", "+14155550123"));
+                "Alice",
+                "alice@example.test",
+                "+14155550123",
+                "https://cdn.example.test/avatar.webp"));
         CurrentUserController controller = new CurrentUserController(service);
         SessionPrincipal principal = new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice");
 
@@ -33,7 +36,10 @@ class CurrentUserControllerTest {
                 .contains(CacheControl.noStore().getHeaderValue())
                 .contains("private");
         assertThat(response.getBody()).isEqualTo(new CurrentUserResponse(
-                "Alice", "alice@example.test", "+14155550123"));
+                "Alice",
+                "alice@example.test",
+                "+14155550123",
+                "https://cdn.example.test/avatar.webp"));
         verify(service).getRequired(10001L);
     }
 }

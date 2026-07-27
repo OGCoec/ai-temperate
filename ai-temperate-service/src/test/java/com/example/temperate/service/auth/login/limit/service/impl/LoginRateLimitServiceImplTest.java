@@ -39,8 +39,7 @@ class LoginRateLimitServiceImplTest {
         service = new LoginRateLimitServiceImpl(store, protector);
         attempt = new LoginAttempt(
                 "person@example.test",
-                "123e4567-e89b-42d3-a456-426614174000",
-                "203.0.113.10");
+                "123e4567-e89b-42d3-a456-426614174000");
     }
 
     @Test
@@ -62,14 +61,10 @@ class LoginRateLimitServiceImplTest {
         assertThat(captor.getAllValues()).allSatisfy(protectedAttempt -> {
             assertThat(protectedAttempt.identifierHash().value()).matches("^[A-Za-z0-9_-]{43}$");
             assertThat(protectedAttempt.actorHash().value()).matches("^[A-Za-z0-9_-]{43}$");
-            assertThat(protectedAttempt.networkHash().value()).matches("^[A-Za-z0-9_-]{43}$");
             assertThat(protectedAttempt.identifierHash())
                     .isNotEqualTo(protectedAttempt.actorHash());
-            assertThat(protectedAttempt.networkHash())
-                    .isEqualTo(protectedAttempt.actorHash())
-                    .isNotEqualTo(protectedAttempt.identifierHash());
             assertThat(protectedAttempt.toString())
-                    .doesNotContain("person@example.test", "203.0.113.10", "install_A");
+                    .doesNotContain("person@example.test", "install_A");
         });
     }
 

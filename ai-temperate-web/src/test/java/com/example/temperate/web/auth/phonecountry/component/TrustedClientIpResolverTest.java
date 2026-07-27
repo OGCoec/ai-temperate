@@ -135,11 +135,15 @@ class TrustedClientIpResolverTest {
         MockHttpServletRequest request = requestFrom("::1");
         request.addHeader("CF-Connecting-IP", "2001:4860:4860::8888");
 
-        assertThat(resolver.resolve(request)).contains("2001:4860:4860:0:0:0:0:8888");
+        assertThat(resolver.resolve(request)).contains("2001:4860:4860::8888");
     }
 
     private static TrustedClientIpResolver resolverWithTrustedRanges(String ranges) {
-        return new TrustedClientIpResolver(new PhoneCountryProperties(true, "unused.bin", ranges));
+        return new TrustedClientIpResolver(new PhoneCountryProperties(
+                true,
+                "unused.bin",
+                java.time.Duration.ofSeconds(8),
+                ranges));
     }
 
     private static MockHttpServletRequest requestFrom(String remoteAddress) {

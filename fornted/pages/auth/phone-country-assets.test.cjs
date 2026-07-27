@@ -5,7 +5,7 @@ const path = require('node:path')
 
 const frontendRoot = path.resolve(__dirname, '../..')
 const countriesSource = fs.readFileSync(
-	path.join(frontendRoot, 'common/auth/phone-countries.js'),
+	path.resolve(frontendRoot, '../shared-frontend/auth/phone-countries.js'),
 	'utf8'
 )
 
@@ -28,4 +28,3 @@ test('all country flag paths resolve to bundled static assets', () => {
 		assert.ok(fs.existsSync(flagPath), `Missing country flag asset: ${flagName}`)
 	}
 })
-

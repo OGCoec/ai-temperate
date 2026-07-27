@@ -1,5 +1,6 @@
 package com.example.temperate.web.auth.csrf.controller;
 
+import com.example.temperate.web.auth.api.WebInvalidInputException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.CacheControl;
@@ -28,7 +29,7 @@ public final class CsrfTokenController {
             description = "返回 204，并通过 Set-Cookie 写入 Secure、SameSite=Strict 的 XSRF-TOKEN 会话 Cookie。")
     public ResponseEntity<Void> csrf(CsrfToken csrfToken) {
         if (csrfToken == null) {
-            throw new IllegalArgumentException("CSRF Cookie endpoint only supports H5 clients.");
+            throw new WebInvalidInputException();
         }
         // CsrfToken 可能是延迟对象，主动取值确保本次 204 响应携带初始化 Cookie。
         csrfToken.getToken();

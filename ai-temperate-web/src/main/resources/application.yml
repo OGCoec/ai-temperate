@@ -15,6 +15,15 @@ spring:
     # 事务 Service 统一通过业务接口调用，默认使用 JDK 接口代理并允许环境变量覆盖。
     proxy-target-class: ${SPRING_AOP_PROXY_TARGET_CLASS:false}
 
+  # Servlet 上传边界用于在读取请求体前限制管理员模型图标文件大小。
+  servlet:
+    # Multipart 请求限制只负责传输层保护，业务层仍按真实图片字节执行独立校验。
+    multipart:
+      # 单个本地图标文件最大允许两 MiB。
+      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:2MB}
+      # Multipart 总请求额外预留名称、描述和边界编码空间。
+      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:3MB}
+
   # 邮件发送默认使用 Gmail SMTP，部署环境仍可通过 MAIL_* 覆盖为其他服务商。
   mail:
     # SMTP 主机默认指向 Gmail，允许环境变量切换部署目标。
@@ -124,6 +133,88 @@ mybatis:
 
 # 认证与安全边界配置。
 app:
+  # 启用 AI 模型使用固定聚合 Key 和整体 AES-256-GCM 密文缓存，PostgreSQL 始终是事实来源。
+  ai-model-cache:
+    # 独立三十二字节规范 Base64 密钥必须由部署环境提供，禁止复用其他安全域密钥。
+    encryption-key-base64: ${AI_MODEL_CACHE_ENCRYPTION_KEY_BASE64:}
+    # 加密快照随机 TTL 下界固定为五分钟，避免所有实例同时失效。
+    minimum-ttl: ${AI_MODEL_CACHE_MINIMUM_TTL:5m}
+    # 加密快照随机 TTL 上界固定为十五分钟，限制短暂旧值窗口。
+    maximum-ttl: ${AI_MODEL_CACHE_MAXIMUM_TTL:15m}
+    # 单个聚合快照最多加载五百个启用模型，超限时拒绝生成 BigKey。
+    max-models: ${AI_MODEL_CACHE_MAX_MODELS:500}
+
+  # AI 模型历史搜索词元回填只允许在受控维护启动中显式开启。
+  ai-model-token-backfill:
+    # 默认关闭回填；开启后按五百条批次执行，任一失败都会阻止应用完成启动。
+    enabled: ${AI_MODEL_TOKEN_BACKFILL_ENABLED:false}
+
+  # Cloudflare Worker 同源代理通过请求级 HMAC 证明浏览器实际访问的外部主机。
+  edge-proxy:
+    # 本地默认关闭验签；生产切换期显式使用 OPTIONAL，稳定后必须设置为 REQUIRED。
+    mode: ${EDGE_PROXY_MODE:DISABLED}
+    # 启用验签时必须提供独立规范 Base64 密钥，禁止复用 JWT、会话或缓存密钥。
+    hmac-secret-base64: ${EDGE_PROXY_HMAC_SECRET_BASE64:}
+    # 签名只接受三十秒内的请求，限制捕获签名后的重放窗口。
+    max-clock-skew: ${EDGE_PROXY_MAX_CLOCK_SKEW:30s}
+
+  # Redis-only 网络风险、外部 IP 情报、PreAuth 与 WAF Challenge 配置。
+  network-risk:
+    # 本地默认关闭，首次生产上线使用 OBSERVE，完成验收后切换为 ENFORCE。
+    mode: ${NETWORK_RISK_MODE:DISABLED}
+    # OBSERVE 或 ENFORCE 必须提供至少三十二字节的规范 Base64 HMAC 密钥；DISABLED 不提供默认密钥。
+    hmac-secret-base64: ${NETWORK_RISK_HMAC_SECRET_BASE64:}
+    # OBSERVE 或 ENFORCE 必须提供独立 Base64 主密钥；DISABLED 只使用不持久化的进程内随机材料。
+    ip2-location-api-key-encryption-key-base64: ${IP2LOCATION_API_KEY_ENCRYPTION_KEY_BASE64:}
+    # IP2Location 风险查询固定使用官方 HTTPS 起点，测试环境可以覆盖为受控桩服务。
+    ip2-location-base-url: ${IP2LOCATION_RISK_BASE_URL:https://api.ip2location.io/}
+    # iPing 仅作为 IP2Location 缺少评分时的 HTTPS 降级端点。
+    iping-base-url: ${IPING_RISK_BASE_URL:https://api.iping.cc/v1/query}
+    # 默认启用 iPing 降级；明确关闭时直接进入本地 BIN 与默认分。
+    iping-enabled: ${IPING_RISK_ENABLED:true}
+    # 缓存未命中的整条外部查询链最多占用八秒，供应商共享该预算。
+    lookup-timeout: ${NETWORK_RISK_LOOKUP_TIMEOUT:8s}
+    # 完整第三方结果缓存六小时，并由实现增加正负百分之二十抖动。
+    positive-cache-ttl: ${NETWORK_RISK_POSITIVE_CACHE_TTL:6h}
+    # 本地 BIN 或默认六十分只缓存十分钟，以便较快重试第三方。
+    fallback-cache-ttl: ${NETWORK_RISK_FALLBACK_CACHE_TTL:10m}
+    # 同一 IP 的跨实例 single-flight 锁只覆盖一次外部查询预算。
+    single-flight-ttl: ${NETWORK_RISK_SINGLE_FLIGHT_TTL:9s}
+    # 单实例最多允许三十二个缓存未命中的外部风险查询并发。
+    max-concurrent-lookups: ${NETWORK_RISK_MAX_CONCURRENT_LOOKUPS:32}
+    # 未登录 PreAuth 每次有效业务请求获得三十分钟滑动期限。
+    anonymous-pre-auth-ttl: ${NETWORK_RISK_ANONYMOUS_PREAUTH_TTL:30m}
+    # 登录成功关联后的 PreAuth 每次有效业务请求获得六小时滑动期限。
+    authenticated-pre-auth-ttl: ${NETWORK_RISK_AUTHENTICATED_PREAUTH_TTL:6h}
+    # 一次性 WAF Challenge 引用五分钟后失效。
+    challenge-ttl: ${NETWORK_RISK_CHALLENGE_TTL:5m}
+    # Challenge 成功证明在当前决策上下文中最多保留三十分钟。
+    challenge-verified-ttl: ${NETWORK_RISK_CHALLENGE_VERIFIED_TTL:30m}
+    # 不可能旅行至少比较相距两百公里的两个可信位置，允许按部署环境覆盖但不属于 Secret。
+    impossible-travel-minimum-distance-km: ${NETWORK_RISK_IMPOSSIBLE_TRAVEL_MINIMUM_DISTANCE_KM:200}
+    # 不可能旅行只比较最近二十四小时内的可信观测。
+    impossible-travel-window: ${NETWORK_RISK_IMPOSSIBLE_TRAVEL_WINDOW:24h}
+    # 动态 BLOCK 决策在相同 PreAuth 上保留十分钟，避免高风险请求立即重复计算。
+    temporary-block-ttl: ${NETWORK_RISK_TEMPORARY_BLOCK_TTL:10m}
+    # WebRTC 客户端探测只定义有界协议参数和加密材料，后端不会向 STUN 发起请求。
+    web-rtc:
+      # 浏览器与 Android 系统 WebView 最多等待十五秒完成 ICE 候选收集。
+      probe-timeout: ${WEBRTC_PROBE_TIMEOUT:15s}
+      # STUN 地址按固定优先顺序下发，服务端校验客户端上报结果的并集。
+      stun-urls:
+        # Google STUN 作为第一个全局候选来源。
+        - "${WEBRTC_STUN_GOOGLE_URL:stun:stun.l.google.com:19302}"
+        # Cloudflare STUN 作为第二个全局候选来源。
+        - "${WEBRTC_STUN_CLOUDFLARE_URL:stun:stun.cloudflare.com:3478}"
+        # Twilio STUN 作为第三个全局候选来源。
+        - "${WEBRTC_STUN_TWILIO_URL:stun:global.stun.twilio.com:3478}"
+        # Nextcloud STUN 作为第四个全局候选来源。
+        - "${WEBRTC_STUN_NEXTCLOUD_URL:stun:stun.nextcloud.com:3478}"
+      # 单次报告最多接受八个规范化公网 IPv4 或 IPv6 地址。
+      max-reported-ips: ${WEBRTC_MAX_REPORTED_IPS:8}
+      # OBSERVE 或 ENFORCE 必须提供独立三十二字节规范 Base64 密钥，禁止复用其他安全域密钥。
+      ip-encryption-key-base64: ${WEBRTC_IP_ENCRYPTION_KEY_BASE64:}
+
   # 安全属性统一绑定并在启动时执行 Jakarta Validation。
   security:
     # 部署环境使用 LOCAL、TEST 或 PROD 白名单值。
@@ -146,7 +237,7 @@ app:
       allowed-hosts: ${TURNSTILE_ALLOWED_HOSTS}
     # H5 认证与流程 Cookie 使用彼此隔离且不可降级的安全策略。
     cookies:
-      # H5 公网跨子域联调时共享认证 Cookie 的父域；留空时保持 Host-only 以兼容 localhost。
+      # 正式切换后变量必须删除并保持 Host-only；仅迁移或回滚窗口允许临时覆盖父域。
       domain: ${AUTH_COOKIE_DOMAIN:}
       # Access Token Cookie 只发送到 API 路径并禁止脚本读取。
       access:
@@ -233,19 +324,118 @@ app:
       # 空值缓存 TTL 默认 45 秒并限制在 30 至 60 秒。
       empty-cache: ${AUTH_EMPTY_CACHE_TTL:45s}
 
+  # 单管理员初始化、hCaptcha 登录和六小时会话的安全配置。
+  admin:
+    # 隐藏管理员 YAML 路径支持部署环境挂载到持久化 Secret 目录。
+    config-path: ${ADMIN_CONFIG_PATH:.admin/complete.yaml}
+    # 管理员 Flow 和会话标识使用独立规范 Base64 HMAC 密钥，禁止复用 JWT 或普通用户 HMAC。
+    session-hmac-secret-base64: ${ADMIN_SESSION_HMAC_SECRET_BASE64}
+    # 管理员不透明会话每次成功访问后滑动续期六小时。
+    session-ttl: ${ADMIN_SESSION_TTL:6h}
+    # 单管理员最多允许十个同时在线设备，超过上限拒绝新会话。
+    max-sessions: ${ADMIN_MAX_SESSIONS:10}
+    # 管理员首次注册 Flow 固定十分钟有效。
+    registration-flow-ttl: ${ADMIN_REGISTRATION_FLOW_TTL:10m}
+    # 管理员登录 hCaptcha Flow 固定十分钟有效。
+    login-flow-ttl: ${ADMIN_LOGIN_FLOW_TTL:10m}
+    # 管理员 API 只允许显式 HTTPS Origin 携带凭据访问。
+    allowed-origins: ${ADMIN_ALLOWED_ORIGINS:https://admin.niko000o.site}
+    # hCaptcha 服务端 Siteverify 配置。
+    hcaptcha:
+      # hCaptcha Site Key 是允许返回管理员前端的公开标识。
+      site-key: ${HCAPTCHA_SITE_KEY}
+      # hCaptcha Secret Key 只能由部署环境提供，禁止返回前端或写入日志。
+      secret-key: ${HCAPTCHA_SECRET_KEY}
+      # hCaptcha 响应域名必须命中管理员站点白名单。
+      allowed-hosts: ${HCAPTCHA_ALLOWED_HOSTS:admin.niko000o.site}
+      # 建立 hCaptcha HTTPS 连接最多等待八秒。
+      connect-timeout: ${HCAPTCHA_CONNECT_TIMEOUT:8s}
+      # 等待 hCaptcha HTTP 响应和正文最多八秒。
+      response-timeout: ${HCAPTCHA_RESPONSE_TIMEOUT:8s}
+      # hCaptcha 一次性挑战最多接受两分钟前签发的响应。
+      max-challenge-age: ${HCAPTCHA_MAX_CHALLENGE_AGE:2m}
+    # 管理员 H5 Cookie 使用独立名称和路径，禁止与普通用户会话混用。
+    cookies:
+      # 正式切换后变量必须删除并保持 Host-only；仅回滚窗口允许临时覆盖敏感 Cookie 父域。
+      domain: ${ADMIN_COOKIE_DOMAIN:}
+      # 正式切换后由同源 Worker 保证可读，迁移窗口可临时保留旧 CSRF 父域。
+      csrf-domain: ${ADMIN_CSRF_COOKIE_DOMAIN:}
+      # 管理员会话 Cookie 仅发送到管理员 API。
+      session:
+        # 管理员会话 Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_SESSION_COOKIE_SECURE:true}
+        # 原始管理员 Token 禁止 JavaScript 读取。
+        http-only: ${ADMIN_SESSION_COOKIE_HTTP_ONLY:true}
+        # 管理员会话固定使用严格同站策略。
+        same-site: ${ADMIN_SESSION_COOKIE_SAME_SITE:Strict}
+        # 管理员会话 Cookie 只作用于管理员 API。
+        path: ${ADMIN_SESSION_COOKIE_PATH:/api/admin}
+      # 管理员会话双提交 CSRF Cookie 允许 H5 读取。
+      csrf:
+        # 管理员 CSRF Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_CSRF_COOKIE_SECURE:true}
+        # 双提交 CSRF Cookie 必须允许 JavaScript 读取。
+        http-only: ${ADMIN_CSRF_COOKIE_HTTP_ONLY:false}
+        # 管理员 CSRF Cookie 固定使用严格同站策略。
+        same-site: ${ADMIN_CSRF_COOKIE_SAME_SITE:Strict}
+        # 管理员 CSRF Cookie 作用于整个站点以保护退出等写请求。
+        path: ${ADMIN_CSRF_COOKIE_PATH:/}
+      # 管理员首次注册 Token 与 Challenge Cookie 配置。
+      register-flow:
+        # 管理员注册 Flow Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_REGISTER_FLOW_COOKIE_SECURE:true}
+        # 注册 Token 与 Challenge 禁止 JavaScript 读取。
+        http-only: ${ADMIN_REGISTER_FLOW_COOKIE_HTTP_ONLY:true}
+        # 管理员注册 Flow 固定使用严格同站策略。
+        same-site: ${ADMIN_REGISTER_FLOW_COOKIE_SAME_SITE:Strict}
+        # 管理员注册 Flow Cookie 仅发送到注册端点。
+        path: ${ADMIN_REGISTER_FLOW_COOKIE_PATH:/api/admin/auth/register}
+      # 管理员注册 Flow 双提交 CSRF Cookie 配置。
+      register-csrf:
+        # 管理员注册 CSRF Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_REGISTER_CSRF_COOKIE_SECURE:true}
+        # 注册 Flow CSRF 必须允许前端复制到受控请求头。
+        http-only: ${ADMIN_REGISTER_CSRF_COOKIE_HTTP_ONLY:false}
+        # 管理员注册 CSRF 固定使用严格同站策略。
+        same-site: ${ADMIN_REGISTER_CSRF_COOKIE_SAME_SITE:Strict}
+        # 管理员页面必须能读取注册 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
+        path: ${ADMIN_REGISTER_CSRF_COOKIE_PATH:/}
+      # 管理员登录 Flow Token 与 Challenge Cookie 配置。
+      login-flow:
+        # 管理员登录 Flow Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_LOGIN_FLOW_COOKIE_SECURE:true}
+        # 登录 Flow Token 与 Challenge 禁止 JavaScript 读取。
+        http-only: ${ADMIN_LOGIN_FLOW_COOKIE_HTTP_ONLY:true}
+        # 管理员登录 Flow 固定使用严格同站策略。
+        same-site: ${ADMIN_LOGIN_FLOW_COOKIE_SAME_SITE:Strict}
+        # 管理员登录 Flow Cookie 仅发送到登录端点。
+        path: ${ADMIN_LOGIN_FLOW_COOKIE_PATH:/api/admin/auth/login}
+      # 管理员登录 Flow 双提交 CSRF Cookie 配置。
+      login-csrf:
+        # 管理员登录 CSRF Cookie 必须只通过 HTTPS 传输。
+        secure: ${ADMIN_LOGIN_CSRF_COOKIE_SECURE:true}
+        # 登录 Flow CSRF 必须允许前端复制到受控请求头。
+        http-only: ${ADMIN_LOGIN_CSRF_COOKIE_HTTP_ONLY:false}
+        # 管理员登录 CSRF 固定使用严格同站策略。
+        same-site: ${ADMIN_LOGIN_CSRF_COOKIE_SAME_SITE:Strict}
+        # 管理员页面必须能读取登录 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
+        path: ${ADMIN_LOGIN_CSRF_COOKIE_PATH:/}
+
   # 手机号默认国家识别配置。
   phone-country:
     # 默认启用基于客户端 IP 的国家识别，BIN 不可用时自动降级。
     enabled: ${AUTH_PHONE_COUNTRY_ENABLED:true}
     # IP2Location DB11 IPv6 BIN 文件路径，生产环境应该使用外部绝对路径。
     bin-path: ${AUTH_PHONE_COUNTRY_BIN_PATH:IP2LOCATION-LITE-DB11.IPV6.BIN}
+    # 单次手机号国家识别的服务端最大执行时间，超时后返回受控错误。
+    lookup-timeout: ${AUTH_PHONE_COUNTRY_LOOKUP_TIMEOUT:8s}
     # 可信代理 CIDR 使用逗号分隔，默认不信任任何代理提供的转发 IP 头。
     trusted-proxy-ranges: ${AUTH_PHONE_COUNTRY_TRUSTED_PROXY_RANGES:}
 
   # 受保护业务 API 的脱敏访问审计配置。
   access-audit:
-    # 默认开启旁路审计；关闭后不注册过滤器、RabbitMQ 拓扑、消费者和清理任务。
-    enabled: ${ACCESS_AUDIT_ENABLED:true}
+    # 默认关闭访问审计；仅在明确需要数据库审计存储时才应启用整条消息链路。
+    enabled: false
     # IP HMAC 使用独立 Base64 密钥，禁止复用 JWT、Cookie 或认证缓存密钥。
     hmac-secret-base64: ${ACCESS_AUDIT_HMAC_SECRET_BASE64}
     # 审计记录默认保留三十天，过期数据由有界批量任务清理。
@@ -438,3 +628,59 @@ logging:
   level:
     # 默认 INFO 不输出新增 DEBUG 事件，临时设置环境变量为 DEBUG 后需重启实例生效。
     com.example.temperate.service.registration.verification: ${VERIFICATION_DELIVERY_LOG_LEVEL:INFO}
+    # 网络风险 Web 边界默认只记录拒绝告警，临时 DEBUG 用于观察 REQUEST 与 ASYNC 分派链路。
+    com.example.temperate.web.risk: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # 网络风险 Service 默认只记录状态转换失败，临时 DEBUG 用于关联 PreAuth 与风险评估轨迹。
+    com.example.temperate.service.risk.logging: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
+
+# 普通用户头像对象存储只保存 Bucket 位置和非敏感行为参数，OSS 凭据由 SDK 标准环境变量读取。
+user-avatar:
+  # 头像对象存储连接、公开访问地址和预签名有效期配置。
+  oss:
+    # 头像 Bucket 名称允许按部署环境覆盖，Bucket 必须保持公共读且禁止公共写。
+    bucket: ${ALIYUN_OSS_AVATAR_BUCKET:ihaveaplan}
+    # OSS Region 必须与 Bucket 实际地域一致，避免签名地域不匹配。
+    region: ${ALIYUN_OSS_AVATAR_REGION:us-west-1}
+    # OSS SDK 服务端点用于签名、HEAD、下载、复制和精确删除。
+    endpoint: ${ALIYUN_OSS_AVATAR_ENDPOINT:https://oss-us-west-1.aliyuncs.com}
+    # 正式头像公开 URL 基地址可以在以后切换为 CDN 域名而不改数据库业务代码。
+    public-base-url: ${ALIYUN_OSS_AVATAR_PUBLIC_BASE_URL:https://ihaveaplan.oss-us-west-1.aliyuncs.com}
+    # 预签名 PUT 默认十分钟失效，客户端超时后必须重新创建预上传。
+    presigned-url-ttl: ${ALIYUN_OSS_AVATAR_PRESIGNED_URL_TTL:PT10M}
+
+# AI 模型图标对象存储独立配置，业务路径与普通用户头像互不复用。
+ai-model-icon:
+  # 远程 SVG 可信官方兼容档位只由最终响应域名触发，不影响普通外链和本地上传。
+  remote-svg:
+    # 开关关闭时八家厂商也全部回退为原有严格 SVG 白名单。
+    trusted-official-profile-enabled: ${AI_MODEL_ICON_TRUSTED_OFFICIAL_SVG_ENABLED:true}
+    # 各厂商可信主机只覆盖自身和真实子域名，共享 CDN 必须配置到精确主机。
+    trusted-hosts:
+      # OpenAI 与 ChatGPT 官方站点可以使用受限样式和内嵌栅格图片。
+      openai: ${AI_MODEL_ICON_TRUSTED_OPENAI_HOSTS:chatgpt.com,openai.com}
+      # Anthropic 与 Claude 官方站点可以使用受限样式和内嵌栅格图片。
+      anthropic: ${AI_MODEL_ICON_TRUSTED_ANTHROPIC_HOSTS:claude.ai,anthropic.com}
+      # Gemini 官方站点及其精确静态资源主机可以使用兼容档位。
+      google: ${AI_MODEL_ICON_TRUSTED_GOOGLE_HOSTS:gemini.google.com,www.gstatic.com}
+      # xAI 与 Grok 官方站点可以使用受限样式和内嵌栅格图片。
+      xai: ${AI_MODEL_ICON_TRUSTED_XAI_HOSTS:grok.com,x.ai}
+      # DeepSeek 官方站点可以使用受限样式和内嵌栅格图片。
+      deepseek: ${AI_MODEL_ICON_TRUSTED_DEEPSEEK_HOSTS:deepseek.com}
+      # 智谱、ChatGLM 与 BigModel 官方站点可以使用兼容档位。
+      zhipu: ${AI_MODEL_ICON_TRUSTED_ZHIPU_HOSTS:zhipuai.cn,chatglm.cn,bigmodel.cn}
+      # Kimi 与 Moonshot 官方站点可以使用受限样式和内嵌栅格图片。
+      moonshot: ${AI_MODEL_ICON_TRUSTED_MOONSHOT_HOSTS:kimi.com,moonshot.cn,moonshot.ai}
+      # 通义千问只信任 qwen.ai 点边界子域，不扩大到阿里共享 CDN。
+      qwen: ${AI_MODEL_ICON_TRUSTED_QWEN_HOSTS:qwen.ai}
+  # 模型图标 OSS Bucket、公开地址和固定对象前缀配置。
+  oss:
+    # Bucket 必须配置为公共读、禁止公共写，应用凭据由 OSS SDK 标准环境变量读取。
+    bucket: ${ALIYUN_OSS_MODEL_ICON_BUCKET:ihaveaplan}
+    # Region 必须与模型图标 Bucket 实际地域一致。
+    region: ${ALIYUN_OSS_MODEL_ICON_REGION:us-west-1}
+    # Endpoint 用于模型图标上传、覆盖和精确删除。
+    endpoint: ${ALIYUN_OSS_MODEL_ICON_ENDPOINT:https://oss-us-west-1.aliyuncs.com}
+    # 公开 URL 基地址可以切换为 CDN 域名而不改变数据库结构。
+    public-base-url: ${ALIYUN_OSS_MODEL_ICON_PUBLIC_BASE_URL:https://ihaveaplan.oss-us-west-1.aliyuncs.com}
+    # 固定前缀把模型图标限制在独立目录，末尾斜杠由路径工厂统一规范化。
+    prefix: ${ALIYUN_OSS_MODEL_ICON_PREFIX:ai-temperate/models/icons/}

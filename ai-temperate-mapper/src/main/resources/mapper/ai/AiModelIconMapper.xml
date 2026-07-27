@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelIconMapper">
+
+    <resultMap id="AiModelIconResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelIcon">
+        <id property="id" column="id"/>
+        <result property="iconName" column="icon_name"/>
+        <result property="iconUrl" column="icon_url"/>
+        <result property="objectKey" column="object_key"/>
+        <result property="description" column="description"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="AiModelIconColumns">
+        id,
+        icon_name,
+        icon_url,
+        object_key,
+        description,
+        created_at,
+        updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModelIcon">
+        INSERT INTO ai_model_icon (
+            id,
+            icon_name,
+            icon_url,
+            object_key,
+            description
+        )
+        VALUES (
+            #{id,jdbcType=BIGINT},
+            #{iconName,jdbcType=VARCHAR},
+            #{iconUrl,jdbcType=VARCHAR},
+            #{objectKey,jdbcType=VARCHAR},
+            #{description,jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <select id="findPage" resultMap="AiModelIconResultMap">
+        SELECT <include refid="AiModelIconColumns"/>
+        FROM ai_model_icon
+        ORDER BY LOWER(icon_name), id
+    </select>
+
+    <select id="findById" resultMap="AiModelIconResultMap">
+        SELECT <include refid="AiModelIconColumns"/>
+        FROM ai_model_icon
+        WHERE id = #{id,jdbcType=BIGINT}
+    </select>
+
+    <select id="findByIdForShare" resultMap="AiModelIconResultMap">
+        SELECT <include refid="AiModelIconColumns"/>
+        FROM ai_model_icon
+        WHERE id = #{id,jdbcType=BIGINT}
+        FOR SHARE
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="AiModelIconResultMap">
+        SELECT <include refid="AiModelIconColumns"/>
+        FROM ai_model_icon
+        WHERE id = #{id,jdbcType=BIGINT}
+        FOR UPDATE
+    </select>
+
+    <update id="update"
+            parameterType="com.example.temperate.model.ai.entity.AiModelIcon">
+        UPDATE ai_model_icon
+        SET icon_name = #{iconName,jdbcType=VARCHAR},
+            icon_url = #{iconUrl,jdbcType=VARCHAR},
+            object_key = #{objectKey,jdbcType=VARCHAR},
+            description = #{description,jdbcType=VARCHAR}
+        WHERE id = #{id,jdbcType=BIGINT}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM ai_model_icon
+        WHERE id = #{id,jdbcType=BIGINT}
+    </delete>
+
+    <select id="countModelReferences" resultType="int">
+        SELECT COUNT(*)
+        FROM ai_model
+        WHERE icon_id = #{iconId,jdbcType=BIGINT}
+    </select>
+
+    <select id="existsEnabledReference" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM ai_model
+            WHERE icon_id = #{iconId,jdbcType=BIGINT}
+              AND is_enabled = TRUE
+        )
+    </select>
+</mapper>

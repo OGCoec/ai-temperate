@@ -13,7 +13,7 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8')
 }
 
-test('login success and local preview enter the account profile page', () => {
+test('login success enters the account profile page without a local preview bypass', () => {
 	const login = read('pages/auth/login.vue')
 	const config = read('common/auth/config.js')
 
@@ -21,8 +21,7 @@ test('login success and local preview enter the account profile page', () => {
 	assert.equal(login.includes(`uni.${legacyTabNavigationMethod}({`), false)
 	assert.match(login, /uni\.reLaunch\(\{/)
 	assert.match(login, /url:\s*AUTH_ROUTES\.home/)
-	assert.match(login, /previewAuthenticatedPages/)
-	assert.match(login, /url:\s*AUTH_ROUTES\.profile/)
+	assert.doesNotMatch(login, /previewAuthenticatedPages|authUiPreview|ui-preview-session/)
 	assert.match(config, /home:\s*'\/pages\/account\/profile'/)
 	assert.match(config, /profile:\s*'\/pages\/account\/profile'/)
 })

@@ -1,5 +1,6 @@
 package com.example.temperate.web.auth.login.controller;
 
+import com.example.temperate.common.net.ip.IpAddressIdentity;
 import com.example.temperate.common.validation.phone.PhoneNumberInputPolicy;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
@@ -10,8 +11,21 @@ import com.example.temperate.service.auth.login.strategy.LoginStrategyRegistry;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
+import com.example.temperate.service.risk.domain.RiskScope;
+import com.example.temperate.service.risk.domain.RiskSessionType;
+import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
+import com.example.temperate.service.risk.config.NetworkRiskMode;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
+import com.example.temperate.service.risk.preauth.domain.PreAuthIssue;
+import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
+import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -29,6 +43,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
 
 /**
  * 密码与验证码登录的 HTTP 接口控制器。
@@ -57,14 +72,26 @@ public final class LoginController {
     private final LoginStrategyRegistry strategyRegistry;
     private final LoginCodeFlowService codeFlowService;
     private final AuthCookieWriter cookieWriter;
+    private final PreAuthService preAuthService;
+    private final PreAuthTransport preAuthTransport;
+    private final RiskRequestContextResolver riskContextResolver;
+    private final NetworkRiskProperties networkRiskProperties;
 
     public LoginController(
             LoginStrategyRegistry strategyRegistry,
             LoginCodeFlowService codeFlowService,
-            AuthCookieWriter cookieWriter) {
+            AuthCookieWriter cookieWriter,
+            PreAuthService preAuthService,
+            PreAuthTransport preAuthTransport,
+            RiskRequestContextResolver riskContextResolver,
+            NetworkRiskProperties networkRiskProperties) {
         this.strategyRegistry = strategyRegistry;
         this.codeFlowService = codeFlowService;
         this.cookieWriter = cookieWriter;
+        this.preAuthService = preAuthService;
+        this.preAuthTransport = preAuthTransport;
+        this.riskContextResolver = riskContextResolver;
+        this.networkRiskProperties = networkRiskProperties;
     }
 
     @PostMapping("/password")
@@ -91,9 +118,17 @@ public final class LoginController {
                         null,
                         null,
                         deviceId,
-                        request.getRemoteAddr()));
+                        canonicalIp(request)));
+        PreAuthIssue preAuth = promotePreAuth(
+                request,
+                response,
+                platform,
+                result.getRefreshToken());
         if (platform == AuthClientPlatform.H5) {
-            // H5 的认证凭据只写 Cookie，避免 JavaScript 和响应 JSON 接触 AT/RT。
+            /*
+             * 必须先完成 PreAuth 旋转再写认证 Cookie；ENFORCE 下旋转失败时，异常响应不能提前向浏览器
+             * 交付一个尚未绑定网络风险状态的新会话。
+             */
             cookieWriter.writeSession(
                     response,
                     result.getAccessToken(),
@@ -101,7 +136,7 @@ public final class LoginController {
                     result.getCsrfToken(),
                     result.getRefreshExpiresAt());
         }
-        return response(result, platform);
+        return response(result, platform, preAuth);
     }
 
     @PostMapping("/code/start")
@@ -118,22 +153,24 @@ public final class LoginController {
                 body.countryIso2(),
                 body.phoneNumber(),
                 deviceId,
-                request.getRemoteAddr()));
+                canonicalIp(request)));
     }
 
     @PostMapping("/code/turnstile")
     @Operation(
             summary = "验证登录流程的人机挑战",
             description = "服务端校验 Cloudflare Turnstile token、action、hostname 和重放状态；客户端布尔值不作为依据。")
-    public FlowAcceptedResponse verifyCodeTurnstile(
+    public Mono<FlowAcceptedResponse> verifyCodeTurnstile(
             @Valid @RequestBody TurnstileRequest body,
             @RequestHeader(FLOW_TOKEN_HEADER) String flowToken,
             @RequestHeader(CHALLENGE_HEADER) String challenge,
             @RequestHeader(DEVICE_HEADER) String deviceId,
             HttpServletRequest request) {
-        codeFlowService.verifyTurnstile(
-                access(flowToken, challenge, deviceId, request), body.turnstileToken());
-        return new FlowAcceptedResponse(true, "人机验证已通过，可以手动发送验证码。");
+        return codeFlowService.verifyTurnstile(
+                        access(flowToken, challenge, deviceId, request),
+                        body.turnstileToken())
+                .thenReturn(new FlowAcceptedResponse(
+                        true, "人机验证已通过，可以手动发送验证码。"));
     }
 
     @PostMapping("/code/send")
@@ -170,9 +207,14 @@ public final class LoginController {
                 body.strategyType(),
                 new LoginStrategyRequest(
                         null, null, null, null,
-                        flowToken, challenge, body.code(), deviceId, request.getRemoteAddr()));
+                        flowToken, challenge, body.code(), deviceId, canonicalIp(request)));
+        PreAuthIssue preAuth = promotePreAuth(
+                request,
+                response,
+                platform,
+                result.getRefreshToken());
         if (platform == AuthClientPlatform.H5) {
-            // 验证码登录与密码登录使用同一 H5 Cookie 写入边界。
+            // 验证码登录复用相同的“先旋转 PreAuth、后交付会话 Cookie”安全顺序。
             cookieWriter.writeSession(
                     response,
                     result.getAccessToken(),
@@ -180,20 +222,71 @@ public final class LoginController {
                     result.getCsrfToken(),
                     result.getRefreshExpiresAt());
         }
-        return response(result, platform);
+        return response(result, platform, preAuth);
     }
 
-    private static LoginCodeAccess access(
+    private LoginCodeAccess access(
             String flowToken,
             String challenge,
             String deviceId,
             HttpServletRequest request) {
         return new LoginCodeAccess(
-                flowToken, challenge, deviceId, request.getRemoteAddr());
+                flowToken, challenge, deviceId, canonicalIp(request));
+    }
+
+    private String canonicalIp(HttpServletRequest request) {
+        return riskContextResolver.resolve(request)
+                .map(TrustedNetworkObservation::clientIp)
+                .orElseGet(() -> IpAddressIdentity.parse(
+                                request.getRemoteAddr())
+                        .canonicalText());
+    }
+
+    private PreAuthIssue promotePreAuth(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            AuthClientPlatform platform,
+            String refreshToken) {
+        if (networkRiskProperties.mode() == NetworkRiskMode.DISABLED) {
+            return null;
+        }
+        PreAuthAccess access = verifiedPreAuthAccess(request);
+        TrustedNetworkObservation observation = riskContextResolver.resolve(request)
+                .orElse(null);
+        if (access == null || observation == null) {
+            if (networkRiskProperties.mode() == NetworkRiskMode.OBSERVE) {
+                return null;
+            }
+            throw new SessionAuthenticationException(
+                    SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
+                    "PreAuth is required after login.",
+                    false);
+        }
+        PreAuthIssue issue = preAuthService.promoteAuthenticated(
+                access,
+                RiskSessionType.USER_REFRESH,
+                refreshToken,
+                observation.observedAt());
+        if (platform == AuthClientPlatform.H5) {
+            preAuthTransport.writeCookie(
+                    response,
+                    RiskScope.USER,
+                    issue.rawToken(),
+                    issue.expiresAt(),
+                    observation.observedAt());
+        }
+        return issue;
+    }
+
+    private static PreAuthAccess verifiedPreAuthAccess(HttpServletRequest request) {
+        Object value = request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
+        return value instanceof PreAuthAccess access ? access : null;
     }
 
     private static LoginResponse response(
-            LoginResult result, AuthClientPlatform platform) {
+            LoginResult result,
+            AuthClientPlatform platform,
+            PreAuthIssue preAuthIssue) {
         boolean android = platform == AuthClientPlatform.ANDROID;
         // 只有 Android 响应体保留 Token 字段；H5 的 null 字段由 JsonInclude 省略。
         return new LoginResponse(
@@ -202,6 +295,7 @@ public final class LoginController {
                 android ? result.getAccessToken() : null,
                 android ? result.getRefreshToken() : null,
                 android ? result.getCsrfToken() : null,
+                android && preAuthIssue != null ? preAuthIssue.rawToken() : null,
                 result.getRefreshExpiresAt());
     }
 
@@ -246,6 +340,7 @@ public final class LoginController {
             String accessToken,
             String refreshToken,
             String csrfToken,
+            String preAuthToken,
             Instant refreshExpiresAt) {
     }
 }

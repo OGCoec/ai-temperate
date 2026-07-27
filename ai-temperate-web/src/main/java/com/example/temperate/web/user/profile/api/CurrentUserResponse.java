@@ -12,5 +12,10 @@ public record CurrentUserResponse(
         @Schema(description = "完整邮箱，仅返回给当前已认证用户", example = "a***@example.test")
         String email,
         @Schema(description = "E.164 手机号；未绑定时为 null", example = "+1415***0123", nullable = true)
-        String phone) {
+        String phone,
+        @Schema(
+                description = "当前头像公开 URL；尚未设置头像时为 null",
+                example = "https://ihaveaplan.oss-us-west-1.aliyuncs.com/ai-temperate/user/AAAAAAAAJxE/0123456789_abcdefghijklmnopqrstuvwxyz-.webp",
+                nullable = true)
+        String avatarUrl) {
 }

@@ -62,7 +62,7 @@
 </template>
 
 <script>
-	import { classifyPassword, passwordError } from '@/common/auth/password-policy.js'
+	import { classifyPassword, passwordError } from '@shared-auth/password-policy.js'
 
 	export default {
 		name: 'AuthPasswordFields',

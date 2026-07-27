@@ -15,9 +15,6 @@
 	import { restorePersistedSession } from '@/common/auth/http-client.js'
 	import { clearSession } from '@/common/auth/session-vault.js'
 	import {
-		activateAuthUiPreviewFromRoute
-	} from '@/common/auth/ui-preview-session.js'
-	import {
 		clearCurrentUserProfile,
 		loadCurrentUserProfile
 	} from '@/common/user/current-user-profile.js'
@@ -39,8 +36,7 @@
 		data() {
 			return { routing: false, unavailable: false, restoring: false }
 		},
-		onLoad(options = {}) {
-			activateAuthUiPreviewFromRoute(options)
+		onLoad() {
 			this.restoreSession()
 		},
 		methods: {

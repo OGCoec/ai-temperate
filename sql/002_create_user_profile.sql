@@ -23,6 +23,14 @@ CREATE TABLE user_profile (
         CHECK (account_status BETWEEN 0 AND 2)
 );
 
+-- 用户列表按账户状态筛选后，以展示名称和主键进行稳定排序；低基数状态不单独建立普通索引。
+CREATE INDEX idx_user_profile_account_status_display_name_id
+    ON user_profile (
+        account_status ASC,
+        display_name ASC NULLS LAST,
+        id ASC
+    );
+
 CREATE OR REPLACE FUNCTION set_user_profile_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -46,7 +54,7 @@ COMMENT ON TABLE user_profile IS '用户详细资料表，与 userloginidentity 
 COMMENT ON COLUMN user_profile.id IS 'BIGINT 自增主键，对外使用 Base64URL 编码';
 COMMENT ON COLUMN user_profile.login_identity_id IS '逻辑关联 userloginidentity.id，不建立物理外键';
 COMMENT ON COLUMN user_profile.display_name IS '用户展示名称';
-COMMENT ON COLUMN user_profile.avatar_url IS '用户头像 URL';
+COMMENT ON COLUMN user_profile.avatar_url IS '用户当前头像的公开访问 URL；旧头像和临时对象残留由 OSS 生命周期策略处理';
 COMMENT ON COLUMN user_profile.gender IS '性别：0=UNDISCLOSED，1=MALE，2=FEMALE，3=OTHER';
 COMMENT ON COLUMN user_profile.birthday IS '用户生日；年龄由 birthday 动态计算，不直接存储';
 COMMENT ON COLUMN user_profile.bio IS '用户个人简介';

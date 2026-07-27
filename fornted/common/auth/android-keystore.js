@@ -1,6 +1,6 @@
 import {
 	emptySessionCredentials,
-	hasCompleteSessionCredentials
+	hasPersistableAndroidCredentials
 } from './session-credentials.js'
 
 const STORAGE_KEY = 'ait.auth.android-session.v3'
@@ -67,7 +67,7 @@ function decode(value) {
 }
 
 export function saveAndroidSessionCredentials(credentials) {
-	if (!hasCompleteSessionCredentials(credentials)) {
+	if (!hasPersistableAndroidCredentials(credentials)) {
 		clearAndroidSessionCredentials()
 		return
 	}
@@ -80,7 +80,8 @@ export function saveAndroidSessionCredentials(credentials) {
 	const plaintext = JSON.stringify({
 		accessToken: credentials.accessToken,
 		refreshToken: credentials.refreshToken,
-		csrfToken: credentials.csrfToken
+		csrfToken: credentials.csrfToken,
+		preAuthToken: credentials.preAuthToken
 	})
 	const ciphertext = cipher.doFinal(new JavaString(plaintext).getBytes('UTF-8'))
 	uni.setStorageSync(STORAGE_KEY, JSON.stringify({
@@ -110,7 +111,7 @@ export function loadAndroidSessionCredentials() {
 			new GcmParameterSpec(128, decode(payload.iv)))
 		const plaintext = cipher.doFinal(decode(payload.ciphertext))
 		const credentials = JSON.parse(new JavaString(plaintext, 'UTF-8').toString())
-		if (!hasCompleteSessionCredentials(credentials)) {
+		if (!hasPersistableAndroidCredentials(credentials)) {
 			throw new Error('安全会话数据不完整。')
 		}
 		return credentials

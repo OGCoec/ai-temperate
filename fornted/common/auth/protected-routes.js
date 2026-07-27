@@ -2,7 +2,12 @@ export const PUBLIC_ROUTES = Object.freeze([
 	'/pages/launch/session-gate',
 	'/pages/auth/login',
 	'/pages/auth/register',
-	'/pages/auth/password-reset'
+	'/pages/auth/password-reset',
+	'/pages/risk/blocked',
+	'/pages/risk/challenge-complete',
+	'/pages/risk/challenge-failed',
+	'/pages/risk/webrtc-probe',
+	'/pages/risk/webrtc-failed'
 ])
 
 const publicRouteSet = new Set(PUBLIC_ROUTES)

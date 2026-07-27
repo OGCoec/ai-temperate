@@ -11,14 +11,42 @@ function readRootProjectFile(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, '..', '..', '..', relativePath), 'utf8')
 }
 
-test('uses HTTPS endpoints for H5 and Android authentication', () => {
+test('uses same-origin production H5 API while preserving local H5 and Android endpoints', () => {
 	const source = readProjectFile('common/auth/config.js')
 
 	assert.match(source, /let authApiBaseUrl = 'https:\/\/api\.niko000o\.site'/)
 	assert.match(source, /authApiBaseUrl = 'https:\/\/localhost:6655'/)
+	assert.match(source, /h5Hostname === 'niko000o\.site'/)
+	assert.match(source, /authApiBaseUrl = ''/)
 	assert.match(source, /window\.location\.hostname/)
-	assert.doesNotMatch(source, /let authApiBaseUrl = 'https:\/\/niko000o\.site'/)
 	assert.doesNotMatch(source, /http:\/\/(?:127\.0\.0\.1|localhost):6655/)
+})
+
+test('runs cookie-scope migration before ordinary API requests and retries 428 once', () => {
+	const migration = readProjectFile('common/auth/cookie-scope-migration.js')
+	const httpClient = readProjectFile('common/auth/http-client.js')
+	const app = readProjectFile('App.vue')
+
+	assert.match(migration, /\/api\/_edge\/cookie-scope/)
+	assert.match(migration, /X-AIT-Cookie-Scope-Reset/)
+	assert.match(migration, /clearSession\(\)/)
+	assert.match(httpClient, /await ensureCookieScopeMigration\(\)/)
+	assert.match(httpClient, /EDGE_COOKIE_SCOPE_RESET_REQUIRED/)
+	assert.match(httpClient, /migrationRetried/)
+	assert.match(app, /ensureCookieScopeMigration/)
+})
+
+test('ordinary H5 CSP uses self for API connections', () => {
+	const index = readProjectFile('index.html')
+	const connectSource = index.match(/connect-src ([^;]+)/)?.[1]
+	const scriptSource = index.match(/script-src ([^;]+)/)?.[1]
+
+	assert.ok(connectSource, '普通用户页面必须声明 connect-src CSP')
+	assert.ok(scriptSource, '普通用户页面必须声明 script-src CSP')
+	assert.match(connectSource, /'self'/)
+	assert.match(connectSource, /https:\/\/localhost:6655/)
+	assert.doesNotMatch(connectSource, /https:\/\/api\.niko000o\.site/)
+	assert.doesNotMatch(scriptSource, /'unsafe-inline'/)
 })
 
 test('login page eagerly initializes browser CSRF without removing the unsafe-request fallback', () => {
@@ -104,7 +132,7 @@ test('local HTTPS launcher explicitly injects environment into IDE child process
 	assert.match(source, /LOCAL_HTTPS_ENABLED/)
 	assert.match(source, /LOCAL_HTTPS_P12_PATH/)
 	assert.match(source, /SERVER_SSL_KEY_STORE_PASSWORD/)
-	assert.match(source, /AUTH_COOKIE_DOMAIN/)
+	assert.doesNotMatch(source, /AUTH_COOKIE_DOMAIN/)
 	assert.match(source, /api\.niko000o\.site/)
 	assert.match(originList, /"https:\/\/dev\.niko000o\.site"/)
 	assert.match(hostnameList, /"dev\.niko000o\.site"/)

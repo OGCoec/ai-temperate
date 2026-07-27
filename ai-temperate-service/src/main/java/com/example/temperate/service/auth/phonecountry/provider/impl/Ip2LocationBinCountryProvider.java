@@ -1,12 +1,15 @@
 package com.example.temperate.service.auth.phonecountry.provider.impl;
 
 import com.example.temperate.service.auth.phonecountry.provider.IpCountryProvider;
+import com.example.temperate.service.risk.ipintel.local.LocalIpGeoProvider;
+import com.example.temperate.service.risk.ipintel.local.LocalIpGeoResult;
 import com.ip2location.IP2Location;
 import com.ip2location.IPResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -21,7 +24,8 @@ import org.slf4j.LoggerFactory;
  * <p>BIN 缺失、初始化失败和查询异常均 Fail Open 返回空值，以免地理库故障阻断认证；生命周期和查询分别
  * 使用锁保护，避免关闭客户端与并发 IP 查询交叉执行。</p>
  */
-public final class Ip2LocationBinCountryProvider implements IpCountryProvider {
+public final class Ip2LocationBinCountryProvider
+        implements IpCountryProvider, LocalIpGeoProvider {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Ip2LocationBinCountryProvider.class);
 
@@ -78,6 +82,11 @@ public final class Ip2LocationBinCountryProvider implements IpCountryProvider {
 
     @Override
     public Optional<String> findCountryIso2(String canonicalClientIp) {
+        return findGeo(canonicalClientIp).map(LocalIpGeoResult::countryCode);
+    }
+
+    @Override
+    public Optional<LocalIpGeoResult> findGeo(String canonicalClientIp) {
         if (!enabled || canonicalClientIp == null || canonicalClientIp.isBlank()) {
             unavailableCounter.increment();
             return Optional.empty();
@@ -100,10 +109,15 @@ public final class Ip2LocationBinCountryProvider implements IpCountryProvider {
             Optional<String> countryIso2 = normalizeCountryIso2(result.getCountryShort());
             if (countryIso2.isPresent()) {
                 resolvedCounter.increment();
+                return Optional.of(new LocalIpGeoResult(
+                        countryIso2.orElseThrow(),
+                        null,
+                        finiteCoordinate(result.getLatitude(), -90D, 90D),
+                        finiteCoordinate(result.getLongitude(), -180D, 180D)));
             } else {
                 notFoundCounter.increment();
             }
-            return countryIso2;
+            return Optional.empty();
         } catch (Exception exception) {
             errorCounter.increment();
             return Optional.empty();
@@ -165,6 +179,12 @@ public final class Ip2LocationBinCountryProvider implements IpCountryProvider {
 
     private static String safeText(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static BigDecimal finiteCoordinate(double value, double minimum, double maximum) {
+        return Double.isFinite(value) && value >= minimum && value <= maximum
+                ? BigDecimal.valueOf(value)
+                : null;
     }
 
     private static String exceptionType(Exception exception) {

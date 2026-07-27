@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import reactor.core.publisher.Mono;
 
 /**
  * 验证注册流程 token 的平台传输分流，以及受保护联系方式的响应与禁缓存契约。
@@ -147,18 +148,23 @@ class RegistrationControllerTokenTransportTest {
 
     @Test
     void turnstileReturnsVerifiedContactsAndDisablesCaching() {
-        when(service.verifyTurnstile(any())).thenReturn(statusResult(true));
+        when(service.verifyTurnstile(any()))
+                .thenReturn(Mono.just(statusResult(true)));
         MockHttpServletResponse servletResponse = new MockHttpServletResponse();
 
-        RegistrationController.RegistrationStatusResponse response = controller.turnstile(
-                new RegistrationController.TurnstileRequest("turnstile-token"),
-                "register-token",
-                "register-csrf",
-                "challenge-handle",
-                "device-1",
-                "ANDROID",
-                new MockHttpServletRequest(),
-                servletResponse);
+        RegistrationController.RegistrationStatusResponse response =
+                controller.turnstile(
+                                new RegistrationController.TurnstileRequest(
+                                        "turnstile-token"),
+                                "register-token",
+                                "register-csrf",
+                                "challenge-handle",
+                                "device-1",
+                                "ANDROID",
+                                new MockHttpServletRequest(),
+                                servletResponse)
+                        .toFuture()
+                        .join();
 
         assertVerifiedContactsAndNoStore(response, servletResponse);
     }

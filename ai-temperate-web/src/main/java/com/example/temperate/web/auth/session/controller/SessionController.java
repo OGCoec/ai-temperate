@@ -8,9 +8,19 @@ import com.example.temperate.service.auth.session.authentication.domain.SessionP
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
+import com.example.temperate.service.risk.config.NetworkRiskMode;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.example.temperate.web.auth.api.WebInvalidInputException;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.service.risk.domain.RiskScope;
+import com.example.temperate.service.risk.domain.RiskSessionType;
+import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
+import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -48,12 +58,21 @@ public final class SessionController {
 
     private final SessionAuthenticationService sessionService;
     private final AuthCookieWriter cookieWriter;
+    private final PreAuthService preAuthService;
+    private final PreAuthTransport preAuthTransport;
+    private final NetworkRiskProperties networkRiskProperties;
 
     public SessionController(
             SessionAuthenticationService sessionService,
-            AuthCookieWriter cookieWriter) {
+            AuthCookieWriter cookieWriter,
+            PreAuthService preAuthService,
+            PreAuthTransport preAuthTransport,
+            NetworkRiskProperties networkRiskProperties) {
         this.sessionService = sessionService;
         this.cookieWriter = cookieWriter;
+        this.preAuthService = preAuthService;
+        this.preAuthTransport = preAuthTransport;
+        this.networkRiskProperties = networkRiskProperties;
     }
 
     @PostMapping("/refresh")
@@ -71,12 +90,15 @@ public final class SessionController {
             HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         String refreshToken = refreshToken(platform, body, request);
-        SessionAuthenticationResult result = sessionService.authenticate(
-                new SessionAuthenticationCommand(
-                        accessToken(platform, request),
-                        refreshToken,
-                        csrfToken,
-                        deviceId));
+        SessionAuthenticationCommand command = new SessionAuthenticationCommand(
+                accessToken(platform, request),
+                refreshToken,
+                csrfToken,
+                deviceId);
+        PreAuthSessionBinding binding = userPreAuthBinding(request, refreshToken);
+        SessionAuthenticationResult result = binding == null
+                ? sessionService.authenticate(command)
+                : sessionService.authenticate(command, binding);
         if (platform == AuthClientPlatform.H5) {
             // H5 刷新仅通过 Set-Cookie 返回凭据，JSON 响应不携带 AT/RT/CSRF。
             cookieWriter.writeSession(
@@ -101,13 +123,16 @@ public final class SessionController {
             HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         if (platform != AuthClientPlatform.H5) {
-            throw new IllegalArgumentException("会话恢复接口仅支持 H5 客户端");
+            throw new WebInvalidInputException();
         }
         // bootstrap 只允许 H5：它依赖浏览器携带 SameSite RT Cookie，并由安全拦截器校验来源。
         String refreshToken = refreshToken(platform, body, request);
-        SessionAuthenticationResult result = sessionService.bootstrap(
-                new SessionBootstrapCommand(
-                        accessToken(platform, request), refreshToken, deviceId));
+        SessionBootstrapCommand command = new SessionBootstrapCommand(
+                accessToken(platform, request), refreshToken, deviceId);
+        PreAuthSessionBinding binding = userPreAuthBinding(request, refreshToken);
+        SessionAuthenticationResult result = binding == null
+                ? sessionService.bootstrap(command)
+                : sessionService.bootstrap(command, binding);
         cookieWriter.writeSession(
                 response,
                 result.getAccessToken(),
@@ -131,6 +156,9 @@ public final class SessionController {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         String refreshToken = refreshToken(platform, body, request);
         sessionService.logout(new LogoutCommand(refreshToken, csrfToken, deviceId));
+        preAuthService.revoke(
+                RiskScope.USER,
+                preAuthTransport.read(request, RiskScope.USER));
         if (platform == AuthClientPlatform.H5) {
             cookieWriter.clearSession(response);
         }
@@ -152,6 +180,9 @@ public final class SessionController {
             HttpServletResponse response) {
         SessionPrincipal principal = currentPrincipal(request);
         sessionService.logoutAllForUser(principal.userId());
+        preAuthService.revoke(
+                RiskScope.USER,
+                preAuthTransport.read(request, RiskScope.USER));
         if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
             cookieWriter.clearSession(response);
         }
@@ -219,6 +250,33 @@ public final class SessionController {
                 SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED,
                 "Access token is required.",
                 true);
+    }
+
+    private PreAuthSessionBinding userPreAuthBinding(
+            HttpServletRequest request,
+            String rawRefreshToken) {
+        Object value = request.getAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
+        if (!(value instanceof PreAuthAccess access)) {
+            // NETWORK_RISK_MODE=DISABLED 时没有 PreAuth 上下文，保留本地开发的原有会话路径。
+            return null;
+        }
+        try {
+            return preAuthService.requireSessionBinding(
+                    access,
+                    RiskScope.USER,
+                    RiskSessionType.USER_REFRESH,
+                    rawRefreshToken);
+        } catch (IllegalArgumentException exception) {
+            if (networkRiskProperties.mode() == NetworkRiskMode.OBSERVE) {
+                return null;
+            }
+            throw new SessionAuthenticationException(
+                    SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
+                    "Authenticated PreAuth is no longer bound to this session.",
+                    false,
+                    exception);
+        }
     }
 
     public record SessionRequest(String refreshToken) {

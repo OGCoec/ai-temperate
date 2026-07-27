@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelCapabilityMapper">
+
+    <resultMap id="AiModelCapabilityResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelCapability">
+        <id property="id" column="id"/>
+        <result property="aiModelId" column="ai_model_id"/>
+        <result property="capabilityCode" column="capability_code"
+                javaType="com.example.temperate.model.ai.enums.AiModelCapabilityCode"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <insert id="insertBatch">
+        INSERT INTO ai_model_capability (
+            id,
+            ai_model_id,
+            capability_code
+        )
+        VALUES
+        <foreach collection="capabilities" item="capability" separator=",">
+            (
+                #{capability.id,jdbcType=BIGINT},
+                #{capability.aiModelId,jdbcType=BIGINT},
+                #{capability.capabilityCode,jdbcType=VARCHAR}
+            )
+        </foreach>
+    </insert>
+
+    <delete id="deleteByAiModelId">
+        DELETE FROM ai_model_capability
+        WHERE ai_model_id = #{aiModelId,jdbcType=BIGINT}
+    </delete>
+
+    <select id="findByAiModelId" resultMap="AiModelCapabilityResultMap">
+        SELECT
+            id,
+            ai_model_id,
+            capability_code,
+            created_at,
+            updated_at
+        FROM ai_model_capability
+        WHERE ai_model_id = #{aiModelId,jdbcType=BIGINT}
+        ORDER BY capability_code
+    </select>
+
+    <select id="findByAiModelIds" resultMap="AiModelCapabilityResultMap">
+        SELECT
+            id,
+            ai_model_id,
+            capability_code,
+            created_at,
+            updated_at
+        FROM ai_model_capability
+        WHERE ai_model_id IN
+        <foreach collection="aiModelIds" item="aiModelId" open="(" separator="," close=")">
+            #{aiModelId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY ai_model_id, capability_code
+    </select>
+</mapper>

@@ -41,7 +41,10 @@ import com.example.temperate.service.registration.flow.security.RegistrationAcce
 import com.example.temperate.service.registration.flow.security.RegistrationTokenProtector;
 import com.example.temperate.service.registration.flow.store.RegistrationFlowStore;
 import com.example.temperate.service.registration.service.lifecycle.RegistrationService;
-import com.example.temperate.service.registration.service.turnstile.TurnstileVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationCommand;
+import com.example.temperate.service.humanverification.HumanVerificationService;
+import com.example.temperate.service.humanverification.HumanVerificationServiceRegistry;
+import com.example.temperate.service.humanverification.HumanVerificationType;
 import com.example.temperate.service.registration.verification.delivery.coordinator.VerificationDeliveryCoordinator;
 import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryRequest;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
@@ -65,6 +68,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 注册生命周期的业务编排实现。
@@ -96,7 +101,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final VerificationDeliveryCoordinator deliveryCoordinator;
     private final SixDigitVerificationCodeServiceRegistry verificationCodeServiceRegistry;
     private final VerificationProviderResolver verificationProviderResolver;
-    private final TurnstileVerificationService turnstileVerificationService;
+    private final HumanVerificationServiceRegistry humanVerificationServices;
     private final PasswordEncoder passwordEncoder;
     private final RegistrationIdGenerator idGenerator;
     private final PublicIdCodec publicIdCodec;
@@ -118,7 +123,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             VerificationDeliveryCoordinator deliveryCoordinator,
             SixDigitVerificationCodeServiceRegistry verificationCodeServiceRegistry,
             VerificationProviderResolver verificationProviderResolver,
-            TurnstileVerificationService turnstileVerificationService,
+            HumanVerificationServiceRegistry humanVerificationServices,
             PasswordEncoder passwordEncoder,
             RegistrationIdGenerator idGenerator,
             PublicIdCodec publicIdCodec,
@@ -140,7 +145,7 @@ public class RegistrationServiceImpl implements RegistrationService {
                 Objects.requireNonNull(verificationCodeServiceRegistry);
         this.verificationProviderResolver =
                 Objects.requireNonNull(verificationProviderResolver);
-        this.turnstileVerificationService = Objects.requireNonNull(turnstileVerificationService);
+        this.humanVerificationServices = Objects.requireNonNull(humanVerificationServices);
         this.passwordEncoder = Objects.requireNonNull(passwordEncoder);
         this.idGenerator = Objects.requireNonNull(idGenerator);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
@@ -206,114 +211,160 @@ public class RegistrationServiceImpl implements RegistrationService {
     }
 
     @Override
-    public RegistrationStatusResult verifyTurnstile(RegistrationTurnstileCommand command) {
-        long startedNanos = System.nanoTime();
-        Objects.requireNonNull(command, "command must not be null");
-        // 必须先确认当前浏览器流程仍有效，再调用 Cloudflare，最后原子消费 challenge 并落入已验证状态；
-        // 调换顺序会造成过期流程消耗一次性 Token，或供应商已成功但本地状态无法确认的不可恢复窗口。
-        long stageStartedNanos = startedNanos;
-        ProtectedRegistrationAccess access;
-        HmacIdentifier turnstileTokenId = null;
-        HmacIdentifier clientIpId = null;
-        try {
-            access = tokenProtector.protect(command.access());
-        } catch (RegistrationException exception) {
-            throw recordTurnstileFailure(
-                    "protect_access",
-                    null,
-                    null,
-                    null,
-                    diagnosed(exception, RegistrationDiagnosticCode.FLOW_ACCESS_REJECTED),
-                    startedNanos,
-                    stageStartedNanos);
-        }
-        long accessProtectedNanos = System.nanoTime();
-        stageStartedNanos = accessProtectedNanos;
-        String canonicalIp = command.access().canonicalIp();
-        if (canonicalIp != null && !canonicalIp.isBlank()) {
-            clientIpId = tokenProtector.clientIpDiagnosticDigest(canonicalIp);
-        }
-        try {
-            turnstileTokenId = tokenProtector.turnstileResponseDigest(command.responseToken());
-        } catch (RegistrationException exception) {
-            throw recordTurnstileFailure(
-                    "protect_token",
-                    access,
-                    null,
-                    clientIpId,
-                    diagnosed(exception, RegistrationDiagnosticCode.INPUT_INVALID),
-                    startedNanos,
-                    stageStartedNanos);
-        }
-        long tokenProtectedNanos = System.nanoTime();
-        stageStartedNanos = tokenProtectedNanos;
-        try {
-            flowStore.getRequired(access, clock.instant());
-        } catch (RegistrationException exception) {
-            throw recordTurnstileFailure(
-                    "load_flow",
-                    access,
-                    turnstileTokenId,
-                    clientIpId,
-                    diagnosed(exception, flowLookupDiagnostic(exception.code())),
-                    startedNanos,
-                    stageStartedNanos);
-        }
-        long flowLoadedNanos = System.nanoTime();
-        stageStartedNanos = flowLoadedNanos;
-        try {
-            turnstileVerificationService.verify(
-                    command.responseToken(),
-                    command.access().canonicalIp(),
-                    command.access().challengeHandle());
-        } catch (RegistrationException exception) {
-            throw recordTurnstileFailure(
-                    "siteverify",
-                    access,
-                    turnstileTokenId,
-                    clientIpId,
-                    exception,
-                    startedNanos,
-                    stageStartedNanos);
-        }
-        long siteverifyCompletedNanos = System.nanoTime();
-        stageStartedNanos = siteverifyCompletedNanos;
-        try {
-            RegistrationStatusResult result = toStatus(
-                    flowStore.markHumanVerified(access, clock.instant()));
-            long finalizedNanos = System.nanoTime();
-            LOGGER.info(
-                    "registration_turnstile_completed traceId={} tokenId={} clientIpId={} "
-                            + "flowId={} challengeId={} accessProtectMs={} tokenProtectMs={} "
-                            + "flowLookupMs={} siteverifyMs={} redisFinalizeMs={} elapsedMs={} "
-                            + "humanVerified={}",
-                    traceId(),
-                    fingerprint(turnstileTokenId),
-                    clientIpId == null ? "absent" : fingerprint(clientIpId),
-                    fingerprint(access.flowId()),
-                    fingerprint(access.challengeId()),
-                    elapsedMillis(startedNanos, accessProtectedNanos),
-                    elapsedMillis(accessProtectedNanos, tokenProtectedNanos),
-                    elapsedMillis(tokenProtectedNanos, flowLoadedNanos),
-                    elapsedMillis(flowLoadedNanos, siteverifyCompletedNanos),
-                    elapsedMillis(siteverifyCompletedNanos, finalizedNanos),
-                    elapsedMillis(startedNanos),
-                    result.humanVerified());
-            return result;
-        } catch (RegistrationException exception) {
-            RegistrationDiagnosticCode diagnosticCode =
-                    exception.code() == RegistrationErrorCode.TURNSTILE_REJECTED
-                            ? RegistrationDiagnosticCode.CHALLENGE_ALREADY_CONSUMED
-                            : flowFinalizeDiagnostic(exception.code());
-            throw recordTurnstileFailure(
-                    "finalize_redis",
-                    access,
-                    turnstileTokenId,
-                    clientIpId,
-                    diagnosed(exception, diagnosticCode),
-                    startedNanos,
-                    stageStartedNanos);
-        }
+    public Mono<RegistrationStatusResult> verifyTurnstile(
+            RegistrationTurnstileCommand command) {
+        // 整条链保持惰性：流程材料保护、Redis 读取和 Cloudflare 请求都只在订阅后发生。
+        return Mono.defer(() -> {
+            long startedNanos = System.nanoTime();
+            String requestTraceId = traceId();
+            Objects.requireNonNull(command, "command must not be null");
+            // 必须先确认当前浏览器流程仍有效，再调用 Cloudflare，最后原子消费 challenge 并落入已验证状态；
+            // 调换顺序会造成过期流程消耗一次性 Token，或供应商已成功但本地状态无法确认的不可恢复窗口。
+            ProtectedRegistrationAccess access;
+            try {
+                access = tokenProtector.protect(command.access());
+            } catch (RegistrationException exception) {
+                throw recordTurnstileFailure(
+                        "protect_access",
+                        null,
+                        null,
+                        null,
+                        diagnosed(exception, RegistrationDiagnosticCode.FLOW_ACCESS_REJECTED),
+                        requestTraceId,
+                        startedNanos,
+                        startedNanos);
+            }
+            long accessProtectedNanos = System.nanoTime();
+            String canonicalIp = command.access().canonicalIp();
+            HmacIdentifier clientIpId =
+                    canonicalIp == null || canonicalIp.isBlank()
+                            ? null
+                            : tokenProtector.clientIpDiagnosticDigest(canonicalIp);
+            HmacIdentifier turnstileTokenId;
+            try {
+                turnstileTokenId =
+                        tokenProtector.turnstileResponseDigest(command.responseToken());
+            } catch (RegistrationException exception) {
+                throw recordTurnstileFailure(
+                        "protect_token",
+                        access,
+                        null,
+                        clientIpId,
+                        diagnosed(exception, RegistrationDiagnosticCode.INPUT_INVALID),
+                        requestTraceId,
+                        startedNanos,
+                        accessProtectedNanos);
+            }
+            long tokenProtectedNanos = System.nanoTime();
+
+            // StringRedisTemplate 是阻塞客户端，读取和 Lua 原子标记必须离开 WebClient 事件循环。
+            Mono<Void> loadFlow = Mono.fromCallable(
+                            () -> flowStore.getRequired(access, clock.instant()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then()
+                    .onErrorMap(
+                            RegistrationException.class,
+                            exception -> recordTurnstileFailure(
+                                    "load_flow",
+                                    access,
+                                    turnstileTokenId,
+                                    clientIpId,
+                                    diagnosed(
+                                            exception,
+                                            flowLookupDiagnostic(exception.code())),
+                                    requestTraceId,
+                                    startedNanos,
+                                    tokenProtectedNanos));
+
+            return loadFlow.then(Mono.defer(() -> {
+                long flowLoadedNanos = System.nanoTime();
+                HumanVerificationService turnstile =
+                        humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE);
+                Mono<Void> siteverify = Mono.defer(
+                                () -> turnstile.verify(HumanVerificationCommand.turnstile(
+                                        command.responseToken(),
+                                        canonicalIp,
+                                        command.access().challengeHandle(),
+                                        "register")))
+                        .contextWrite(context -> context.put(
+                                HumanVerificationService.TRACE_ID_CONTEXT_KEY,
+                                requestTraceId))
+                        .onErrorMap(
+                                RegistrationException.class,
+                                exception -> recordTurnstileFailure(
+                                        "siteverify",
+                                        access,
+                                        turnstileTokenId,
+                                        clientIpId,
+                                        exception,
+                                        requestTraceId,
+                                        startedNanos,
+                                        flowLoadedNanos));
+
+                return siteverify.then(Mono.defer(() -> {
+                    long siteverifyCompletedNanos = System.nanoTime();
+                    return Mono.fromCallable(() -> toStatus(
+                                    flowStore.markHumanVerified(
+                                            access, clock.instant())))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .doOnSuccess(result -> {
+                                long finalizedNanos = System.nanoTime();
+                                LOGGER.info(
+                                        "registration_turnstile_completed traceId={} "
+                                                + "tokenId={} clientIpId={} flowId={} "
+                                                + "challengeId={} accessProtectMs={} "
+                                                + "tokenProtectMs={} flowLookupMs={} "
+                                                + "siteverifyMs={} redisFinalizeMs={} "
+                                                + "elapsedMs={} humanVerified={}",
+                                        requestTraceId,
+                                        fingerprint(turnstileTokenId),
+                                        clientIpId == null
+                                                ? "absent"
+                                                : fingerprint(clientIpId),
+                                        fingerprint(access.flowId()),
+                                        fingerprint(access.challengeId()),
+                                        elapsedMillis(
+                                                startedNanos,
+                                                accessProtectedNanos),
+                                        elapsedMillis(
+                                                accessProtectedNanos,
+                                                tokenProtectedNanos),
+                                        elapsedMillis(
+                                                tokenProtectedNanos,
+                                                flowLoadedNanos),
+                                        elapsedMillis(
+                                                flowLoadedNanos,
+                                                siteverifyCompletedNanos),
+                                        elapsedMillis(
+                                                siteverifyCompletedNanos,
+                                                finalizedNanos),
+                                        elapsedMillis(startedNanos),
+                                        result.humanVerified());
+                            })
+                            .onErrorMap(
+                                    RegistrationException.class,
+                                    exception -> {
+                                        RegistrationDiagnosticCode diagnosticCode =
+                                                exception.code()
+                                                                == RegistrationErrorCode
+                                                                        .TURNSTILE_REJECTED
+                                                        ? RegistrationDiagnosticCode
+                                                                .CHALLENGE_ALREADY_CONSUMED
+                                                        : flowFinalizeDiagnostic(
+                                                                exception.code());
+                                        return recordTurnstileFailure(
+                                                "finalize_redis",
+                                                access,
+                                                turnstileTokenId,
+                                                clientIpId,
+                                                diagnosed(exception, diagnosticCode),
+                                                requestTraceId,
+                                                startedNanos,
+                                                siteverifyCompletedNanos);
+                                    });
+                }));
+            }));
+        });
     }
 
     @Override
@@ -532,13 +583,14 @@ public class RegistrationServiceImpl implements RegistrationService {
             HmacIdentifier turnstileTokenId,
             HmacIdentifier clientIpId,
             RegistrationException exception,
+            String requestTraceId,
             long startedNanos,
             long stageStartedNanos) {
         LOGGER.warn(
                 "registration_turnstile_stage_failed traceId={} stage={} diagnosticCode={} "
                         + "businessCode={} tokenId={} clientIpId={} flowId={} challengeId={} "
                         + "stageElapsedMs={} elapsedMs={}",
-                traceId(),
+                requestTraceId,
                 stage,
                 exception.diagnosticCode().map(Enum::name).orElse("absent"),
                 exception.code(),

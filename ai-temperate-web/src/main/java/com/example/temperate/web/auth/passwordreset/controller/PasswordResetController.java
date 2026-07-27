@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
 
 /**
  * 密码找回与重置流程的 HTTP 接口控制器。
@@ -86,17 +87,23 @@ public final class PasswordResetController {
 
     @PostMapping("/turnstile")
     @Operation(summary = "服务端校验找回密码流程的 Cloudflare Turnstile")
-    public AcceptedResponse verifyTurnstile(
+    public Mono<AcceptedResponse> verifyTurnstile(
             @Valid @RequestBody TurnstileRequest body,
             @RequestHeader(value = FLOW_TOKEN_HEADER, required = false) String flowToken,
             @RequestHeader(CHALLENGE_HEADER) String challenge,
             @RequestHeader(DEVICE_HEADER) String deviceId,
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
             HttpServletRequest request) {
-        passwordResetService.verifyTurnstile(
-                access(flowToken, challenge, deviceId, platformHeader, request),
-                body.turnstileToken());
-        return new AcceptedResponse(true, "人机验证已通过，可以手动发送验证码。");
+        return passwordResetService.verifyTurnstile(
+                        access(
+                                flowToken,
+                                challenge,
+                                deviceId,
+                                platformHeader,
+                                request),
+                        body.turnstileToken())
+                .thenReturn(new AcceptedResponse(
+                        true, "人机验证已通过，可以手动发送验证码。"));
     }
 
     @PostMapping("/send")

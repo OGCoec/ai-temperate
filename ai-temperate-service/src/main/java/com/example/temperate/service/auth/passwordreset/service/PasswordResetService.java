@@ -5,6 +5,7 @@ import com.example.temperate.service.auth.passwordreset.dto.PasswordResetAccess;
 import com.example.temperate.service.auth.passwordreset.dto.PasswordResetStartCommand;
 import com.example.temperate.service.auth.passwordreset.dto.PasswordResetStartResult;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
+import reactor.core.publisher.Mono;
 
 /**
  * 定义密码重置流程的启动、人机验证、验证码验证和提交新密码业务边界。
@@ -13,7 +14,7 @@ public interface PasswordResetService {
 
     PasswordResetStartResult start(PasswordResetStartCommand command);
 
-    void verifyTurnstile(PasswordResetAccess access, String turnstileToken);
+    Mono<Void> verifyTurnstile(PasswordResetAccess access, String turnstileToken);
 
     void sendCode(PasswordResetAccess access);
 

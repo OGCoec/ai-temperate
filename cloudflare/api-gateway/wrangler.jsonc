@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-temperate-api-gateway",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-24",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "niko000o.site/api/*",
+      "zone_name": "niko000o.site"
+    },
+    {
+      "pattern": "admin.niko000o.site/api/*",
+      "zone_name": "niko000o.site"
+    }
+  ],
+  "vars": {
+    "API_UPSTREAM_ORIGIN": "https://api.niko000o.site"
+  }
+}

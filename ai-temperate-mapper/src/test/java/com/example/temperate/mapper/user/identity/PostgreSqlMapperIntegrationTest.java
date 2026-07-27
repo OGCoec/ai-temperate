@@ -392,7 +392,9 @@ class PostgreSqlMapperIntegrationTest {
                 "sql/001_create_users.sql",
                 "sql/002_create_user_profile.sql",
                 "sql/003_create_ai_model.sql",
-                "sql/005_create_user_membership_quota.sql");
+                "sql/004_create_ai_model_capability.sql",
+                "sql/005_create_user_membership_quota.sql",
+                "sql/006_create_ai_model_icon.sql");
         try (Connection connection = openConnection();
                 Statement statement = connection.createStatement()) {
             for (String migration : migrations) {
@@ -415,7 +417,11 @@ class PostgreSqlMapperIntegrationTest {
         Configuration configuration = new Configuration(environment);
         parseMapper(configuration, "mapper/user/identity/UserLoginIdentityMapper.xml");
         parseMapper(configuration, "mapper/user/profile/UserProfileMapper.xml");
+        parseMapper(configuration, "mapper/user/avatar/UserAvatarMapper.xml");
         parseMapper(configuration, "mapper/user/membership/UserMembershipQuotaMapper.xml");
+        parseMapper(configuration, "mapper/ai/AiModelMapper.xml");
+        parseMapper(configuration, "mapper/ai/AiModelCapabilityMapper.xml");
+        parseMapper(configuration, "mapper/ai/AiModelIconMapper.xml");
         return new SqlSessionFactoryBuilder().build(configuration);
     }
 

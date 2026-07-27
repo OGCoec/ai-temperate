@@ -9,9 +9,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.temperate.mapper.ai.AiModelCapabilityMapper;
+import com.example.temperate.mapper.ai.AiModelIconMapper;
+import com.example.temperate.mapper.ai.AiModelMapper;
+import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
+import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import jakarta.servlet.http.Cookie;
@@ -51,6 +56,9 @@ class AiTemperateApplicationTest {
     @Autowired
     private AuthSecurityProperties securityProperties;
 
+    @Autowired
+    private AdminProperties adminProperties;
+
     @MockitoBean
     private StringRedisTemplate stringRedisTemplate;
 
@@ -62,6 +70,18 @@ class AiTemperateApplicationTest {
 
     @MockitoBean
     private UserMembershipQuotaMapper userMembershipQuotaMapper;
+
+    @MockitoBean
+    private AiModelMapper aiModelMapper;
+
+    @MockitoBean
+    private AiModelCapabilityMapper aiModelCapabilityMapper;
+
+    @MockitoBean
+    private AiModelIconMapper aiModelIconMapper;
+
+    @MockitoBean
+    private UserAvatarMapper userAvatarMapper;
 
     @MockitoBean
     private VerificationDeliveryPublisher verificationDeliveryPublisher;
@@ -79,6 +99,8 @@ class AiTemperateApplicationTest {
         assertThat(securityProperties.env()).isEqualTo(AuthSecurityProperties.Env.TEST);
         assertThat(securityProperties.cors().allowedOrigins())
                 .containsExactly("http://localhost:5173");
+        assertThat(adminProperties.cookies().domain()).isEmpty();
+        assertThat(adminProperties.cookies().csrfDomain()).isEmpty();
         assertThat(applicationContext.getBeansOfType(PasswordEncoder.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(Clock.class))
                 .containsOnlyKeys("applicationClock");
