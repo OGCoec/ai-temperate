@@ -2,7 +2,6 @@
 	<view class="model-form" :aria-busy="busy">
 		<view class="form-section">
 			<view class="section-heading">
-				<text class="section-index">01</text>
 				<view>
 					<text class="section-title">模型身份</text>
 					<text class="section-copy">名称与厂商会由后端统一去空白并转换为小写。</text>
@@ -65,7 +64,6 @@
 
 		<view class="form-section">
 			<view class="section-heading">
-				<text class="section-index">02</text>
 				<view>
 					<text class="section-title">计费倍率</text>
 					<text class="section-copy">输入和输出倍率独立保存，最多保留八位小数。</text>
@@ -113,7 +111,6 @@
 
 		<view class="form-section">
 			<view class="section-heading">
-				<text class="section-index">03</text>
 				<view>
 					<text class="section-title">能力矩阵</text>
 					<text class="section-copy">至少选择一项；编辑时提交会整组替换能力集合。</text>
@@ -149,91 +146,99 @@
 			</text>
 		</view>
 
-		<view class="form-section">
-			<view class="section-heading">
-				<text class="section-index">04</text>
+		<view class="form-section advanced-section">
+			<button
+				class="advanced-toggle"
+				type="button"
+				:aria-expanded="advancedOpen ? 'true' : 'false'"
+				aria-controls="model-advanced-fields"
+				@click="advancedOpen = !advancedOpen"
+			>
 				<view>
 					<text class="section-title">展示元数据</text>
 					<text class="section-copy">标签用于管理端辨识；图标从独立资源库选择，可被多个模型复用。</text>
 				</view>
-			</view>
-			<view class="field-block">
-				<text class="field-label">标签</text>
-				<textarea
-					class="field-control compact-textarea"
-					:value="modelValue.tagsText"
-					:disabled="readonly || busy"
-					:aria-invalid="Boolean(errors.tagsText)"
-					:aria-describedby="errors.tagsText ? 'model-tags-error' : undefined"
-					aria-label="模型标签"
-					placeholder="使用逗号或换行分隔，例如 chat, reasoning"
-					@input="updateField('tagsText', $event.detail.value)"
-				/>
-				<text v-if="errors.tagsText" id="model-tags-error" class="field-error" role="alert">{{ errors.tagsText }}</text>
-				<text v-else class="field-help">最多 20 个标签，每个标签不超过 64 个字符。</text>
-			</view>
-			<view class="field-block">
-				<view class="icon-field-heading">
-					<view>
-						<text class="field-label">模型图标</text>
-						<text class="field-help">这里只保存图标公共 ID，展示 URL 由后端关联查询。</text>
-					</view>
-					<button class="manage-icons" type="button" :disabled="busy" @click="$emit('manage-icons')">管理图标库</button>
-				</view>
-				<view v-if="selectedIcon" class="selected-icon">
-					<image class="icon-preview" :src="selectedIcon.iconUrl" mode="aspectFit" :alt="selectedIcon.iconName" />
-					<view>
-						<text class="icon-name">{{ selectedIcon.iconName }}</text>
-						<text class="icon-description">{{ selectedIcon.description || '暂无描述' }}</text>
-					</view>
-				</view>
-				<template v-if="!readonly">
-					<input
-						class="field-control icon-search"
-						type="search"
-						:value="iconSearch"
-						:disabled="busy || iconLoading"
-						aria-label="筛选模型图标"
-						maxlength="128"
-						placeholder="按名称或描述筛选图标"
-						@input="iconSearch = $event.detail.value"
+				<text class="advanced-chevron" aria-hidden="true">{{ advancedOpen ? '−' : '+' }}</text>
+			</button>
+			<view v-if="advancedOpen" id="model-advanced-fields" class="advanced-content">
+				<view class="field-block">
+					<text class="field-label">标签</text>
+					<textarea
+						class="field-control compact-textarea"
+						:value="modelValue.tagsText"
+						:disabled="readonly || busy"
+						:aria-invalid="Boolean(errors.tagsText)"
+						:aria-describedby="errors.tagsText ? 'model-tags-error' : undefined"
+						aria-label="模型标签"
+						placeholder="使用逗号或换行分隔，例如 chat, reasoning"
+						@input="updateField('tagsText', $event.detail.value)"
 					/>
-					<view class="icon-options" role="radiogroup" aria-label="可选模型图标">
-						<button
-							class="icon-option no-icon-option"
-							:class="{ selected: !modelValue.iconPublicId }"
-							type="button"
-							:disabled="busy || iconLoading"
-							:aria-pressed="!modelValue.iconPublicId"
-							@click="selectIcon(null)"
-						>
-							<view class="empty-icon" aria-hidden="true">—</view>
-							<view>
-								<text class="icon-name">不使用图标</text>
-								<text class="icon-description">清除当前模型的图标关联</text>
-							</view>
-						</button>
-						<button
-							v-for="icon in filteredIconOptions"
-							:key="icon.publicId"
-							class="icon-option"
-							:class="{ selected: modelValue.iconPublicId === icon.publicId }"
-							type="button"
-							:disabled="busy || iconLoading"
-							:aria-pressed="modelValue.iconPublicId === icon.publicId"
-							@click="selectIcon(icon)"
-						>
-							<image class="icon-preview" :src="icon.iconUrl" mode="aspectFit" :alt="icon.iconName" />
-							<view>
-								<text class="icon-name">{{ icon.iconName }}</text>
-								<text class="icon-description">{{ icon.description || '暂无描述' }}</text>
-							</view>
-						</button>
+					<text v-if="errors.tagsText" id="model-tags-error" class="field-error" role="alert">{{ errors.tagsText }}</text>
+					<text v-else class="field-help">最多 20 个标签，每个标签不超过 64 个字符。</text>
+				</view>
+				<view class="field-block">
+					<view class="icon-field-heading">
+						<view>
+							<text class="field-label">模型图标</text>
+							<text class="field-help">这里只保存图标公共 ID，展示 URL 由后端关联查询。</text>
+						</view>
+						<button class="manage-icons" type="button" :disabled="busy" @click="$emit('manage-icons')">管理图标库</button>
 					</view>
-					<text v-if="iconLoading" class="field-help">正在加载图标资源…</text>
-					<text v-else-if="!filteredIconOptions.length" class="field-help">没有匹配的图标，可先进入图标库新增。</text>
-				</template>
-				<text v-if="errors.iconPublicId" id="model-icon-error" class="field-error" role="alert">{{ errors.iconPublicId }}</text>
+					<view v-if="selectedIcon" class="selected-icon">
+						<image class="icon-preview" :src="selectedIcon.iconUrl" mode="aspectFit" :alt="selectedIcon.iconName" />
+						<view>
+							<text class="icon-name">{{ selectedIcon.iconName }}</text>
+							<text class="icon-description">{{ selectedIcon.description || '暂无描述' }}</text>
+						</view>
+					</view>
+					<template v-if="!readonly">
+						<input
+							class="field-control icon-search"
+							type="search"
+							:value="iconSearch"
+							:disabled="busy || iconLoading"
+							aria-label="筛选模型图标"
+							maxlength="128"
+							placeholder="按名称或描述筛选图标"
+							@input="iconSearch = $event.detail.value"
+						/>
+						<view class="icon-options" role="radiogroup" aria-label="可选模型图标">
+							<button
+								class="icon-option no-icon-option"
+								:class="{ selected: !modelValue.iconPublicId }"
+								type="button"
+								:disabled="busy || iconLoading"
+								:aria-pressed="!modelValue.iconPublicId"
+								@click="selectIcon(null)"
+							>
+								<view class="empty-icon" aria-hidden="true">—</view>
+								<view>
+									<text class="icon-name">不使用图标</text>
+									<text class="icon-description">清除当前模型的图标关联</text>
+								</view>
+							</button>
+							<button
+								v-for="icon in filteredIconOptions"
+								:key="icon.publicId"
+								class="icon-option"
+								:class="{ selected: modelValue.iconPublicId === icon.publicId }"
+								type="button"
+								:disabled="busy || iconLoading"
+								:aria-pressed="modelValue.iconPublicId === icon.publicId"
+								@click="selectIcon(icon)"
+							>
+								<image class="icon-preview" :src="icon.iconUrl" mode="aspectFit" :alt="icon.iconName" />
+								<view>
+									<text class="icon-name">{{ icon.iconName }}</text>
+									<text class="icon-description">{{ icon.description || '暂无描述' }}</text>
+								</view>
+							</button>
+						</view>
+						<text v-if="iconLoading" class="field-help">正在加载图标资源…</text>
+						<text v-else-if="!filteredIconOptions.length" class="field-help">没有匹配的图标，可先进入图标库新增。</text>
+					</template>
+					<text v-if="errors.iconPublicId" id="model-icon-error" class="field-error" role="alert">{{ errors.iconPublicId }}</text>
+				</view>
 			</view>
 		</view>
 	</view>
@@ -256,7 +261,8 @@ export default {
 	data() {
 		return {
 			capabilityOptions: AI_MODEL_CAPABILITY_OPTIONS,
-			iconSearch: ''
+			iconSearch: '',
+			advancedOpen: false
 		}
 	},
 	computed: {
@@ -299,6 +305,14 @@ export default {
 				iconPreviewUrl: icon?.iconUrl || ''
 			})
 		},
+		focusFirstInvalid(errors = this.errors) {
+			if (errors?.tagsText || errors?.iconPublicId) this.advancedOpen = true
+			// #ifdef H5
+			this.$nextTick(() => {
+				this.$el?.querySelector?.('[aria-invalid="true"]')?.focus?.()
+			})
+			// #endif
+		},
 		toggleCapability(code) {
 			if (this.readonly || this.busy) return
 			const selected = new Set(this.modelValue.capabilities || [])
@@ -320,18 +334,15 @@ export default {
 .model-form { display: grid; gap: 24rpx; }
 .form-section {
 	padding: 28rpx;
-	border: 1px solid rgba(105, 212, 226, .15);
-	border-radius: $app-radius-panel;
-	background: $app-surface;
+	@include admin-solid-panel;
 }
-.section-heading { display: grid; grid-template-columns: 52rpx minmax(0, 1fr); gap: 18rpx; margin-bottom: 26rpx; }
-.section-index { color: $app-green; font-size: 18rpx; font-weight: 800; letter-spacing: .12em; }
+.section-heading { margin-bottom: 26rpx; }
 .section-title { display: block; color: $app-text; font-size: 28rpx; font-weight: 780; letter-spacing: -.015em; }
-.section-copy { display: block; margin-top: 6rpx; color: $app-muted; font-size: 21rpx; line-height: 1.5; }
+.section-copy { display: block; margin-top: 6rpx; color: $app-muted; font-size: 24rpx; line-height: 1.5; }
 .field-grid, .ratio-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; }
 .field-block, .ratio-field { min-width: 0; margin-top: 20rpx; }
 .field-grid .field-block, .ratio-grid .ratio-field { margin-top: 0; }
-.field-label { display: block; margin-bottom: 10rpx; color: #c9d5d8; font-size: 21rpx; font-weight: 690; }
+.field-label { display: block; margin-bottom: 10rpx; color: #c9d5d8; font-size: 24rpx; font-weight: 690; }
 .field-control, .ratio-control {
 	width: 100%;
 	min-height: 88rpx;
@@ -348,9 +359,41 @@ export default {
 .ratio-control input[disabled] { color: #b7c4c8; opacity: 1; }
 .field-textarea { min-height: 210rpx; padding-top: 18rpx; line-height: 1.55; }
 .compact-textarea { min-height: 128rpx; padding-top: 18rpx; line-height: 1.5; }
-.field-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 8rpx; color: $app-muted; font-size: 18rpx; }
-.field-help { display: block; margin-top: 8rpx; color: $app-muted; font-size: 18rpx; }
-.field-error { display: block; margin-top: 8rpx; color: $app-danger-text; font-size: 19rpx; line-height: 1.45; }
+.field-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 8rpx; color: $app-muted; font-size: 24rpx; }
+.field-help { display: block; margin-top: 8rpx; color: $app-muted; font-size: 24rpx; }
+.field-error { display: block; margin-top: 8rpx; color: $app-danger-text; font-size: 24rpx; line-height: 1.45; }
+.advanced-toggle {
+	width: 100%;
+	min-height: 86rpx;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 20rpx;
+	background: transparent;
+	color: $app-text;
+	text-align: left;
+}
+.advanced-toggle::after { border: 0; }
+.advanced-toggle:focus-visible { @include admin-focus-ring; }
+.advanced-chevron {
+	width: 52rpx;
+	height: 52rpx;
+	flex: 0 0 auto;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba($app-green, .1);
+	color: $app-green;
+	font-size: 34rpx;
+}
+.advanced-content {
+	padding-top: 8rpx;
+	animation: advanced-arrive $app-motion-surface $app-ease-out both;
+}
 .icon-field-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18rpx; }
 .manage-icons {
 	margin: 0;
@@ -360,7 +403,7 @@ export default {
 	border-radius: 10rpx;
 	background: rgba(57, 214, 210, .07);
 	color: $app-green;
-	font-size: 19rpx;
+	font-size: 24rpx;
 }
 .selected-icon {
 	margin-top: 14rpx;
@@ -406,10 +449,10 @@ export default {
 }
 .empty-icon { display: grid; place-items: center; color: $app-muted; }
 .icon-name, .icon-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.icon-name { color: $app-text; font-size: 20rpx; font-weight: 720; }
-.icon-description { margin-top: 4rpx; color: $app-muted; font-size: 17rpx; }
+.icon-name { color: $app-text; font-size: 24rpx; font-weight: 720; }
+.icon-description { margin-top: 4rpx; color: $app-muted; font-size: 24rpx; }
 .ratio-control { display: grid; grid-template-columns: 68rpx minmax(0, 1fr); align-items: center; padding: 0 18rpx; }
-.ratio-control > text { color: $app-green; font-size: 17rpx; font-weight: 820; letter-spacing: .08em; }
+.ratio-control > text { color: $app-green; font-size: 24rpx; font-weight: 820; letter-spacing: .08em; }
 .ratio-control input { width: 100%; color: inherit; font-size: 28rpx; font-variant-numeric: tabular-nums; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; }
 .capability-option {
@@ -432,8 +475,8 @@ export default {
 .capability-dot { width: 12rpx; height: 12rpx; border-radius: 50%; background: transparent; }
 .capability-option.selected .capability-dot { background: $app-green; }
 .capability-label, .capability-hint { display: block; }
-.capability-label { font-size: 22rpx; font-weight: 740; }
-.capability-hint { margin-top: 4rpx; color: $app-muted; font-size: 18rpx; line-height: 1.35; }
+.capability-label { font-size: 24rpx; font-weight: 740; }
+.capability-hint { margin-top: 4rpx; color: $app-muted; font-size: 24rpx; line-height: 1.35; }
 .capability-error { margin-top: 12rpx; }
 .numeric { font-variant-numeric: tabular-nums; }
 button::after { border: 0; }
@@ -449,7 +492,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 @media (max-width: 640px) {
-	.form-section { padding: 24rpx 20rpx; border-left: 0; border-right: 0; border-radius: 0; }
+	.form-section { padding: 24rpx 20rpx; }
 	.field-grid, .ratio-grid, .capability-grid { grid-template-columns: 1fr; }
 	.icon-options { grid-template-columns: 1fr; }
 	.field-control, .ratio-control, .capability-option { min-height: 96rpx; }
@@ -457,5 +500,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 @media (prefers-reduced-motion: reduce) {
 	* { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+	.advanced-content { animation: none; }
+}
+
+@keyframes advanced-arrive {
+	from { opacity: 0; transform: translate3d(0, 8rpx, 0); }
+	to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 </style>

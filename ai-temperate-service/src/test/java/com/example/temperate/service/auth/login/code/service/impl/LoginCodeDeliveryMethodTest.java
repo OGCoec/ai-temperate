@@ -14,7 +14,10 @@ import static org.mockito.Mockito.inOrder;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
+import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowSnapshot;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowStore;
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
@@ -60,23 +63,29 @@ class LoginCodeDeliveryMethodTest {
             HmacIdentifier.fromProtectedValue("A".repeat(43));
 
     private LoginCodeFlowStore flowStore;
+    private UserLoginIdentityMapper identityMapper;
+    private IdentityPresenceFilter identityPresenceFilter;
     private AuthSessionSecretProtector protector;
     private LoginRateLimitService rateLimitService;
     private VerificationCodeGenerator codeGenerator;
     private VerificationDeliveryPublisher publisher;
     private HumanVerificationServiceRegistry humanVerificationServices;
     private HumanVerificationService turnstileService;
+    private AuthTokenService tokenService;
     private LoginCodeFlowServiceImpl service;
 
     @BeforeEach
     void setUp() {
         flowStore = mock(LoginCodeFlowStore.class);
+        identityMapper = mock(UserLoginIdentityMapper.class);
+        identityPresenceFilter = mock(IdentityPresenceFilter.class);
         protector = mock(AuthSessionSecretProtector.class);
         rateLimitService = mock(LoginRateLimitService.class);
         codeGenerator = mock(VerificationCodeGenerator.class);
         publisher = mock(VerificationDeliveryPublisher.class);
         humanVerificationServices = mock(HumanVerificationServiceRegistry.class);
         turnstileService = mock(HumanVerificationService.class);
+        tokenService = mock(AuthTokenService.class);
         when(humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE))
                 .thenReturn(turnstileService);
         when(protector.loginFlowToken(anyString())).thenReturn(HMAC);
@@ -87,13 +96,17 @@ class LoginCodeDeliveryMethodTest {
         when(protector.loginDeliveryOperation(anyString())).thenReturn(HMAC);
         when(rateLimitService.check(any(), eq(LoginFailureBucket.CODE)))
                 .thenReturn(LoginLimitDecision.ALLOWED);
+        when(identityPresenceFilter.checkEmail(anyString()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
+        when(identityPresenceFilter.checkPhone(anyString()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
         when(codeGenerator.generate()).thenReturn("012345");
         service = new LoginCodeFlowServiceImpl(
-                mock(UserLoginIdentityMapper.class),
+                identityMapper,
                 new RegistrationInputNormalizer(),
                 flowStore,
                 protector,
-                mock(AuthTokenService.class),
+                tokenService,
                 humanVerificationServices,
                 codeGenerator,
                 new VerificationDeliveryOperationIdGenerator(),
@@ -101,7 +114,31 @@ class LoginCodeDeliveryMethodTest {
                 mock(LoginAccountNotificationService.class),
                 rateLimitService,
                 mock(LoginSessionIssuer.class),
+                identityPresenceFilter,
                 Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    void definiteBloomMissCreatesSameShapeFakeFlowWithoutDatabaseLookup() {
+        when(identityPresenceFilter.checkEmail("missing@example.com"))
+                .thenReturn(IdentityPresenceDecision.DEFINITELY_ABSENT);
+        when(tokenService.newFlowToken()).thenReturn("flow-token", "challenge-token");
+
+        service.start(new LoginCodeStartCommand(
+                LoginStrategyType.EMAIL_CODE,
+                "missing@example.com",
+                null,
+                null,
+                "550e8400-e29b-41d4-a716-446655440000",
+                "127.0.0.1"));
+
+        verify(identityMapper, never()).findByNormalizedEmail(anyString());
+        verify(flowStore).create(
+                any(),
+                eq(LoginStrategyType.EMAIL_CODE),
+                eq("missing@example.com"),
+                eq(0L),
+                eq(NOW));
     }
 
     @Test

@@ -1,23 +1,29 @@
 <template>
-	<view class="catalog-page">
+	<admin-page-shell
+		v-if="adminRouteReady"
+		current-path="/pages/ai-models/index"
+		kicker="模型运营"
+		title="AI 模型目录"
+		description="按计费倍率审阅模型，维护能力与启用状态。停用是模型退出可用范围的唯一方式。"
+		:busy="writing"
+		@navigate="navigateProtected"
+	>
+		<template #actions>
+			<admin-action-button tone="neutral" :loading="loading" :disabled="writing" @click="loadModels">
+				刷新
+			</admin-action-button>
+			<admin-action-button tone="amber" :disabled="writing" @click="openCreate">
+				新增模型
+			</admin-action-button>
+		</template>
 		<view class="catalog-shell">
-			<view class="context-bar">
-				<admin-action-button class="back-button" tone="neutral" size="compact" aria-label="返回管理员控制台" @click="goBack">返回</admin-action-button>
-				<view class="title-block">
-					<text class="eyebrow">MODEL OPERATIONS · CATALOG</text>
-					<text class="page-title">AI 模型目录</text>
-					<text class="page-copy">按计费倍率审阅模型，维护能力与启用状态。停用是模型退出可用范围的唯一方式。</text>
-				</view>
-				<view class="header-actions">
-					<admin-action-button tone="neutral" :loading="loading" :disabled="writing" @click="loadModels">刷新</admin-action-button>
-					<admin-action-button tone="amber" :disabled="writing" @click="openCreate">新增模型</admin-action-button>
-				</view>
-			</view>
-
-			<view v-if="banner.message" class="page-banner" :class="banner.type" role="status">
-				<text>{{ banner.message }}</text>
-				<admin-action-button tone="neutral" size="compact" aria-label="关闭通知" @click="clearBanner">关闭</admin-action-button>
-			</view>
+			<admin-feedback-banner
+				v-if="banner.message"
+				:tone="banner.type === 'error' ? 'danger' : (banner.type === 'success' ? 'success' : 'info')"
+				:message="banner.message"
+				:dismissible="true"
+				@dismiss="clearBanner"
+			/>
 
 			<view class="query-panel desktop-query-panel" aria-label="模型查询条件">
 				<view class="search-field">
@@ -192,13 +198,28 @@
 							<text>{{ model.enabled ? '已启用' : '已停用' }}</text>
 						</view>
 						<view class="row-actions">
-							<admin-action-button tone="teal" size="compact" @click="openDetail(model.publicId)">详情</admin-action-button>
 							<admin-action-button
-								:tone="model.enabled ? 'orange' : 'lime'"
+								tone="neutral"
 								size="compact"
 								:disabled="writing"
-								@click="confirmSingleStatus(model)"
-							>{{ model.enabled ? '停用' : '启用' }}</admin-action-button>
+								:aria-expanded="openRowMenuId === model.publicId ? 'true' : 'false'"
+								:aria-controls="`model-row-menu-${model.publicId}`"
+								@click="toggleRowMenu(model.publicId)"
+							>更多</admin-action-button>
+							<view
+								v-if="openRowMenuId === model.publicId"
+								:id="`model-row-menu-${model.publicId}`"
+								class="row-menu"
+								role="menu"
+							>
+								<button type="button" role="menuitem" @click="openRowDetail(model.publicId)">查看详情</button>
+								<button
+									type="button"
+									role="menuitem"
+									:class="{ warning: model.enabled }"
+									@click="openRowStatus(model)"
+								>{{ model.enabled ? '停用模型' : '启用模型' }}</button>
+							</view>
 						</view>
 					</view>
 				</view>
@@ -286,12 +307,15 @@
 				</view>
 			</view>
 		</view>
-	</view>
+	</admin-page-shell>
 </template>
 
 <script>
 import AdminActionButton from '@/components/admin/admin-action-button.vue'
 import { adminAiModelApi } from '@/common/admin/admin-ai-model-api.js'
+import { createAdminPageGuardMixin } from '@/common/admin/admin-page-guard.js'
+import { guardedAdminNavigate } from '@/common/admin/admin-route-guard-runtime.js'
+import { adminPrefersReducedMotion } from '@/common/admin/admin-motion.js'
 import { AI_MODEL_CAPABILITY_OPTIONS } from '@/common/admin/admin-ai-model-form.js'
 
 function emptyPage() {
@@ -318,6 +342,7 @@ function initialQuery() {
 }
 
 export default {
+	mixins: [createAdminPageGuardMixin('/pages/ai-models/index')],
 	components: { AdminActionButton },
 	data() {
 		return {
@@ -331,6 +356,7 @@ export default {
 			loadedOnce: false,
 			banner: { type: '', message: '' },
 			filtersOpen: false,
+			openRowMenuId: '',
 			filterDraftSnapshot: null,
 			statusOptions: [
 				{ label: '全部', value: '' },
@@ -356,27 +382,48 @@ export default {
 		}
 	},
 	onLoad() {
-		this.loadModels()
+		this.runAfterAdminRouteGuard(() => this.loadModels())
 	},
 	onShow() {
-		if (this.loadedOnce) this.loadModels()
+		this.runAfterAdminRouteGuard(() => {
+			if (this.loadedOnce) return this.loadModels()
+		})
 	},
 	onBackPress() {
+		if (this.openRowMenuId) {
+			this.openRowMenuId = ''
+			return true
+		}
 		if (!this.filtersOpen) return false
 		this.closeFilters(true)
 		return true
 	},
 	methods: {
+		navigateProtected(route) {
+			if (route === '/pages/ai-models/index') return
+			return guardedAdminNavigate(route)
+		},
 		goBack() {
 			uni.navigateBack({ delta: 1 })
 		},
 		openCreate() {
-			uni.navigateTo({ url: '/pages/ai-models/create' })
+			return guardedAdminNavigate('/pages/ai-models/create')
 		},
 		openDetail(publicId) {
-			uni.navigateTo({
-				url: `/pages/ai-models/detail?publicId=${encodeURIComponent(publicId)}`
-			})
+			return guardedAdminNavigate(
+				`/pages/ai-models/detail?publicId=${encodeURIComponent(publicId)}`)
+		},
+		toggleRowMenu(publicId) {
+			if (this.writing) return
+			this.openRowMenuId = this.openRowMenuId === publicId ? '' : publicId
+		},
+		openRowDetail(publicId) {
+			this.openRowMenuId = ''
+			return this.openDetail(publicId)
+		},
+		openRowStatus(model) {
+			this.openRowMenuId = ''
+			this.confirmSingleStatus(model)
 		},
 		clearBanner() {
 			this.banner = { type: '', message: '' }
@@ -423,6 +470,7 @@ export default {
 		},
 		async loadModels() {
 			if (this.loading) return
+			this.openRowMenuId = ''
 			this.loading = true
 			this.loadError = ''
 			try {
@@ -443,9 +491,6 @@ export default {
 				this.loadedOnce = true
 			} catch (error) {
 				this.loadError = error?.message || '模型目录接口暂时不可用。'
-				if (error?.code === 'ADMIN_SESSION_INVALID') {
-					uni.reLaunch({ url: '/pages/index/index' })
-				}
 			} finally {
 				this.loading = false
 			}
@@ -457,7 +502,10 @@ export default {
 			this.selectedIds = []
 			this.loadModels()
 			// #ifdef H5
-			window.scrollTo({ top: 0, behavior: 'smooth' })
+			window.scrollTo({
+				top: 0,
+				behavior: adminPrefersReducedMotion() ? 'auto' : 'smooth'
+			})
 			// #endif
 		},
 		selected(publicId) {
@@ -574,7 +622,7 @@ export default {
 .eyebrow {
 	display: block;
 	color: $app-action-teal;
-	font-size: 18rpx;
+	font-size: 24rpx;
 	font-weight: 780;
 	letter-spacing: .1em;
 }
@@ -593,7 +641,7 @@ export default {
 	max-width: 900rpx;
 	margin-top: 12rpx;
 	color: $app-muted;
-	font-size: 22rpx;
+	font-size: 24rpx;
 	line-height: 1.55;
 }
 
@@ -617,7 +665,7 @@ export default {
 	gap: 20rpx;
 	background: rgba($app-action-lime, .08);
 	color: #dfffb0;
-	font-size: 21rpx;
+	font-size: 24rpx;
 }
 
 .page-banner.error {
@@ -648,7 +696,7 @@ export default {
 	display: block;
 	margin-bottom: 9rpx;
 	color: $app-muted;
-	font-size: 18rpx;
+	font-size: 24rpx;
 	font-weight: 680;
 }
 
@@ -675,7 +723,7 @@ export default {
 	padding: 0 20rpx;
 	box-sizing: border-box;
 	color: $app-text;
-	font-size: 22rpx;
+	font-size: 24rpx;
 }
 
 .segmented {
@@ -701,7 +749,7 @@ export default {
 	justify-content: center;
 	background: transparent;
 	color: $app-muted;
-	font-size: 20rpx;
+	font-size: 24rpx;
 	line-height: 1;
 	white-space: nowrap;
 	transition: background-color 180ms ease, color 180ms ease, transform 120ms ease-out;
@@ -743,7 +791,7 @@ export default {
 .result-label,
 .result-meta {
 	color: $app-muted;
-	font-size: 20rpx;
+	font-size: 24rpx;
 }
 
 .result-meta {
@@ -780,7 +828,7 @@ export default {
 .state-copy {
 	max-width: 620rpx;
 	margin: 10rpx 0 22rpx;
-	font-size: 21rpx;
+	font-size: 24rpx;
 	line-height: 1.5;
 }
 
@@ -798,7 +846,7 @@ export default {
 	padding: 0 20rpx;
 	border-bottom: 1px solid $app-border;
 	color: $app-muted;
-	font-size: 17rpx;
+	font-size: 24rpx;
 	font-weight: 680;
 	letter-spacing: .03em;
 }
@@ -862,19 +910,19 @@ export default {
 
 .model-name {
 	color: $app-text;
-	font-size: 23rpx;
+	font-size: 24rpx;
 	font-weight: 760;
 }
 
 .model-vendor {
 	margin-top: 6rpx;
 	color: $app-muted;
-	font-size: 17rpx;
+	font-size: 24rpx;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .ratio-value {
-	font-size: 23rpx;
+	font-size: 24rpx;
 	font-weight: 720;
 }
 
@@ -893,7 +941,7 @@ export default {
 	border: 1px solid rgba($app-teal, .22);
 	border-radius: 999rpx;
 	color: #b9dce1;
-	font-size: 15rpx;
+	font-size: 24rpx;
 }
 
 .capability-more {
@@ -907,7 +955,7 @@ export default {
 	align-items: center;
 	gap: 9rpx;
 	color: $app-muted;
-	font-size: 19rpx;
+	font-size: 24rpx;
 }
 
 .status-dot {
@@ -923,8 +971,8 @@ export default {
 }
 
 .row-actions {
+	position: relative;
 	display: grid;
-	grid-template-columns: 1fr 1fr;
 	gap: 8rpx;
 }
 
@@ -932,6 +980,42 @@ export default {
 	min-width: 0;
 	padding-left: 12rpx;
 	padding-right: 12rpx;
+}
+
+.row-menu {
+	min-width: 184rpx;
+	padding: 8rpx;
+	border: 1px solid rgba($app-teal, .22);
+	border-radius: $app-radius-control;
+	display: grid;
+	gap: 4rpx;
+	@include admin-glass-chrome(true);
+}
+
+.row-menu button {
+	min-height: 64rpx;
+	margin: 0;
+	padding: 0 14rpx;
+	border: 0;
+	border-radius: 8rpx;
+	display: flex;
+	align-items: center;
+	background: transparent;
+	color: $app-text;
+	font-size: 24rpx;
+	text-align: left;
+}
+
+.row-menu button::after {
+	border: 0;
+}
+
+.row-menu button.warning {
+	color: $app-action-orange;
+}
+
+.row-menu button:focus-visible {
+	@include admin-focus-ring;
 }
 
 .pagination {
@@ -1154,7 +1238,7 @@ input:focus-visible {
 		border-radius: 999rpx;
 		background: rgba($app-action-teal, .06);
 		color: #bddbdd;
-		font-size: 17rpx;
+		font-size: 24rpx;
 	}
 
 	.result-strip {
@@ -1245,7 +1329,7 @@ input:focus-visible {
 		display: block;
 		margin-bottom: 5rpx;
 		color: $app-muted;
-		font-size: 17rpx;
+		font-size: 24rpx;
 	}
 
 	.capability-cell {
@@ -1330,7 +1414,7 @@ input:focus-visible {
 		gap: 14rpx;
 		background: rgba(12, 18, 22, .96);
 		color: $app-text;
-		font-size: 19rpx;
+		font-size: 24rpx;
 	}
 
 	.mobile-batch-actions {
@@ -1389,7 +1473,7 @@ input:focus-visible {
 	.drawer-copy {
 		margin-top: 6rpx;
 		color: $app-muted;
-		font-size: 18rpx;
+		font-size: 24rpx;
 	}
 
 	.drawer-filter-group {
@@ -1427,6 +1511,45 @@ input:focus-visible {
 		background: rgba($app-muted, .08);
 		color: $app-text;
 	}
+
+	.row-menu button:hover {
+		background: rgba($app-muted, .1);
+	}
+}
+
+.catalog-shell > .admin-feedback-banner {
+	margin-top: $app-space-3;
+}
+
+.query-panel {
+	@include admin-glass-chrome;
+	border-color: $app-border-soft;
+}
+
+.result-strip,
+.catalog-panel {
+	@include admin-solid-panel;
+}
+
+.result-strip {
+	margin-top: $app-space-3;
+	border-top: 1px solid $app-border-soft;
+	border-bottom: 1px solid $app-border-soft;
+}
+
+.control-label,
+.search-control input,
+.segmented button,
+.result-label,
+.result-meta,
+.list-head,
+.state-copy {
+	font-size: 24rpx;
+}
+
+.filter-drawer {
+	@include admin-glass-chrome(true);
+	box-shadow: $app-shadow-sheet;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1446,6 +1569,28 @@ input:focus-visible {
 
 	.filter-drawer {
 		animation: none;
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) {
+	.query-panel,
+	.filter-drawer,
+	.mobile-batch-bar,
+	.row-menu {
+		background: $app-surface-elevated;
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+@media (prefers-contrast: more) {
+	.query-panel,
+	.result-strip,
+	.catalog-panel,
+	.filter-drawer,
+	.row-menu {
+		border: 2px solid $app-text;
+		background: $app-canvas;
 	}
 }
 

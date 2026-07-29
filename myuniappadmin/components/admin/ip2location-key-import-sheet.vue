@@ -1,22 +1,12 @@
 <template>
-	<view v-if="open" class="import-layer" role="presentation" @click.self="requestClose">
-		<view
-			class="import-sheet"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="ip2location-import-title"
-		>
-			<view class="sheet-header">
-				<view>
-					<text id="ip2location-import-title" class="sheet-title">导入 IP2Location 凭据</text>
-					<text class="sheet-copy">密钥只在本次提交期间保留于内存，成功或关闭后立即清空。</text>
-				</view>
-				<button class="icon-button" type="button" aria-label="关闭导入面板" :disabled="busy" @click="requestClose">
-					关闭
-				</button>
-			</view>
-
-			<scroll-view class="sheet-body" scroll-y>
+	<admin-material-sheet
+		:model-value="open"
+		title="导入 IP2Location 凭据"
+		description="密钥只在本次提交期间保留于内存，成功或关闭后立即清空。"
+		:close-on-backdrop="!busy"
+		@close="requestClose"
+	>
+		<view class="import-form">
 				<view class="capacity-line" aria-live="polite">
 					<text>凭据容量</text>
 					<text class="numeric">{{ currentCount }} / 100</text>
@@ -97,9 +87,9 @@
 				</view>
 
 				<view v-if="visibleError" class="inline-error" role="alert">{{ visibleError }}</view>
-			</scroll-view>
-
-			<view class="sheet-footer">
+		</view>
+		<template #footer>
+			<view class="import-footer">
 				<view class="submission-summary" aria-live="polite">
 					<text>本次提交</text>
 					<text class="numeric">{{ parsed.apiKeys.length }} 条</text>
@@ -108,11 +98,12 @@
 					加密导入
 				</button>
 			</view>
-		</view>
-	</view>
+		</template>
+	</admin-material-sheet>
 </template>
 
 <script>
+import AdminMaterialSheet from './admin-material-sheet.vue'
 import {
 	parseIp2LocationKeyText,
 	validateIp2LocationImportCapacity
@@ -133,6 +124,7 @@ const plans = [
 
 export default {
 	name: 'Ip2LocationKeyImportSheet',
+	components: { AdminMaterialSheet },
 	props: {
 		open: { type: Boolean, default: false },
 		currentCount: { type: Number, default: 0 },
@@ -260,14 +252,8 @@ export default {
 <style lang="scss" scoped>
 @import '@/common/app-theme.scss';
 
-.import-layer { position: fixed; inset: 0; z-index: 80; background: rgba(2, 5, 7, .72); display: flex; justify-content: flex-end; }
-.import-sheet { width: min(520px, 100%); height: 100%; background: $app-surface; border-left: 1px solid $app-border; display: flex; flex-direction: column; box-shadow: -24px 0 70px rgba(0, 0, 0, .42); animation: sheet-in 180ms ease-out; }
-.sheet-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; padding: 36rpx 34rpx 28rpx; border-bottom: 1px solid $app-border; }
-.sheet-title { display: block; color: $app-text; font-size: 34rpx; font-weight: 760; }
-.sheet-copy { display: block; max-width: 660rpx; margin-top: 10rpx; color: $app-muted; font-size: 23rpx; line-height: 1.55; }
-.icon-button, .text-button, .advanced-toggle { min-height: 76rpx; border: 0; background: transparent; color: $app-green; font-size: 24rpx; }
-.icon-button { min-width: 88rpx; padding: 0 14rpx; }
-.sheet-body { flex: 1; min-height: 0; padding: 28rpx 34rpx; box-sizing: border-box; }
+.import-form { padding-right: 4rpx; }
+.text-button, .advanced-toggle { min-height: 76rpx; border: 0; background: transparent; color: $app-green; font-size: 24rpx; }
 .capacity-line, .submission-summary { display: flex; align-items: center; justify-content: space-between; color: $app-muted; font-size: 24rpx; }
 .capacity-line { padding-bottom: 24rpx; border-bottom: 1px solid rgba($app-border, .7); }
 .capacity-line .numeric, .submission-summary .numeric { color: $app-text; font-weight: 720; }
@@ -278,30 +264,25 @@ export default {
 .key-textarea { min-height: 250rpx; padding: 22rpx; font: 24rpx/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .text-control, .select-control, .validity-control { min-height: 84rpx; padding: 0 22rpx; display: flex; align-items: center; font-size: 25rpx; }
 .validity-control { color: $app-green; font-weight: 720; }
-.field-help, .file-note { display: block; margin-top: 10rpx; color: $app-muted; font-size: 21rpx; line-height: 1.5; }
+.field-help, .file-note { display: block; margin-top: 10rpx; color: $app-muted; font-size: 24rpx; line-height: 1.5; }
 .file-note { color: $app-teal; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18rpx; }
 .advanced-toggle { width: 100%; margin-top: 24rpx; padding: 0; text-align: left; justify-content: flex-start; }
-.advanced-panel { padding: 18rpx 20rpx; border: 1px solid $app-border; border-radius: $app-radius-control; background: rgba($app-raised, .62); }
-.radio-option { min-height: 76rpx; display: flex; align-items: center; gap: 14rpx; color: $app-text; font-size: 23rpx; }
-.inline-error { margin: 24rpx 0; padding: 18rpx 20rpx; border-left: 4rpx solid $app-danger; background: rgba($app-danger, .1); color: $app-danger-text; font-size: 23rpx; line-height: 1.5; }
-.sheet-footer { padding: 20rpx 34rpx calc(22rpx + env(safe-area-inset-bottom)); border-top: 1px solid $app-border; background: $app-surface; }
+.advanced-panel { padding: 18rpx 20rpx; border-radius: $app-radius-control; background: rgba($app-raised, .62); }
+.radio-option { min-height: 76rpx; display: flex; align-items: center; gap: 14rpx; color: $app-text; font-size: 24rpx; }
+.inline-error { margin: 24rpx 0; padding: 18rpx 20rpx; border-radius: $app-radius-control; background: rgba($app-danger, .1); color: $app-danger-text; font-size: 24rpx; line-height: 1.5; }
+.import-footer { width: 100%; }
 .submit-button { width: 100%; min-height: 88rpx; margin-top: 16rpx; border: 0; border-radius: $app-radius-control; background: $app-lime; color: #171306; font-size: 27rpx; font-weight: 780; }
 .numeric { font-variant-numeric: tabular-nums; }
 button::after { border: 0; }
 button:focus-visible, .key-textarea:focus, .text-control:focus { outline: 2px solid $app-focus; outline-offset: 2px; }
 
-@keyframes sheet-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
-
 @media (max-width: 720px) {
-	.import-layer { align-items: flex-end; }
-	.import-sheet { width: 100%; height: min(88vh, 900px); border-left: 0; border-top: 1px solid $app-border; border-radius: 28rpx 28rpx 0 0; animation-name: sheet-up; }
-	.sheet-header, .sheet-body, .sheet-footer { padding-left: 28rpx; padding-right: 28rpx; }
 	.field-grid { grid-template-columns: 1fr; gap: 0; }
-	.icon-button, .text-button, .advanced-toggle, .submit-button { min-height: 96rpx; }
+	.text-button, .advanced-toggle, .submit-button { min-height: 96rpx; }
 }
 
-@keyframes sheet-up { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-
-@media (prefers-reduced-motion: reduce) { .import-sheet { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+	.advanced-toggle { transition: opacity 80ms linear; }
+}
 </style>

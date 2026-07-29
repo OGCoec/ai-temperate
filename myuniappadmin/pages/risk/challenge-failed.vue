@@ -2,6 +2,7 @@
 	<ChallengeFailedGate
 		ref="gate"
 		audience="ADMIN"
+		appearance="ADMIN_QUIET"
 		:failure-reason="failureReason"
 		:busy="busy"
 		@retry="retry"

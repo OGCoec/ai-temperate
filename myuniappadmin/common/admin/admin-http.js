@@ -19,9 +19,12 @@ import { presentAdminRiskBlock } from './admin-risk-block-navigation.js'
 import { beginAdminRiskChallenge } from './admin-risk-challenge-navigation.js'
 import {
 	clearAdminFlow,
-	clearAdminSession,
 	loadAdminSecureState
 } from './admin-secure-vault.js'
+import {
+	handleAdminSessionInvalid,
+	isAdminSessionExpiryError
+} from './admin-session-expiry-navigation.js'
 import {
 	isWebRtcFailureCode,
 	isWebRtcRetryCode
@@ -285,7 +288,11 @@ function adminResponseError(path, statusCode, data) {
 		if (path.startsWith('/api/admin/auth/register')) clearAdminFlow('register')
 		if (path.startsWith('/api/admin/auth/login')) clearAdminFlow('login')
 	}
-	if (error.code === 'ADMIN_SESSION_INVALID') clearAdminSession()
+	if (isAdminSessionExpiryError(error, path)) {
+		error.code = 'ADMIN_SESSION_INVALID'
+		// 管理员会话失效时同步删除独立邮箱检查 Vault，避免凭证残留到下一次登录。
+		handleAdminSessionInvalid(error, { path })
+	}
 	return error
 }
 

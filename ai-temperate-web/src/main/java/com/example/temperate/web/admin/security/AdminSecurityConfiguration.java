@@ -75,12 +75,14 @@ public class AdminSecurityConfiguration {
                 "X-Admin-Register-Token",
                 "X-Admin-Login-Flow-Token",
                 "X-Admin-CSRF-Token",
+                "Idempotency-Key",
                 "X-Admin-Challenge",
                 PreAuthTransport.APP_HEADER,
                 PreAuthTransport.RESET_HEADER,
                 "X-Auth-Attempt-Id"));
         configuration.setExposedHeaders(List.of(
-                "X-Trace-Id"));
+                "X-Trace-Id",
+                "Idempotency-Replayed"));
         configuration.setMaxAge(600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/admin/**", configuration);

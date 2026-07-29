@@ -8,6 +8,9 @@ import {
 	loadAdminSecureState,
 	updateAdminSecureState
 } from './admin-secure-vault.js'
+import {
+	clearAdminMailInspectionSession
+} from './admin-mail-inspection-session-store.js'
 
 function rememberFlow(kind, response) {
 	if (adminClientPlatform() !== 'ANDROID') return
@@ -92,6 +95,8 @@ export const adminApi = {
 	},
 	async loginComplete(data) {
 		const response = await adminRequest('/api/admin/auth/login/complete', { data })
+		// 新管理员会话建立前清除上一会话的邮箱原始凭证，防止敏感输入跨会话恢复。
+		await clearAdminMailInspectionSession()
 		if (adminClientPlatform() === 'ANDROID') {
 			updateAdminSecureState({
 				adminToken: response.adminToken,
@@ -109,6 +114,7 @@ export const adminApi = {
 	},
 	async logout() {
 		const response = await adminRequest('/api/admin/auth/logout')
+		await clearAdminMailInspectionSession()
 		clearAdminSession()
 		invalidateAdminPreAuth()
 		invalidateAdminWebRtcVerification()
@@ -116,6 +122,7 @@ export const adminApi = {
 	},
 	async logoutAll() {
 		const response = await adminRequest('/api/admin/auth/logout-all')
+		await clearAdminMailInspectionSession()
 		clearAdminSession()
 		invalidateAdminPreAuth()
 		invalidateAdminWebRtcVerification()

@@ -48,8 +48,12 @@ public final class AdminWebExceptionHandler {
             HttpServletRequest request,
             HttpServletResponse response) {
         HttpStatus httpStatus = status(exception.code());
+        // 邮箱任务拒绝使用独立低基数事件名，且仍只记录稳定错误码，不把请求或邮件证据带入日志。
+        String event = exception.code().name().startsWith("ADMIN_MAIL_INSPECTION_")
+                ? "admin_mail_inspection_rejected"
+                : "admin_auth_rejected";
         exceptionLogger.logKnown(
-                "admin_auth_rejected",
+                event,
                 exception.code().name(),
                 httpStatus,
                 exception);
@@ -93,10 +97,16 @@ public final class AdminWebExceptionHandler {
     private static HttpStatus status(AdminErrorCode code) {
         return switch (code) {
             case ADMIN_ALREADY_INITIALIZED, ADMIN_NOT_INITIALIZED,
-                    ADMIN_SESSION_LIMIT_REACHED -> HttpStatus.CONFLICT;
+                    ADMIN_SESSION_LIMIT_REACHED,
+                    ADMIN_MAIL_INSPECTION_JOB_CONFLICT,
+                    ADMIN_MAIL_INSPECTION_IDEMPOTENCY_CONFLICT -> HttpStatus.CONFLICT;
             case ADMIN_CONFIG_INVALID, ADMIN_CSRF_CONFIGURATION_INVALID,
                     ADMIN_DISABLED, HCAPTCHA_UNAVAILABLE,
+                    ADMIN_MAIL_INSPECTION_TYPE_UNAVAILABLE,
+                    ADMIN_MAIL_INSPECTION_UNAVAILABLE,
+                    ADMIN_MAIL_INSPECTION_SUBMISSION_INCOMPLETE,
                     ADMIN_INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case ADMIN_FLOW_EXPIRED -> HttpStatus.GONE;
             case ADMIN_PREAUTH_REQUIRED -> HttpStatus.PRECONDITION_REQUIRED;
             case HCAPTCHA_REJECTED -> HttpStatus.FORBIDDEN;
@@ -128,6 +138,22 @@ public final class AdminWebExceptionHandler {
             case ADMIN_VERIFICATION_INVALID -> "验证码不正确或已过期。";
             case ADMIN_PASSWORD_INVALID -> "密码强度不足或两次输入不一致。";
             case ADMIN_FLOW_INVALID -> "管理员认证流程无效，请重新开始。";
+            case ADMIN_MAIL_INSPECTION_INVALID_REQUEST ->
+                    "邮箱检查请求格式或容量无效。";
+            case ADMIN_MAIL_INSPECTION_IDEMPOTENCY_KEY_INVALID ->
+                    "Idempotency-Key 必须是规范小写 UUIDv4。";
+            case ADMIN_MAIL_INSPECTION_IDEMPOTENCY_CONFLICT ->
+                    "同一提交编号对应的检查类型、并发或凭证内容已经变化。";
+            case ADMIN_MAIL_INSPECTION_SUBMISSION_INCOMPLETE ->
+                    "部分凭证尚未持久化，请使用原提交编号继续确认。";
+            case ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND ->
+                    "邮箱检查任务不存在或已过期。";
+            case ADMIN_MAIL_INSPECTION_JOB_CONFLICT ->
+                    "同类邮箱检查任务正在运行或任务容量已满。";
+            case ADMIN_MAIL_INSPECTION_TYPE_UNAVAILABLE ->
+                    "邮箱检查策略暂时不可用。";
+            case ADMIN_MAIL_INSPECTION_UNAVAILABLE ->
+                    "邮箱检查服务暂时不可用。";
             default -> "管理员认证服务暂时不可用。";
         };
     }

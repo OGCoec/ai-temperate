@@ -119,7 +119,15 @@ public final class Ip2LocationApiKeyProtector {
                     != Ip2LocationKeyMaterial.CURRENT_SCHEMA_VERSION) {
                 throw new IllegalArgumentException("Unsupported API key schema.");
             }
-            return material;
+            String normalizedApiKey = normalizeApiKey(material.apiKey());
+            // 脱敏值属于可变展示策略，读取时必须从已认证的明文重新生成，避免历史密文继续暴露旧规则下的更多字符。
+            return new Ip2LocationKeyMaterial(
+                    material.schemaVersion(),
+                    normalizedApiKey,
+                    mask(normalizedApiKey),
+                    material.planType(),
+                    material.createdAt(),
+                    material.expiresAt());
         } catch (GeneralSecurityException | IOException exception) {
             throw new IllegalArgumentException("Encrypted API key envelope is invalid.", exception);
         } finally {
@@ -207,9 +215,9 @@ public final class Ip2LocationApiKeyProtector {
         if (value.length() <= 8) {
             return "****";
         }
-        return value.substring(0, 4)
+        return value.substring(0, 3)
                 + "****"
-                + value.substring(value.length() - 4);
+                + value.substring(value.length() - 3);
     }
 
     private static byte[] decodeUrl(String value) {

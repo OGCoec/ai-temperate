@@ -16,5 +16,78 @@ $app-action-orange: #e89a4a;
 $app-danger: #d9686b;
 $app-danger-text: #ffb8ba;
 $app-focus: #8be7e4;
-$app-radius-control: 12rpx;
-$app-radius-panel: 18rpx;
+$app-text-muted: $app-muted;
+
+// Quiet Apple Pro 中性色层级：品牌色保持不变，仅通过深色材质建立空间关系。
+$app-canvas: #070a0c;
+$app-surface-soft: #0c1114;
+$app-surface-solid: #10161a;
+$app-surface-elevated: #151e23;
+$app-surface-strong: #1a252b;
+$app-border-soft: rgba(145, 162, 168, .14);
+$app-border-strong: rgba(145, 162, 168, .28);
+$app-glass: rgba(15, 22, 26, .76);
+$app-glass-heavy: rgba(10, 15, 18, .9);
+$app-scrim: rgba(2, 5, 7, .68);
+
+// 字号以产品操作界面为基准，避免过小的辅助文字影响长时间使用。
+$app-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC",
+	"Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+$app-font-size-caption: 24rpx;
+$app-font-size-body: 28rpx;
+$app-font-size-section: 36rpx;
+$app-font-size-page: 56rpx;
+$app-line-height-tight: 1.18;
+$app-line-height-body: 1.55;
+
+// 4/8 基础节奏，同时保留既有变量名以兼容当前页面。
+$app-space-1: 8rpx;
+$app-space-2: 16rpx;
+$app-space-3: 24rpx;
+$app-space-4: 32rpx;
+$app-space-5: 40rpx;
+$app-space-6: 48rpx;
+$app-space-8: 64rpx;
+$app-radius-control: 14rpx;
+$app-radius-panel: 28rpx;
+$app-radius-sheet: 40rpx;
+
+// 阴影只用于浮动层，不和大范围装饰边框同时叠加。
+$app-shadow-floating: 0 8rpx 16rpx rgba(0, 0, 0, .24);
+$app-shadow-sheet: 0 18rpx 36rpx rgba(0, 0, 0, .34);
+$app-blur-chrome: 24px;
+$app-blur-sheet: 34px;
+
+// 产品动效统一使用短反馈；物理弹簧由 admin-motion.js 管理。
+$app-motion-micro: 140ms;
+$app-motion-state: 220ms;
+$app-motion-surface: 300ms;
+$app-ease-out: cubic-bezier(.22, 1, .36, 1);
+$app-ease-in: cubic-bezier(.64, 0, .78, 0);
+
+@mixin admin-solid-panel {
+	background: $app-surface-solid;
+	border: 1px solid $app-border-soft;
+	border-radius: $app-radius-panel;
+}
+
+@mixin admin-glass-chrome($heavy: false) {
+	@if $heavy {
+		background: $app-glass-heavy;
+	} @else {
+		background: $app-glass;
+	}
+	-webkit-backdrop-filter: blur($app-blur-chrome) saturate(145%);
+	backdrop-filter: blur($app-blur-chrome) saturate(145%);
+}
+
+@mixin admin-focus-ring {
+	outline: 2px solid $app-focus;
+	outline-offset: 3px;
+}
+
+@mixin admin-control-reset {
+	box-sizing: border-box;
+	font-family: $app-font-family;
+	touch-action: manipulation;
+}

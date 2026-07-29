@@ -5,6 +5,9 @@ import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartResult;
@@ -69,6 +72,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     private final LoginAccountNotificationService notificationService;
     private final LoginRateLimitService rateLimitService;
     private final LoginSessionIssuer sessionIssuer;
+    private final IdentityPresenceFilter identityPresenceFilter;
     private final Clock clock;
 
     public LoginCodeFlowServiceImpl(
@@ -84,6 +88,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
             LoginAccountNotificationService notificationService,
             LoginRateLimitService rateLimitService,
             LoginSessionIssuer sessionIssuer,
+            IdentityPresenceFilter identityPresenceFilter,
             Clock clock) {
         this.identityMapper = Objects.requireNonNull(identityMapper);
         this.inputNormalizer = Objects.requireNonNull(inputNormalizer);
@@ -97,6 +102,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         this.notificationService = Objects.requireNonNull(notificationService);
         this.rateLimitService = Objects.requireNonNull(rateLimitService);
         this.sessionIssuer = Objects.requireNonNull(sessionIssuer);
+        this.identityPresenceFilter = Objects.requireNonNull(identityPresenceFilter);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -108,9 +114,21 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         LoginAttempt attempt = new LoginAttempt(
                 identifier, command.deviceInstallationId());
         requireAllowed(attempt);
-        UserLoginIdentity identity = command.strategyType() == LoginStrategyType.EMAIL_CODE
-                ? identityMapper.findByNormalizedEmail(identifier)
-                : identityMapper.findByNormalizedPhone(identifier);
+        IdentityPresenceKind kind =
+                command.strategyType() == LoginStrategyType.EMAIL_CODE
+                        ? IdentityPresenceKind.EMAIL
+                        : IdentityPresenceKind.PHONE;
+        IdentityPresenceDecision presence = kind == IdentityPresenceKind.EMAIL
+                ? identityPresenceFilter.checkEmail(identifier)
+                : identityPresenceFilter.checkPhone(identifier);
+        UserLoginIdentity identity = null;
+        if (presence != IdentityPresenceDecision.DEFINITELY_ABSENT) {
+            identity = kind == IdentityPresenceKind.EMAIL
+                    ? identityMapper.findByNormalizedEmail(identifier)
+                    : identityMapper.findByNormalizedPhone(identifier);
+            identityPresenceFilter.recordDatabaseVerification(
+                    kind, presence, identity != null);
+        }
         String flowToken = tokenService.newFlowToken();
         String challenge = tokenService.newFlowToken();
         ProtectedLoginCodeAccess access = protect(

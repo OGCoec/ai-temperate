@@ -31,6 +31,15 @@ public interface UserLoginIdentityMapper {
     UserLoginIdentity findByNormalizedPhone(
             @Param("normalizedPhone") String normalizedPhone);
 
+    /**
+     * 按内部 ID 游标分页读取 Bloom 初始化所需的最小联系方式列。
+     *
+     * <p>调用方必须把单批限制在 2000 条以内，并以上一页最后一个 ID 继续，禁止使用深分页或一次加载全表。</p>
+     */
+    List<UserLoginIdentity> findIdentityContactsAfterId(
+            @Param("afterId") long afterId,
+            @Param("limit") int limit);
+
     AuthenticationContext findAuthenticationByNormalizedEmail(
             @Param("normalizedEmail") String normalizedEmail);
 

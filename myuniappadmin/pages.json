@@ -23,14 +23,14 @@
 			"path": "pages/risk/challenge-failed",
 			"style": {
 				"navigationStyle": "custom",
-				"backgroundColor": "#1c2118"
+				"backgroundColor": "#080b0d"
 			}
 		},
 		{
 			"path": "pages/risk/blocked",
 			"style": {
 				"navigationStyle": "custom",
-				"backgroundColor": "#f1f0ec"
+				"backgroundColor": "#080b0d"
 			}
 		},
 		{
@@ -86,6 +86,36 @@
 		},
 		{
 			"path": "pages/ai-model-icons/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/mail-inspection/openai/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/mail-inspection/kiro/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#080b0d",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
+			"path": "pages/mail-inspection/ip2location/index",
 			"style": {
 				"navigationStyle": "custom",
 				"backgroundColor": "#080b0d",

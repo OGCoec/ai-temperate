@@ -100,6 +100,15 @@
         WHERE phone = #{normalizedPhone,jdbcType=VARCHAR}
     </select>
 
+    <select id="findIdentityContactsAfterId" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityContactColumns"/>
+        FROM userloginidentity
+        WHERE id &gt; #{afterId,jdbcType=BIGINT}
+        ORDER BY id
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
     <select id="findAuthenticationByNormalizedEmail"
             resultMap="AuthenticationContextResultMap">
         SELECT

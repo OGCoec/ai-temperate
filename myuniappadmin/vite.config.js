@@ -46,6 +46,10 @@ export default defineConfig(() => {
 			host: '127.0.0.1',
 			port: 3001,
 			strictPort: true,
+			headers: {
+				'Cache-Control': 'no-store, max-age=0',
+				Pragma: 'no-cache'
+			},
 			fs: {
 				allow: [fileURLToPath(new URL('..', import.meta.url))]
 			},

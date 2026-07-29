@@ -1,20 +1,146 @@
 <template>
-	<view class="admin-page">
-		<view class="admin-shell">
+	<admin-page-shell
+		v-if="screenState === 'AUTHENTICATED'"
+		current-path="/pages/index/index"
+		kicker="管理员工作台"
+		title="控制台"
+		description="集中查看当前管理员会话，并进入模型、凭据与邮件证据工作流。"
+		:busy="busy"
+		@navigate="navigateProtected"
+	>
+		<template #meta>
+			<view class="session-chip">
+				<view class="session-chip-dot" aria-hidden="true" />
+				<text>会话已验证</text>
+			</view>
+			<text class="session-expiry">滑动到期：{{ expiresLabel }}</text>
+		</template>
+		<template #actions>
+			<admin-action-button tone="teal" size="compact" :loading="busy" @click="refreshProfile">
+				刷新会话
+			</admin-action-button>
+			<admin-action-button tone="neutral" size="compact" :disabled="busy" @click="logoutCurrent">
+				退出当前设备
+			</admin-action-button>
+		</template>
+
+		<admin-feedback-banner
+			v-if="message"
+			:tone="feedbackTone"
+			:message="message"
+			:dismissible="true"
+			@dismiss="clearMessage"
+		/>
+
+		<view class="dashboard-overview">
+			<view class="session-panel">
+				<view class="session-identity">
+					<view class="profile-badge">{{ profileFlag }}</view>
+					<view>
+						<text class="section-heading">管理员会话</text>
+						<text class="section-copy">当前设备已通过后端会话校验。</text>
+					</view>
+				</view>
+				<view class="profile-list">
+					<view class="profile-row">
+						<text class="profile-label">邮箱</text>
+						<text class="profile-value">{{ profile.email }}</text>
+					</view>
+					<view class="profile-row">
+						<text class="profile-label">国际手机号</text>
+						<text class="profile-value">{{ profile.phoneE164 }}</text>
+					</view>
+					<view class="profile-row">
+						<text class="profile-label">会话到期</text>
+						<text class="profile-value">{{ expiresLabel }}</text>
+					</view>
+				</view>
+			</view>
+
+			<view class="operations-panel">
+				<view class="section-intro">
+					<view>
+						<text class="section-heading">工作区</text>
+						<text class="section-copy">选择任务后，前端会再次确认管理员会话。</text>
+					</view>
+					<text class="operation-count">4 个入口</text>
+				</view>
+				<view class="operation-list">
+					<button class="operation-row" type="button" :disabled="busy" @click="navigateToAiModels">
+						<text class="operation-symbol">AI</text>
+						<view class="operation-copy">
+							<text class="operation-title">AI 模型目录</text>
+							<text class="operation-description">分页查询、新增、编辑并单个或批量启停模型</text>
+						</view>
+						<text class="operation-arrow" aria-hidden="true">›</text>
+					</button>
+					<button class="operation-row" type="button" :disabled="busy" @click="navigateToAiModelIcons">
+						<text class="operation-symbol">◇</text>
+						<view class="operation-copy">
+							<text class="operation-title">模型图标库</text>
+							<text class="operation-description">上传 OSS 图片、登记外部 URL 并维护复用图标</text>
+						</view>
+						<text class="operation-arrow" aria-hidden="true">›</text>
+					</button>
+					<button class="operation-row" type="button" :disabled="busy" @click="navigateToIp2LocationKeys">
+						<text class="operation-symbol">IP</text>
+						<view class="operation-copy">
+							<text class="operation-title">IP 信誉凭据</text>
+							<text class="operation-description">导入、查看和撤销 IP2Location 加密调用凭据</text>
+						</view>
+						<text class="operation-arrow" aria-hidden="true">›</text>
+					</button>
+					<button class="operation-row" type="button" :disabled="busy" @click="navigateToMailInspection">
+						<text class="operation-symbol">@</text>
+						<view class="operation-copy">
+							<text class="operation-title">邮箱证据检查</text>
+							<text class="operation-description">Microsoft OAuth · Outlook IMAP · OpenAI / Kiro / IP2Location</text>
+						</view>
+						<text class="operation-arrow" aria-hidden="true">›</text>
+					</button>
+				</view>
+			</view>
+
+			<view class="security-panel">
+				<view>
+					<text class="section-heading">安全边界</text>
+					<text class="section-copy">所有权限仍由后端强制执行，前端守卫只负责拦截页面和减少无效请求。</text>
+				</view>
+				<view class="security-facts">
+					<text>单管理员</text>
+					<text>hCaptcha 后端校验</text>
+					<text>六小时滑动会话</text>
+				</view>
+				<admin-action-button tone="danger" size="compact" :disabled="busy" @click="logoutEverywhere">
+					退出所有设备
+				</admin-action-button>
+			</view>
+		</view>
+	</admin-page-shell>
+
+	<view v-else class="admin-auth-page">
+		<view class="ambient-light ambient-light-primary" aria-hidden="true" />
+		<view class="ambient-light ambient-light-secondary" aria-hidden="true" />
+		<view class="auth-shell">
 			<view class="admin-intro">
 				<view class="admin-mark" aria-hidden="true"><view class="admin-mark-core" /></view>
-				<text class="admin-kicker">AI TEMPERATE · ADMIN</text>
+				<text class="admin-kicker">AI Temperate 管理端</text>
 				<text class="admin-title">{{ pageTitle }}</text>
 				<text class="admin-copy">{{ pageCopy }}</text>
 				<view class="security-note">
+					<view class="security-note-dot" aria-hidden="true" />
 					<text>单管理员 · hCaptcha 后端校验 · 六小时滑动会话</text>
 				</view>
 			</view>
 
 			<view class="admin-panel">
-				<view v-if="message" class="admin-banner" :class="messageType" role="alert">
-					{{ message }}
-				</view>
+				<admin-feedback-banner
+					v-if="message"
+					:tone="feedbackTone"
+					:message="message"
+					:dismissible="true"
+					@dismiss="clearMessage"
+				/>
 
 				<view v-if="screenState === 'LOADING'" class="center-state" aria-live="polite">
 					<view class="loading-ring" aria-hidden="true" />
@@ -29,41 +155,6 @@
 							: '管理员配置当前为 DISABLED，认证与管理接口均不可用。' }}
 					</text>
 					<button class="primary-button" type="button" :loading="busy" @click="loadState(true)">重新检查</button>
-				</view>
-
-				<view v-else-if="screenState === 'AUTHENTICATED'" class="dashboard">
-					<view class="profile-badge">{{ profileFlag }}</view>
-					<text class="state-title">管理员会话已验证</text>
-					<view class="profile-row">
-						<text class="profile-label">邮箱</text>
-						<text class="profile-value">{{ profile.email }}</text>
-					</view>
-					<view class="profile-row">
-						<text class="profile-label">国际手机号</text>
-						<text class="profile-value">{{ profile.phoneE164 }}</text>
-					</view>
-					<view class="profile-row">
-						<text class="profile-label">会话到期</text>
-						<text class="profile-value">{{ expiresLabel }}</text>
-					</view>
-					<button class="credential-button" type="button" :disabled="busy" @click="navigateToIp2LocationKeys">
-						<text class="credential-kicker">NETWORK RISK</text>
-						<text class="credential-title">IP 信誉凭据</text>
-						<text class="credential-copy">导入、查看和撤销 IP2Location 加密调用凭据</text>
-					</button>
-					<button class="credential-button model-catalog-button" type="button" :disabled="busy" @click="navigateToAiModels">
-						<text class="credential-kicker">MODEL OPERATIONS</text>
-						<text class="credential-title">AI 模型目录</text>
-						<text class="credential-copy">分页查询、新增、编辑并单个或批量启停模型</text>
-					</button>
-					<button class="credential-button model-catalog-button" type="button" :disabled="busy" @click="navigateToAiModelIcons">
-						<text class="credential-kicker">MODEL ASSETS</text>
-						<text class="credential-title">模型图标库</text>
-						<text class="credential-copy">上传 OSS 图片、登记外部 URL 并维护模型复用图标</text>
-					</button>
-					<button class="primary-button" type="button" :loading="busy" @click="refreshProfile">刷新会话</button>
-					<button class="secondary-button" type="button" :disabled="busy" @click="logoutCurrent">退出当前设备</button>
-					<button class="danger-button" type="button" :disabled="busy" @click="logoutEverywhere">退出所有设备</button>
 				</view>
 
 				<view v-else-if="screenState === 'UNINITIALIZED'">
@@ -146,12 +237,17 @@
 	</view>
 </template>
 
-	<script>
+<script>
 	import IdentityForm from '@/components/admin/admin-identity-form.vue'
 	import PasswordFields from '@/components/admin/admin-password-fields.vue'
 	import VerificationCodeFields from '@/components/admin/admin-verification-code-fields.vue'
 	import LoginPasswordField from '@/components/admin/admin-login-password-field.vue'
 	import { adminApi } from '@/common/admin/admin-api.js'
+	import {
+		guardedAdminNavigate,
+		markAdminSessionAuthenticated
+	} from '@/common/admin/admin-route-guard-runtime.js'
+	import { takeAdminSessionExpiryNotice } from '@/common/admin/admin-session-expiry-navigation.js'
 	import { requestAdminHcaptchaToken } from '@/common/admin/admin-hcaptcha.js'
 	import { clearAdminFlow } from '@/common/admin/admin-secure-vault.js'
 	import {
@@ -223,6 +319,13 @@
 				if (this.screenState === 'AUTHENTICATED') return '会话已绑定当前设备；任何受保护操作都会滑动续期。'
 				return '配置状态、凭证校验与会话边界均由后端强制执行。'
 			},
+			feedbackTone() {
+				return {
+					error: 'danger',
+					success: 'success',
+					warning: 'warning'
+				}[this.messageType] || 'info'
+			},
 			profileFlag() { return flagFromIso2(this.profile.countryIso2) || 'A' },
 			expiresLabel() {
 				if (!this.profile.expiresAt) return '未知'
@@ -230,18 +333,31 @@
 			}
 		},
 		onLoad() {
-			this.loadState(false)
+			const sessionNotice = takeAdminSessionExpiryNotice()
+			this.loadState(false).finally(() => {
+				if (sessionNotice) {
+					this.message = sessionNotice
+					this.messageType = 'error'
+				}
+			})
 			this.resolveInitialCountry()
 		},
 		methods: {
+			navigateProtected(route) {
+				if (route === '/pages/index/index') return
+				return guardedAdminNavigate(route)
+			},
 			navigateToIp2LocationKeys() {
-				uni.navigateTo({ url: '/pages/risk/ip2location-keys' })
+				return guardedAdminNavigate('/pages/risk/ip2location-keys')
 			},
 			navigateToAiModels() {
-				uni.navigateTo({ url: '/pages/ai-models/index' })
+				return guardedAdminNavigate('/pages/ai-models/index')
 			},
 			navigateToAiModelIcons() {
-				uni.navigateTo({ url: '/pages/ai-model-icons/index' })
+				return guardedAdminNavigate('/pages/ai-model-icons/index')
+			},
+			navigateToMailInspection() {
+				return guardedAdminNavigate('/pages/mail-inspection/openai/index')
 			},
 			updateEmailCode(value) {
 				this.form.emailCode = value
@@ -325,6 +441,7 @@
 							try {
 								this.profile = await adminApi.bootstrap()
 								this.screenState = 'AUTHENTICATED'
+								markAdminSessionAuthenticated()
 							} catch (error) {
 								if (error.code !== 'ADMIN_SESSION_INVALID') throw error
 								this.screenState = 'ACTIVE'
@@ -439,6 +556,7 @@
 						this.form.password = ''
 						this.profile = response.admin
 						this.screenState = 'AUTHENTICATED'
+						markAdminSessionAuthenticated()
 					})
 				} catch (_) {
 					this.form.password = ''
@@ -453,7 +571,10 @@
 						this.messageType = 'success'
 					})
 				} catch (error) {
-					if (error.code === 'ADMIN_SESSION_INVALID') this.screenState = 'ACTIVE'
+					if (error.code === 'ADMIN_SESSION_INVALID') {
+						this.profile = {}
+						this.screenState = 'ACTIVE'
+					}
 				}
 			},
 			async logoutCurrent() {
@@ -461,89 +582,666 @@
 					await this.run(() => adminApi.logout())
 					this.profile = {}
 					this.screenState = 'ACTIVE'
-				} catch (_) {}
+				} catch (error) {
+					if (error.code === 'ADMIN_SESSION_INVALID') {
+						this.profile = {}
+						this.screenState = 'ACTIVE'
+					}
+				}
 			},
 			async logoutEverywhere() {
 				try {
 					await this.run(() => adminApi.logoutAll())
 					this.profile = {}
 					this.screenState = 'ACTIVE'
-				} catch (_) {}
+				} catch (error) {
+					if (error.code === 'ADMIN_SESSION_INVALID') {
+						this.profile = {}
+						this.screenState = 'ACTIVE'
+					}
+				}
 			}
 		}
 	}
 </script>
 
 <style lang="scss">
-	page { min-height: 100%; background: #080b0d; }
-	button::after { border: 0; }
-	.admin-page {
+	@import '@/common/app-theme.scss';
+
+	page {
+		min-height: 100%;
+		background: $app-canvas;
+	}
+
+	button {
+		font-family: $app-font-family;
+	}
+
+	button::after {
+		border: 0;
+	}
+
+	.admin-auth-page {
+		position: relative;
 		min-height: 100vh;
-		padding: calc(30rpx + env(safe-area-inset-top)) 28rpx calc(36rpx + env(safe-area-inset-bottom));
+		padding: calc(32rpx + env(safe-area-inset-top)) 28rpx calc(40rpx + env(safe-area-inset-bottom));
 		box-sizing: border-box;
-		color: #f3f8f8;
-		background:
-			radial-gradient(circle at 12% 16%, rgba(57, 214, 210, .17), transparent 28%),
-			linear-gradient(135deg, #080b0d 0%, #0e1519 54%, #07090b 100%);
+		overflow: hidden;
+		color: $app-text;
+		background: $app-canvas;
+		font-family: $app-font-family;
 	}
-	.admin-shell { width: 100%; max-width: 1180px; margin: 0 auto; display: grid; gap: 30rpx; }
-	.admin-intro { padding: 10rpx 4rpx; }
+
+	.ambient-light {
+		position: absolute;
+		width: 620rpx;
+		height: 620rpx;
+		border-radius: 50%;
+		filter: blur(80px);
+		opacity: .16;
+		pointer-events: none;
+	}
+
+	.ambient-light-primary {
+		top: -280rpx;
+		left: -220rpx;
+		background: $app-green;
+	}
+
+	.ambient-light-secondary {
+		right: -320rpx;
+		bottom: -360rpx;
+		background: $app-teal;
+		opacity: .09;
+	}
+
+	.auth-shell {
+		position: relative;
+		z-index: 1;
+		width: min(1120px, 100%);
+		min-height: calc(100vh - 72rpx);
+		margin: 0 auto;
+		display: grid;
+		align-items: center;
+		gap: 48rpx;
+	}
+
+	.admin-intro {
+		padding: 12rpx 4rpx;
+	}
+
 	.admin-mark {
-		width: 72rpx; height: 72rpx; display: flex; align-items: center; justify-content: center;
-		border: 1px solid rgba(105, 212, 226, .36); border-radius: 18rpx; background: rgba(20, 29, 34, .78);
+		width: 72rpx;
+		height: 72rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 20rpx;
+		background: rgba($app-green, .11);
 	}
-	.admin-mark-core { width: 28rpx; height: 28rpx; border-radius: 50%; background: #39d6d2; box-shadow: 0 0 20rpx rgba(57,214,210,.42); }
-	.admin-kicker, .admin-title, .admin-copy, .panel-title, .panel-copy, .state-title, .state-copy { display: block; }
-	.admin-kicker { margin-top: 22rpx; color: #69d4e2; font-size: 24rpx; font-weight: 700; }
-	.admin-title { margin-top: 12rpx; font-size: 54rpx; font-weight: 760; line-height: 1.08; }
-	.admin-copy { max-width: 620rpx; margin-top: 18rpx; color: #a8b8bd; font-size: 27rpx; line-height: 1.55; }
-	.security-note { margin-top: 24rpx; color: #c6d2d5; font-size: 23rpx; }
+
+	.admin-mark-core {
+		width: 26rpx;
+		height: 26rpx;
+		border: 6rpx solid $app-green;
+		border-radius: 50%;
+		box-sizing: border-box;
+	}
+
+	.admin-kicker,
+	.admin-title,
+	.admin-copy,
+	.panel-title,
+	.panel-copy,
+	.state-title,
+	.state-copy {
+		display: block;
+	}
+
+	.admin-kicker {
+		margin-top: 24rpx;
+		color: $app-green;
+		font-size: $app-font-size-caption;
+		font-weight: 720;
+	}
+
+	.admin-title {
+		max-width: 720rpx;
+		margin-top: 14rpx;
+		font-size: 60rpx;
+		font-weight: 790;
+		line-height: 1.08;
+		letter-spacing: -.03em;
+		text-wrap: balance;
+	}
+
+	.admin-copy {
+		max-width: 68ch;
+		margin-top: 18rpx;
+		color: $app-muted;
+		font-size: $app-font-size-body;
+		line-height: $app-line-height-body;
+		text-wrap: pretty;
+	}
+
+	.security-note {
+		margin-top: 28rpx;
+		display: flex;
+		align-items: center;
+		gap: 14rpx;
+		color: #c6d2d5;
+		font-size: 25rpx;
+	}
+
+	.security-note-dot {
+		width: 12rpx;
+		height: 12rpx;
+		border-radius: 50%;
+		background: $app-green;
+		box-shadow: 0 0 0 7rpx rgba($app-green, .1);
+	}
+
 	.admin-panel {
-		padding: 34rpx 30rpx; border: 1px solid rgba(105, 212, 226, .22); border-radius: 18rpx;
-		background: rgba(16, 22, 26, .84); backdrop-filter: blur(18px); box-shadow: 0 20rpx 60rpx rgba(0,0,0,.28);
+		padding: 40rpx 36rpx;
+		border-radius: $app-radius-panel;
+		box-sizing: border-box;
+		@include admin-glass-chrome(true);
+		box-shadow: $app-shadow-floating;
 	}
-	.panel-title, .state-title { color: #f3f8f8; font-size: 36rpx; font-weight: 760; line-height: 1.2; }
-	.panel-copy, .state-copy { margin: 10rpx 0 26rpx; color: #91a2a8; font-size: 24rpx; line-height: 1.55; }
-	.admin-banner { margin-bottom: 22rpx; padding: 18rpx 20rpx; border-radius: 10rpx; background: rgba(57,214,210,.1); color: #d9fbfb; font-size: 24rpx; }
-	.admin-banner.error { background: rgba(232,98,98,.12); color: #ffb8b8; }
-	.admin-banner.success { background: rgba(57,214,210,.12); color: #c8ffff; }
-	.center-state { min-height: 360rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20rpx; text-align: center; color: #a8b8bd; }
-	.loading-ring { width: 48rpx; height: 48rpx; border: 4rpx solid rgba(105,212,226,.2); border-top-color: #69d4e2; border-radius: 50%; animation: spin .8s linear infinite; }
-	.step-row { display: flex; justify-content: space-between; margin-bottom: 30rpx; color: #91a2a8; font-size: 20rpx; }
-	.step-item { display: flex; align-items: center; gap: 8rpx; }
-	.step-dot { width: 38rpx; height: 38rpx; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #263238; }
-	.step-dot.active { background: #39d6d2; color: #071012; }
-	.primary-button, .secondary-button, .danger-button {
-		width: 100%; min-height: 86rpx; margin: 24rpx 0 0; border: 0; border-radius: 12rpx;
-		display: flex; align-items: center; justify-content: center; font-size: 27rpx; font-weight: 740;
+
+	.admin-panel > .admin-feedback-banner {
+		margin-bottom: $app-space-3;
 	}
-	.primary-button { background: linear-gradient(135deg, #d2e85c, #97c93f); color: #101707; }
-	.secondary-button { border: 1px solid rgba(105,212,226,.34); background: rgba(57,214,210,.08); color: #d9fbfb; }
-	.danger-button { border: 1px solid rgba(232,98,98,.35); background: rgba(232,98,98,.08); color: #ffb8b8; }
-	.credential-button {
-		width: 100%; min-height: 126rpx; margin-top: 28rpx; padding: 22rpx 24rpx; border: 1px solid rgba(57,214,210,.32);
-		border-radius: 14rpx; background: rgba(57,214,210,.06); color: #f3f8f8; text-align: left;
-		display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+
+	.panel-title,
+	.state-title {
+		color: $app-text;
+		font-size: $app-font-size-section;
+		font-weight: 760;
+		line-height: 1.25;
 	}
-	.model-catalog-button { border-color: rgba(105,212,226,.42); background: linear-gradient(135deg, rgba(57,214,210,.08), rgba(105,212,226,.04)); }
-	.credential-kicker { color: #39d6d2; font-size: 18rpx; font-weight: 760; letter-spacing: .12em; }
-	.credential-title { margin-top: 6rpx; font-size: 28rpx; font-weight: 760; }
-	.credential-copy { margin-top: 6rpx; color: #91a2a8; font-size: 21rpx; line-height: 1.45; }
-	.dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx; }
-	.delivery-row { display: flex; gap: 12rpx; margin-top: 16rpx; }
-	.delivery-row button { flex: 1; margin: 0; border: 1px solid rgba(145,162,168,.3); background: transparent; color: #a8b8bd; font-size: 23rpx; }
-	.delivery-row button.selected { border-color: #39d6d2; background: rgba(57,214,210,.12); color: #d9fbfb; }
-	.profile-badge { width: 88rpx; height: 88rpx; margin-bottom: 20rpx; display: flex; align-items: center; justify-content: center; border-radius: 24rpx; background: rgba(57,214,210,.12); font-size: 45rpx; }
-	.profile-row { padding: 22rpx 0; border-bottom: 1px solid rgba(145,162,168,.16); }
-	.profile-label, .profile-value { display: block; }
-	.profile-label { color: #91a2a8; font-size: 21rpx; }
-	.profile-value { margin-top: 7rpx; color: #f3f8f8; font-size: 27rpx; overflow-wrap: anywhere; }
-	@keyframes spin { to { transform: rotate(360deg); } }
+
+	.panel-copy,
+	.state-copy {
+		margin: 12rpx 0 28rpx;
+		color: $app-muted;
+		font-size: 26rpx;
+		line-height: $app-line-height-body;
+	}
+
+	.center-state {
+		min-height: 360rpx;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 20rpx;
+		text-align: center;
+		color: $app-muted;
+		font-size: $app-font-size-body;
+	}
+
+	.loading-ring {
+		width: 48rpx;
+		height: 48rpx;
+		border: 4rpx solid rgba($app-teal, .18);
+		border-top-color: $app-teal;
+		border-radius: 50%;
+		animation: spin .8s linear infinite;
+	}
+
+	.step-row {
+		display: flex;
+		justify-content: space-between;
+		margin-bottom: 34rpx;
+		color: $app-muted;
+		font-size: $app-font-size-caption;
+	}
+
+	.step-item {
+		display: flex;
+		align-items: center;
+		gap: 10rpx;
+	}
+
+	.step-dot {
+		width: 42rpx;
+		height: 42rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 50%;
+		background: $app-surface-strong;
+	}
+
+	.step-dot.active {
+		background: $app-green;
+		color: #071012;
+	}
+
+	.primary-button,
+	.secondary-button,
+	.danger-button {
+		width: 100%;
+		min-height: 92rpx;
+		margin: 26rpx 0 0;
+		border-radius: $app-radius-control;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 27rpx;
+		font-weight: 730;
+		transition:
+			transform $app-motion-micro $app-ease-out,
+			background-color $app-motion-state ease,
+			opacity $app-motion-state ease;
+	}
+
+	.primary-button {
+		border: 0;
+		background: $app-green;
+		color: #071012;
+	}
+
+	.secondary-button {
+		border: 1px solid rgba($app-teal, .34);
+		background: rgba($app-green, .07);
+		color: #d9fbfb;
+	}
+
+	.danger-button {
+		border: 1px solid rgba($app-danger, .35);
+		background: rgba($app-danger, .08);
+		color: $app-danger-text;
+	}
+
+	.primary-button:focus-visible,
+	.secondary-button:focus-visible,
+	.danger-button:focus-visible,
+	.delivery-row button:focus-visible,
+	.operation-row:focus-visible {
+		@include admin-focus-ring;
+	}
+
+	.primary-button:active,
+	.secondary-button:active,
+	.danger-button:active,
+	.delivery-row button:active,
+	.operation-row:active {
+		transform: scale(.98);
+	}
+
+	.dispatch-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 14rpx;
+	}
+
+	.delivery-row {
+		display: flex;
+		gap: 12rpx;
+		margin-top: 16rpx;
+	}
+
+	.delivery-row button {
+		min-height: 84rpx;
+		flex: 1;
+		margin: 0;
+		border: 1px solid $app-border-strong;
+		border-radius: $app-radius-control;
+		background: transparent;
+		color: $app-muted;
+		font-size: 25rpx;
+		transition:
+			transform $app-motion-micro $app-ease-out,
+			background-color $app-motion-state ease;
+	}
+
+	.delivery-row button.selected {
+		border-color: $app-green;
+		background: rgba($app-green, .12);
+		color: #d9fbfb;
+	}
+
+	.dashboard-overview {
+		margin-top: $app-space-5;
+		display: grid;
+		grid-template-columns: minmax(300px, .72fr) minmax(430px, 1.28fr);
+		gap: $app-space-3;
+		align-items: start;
+	}
+
+	.session-panel,
+	.operations-panel,
+	.security-panel {
+		padding: $app-space-4;
+		@include admin-solid-panel;
+	}
+
+	.session-panel {
+		position: sticky;
+		top: $app-space-4;
+	}
+
+	.session-identity {
+		display: flex;
+		align-items: center;
+		gap: $app-space-2;
+	}
+
+	.profile-badge {
+		width: 76rpx;
+		height: 76rpx;
+		flex: 0 0 auto;
+		border-radius: 22rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba($app-green, .12);
+		color: $app-text;
+		font-size: 38rpx;
+	}
+
+	.section-heading,
+	.section-copy,
+	.profile-label,
+	.profile-value,
+	.operation-title,
+	.operation-description {
+		display: block;
+	}
+
+	.section-heading {
+		font-size: 34rpx;
+		font-weight: 750;
+		letter-spacing: -.015em;
+	}
+
+	.section-copy {
+		margin-top: 8rpx;
+		color: $app-muted;
+		font-size: 25rpx;
+		line-height: 1.5;
+	}
+
+	.profile-list {
+		margin-top: $app-space-3;
+	}
+
+	.profile-row {
+		padding: 20rpx 0;
+		border-bottom: 1px solid $app-border-soft;
+	}
+
+	.profile-row:last-child {
+		border-bottom: 0;
+	}
+
+	.profile-label {
+		color: $app-muted;
+		font-size: $app-font-size-caption;
+	}
+
+	.profile-value {
+		margin-top: 7rpx;
+		color: $app-text;
+		font-size: 27rpx;
+		line-height: 1.45;
+		overflow-wrap: anywhere;
+	}
+
+	.section-intro {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: $app-space-3;
+	}
+
+	.operation-count,
+	.session-chip,
+	.session-expiry {
+		min-height: 48rpx;
+		padding: 0 16rpx;
+		border-radius: 999px;
+		display: inline-flex;
+		align-items: center;
+		box-sizing: border-box;
+		color: $app-muted;
+		font-size: $app-font-size-caption;
+	}
+
+	.operation-count,
+	.session-expiry {
+		background: rgba($app-muted, .08);
+	}
+
+	.session-chip {
+		gap: 10rpx;
+		background: rgba($app-green, .1);
+		color: #d9fbfb;
+	}
+
+	.session-chip-dot {
+		width: 10rpx;
+		height: 10rpx;
+		border-radius: 50%;
+		background: $app-green;
+	}
+
+	.operation-list {
+		margin-top: $app-space-3;
+	}
+
+	.operation-row {
+		width: 100%;
+		min-height: 112rpx;
+		margin: 0;
+		padding: 20rpx 12rpx;
+		border: 0;
+		border-bottom: 1px solid $app-border-soft;
+		border-radius: 0;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+		gap: $app-space-2;
+		background: transparent;
+		color: $app-text;
+		text-align: left;
+		transition:
+			transform $app-motion-micro $app-ease-out,
+			background-color $app-motion-state ease,
+			opacity $app-motion-state ease;
+	}
+
+	.operation-row:last-child {
+		border-bottom: 0;
+	}
+
+	.operation-symbol {
+		width: 56rpx;
+		height: 56rpx;
+		flex: 0 0 auto;
+		border-radius: 16rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba($app-green, .11);
+		color: $app-green;
+		font-size: 21rpx;
+		font-weight: 780;
+	}
+
+	.operation-copy {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.operation-title {
+		font-size: 28rpx;
+		font-weight: 710;
+	}
+
+	.operation-description {
+		margin-top: 5rpx;
+		color: $app-muted;
+		font-size: 24rpx;
+		line-height: 1.45;
+	}
+
+	.operation-arrow {
+		color: $app-muted;
+		font-size: 38rpx;
+	}
+
+	.security-panel {
+		grid-column: 1 / -1;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		align-items: center;
+		gap: $app-space-4;
+	}
+
+	.security-facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 10rpx;
+	}
+
+	.security-facts text {
+		padding: 10rpx 14rpx;
+		border-radius: 999px;
+		background: rgba($app-muted, .08);
+		color: $app-muted;
+		font-size: $app-font-size-caption;
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		.operation-row:not(:disabled):hover {
+			background: rgba($app-green, .055);
+			cursor: pointer;
+		}
+
+		.primary-button:not(:disabled):hover {
+			background: #57e3df;
+			cursor: pointer;
+		}
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
+	}
+
 	@media screen and (min-width: 760px) {
-		.admin-page { padding: 56px 42px; }
-		.admin-shell { min-height: calc(100vh - 112px); grid-template-columns: minmax(300px, 1fr) minmax(400px, 500px); align-items: center; gap: 60px; }
-		.admin-title { font-size: 44px; }
-		.admin-panel { padding: 36px 34px; }
+		.auth-shell {
+			grid-template-columns: minmax(300px, 1fr) minmax(400px, 500px);
+			gap: 72px;
+		}
+
+		.admin-title {
+			font-size: 46px;
+		}
+
+		.admin-panel {
+			padding: 40px 38px;
+		}
 	}
-	@media (prefers-reduced-motion: reduce) { .loading-ring { animation: none; } }
+
+	@media (max-width: 1023px) {
+		.dashboard-overview {
+			grid-template-columns: 1fr;
+		}
+
+		.session-panel {
+			position: static;
+		}
+
+		.security-panel {
+			grid-column: auto;
+			grid-template-columns: 1fr;
+		}
+	}
+
+	@media (max-width: 767px) {
+		.auth-shell {
+			align-content: center;
+			gap: 32rpx;
+		}
+
+		.admin-title {
+			font-size: 52rpx;
+		}
+
+		.admin-copy {
+			font-size: 26rpx;
+		}
+
+		.admin-panel {
+			padding: 32rpx 24rpx;
+		}
+
+		.dispatch-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.dashboard-overview {
+			margin-top: $app-space-4;
+		}
+
+		.session-panel,
+		.operations-panel,
+		.security-panel {
+			padding: 28rpx 24rpx;
+		}
+
+		.operation-row {
+			min-height: 104rpx;
+			padding-right: 4rpx;
+			padding-left: 4rpx;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.loading-ring {
+			animation: none;
+		}
+
+		.primary-button,
+		.secondary-button,
+		.danger-button,
+		.delivery-row button,
+		.operation-row {
+			transition: opacity 80ms linear, background-color 80ms linear;
+		}
+
+		.primary-button:active,
+		.secondary-button:active,
+		.danger-button:active,
+		.delivery-row button:active,
+		.operation-row:active {
+			transform: none;
+		}
+	}
+
+	@media (prefers-reduced-transparency: reduce) {
+		.ambient-light {
+			display: none;
+		}
+
+		.admin-panel {
+			background: $app-surface-solid;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+		}
+	}
+
+	@media (prefers-contrast: more) {
+		.admin-panel,
+		.session-panel,
+		.operations-panel,
+		.security-panel {
+			border: 2px solid $app-text;
+			background: $app-canvas;
+		}
+	}
 </style>

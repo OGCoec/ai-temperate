@@ -56,6 +56,11 @@ ai-model-icon:
 
 # 测试认证与安全配置。
 app:
+  # 上下文测试关闭后台身份 Bloom 构建，避免连接任何真实 Redis 或 PostgreSQL。
+  identity-presence-bloom:
+    # 测试环境仅验证 Bean 与配置绑定，不启动后台全量初始化。
+    enabled: false
+
   # 测试 AI 模型缓存使用固定非生产密钥和生产允许范围内的 TTL，不连接真实 Redis。
   ai-model-cache:
     # 固定测试密钥恰好解码为三十二字节，不对应任何生产缓存。
@@ -245,6 +250,28 @@ app:
     registration-flow-ttl: 10m
     # 测试管理员登录 Flow 固定十分钟。
     login-flow-ttl: 10m
+    # 测试管理员邮箱检查只验证属性绑定，不创建 Rabbit 连接或执行外部邮箱调用。
+    mail-inspection:
+      # 测试环境关闭真实 Rabbit 工作调度并使用 Fail Closed 替身。
+      rabbit:
+        # 普通上下文测试不注册 Rabbit 拓扑、消费者或启动恢复扫描器。
+        enabled: false
+        # 固定测试 AES-256-GCM 密钥恰好解码为三十二字节，不对应生产消息。
+        payload-key-base64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # 测试提交层使用小边界验证属性绑定，不会连接 RabbitMQ。
+      submission:
+        # 测试残缺提交保留期与生产默认值一致。
+        incomplete-retention: 6h
+        # 测试残缺任务清理间隔固定为一分钟。
+        cleanup-interval: 1m
+        # 测试分块明文上限保持一百六十 KiB。
+        max-plaintext-chunk-bytes: 163840
+        # 测试完整消息边界保持二百五十六 KiB。
+        max-message-bytes: 262144
+        # 测试创建阶段最多并发发布八个分块。
+        publish-concurrency: 8
+        # 测试每个分块最多并发派发十六条工作消息。
+        work-dispatch-concurrency: 16
     # 测试管理员前端只允许本机显式 Origin。
     allowed-origins: https://localhost:3001
     # 测试 hCaptcha 配置全部为非生产假值。

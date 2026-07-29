@@ -1,5 +1,5 @@
 <template>
-	<view class="gate-page">
+	<view class="gate-page" :class="{ 'appearance-admin-quiet': appearance === 'ADMIN_QUIET' }">
 		<view class="gate-panel" role="main" aria-labelledby="challenge-failed-title">
 			<view class="gate-status" role="alert" aria-live="assertive">
 				<view class="status-label">
@@ -77,6 +77,11 @@
 			busy: {
 				type: Boolean,
 				default: false
+			},
+			appearance: {
+				type: String,
+				default: 'DEFAULT',
+				validator: value => value === 'DEFAULT' || value === 'ADMIN_QUIET'
 			}
 		},
 		computed: {
@@ -267,6 +272,26 @@
 		opacity: 0.7;
 	}
 
+	.appearance-admin-quiet {
+		--gate-bg: #080b0d;
+		--gate-surface: rgba(16, 22, 26, 0.88);
+		--gate-text: #f3f8f8;
+		--gate-muted: #91a2a8;
+		--gate-lime: #39d6d2;
+		--gate-yellow: #f3be58;
+		--gate-border: rgba(145, 162, 168, 0.26);
+		--gate-on-action: #071012;
+		background:
+			radial-gradient(circle at 18% 0%, rgba(57, 214, 210, 0.1), transparent 34%),
+			var(--gate-bg);
+	}
+
+	.appearance-admin-quiet .gate-panel {
+		-webkit-backdrop-filter: blur(24px) saturate(145%);
+		backdrop-filter: blur(24px) saturate(145%);
+		box-shadow: 0 8px 16px rgba(0, 0, 0, 0.24);
+	}
+
 	@media (min-width: 760px) {
 		.gate-page {
 			display: grid;
@@ -299,6 +324,21 @@
 
 		.retry-button:active:not([disabled]) {
 			transform: none;
+		}
+	}
+
+	@media (prefers-reduced-transparency: reduce) {
+		.appearance-admin-quiet .gate-panel {
+			background: #10161a;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+		}
+	}
+
+	@media (prefers-contrast: more) {
+		.appearance-admin-quiet .gate-panel {
+			border: 2px solid #f3f8f8;
+			background: #080b0d;
 		}
 	}
 </style>

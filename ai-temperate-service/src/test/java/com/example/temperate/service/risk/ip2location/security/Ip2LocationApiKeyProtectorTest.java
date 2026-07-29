@@ -44,8 +44,42 @@ class Ip2LocationApiKeyProtectorTest {
         Ip2LocationKeyMaterial material =
                 protector.unprotect(first.keyId(), first.encryptedEnvelope());
         assertThat(material.apiKey()).isEqualTo("free-test-key-0001");
-        assertThat(material.maskedKey()).isEqualTo("free****0001");
+        assertThat(material.maskedKey()).isEqualTo("fre****001");
         assertThat(material.planType()).isEqualTo(Ip2LocationPlanType.FREE);
+    }
+
+    @Test
+    void shortApiKeyIsFullyMasked() {
+        Ip2LocationApiKeyProtector protector = protector();
+
+        ProtectedIp2LocationKey protectedKey = protector.protect(
+                "12345678",
+                Ip2LocationPlanType.FREE,
+                CREATED_AT,
+                EXPIRES_AT);
+
+        Ip2LocationKeyMaterial material =
+                protector.unprotect(protectedKey.keyId(), protectedKey.encryptedEnvelope());
+        assertThat(material.maskedKey()).isEqualTo("****");
+    }
+
+    @Test
+    void legacyEnvelopeIsRemaskedWithoutRedisMigration() {
+        Ip2LocationApiKeyProtector protector = protector();
+        HmacIdentifier legacyKeyId = HmacIdentifier.fromProtectedValue(
+                "jJ43IwZEu3Wi6Dliow-4TN1MeRiHTcN4yEEtnYwz-cU");
+        // 固定夹具包含旧版前四后四脱敏值，用于保证历史密文读取后不会继续扩大凭据暴露面。
+        String legacyEnvelope = "v1.AQIDBAUGBwgJCgsM."
+                + "zOENJe18zGVo5E9U8gnJTz9jbkanWtSnaAdjHYJOszYY9ZxLxjUUgA0O1Usn1KHh"
+                + "oCFqhF5bFOx_HhlkgaJvd40b82OMYC6aourLvgpta7nV7Hx42DVy46RNrjLEy6kf"
+                + "8wMN1KSPGglk3lhJzlOYz49RDeq2xsJIxB3eHDkfT3yH1GzF3wt8Z32eCiAxzKZ"
+                + "4rjxFGtIVak_Blj7AT_7KMhPpEZHJTWqYlUX5lHBmujjt4DyR";
+
+        Ip2LocationKeyMaterial material =
+                protector.unprotect(legacyKeyId, legacyEnvelope);
+
+        assertThat(material.apiKey()).isEqualTo("free-test-key-0001");
+        assertThat(material.maskedKey()).isEqualTo("fre****001");
     }
 
     @Test

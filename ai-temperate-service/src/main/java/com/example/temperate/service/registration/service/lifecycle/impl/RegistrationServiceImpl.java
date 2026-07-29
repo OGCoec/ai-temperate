@@ -8,6 +8,9 @@ import com.example.temperate.mapper.user.profile.UserProfileMapper;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.entity.UserProfile;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.password.policy.PasswordStrengthPolicy;
 import com.example.temperate.service.auth.password.policy.PasswordValidationException;
 import com.example.temperate.service.registration.component.executor.RegistrationAfterCommitExecutor;
@@ -77,7 +80,8 @@ import reactor.core.scheduler.Schedulers;
  * <p>用途：串联输入规范化、风险与人机校验、双通道验证码、Redis 注册状态机和 PostgreSQL 用户开户。</p>
  *
  * <p>事务与并发原理：完成注册前先由 Redis 原子领取流程完成权，防止多实例重复开户；随后在本地数据库事务中
- * 写入身份、资料状态和会员额度。事务提交后删除流程，事务回滚时释放领取权，以避免未提交数据对应的流程被错误消费。</p>
+ * 写入身份、资料状态和会员额度。事务提交后删除流程并幂等更新身份 Bloom，事务回滚时只释放领取权，
+ * 以避免未提交数据对应的流程被错误消费或写入过滤器。</p>
  */
 @Service
 public class RegistrationServiceImpl implements RegistrationService {
@@ -106,6 +110,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final RegistrationIdGenerator idGenerator;
     private final PublicIdCodec publicIdCodec;
     private final RegistrationAfterCommitExecutor afterCommitExecutor;
+    private final IdentityPresenceFilter identityPresenceFilter;
     private final Clock clock;
     private final Duration flowTtl;
 
@@ -128,6 +133,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             RegistrationIdGenerator idGenerator,
             PublicIdCodec publicIdCodec,
             RegistrationAfterCommitExecutor afterCommitExecutor,
+            IdentityPresenceFilter identityPresenceFilter,
             Clock clock,
             @Value("${app.registration.flow-ttl:600s}") Duration flowTtl) {
         this.identityMapper = Objects.requireNonNull(identityMapper);
@@ -150,6 +156,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         this.idGenerator = Objects.requireNonNull(idGenerator);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
         this.afterCommitExecutor = Objects.requireNonNull(afterCommitExecutor);
+        this.identityPresenceFilter = Objects.requireNonNull(identityPresenceFilter);
         this.clock = Objects.requireNonNull(clock);
         if (!REQUIRED_FLOW_TTL.equals(flowTtl)) {
             throw new IllegalArgumentException("Registration flow TTL must be exactly 600 seconds.");
@@ -169,13 +176,28 @@ public class RegistrationServiceImpl implements RegistrationService {
             throw unavailable();
         }
 
-        List<UserLoginIdentity> conflicts = identityMapper.findConflicts(email, phone);
+        IdentityPresenceDecision emailPresence =
+                identityPresenceFilter.checkEmail(email);
+        IdentityPresenceDecision phonePresence =
+                identityPresenceFilter.checkPhone(phone);
+        boolean requiresDatabaseCheck =
+                emailPresence != IdentityPresenceDecision.DEFINITELY_ABSENT
+                        || phonePresence != IdentityPresenceDecision.DEFINITELY_ABSENT;
+        List<UserLoginIdentity> conflicts = requiresDatabaseCheck
+                ? identityMapper.findConflicts(email, phone)
+                : List.of();
+        boolean phoneConflict = conflicts.stream()
+                .anyMatch(identity -> phone.equals(identity.getPhone()));
+        boolean emailConflict = conflicts.stream()
+                .anyMatch(identity -> email.equalsIgnoreCase(identity.getEmail()));
+        if (requiresDatabaseCheck) {
+            identityPresenceFilter.recordDatabaseVerification(
+                    IdentityPresenceKind.EMAIL, emailPresence, emailConflict);
+            identityPresenceFilter.recordDatabaseVerification(
+                    IdentityPresenceKind.PHONE, phonePresence, phoneConflict);
+        }
         if (!conflicts.isEmpty()) {
             // 对冲突账户始终返回统一不可用结果，避免注册接口成为账号枚举渠道。
-            boolean phoneConflict = conflicts.stream()
-                    .anyMatch(identity -> phone.equals(identity.getPhone()));
-            boolean emailConflict = conflicts.stream()
-                    .anyMatch(identity -> email.equalsIgnoreCase(identity.getEmail()));
             flowStore.recordConflict(actor, phoneConflict, emailConflict, clock.instant());
             throw unavailable();
         }
@@ -460,10 +482,23 @@ public class RegistrationServiceImpl implements RegistrationService {
         RegistrationCompletionClaim claim =
                 flowStore.claimCompletion(access, claimId, clock.instant());
 
+        RegistrationFlowSnapshot snapshot = claim.snapshot();
+        long internalId;
+        String publicId;
         try {
-            // 在写库前登记事务完成回调：提交后删除流程，回滚后释放领取权以允许安全重试。
+            internalId = idGenerator.nextPositiveId();
+            if (internalId <= 0) {
+                throw new IllegalStateException("Registration ID must be positive.");
+            }
+            publicId = publicIdCodec.encode(internalId);
+            long committedUserId = internalId;
+            // 回调必须在写库前登记：提交后先幂等增加 Bloom 再清理流程，避免流程删除失败跳过 Bloom 降级保护。
             afterCommitExecutor.execute(
-                    () -> flowStore.delete(access),
+                    () -> {
+                        identityPresenceFilter.recordRegistration(
+                                committedUserId, snapshot.email(), snapshot.phone());
+                        flowStore.delete(access);
+                    },
                     () -> flowStore.releaseCompletionClaim(access, claimId));
         } catch (RuntimeException registrationFailure) {
             try {
@@ -475,17 +510,10 @@ public class RegistrationServiceImpl implements RegistrationService {
         }
 
         try {
-            RegistrationFlowSnapshot snapshot = claim.snapshot();
             // 起始阶段的查重不能替代事务内复核；并发注册可能在两次检查之间占用了邮箱或手机号。
             if (!identityMapper.findConflicts(snapshot.email(), snapshot.phone()).isEmpty()) {
                 throw unavailable();
             }
-
-            long internalId = idGenerator.nextPositiveId();
-            if (internalId <= 0) {
-                throw new IllegalStateException("Registration ID must be positive.");
-            }
-            String publicId = publicIdCodec.encode(internalId);
 
             UserLoginIdentity identity = new UserLoginIdentity();
             identity.setId(internalId);

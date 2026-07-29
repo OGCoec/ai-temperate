@@ -4,6 +4,9 @@ import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.login.audit.enums.LoginAuditOutcome;
 import com.example.temperate.service.auth.login.audit.enums.LoginAuditReason;
 import com.example.temperate.service.auth.login.audit.observer.LoginAuditObserver;
@@ -32,12 +35,13 @@ import org.springframework.transaction.annotation.Transactional;
  * 编排密码登录的输入规范化、风控检查、账号校验、密码升级和会话创建。
  *
  * <p>密码比对对存在与不存在的账号保持相同的计算路径，以减少账号枚举时序差异；密码哈希升级在本地事务中
- * 使用 CAS 写入，避免并发登录回退已升级的哈希。</p>
+ * 使用 CAS 写入，避免并发登录回退已升级的哈希。身份 Bloom 只允许在明确未命中时跳过查库，异常时仍
+ * 回源 PostgreSQL。</p>
  */
 @Service
 public final class LoginServiceImpl implements LoginService {
 
-    private static final String DUMMY_PASSWORD_HASH =
+    static final String DUMMY_PASSWORD_HASH =
             "{bcrypt}$2a$10$JieVY2BiTm1zdN1W07/YxurgOHVm0i5fEmyEnFvyKI3m4jJTukJb6";
 
     private final LoginInputNormalizer inputNormalizer;
@@ -49,6 +53,7 @@ public final class LoginServiceImpl implements LoginService {
     private final RefreshSessionStore refreshSessionStore;
     private final AuthSessionSecretProtector secretProtector;
     private final PublicIdCodec publicIdCodec;
+    private final IdentityPresenceFilter identityPresenceFilter;
 
     public LoginServiceImpl(
             LoginInputNormalizer inputNormalizer,
@@ -59,7 +64,8 @@ public final class LoginServiceImpl implements LoginService {
             AuthTokenService authTokenService,
             RefreshSessionStore refreshSessionStore,
             AuthSessionSecretProtector secretProtector,
-            PublicIdCodec publicIdCodec) {
+            PublicIdCodec publicIdCodec,
+            IdentityPresenceFilter identityPresenceFilter) {
         this.inputNormalizer = Objects.requireNonNull(
                 inputNormalizer, "inputNormalizer must not be null");
         this.identityMapper = Objects.requireNonNull(
@@ -78,6 +84,8 @@ public final class LoginServiceImpl implements LoginService {
                 secretProtector, "secretProtector must not be null");
         this.publicIdCodec = Objects.requireNonNull(
                 publicIdCodec, "publicIdCodec must not be null");
+        this.identityPresenceFilter = Objects.requireNonNull(
+                identityPresenceFilter, "identityPresenceFilter must not be null");
     }
 
     @Override
@@ -124,11 +132,22 @@ public final class LoginServiceImpl implements LoginService {
     }
 
     private AuthenticationContext findAuthenticationContext(NormalizedLoginInput input) {
+        IdentityPresenceKind kind = input.getIdentifierType() == LoginIdentifierType.EMAIL
+                ? IdentityPresenceKind.EMAIL
+                : IdentityPresenceKind.PHONE;
+        IdentityPresenceDecision presence = kind == IdentityPresenceKind.EMAIL
+                ? identityPresenceFilter.checkEmail(input.getIdentifier())
+                : identityPresenceFilter.checkPhone(input.getIdentifier());
+        if (presence == IdentityPresenceDecision.DEFINITELY_ABSENT) {
+            return null;
+        }
         try {
-            if (input.getIdentifierType() == LoginIdentifierType.EMAIL) {
-                return identityMapper.findAuthenticationByNormalizedEmail(input.getIdentifier());
-            }
-            return identityMapper.findAuthenticationByNormalizedPhone(input.getIdentifier());
+            AuthenticationContext context = kind == IdentityPresenceKind.EMAIL
+                    ? identityMapper.findAuthenticationByNormalizedEmail(input.getIdentifier())
+                    : identityMapper.findAuthenticationByNormalizedPhone(input.getIdentifier());
+            identityPresenceFilter.recordDatabaseVerification(
+                    kind, presence, context != null);
+            return context;
         } catch (RuntimeException exception) {
             throw infrastructure("Login authentication lookup failed.", exception);
         }

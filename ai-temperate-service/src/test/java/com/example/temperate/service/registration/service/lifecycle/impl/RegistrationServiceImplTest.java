@@ -3,9 +3,11 @@ package com.example.temperate.service.registration.service.lifecycle.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -21,6 +23,9 @@ import com.example.temperate.mapper.user.profile.UserProfileMapper;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.entity.UserProfile;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceMutationResult;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.humanverification.HumanVerificationCommand;
 import com.example.temperate.service.humanverification.HumanVerificationService;
@@ -99,6 +104,7 @@ class RegistrationServiceImplTest {
     private UserMembershipQuotaMapper membershipQuotaMapper;
     private InMemoryFlowStore flowStore;
     private PasswordEncoder passwordEncoder;
+    private IdentityPresenceFilter identityPresenceFilter;
     private CapturingAfterCommitExecutor afterCommitExecutor;
     private CapturingPublisher deliveryPublisher;
     private TurnstileProbe turnstile;
@@ -110,6 +116,7 @@ class RegistrationServiceImplTest {
         profileMapper = mock(UserProfileMapper.class);
         membershipQuotaMapper = mock(UserMembershipQuotaMapper.class);
         passwordEncoder = mock(PasswordEncoder.class);
+        identityPresenceFilter = mock(IdentityPresenceFilter.class);
         flowStore = new InMemoryFlowStore();
         afterCommitExecutor = new CapturingAfterCommitExecutor();
         deliveryPublisher = new CapturingPublisher();
@@ -120,6 +127,12 @@ class RegistrationServiceImplTest {
         when(profileMapper.insert(any())).thenReturn(1);
         when(membershipQuotaMapper.insert(any())).thenReturn(1);
         when(passwordEncoder.encode(any())).thenReturn("{bcrypt}test-hash");
+        when(identityPresenceFilter.checkEmail(any()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
+        when(identityPresenceFilter.checkPhone(any()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
+        when(identityPresenceFilter.recordRegistration(anyLong(), any(), any()))
+                .thenReturn(IdentityPresenceMutationResult.APPLIED);
 
         HmacSha256Identifier hmac = new HmacSha256Identifier(
                 "0123456789abcdef0123456789abcdef"
@@ -162,6 +175,7 @@ class RegistrationServiceImplTest {
                 ids,
                 new PublicIdCodec(),
                 afterCommitExecutor,
+                identityPresenceFilter,
                 fixedClock,
                 Duration.ofSeconds(600));
     }
@@ -190,6 +204,18 @@ class RegistrationServiceImplTest {
         assertThat(flowStore.flow.expiresAt()).isEqualTo(NOW.plusSeconds(600));
         assertThat(flowStore.flow.email()).isEqualTo("alice@example.com");
         assertThat(flowStore.flow.phone()).isEqualTo("+13125550100");
+    }
+
+    @Test
+    void startSkipsInitialConflictQueryOnlyWhenBothFiltersDefinitelyMiss() {
+        when(identityPresenceFilter.checkEmail("alice@example.com"))
+                .thenReturn(IdentityPresenceDecision.DEFINITELY_ABSENT);
+        when(identityPresenceFilter.checkPhone("+13125550100"))
+                .thenReturn(IdentityPresenceDecision.DEFINITELY_ABSENT);
+
+        service.start(startCommand());
+
+        verify(identityMapper, never()).findConflicts(any(), any());
     }
 
     @Test
@@ -393,8 +419,16 @@ class RegistrationServiceImplTest {
         assertThat(membershipQuota.getQuotaBalanceMinor()).isNull();
         assertThat(flowStore.deleted).isFalse();
 
+        when(identityPresenceFilter.recordRegistration(
+                        42L, "alice@example.com", "+13125550100"))
+                .thenAnswer(invocation -> {
+                    assertThat(flowStore.deleted).isFalse();
+                    return IdentityPresenceMutationResult.APPLIED;
+                });
         afterCommitExecutor.commit();
         assertThat(flowStore.deleted).isTrue();
+        verify(identityPresenceFilter)
+                .recordRegistration(42L, "alice@example.com", "+13125550100");
     }
 
     @Test

@@ -466,6 +466,89 @@
 		}
 	}
 
+	/* 管理端阻断页只改变展示材质，历史锁定与禁止重试行为保持不变。 */
+	.gate-page {
+		background:
+			radial-gradient(circle at 16% -8%, rgba(57, 214, 210, 0.1), transparent 34%),
+			radial-gradient(circle at 88% 0%, rgba(243, 190, 88, 0.09), transparent 28%),
+			#080b0d;
+		color: #f3f8f8;
+		font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+			"PingFang SC", "Microsoft YaHei", sans-serif;
+	}
+
+	.gate-shell {
+		background: #10161a;
+		box-shadow: 0 8px 16px rgba(0, 0, 0, 0.26);
+	}
+
+	.status-rail {
+		background: rgba(217, 104, 107, 0.18);
+		color: #ffb8ba;
+	}
+
+	.status-context {
+		color: #d5b9ba;
+	}
+
+	.status-dot {
+		border-color: rgba(255, 184, 186, 0.52);
+		background: #d9686b;
+	}
+
+	.gate-message {
+		background: #10161a;
+	}
+
+	.shield-mark {
+		background: rgba(217, 104, 107, 0.13);
+		color: #ffb8ba;
+	}
+
+	.gate-label {
+		color: #ffb8ba;
+	}
+
+	.gate-copy,
+	.recovery-intro,
+	.recovery-row,
+	.stopped-copy {
+		color: #91a2a8;
+	}
+
+	.assurance {
+		border-color: #2b3c44;
+		color: #c9d5d8;
+	}
+
+	.assurance-mark {
+		background: #39d6d2;
+		color: #071012;
+	}
+
+	.recovery-panel {
+		border-color: #2b3c44;
+		background: #0c1114;
+	}
+
+	.recovery-row + .recovery-row {
+		border-color: #2b3c44;
+	}
+
+	.step-number {
+		background: rgba(57, 214, 210, 0.12);
+		color: #39d6d2;
+	}
+
+	.stopped-state {
+		background: #151e23;
+		color: #f3f8f8;
+	}
+
+	.stopped-mark {
+		background: #d9686b;
+	}
+
 	@media (prefers-reduced-motion: reduce) {
 		*,
 		*::before,
@@ -474,6 +557,18 @@
 			transition-duration: 0.01ms !important;
 			animation-duration: 0.01ms !important;
 			animation-iteration-count: 1 !important;
+		}
+	}
+
+	@media (prefers-contrast: more) {
+		.gate-shell {
+			border: 2px solid #f3f8f8;
+			background: #080b0d;
+		}
+
+		.gate-message,
+		.recovery-panel {
+			background: #080b0d;
 		}
 	}
 </style>

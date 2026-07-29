@@ -420,6 +420,142 @@ app:
         same-site: ${ADMIN_LOGIN_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员页面必须能读取登录 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
         path: ${ADMIN_LOGIN_CSRF_COOKIE_PATH:/}
+    # 管理员批量邮箱检查使用固定本机代理、有限重试和进程内短期任务。
+    mail-inspection:
+      # OAuth HTTP CONNECT 与 IMAP SOCKS 共用唯一的本机 mixed 代理。
+      proxy:
+        # 代理只允许回环地址，禁止把敏感邮箱流量转发到局域网主机。
+        host: ${ADMIN_MAIL_INSPECTION_PROXY_HOST:127.0.0.1}
+        # 固定 7897 端口，不探测或回退 7892。
+        port: ${ADMIN_MAIL_INSPECTION_PROXY_PORT:7897}
+      # Microsoft 公共客户端 refresh token 交换配置。
+      oauth:
+        # 公共租户 OAuth v2 端点允许隔离测试覆盖为本地桩地址。
+        token-uri: ${ADMIN_MAIL_INSPECTION_TOKEN_URI:https://login.microsoftonline.com/common/oauth2/v2.0/token}
+        # OAuth 只申请 Outlook IMAP 委托权限和离线访问。
+        scope: ${ADMIN_MAIL_INSPECTION_SCOPE:https://outlook.office.com/IMAP.AccessAsUser.All offline_access}
+        # 专用 Reactor Netty 连接池最多保留十六条连接。
+        max-connections: ${ADMIN_MAIL_INSPECTION_OAUTH_MAX_CONNECTIONS:16}
+        # 全部任务共享最多八个并发 OAuth 请求。
+        concurrency: ${ADMIN_MAIL_INSPECTION_OAUTH_CONCURRENCY:8}
+        # 建立 OAuth 代理连接最多等待五秒。
+        connect-timeout: ${ADMIN_MAIL_INSPECTION_OAUTH_CONNECT_TIMEOUT:5s}
+        # 单次 OAuth 响应最多等待十二秒。
+        response-timeout: ${ADMIN_MAIL_INSPECTION_OAUTH_RESPONSE_TIMEOUT:12s}
+        # 首次请求加两次重试，总尝试次数固定不超过三次。
+        max-attempts: ${ADMIN_MAIL_INSPECTION_OAUTH_MAX_ATTEMPTS:3}
+        # 普通临时错误第一次重试前等待一秒，后续指数增加。
+        initial-backoff: ${ADMIN_MAIL_INSPECTION_OAUTH_INITIAL_BACKOFF:1s}
+        # 普通退避加入百分之二十随机抖动以避免同步重试。
+        jitter: ${ADMIN_MAIL_INSPECTION_OAUTH_JITTER:0.2}
+        # 供应商 Retry-After 单次最多接受三十秒。
+        max-retry-after: ${ADMIN_MAIL_INSPECTION_OAUTH_MAX_RETRY_AFTER:30s}
+        # 单条凭证从 OAuth 到 IMAP 的完整处理最多占用一百二十秒。
+        credential-timeout: ${ADMIN_MAIL_INSPECTION_CREDENTIAL_TIMEOUT:120s}
+      # Outlook IMAPS/XOAUTH2 阻塞调用的虚拟线程隔离配置。
+      imap:
+        # Outlook IMAP 主机保持官方固定端点。
+        host: ${ADMIN_MAIL_INSPECTION_IMAP_HOST:imap-mail.outlook.com}
+        # IMAPS 使用标准 993 端口并支持隔离测试覆盖。
+        port: ${ADMIN_MAIL_INSPECTION_IMAP_PORT:993}
+        # 全部任务共享最多四个真实 IMAP 连接。
+        concurrency: ${ADMIN_MAIL_INSPECTION_IMAP_CONCURRENCY:4}
+        # 建立 IMAP 连接最多等待十秒。
+        connect-timeout: ${ADMIN_MAIL_INSPECTION_IMAP_CONNECT_TIMEOUT:10s}
+        # 单次 IMAP 读取或写入最多等待二十秒。
+        read-timeout: ${ADMIN_MAIL_INSPECTION_IMAP_READ_TIMEOUT:20s}
+        # 单个邮箱的完整 IMAP 扫描最多持续四十五秒。
+        scan-timeout: ${ADMIN_MAIL_INSPECTION_IMAP_SCAN_TIMEOUT:45s}
+        # 临时 IMAP I/O 首次加两次重试，总尝试次数不超过三次。
+        max-attempts: ${ADMIN_MAIL_INSPECTION_IMAP_MAX_ATTEMPTS:3}
+      # 进程内任务容量、批量边界和保留策略。
+      job:
+        # 单实例同时最多运行两个不同类型任务。
+        max-active-jobs: ${ADMIN_MAIL_INSPECTION_MAX_ACTIVE_JOBS:2}
+        # 同一检查类型同时最多运行一个任务。
+        max-active-jobs-per-type: ${ADMIN_MAIL_INSPECTION_MAX_ACTIVE_JOBS_PER_TYPE:1}
+        # 管理员未指定时，每个任务默认使用四个 Rabbit 消费业务额度。
+        default-business-concurrency: ${ADMIN_MAIL_INSPECTION_DEFAULT_BUSINESS_CONCURRENCY:4}
+        # 单个任务允许申请的业务并发上限固定为六十四，不改变 OAuth 与 IMAP 的全局限制。
+        max-business-concurrency: ${ADMIN_MAIL_INSPECTION_MAX_BUSINESS_CONCURRENCY:64}
+        # 单行字符数上限阻止分隔符和 Token 造成无界内存占用。
+        max-line-chars: ${ADMIN_MAIL_INSPECTION_MAX_LINE_CHARS:12288}
+        # 单次 JSON 中凭证文本的 UTF-8 总量不得超过一 MiB。
+        max-request-bytes: ${ADMIN_MAIL_INSPECTION_MAX_REQUEST_BYTES:1048576}
+        # 完成或失败任务只在当前进程保留三十分钟。
+        retention: ${ADMIN_MAIL_INSPECTION_JOB_RETENTION:30m}
+        # 每分钟删除一次已经过期的完成任务。
+        cleanup-interval: ${ADMIN_MAIL_INSPECTION_JOB_CLEANUP_INTERVAL:1m}
+        # 创建响应建议客户端两秒后开始查询。
+        poll-after: ${ADMIN_MAIL_INSPECTION_POLL_AFTER:2s}
+      # RabbitMQ 工作消息加密、可靠发布确认和重启恢复扫描配置。
+      rabbit:
+        # 默认启用 Rabbit 工作调度；隔离单元测试可显式关闭并使用不可用替身，生产任务禁止回退进程内队列。
+        enabled: ${ADMIN_MAIL_INSPECTION_RABBIT_ENABLED:true}
+        # 邮箱、clientId 与 refresh token 使用独立 AES-256-GCM 密钥保护，生产环境必须显式提供规范 Base64 的三十二字节随机值。
+        payload-key-base64: ${ADMIN_MAIL_INSPECTION_RABBIT_AES_KEY_BASE64}
+        # 单次 Publisher Confirm 最多等待五秒，超时进入有限发布重试。
+        confirm-timeout: ${ADMIN_MAIL_INSPECTION_RABBIT_CONFIRM_TIMEOUT:5s}
+        # 每条工作消息连同首次发布最多尝试三次，禁止无限循环发布。
+        publish-max-attempts: ${ADMIN_MAIL_INSPECTION_RABBIT_PUBLISH_MAX_ATTEMPTS:3}
+        # 发布失败按二百毫秒、五百毫秒和一秒的有界序列退避。
+        publish-backoffs: ${ADMIN_MAIL_INSPECTION_RABBIT_PUBLISH_BACKOFFS:200ms,500ms,1s}
+        # 终态派发标记每分钟分批回收，避免历史任务持续占用恢复队列。
+        marker-cleanup-interval: ${ADMIN_MAIL_INSPECTION_RABBIT_MARKER_CLEANUP_INTERVAL:1m}
+        # 单次最多校验五百条标记，避免定时清理长时间占用类型生命周期锁。
+        marker-cleanup-batch-size: ${ADMIN_MAIL_INSPECTION_RABBIT_MARKER_CLEANUP_BATCH_SIZE:500}
+      # 持久化提交分块、异步派发与残缺任务清理使用独立边界。
+      submission:
+        # 残缺提交最多保留六小时，期间客户端可使用原幂等键安全补齐。
+        incomplete-retention: ${ADMIN_MAIL_INSPECTION_SUBMISSION_INCOMPLETE_RETENTION:6h}
+        # 每分钟检查一次超过保留期且仍未完整确认的提交。
+        cleanup-interval: ${ADMIN_MAIL_INSPECTION_SUBMISSION_CLEANUP_INTERVAL:1m}
+        # 单个分块加密前最多承载一百六十 KiB 凭证数据。
+        max-plaintext-chunk-bytes: ${ADMIN_MAIL_INSPECTION_SUBMISSION_MAX_PLAINTEXT_CHUNK_BYTES:163840}
+        # 序列化后的完整 Rabbit 消息禁止超过二百五十六 KiB。
+        max-message-bytes: ${ADMIN_MAIL_INSPECTION_SUBMISSION_MAX_MESSAGE_BYTES:262144}
+        # HTTP 创建阶段最多同时等待八个 Submission Publisher Confirm。
+        publish-concurrency: ${ADMIN_MAIL_INSPECTION_SUBMISSION_PUBLISH_CONCURRENCY:8}
+        # 单个 Submission Chunk 最多同时派发十六条 Work 消息。
+        work-dispatch-concurrency: ${ADMIN_MAIL_INSPECTION_WORK_DISPATCH_CONCURRENCY:16}
+      # 只读邮件扫描窗口、正文上限和文件夹优先级。
+      scan:
+        # OpenAI 与 Kiro 每个文件夹最多读取最近八十封邮件。
+        status-fetch-count: ${ADMIN_MAIL_INSPECTION_STATUS_FETCH_COUNT:80}
+        # OpenAI 与 Kiro 每个邮箱最多解析三十封候选邮件。
+        status-max-candidates: ${ADMIN_MAIL_INSPECTION_STATUS_MAX_CANDIDATES:30}
+        # IP2Location 每个文件夹最多读取最近二十封邮件。
+        ip2-fetch-count: ${ADMIN_MAIL_INSPECTION_IP2_FETCH_COUNT:20}
+        # IP2Location 每个邮箱最多解析二十封候选邮件。
+        ip2-max-candidates: ${ADMIN_MAIL_INSPECTION_IP2_MAX_CANDIDATES:20}
+        # MIME 提取文本最多保留二十万字符且不会写入任务状态。
+        max-body-chars: ${ADMIN_MAIL_INSPECTION_MAX_BODY_CHARS:200000}
+        # 垃圾邮件文件夹优先于收件箱，随后再扫描其他可读文件夹。
+        folder-order: ${ADMIN_MAIL_INSPECTION_FOLDER_ORDER:Junk Email,INBOX}
+      # 三类供应商邮件的候选与限制证据白名单。
+      matchers:
+        # OpenAI 和 ChatGPT 邮件匹配参数。
+        openai:
+          # 发送方包含 OpenAI 或 ChatGPT 时视为候选。
+          sender-keywords: ${ADMIN_MAIL_INSPECTION_OPENAI_SENDERS:openai,chatgpt}
+          # 主题包含 OpenAI 或 ChatGPT 时视为候选。
+          subject-keywords: ${ADMIN_MAIL_INSPECTION_OPENAI_SUBJECTS:openai,chatgpt}
+          # 这些稳定短语表示找到账号限制证据。
+          restricted-phrases: ${ADMIN_MAIL_INSPECTION_OPENAI_RESTRICTED:Your account has been detected,deactivated,deactivating}
+        # Kiro 和 AWS 邮件匹配参数。
+        kiro:
+          # Kiro 候选默认只接受 AWS 官方相关发送方关键字。
+          sender-keywords: ${ADMIN_MAIL_INSPECTION_KIRO_SENDERS:amazonaws.com,no-reply@amazonaws.com}
+          # Kiro 候选主题使用旧项目确认过的三组关键字。
+          subject-keywords: ${ADMIN_MAIL_INSPECTION_KIRO_SUBJECTS:Kiro,Your Kiro Account,Response Required}
+          # Kiro 限制短语覆盖可疑活动、暂停、禁用和策略审查。
+          restricted-phrases: ${ADMIN_MAIL_INSPECTION_KIRO_RESTRICTED:detected suspicious activity,restricted your ability to use Kiro,requires immediate attention,validate your account details,abuse,suspicious activity,restricted,suspended,disabled,terminated,policy violation,account review}
+        # IP2Location 邮件只使用官方域和品牌主题关键字。
+        ip2location:
+          # 发送方必须包含 IP2Location 官方域才直接命中。
+          sender-domain: ${ADMIN_MAIL_INSPECTION_IP2_SENDER_DOMAIN:ip2location.io}
+          # 主题包含品牌关键字时也进入候选扫描。
+          subject-keyword: ${ADMIN_MAIL_INSPECTION_IP2_SUBJECT_KEYWORD:ip2location}
 
   # 手机号默认国家识别配置。
   phone-country:
@@ -469,6 +605,25 @@ app:
       max-failures: ${AUTH_LOGIN_MAX_FAILURES:5}
       # 任一登录失败桶第六次失败后，对该安装设备封禁整个登录域两小时。
       block-duration: ${AUTH_LOGIN_BLOCK_DURATION:2h}
+
+  # 已注册邮箱与手机号计数布隆过滤器的容量、分片和后台构建配置。
+  identity-presence-bloom:
+    # 是否启用身份 Bloom；关闭时所有认证流程直接回源 PostgreSQL。
+    enabled: ${IDENTITY_PRESENCE_BLOOM_ENABLED:true}
+    # 每个邮箱或手机号过滤器分别使用一百万个计数器。
+    capacity: ${IDENTITY_PRESENCE_BLOOM_CAPACITY:1000000}
+    # 每个受保护联系方式计算七个互不重复的计数器位置。
+    hash-count: ${IDENTITY_PRESENCE_BLOOM_HASH_COUNT:7}
+    # 每个计数器占一个字节并允许表达零到二百五十五。
+    counter-bytes: ${IDENTITY_PRESENCE_BLOOM_COUNTER_BYTES:1}
+    # 每个 Redis String Bucket 保存一百万个计数器，当前约占一 MiB。
+    counters-per-bucket: ${IDENTITY_PRESENCE_BLOOM_COUNTERS_PER_BUCKET:1000000}
+    # PostgreSQL 初始化使用五百条游标分页，避免一次加载全表。
+    build-batch-size: ${IDENTITY_PRESENCE_BLOOM_BUILD_BATCH_SIZE:500}
+    # 用户 ID 幂等凭据拆成二百五十六个 Set，控制单 Key 成员数量。
+    receipt-shards: ${IDENTITY_PRESENCE_BLOOM_RECEIPT_SHARDS:256}
+    # 单个过滤器最多按十万条规划，达到边界后必须扩容并重建。
+    maximum-elements: ${IDENTITY_PRESENCE_BLOOM_MAXIMUM_ELEMENTS:100000}
 
   # 注册会话、验证与外部投递的服务层配置。
   registration:

@@ -159,6 +159,7 @@ class RegistrationServiceTransactionProxyTest {
                 () -> 42L,
                 new PublicIdCodec(),
                 new SpringRegistrationAfterCommitExecutor(cleanupObserver),
+                mock(com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter.class),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofSeconds(600));
 

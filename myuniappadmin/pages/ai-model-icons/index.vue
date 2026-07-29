@@ -1,18 +1,43 @@
 <template>
-	<view class="icon-page">
-		<view class="icon-shell">
-			<view class="page-head">
-				<admin-action-button tone="neutral" size="compact" @click="goBack">返回</admin-action-button>
-				<view class="head-copy">
-					<text class="eyebrow">MODEL ASSET LIBRARY</text>
-					<text class="page-title">模型图标库</text>
-					<text class="page-copy">一个图标资源可被多个模型复用；本地图片存入 OSS，外部图片只登记验证后的 HTTPS 地址。</text>
-				</view>
-			</view>
-
-			<view v-if="message" class="message" :class="{ error: messageError }" role="alert">
-				<text class="message-summary">{{ message }}</text>
-				<view v-if="messageDiagnostics" class="message-diagnostics">
+	<admin-page-shell
+		v-if="adminRouteReady"
+		current-path="/pages/ai-model-icons/index"
+		kicker="模型资源"
+		title="模型图标库"
+		description="一个图标资源可被多个模型复用；本地图片存入 OSS，外部图片只登记验证后的 HTTPS 地址。"
+		:busy="writing"
+		@navigate="navigateProtected"
+	>
+		<template #actions>
+			<admin-action-button tone="neutral" :loading="loading" :disabled="writing" @click="loadPage">
+				刷新
+			</admin-action-button>
+			<admin-action-button tone="amber" :disabled="writing" @click="openCreateInspector">
+				新增图标
+			</admin-action-button>
+		</template>
+		<view
+			class="icon-shell"
+			:class="{
+				'mobile-inspector-open': mobileInspectorOpen,
+				'spring-inspector': inspectorSpringEnabled
+			}"
+		>
+			<view v-if="message" class="feedback-stack">
+				<admin-feedback-banner
+					:tone="messageError ? 'danger' : 'success'"
+					:message="message"
+					:dismissible="true"
+					@dismiss="setMessage('')"
+				/>
+				<button
+					v-if="messageDiagnostics"
+					class="diagnostics-toggle"
+					type="button"
+					:aria-expanded="diagnosticsOpen ? 'true' : 'false'"
+					@click="diagnosticsOpen = !diagnosticsOpen"
+				>{{ diagnosticsOpen ? '收起诊断信息' : '查看诊断信息' }}</button>
+				<view v-if="messageDiagnostics && diagnosticsOpen" class="message-diagnostics">
 					<text v-if="messageDiagnostics.code">错误码：{{ messageDiagnostics.code }}</text>
 					<text v-if="messageDiagnostics.exceptionType">异常类型：{{ messageDiagnostics.exceptionType }}</text>
 					<text v-if="messageDiagnostics.exceptionMessage">异常信息：{{ messageDiagnostics.exceptionMessage }}</text>
@@ -21,12 +46,13 @@
 				</view>
 			</view>
 
-			<view class="create-panel">
+			<view v-if="!editing" class="create-panel" :style="inspectorMotionStyle">
 				<view class="panel-heading">
 					<view>
-						<text class="panel-title">新增图标资源</text>
+						<text class="panel-title">创建图标资源</text>
 						<text class="panel-copy">支持 PNG、JPEG/JPG、WebP、GIF、ICO、AVIF 和安全 SVG，最大 2 MiB。外链不会复制到 OSS。</text>
 					</view>
+					<button class="mobile-inspector-close" type="button" aria-label="关闭图标编辑器" @click="closeInspector">×</button>
 					<view class="source-tabs" role="tablist" aria-label="图标来源">
 						<button type="button" :class="{ active: createMode === 'UPLOAD' }" @click="createMode = 'UPLOAD'">本地上传</button>
 						<button type="button" :class="{ active: createMode === 'REMOTE' }" @click="createMode = 'REMOTE'">外部 URL</button>
@@ -55,13 +81,14 @@
 				</view>
 			</view>
 
-			<view v-if="editing" class="edit-panel">
+			<view v-if="editing" class="edit-panel" :style="inspectorMotionStyle">
 				<view class="panel-heading">
 					<view>
 						<text class="panel-title">编辑 {{ editing.iconName }}</text>
 						<text class="panel-copy">外部 URL 留空时只修改名称和描述；填写后会切换为外链来源。</text>
 					</view>
-					<admin-action-button tone="neutral" size="compact" :disabled="writing" @click="cancelEdit">取消</admin-action-button>
+					<button class="mobile-inspector-close" type="button" aria-label="关闭图标编辑器" @click="cancelEdit">×</button>
+					<admin-action-button class="desktop-cancel-edit" tone="neutral" size="compact" :disabled="writing" @click="cancelEdit">取消</admin-action-button>
 				</view>
 				<view class="form-grid">
 					<view class="field">
@@ -103,7 +130,7 @@
 							<text class="source">{{ sourceLabel(icon.iconUrl) }}</text>
 						</view>
 						<view class="card-actions">
-							<admin-action-button tone="neutral" size="compact" :disabled="writing" @click="startEdit(icon)">编辑</admin-action-button>
+							<admin-action-button tone="neutral" size="compact" :disabled="writing" @click="openEditInspector(icon)">编辑</admin-action-button>
 							<admin-action-button tone="danger" size="compact" :disabled="writing" @click="confirmDelete(icon)">删除</admin-action-button>
 						</view>
 					</view>
@@ -114,8 +141,15 @@
 					<admin-action-button tone="neutral" size="compact" :disabled="loading || !page.hasNext" @click="changePage(1)">下一页</admin-action-button>
 				</view>
 			</view>
+			<button
+				v-if="mobileInspectorOpen"
+				class="mobile-inspector-backdrop"
+				type="button"
+				aria-label="关闭图标编辑器"
+				@click="closeInspector"
+			/>
 		</view>
-	</view>
+	</admin-page-shell>
 </template>
 
 <script>
@@ -124,6 +158,15 @@ import {
 	adminAiModelIconApi,
 	aiModelIconUrlSource
 } from '@/common/admin/admin-ai-model-icon-api.js'
+import { createAdminPageGuardMixin } from '@/common/admin/admin-page-guard.js'
+import { leaveAdminChildPage } from '@/common/admin/admin-page-navigation.js'
+import { guardedAdminNavigate } from '@/common/admin/admin-route-guard-runtime.js'
+import {
+	ADMIN_MOTION_PRESETS,
+	adminSupportsSpringMotion,
+	animateAdminSpring,
+	cancelAdminMotion
+} from '@/common/admin/admin-motion.js'
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const ICON_FILE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.avif', '.svg']
@@ -133,6 +176,7 @@ function emptyCreateForm() {
 }
 
 export default {
+	mixins: [createAdminPageGuardMixin('/pages/ai-model-icons/index')],
 	components: { AdminActionButton },
 	data() {
 		return {
@@ -147,21 +191,77 @@ export default {
 			message: '',
 			messageError: false,
 			messageDiagnostics: null,
+			diagnosticsOpen: false,
+			mobileInspectorOpen: false,
+			inspectorProgress: 0,
+			inspectorSpringEnabled: adminSupportsSpringMotion(),
 			previewFailures: {}
 		}
 	},
+	computed: {
+		inspectorMotionStyle() {
+			const progress = Math.max(0, Math.min(1, this.inspectorProgress))
+			return {
+				'--inspector-opacity': String(progress),
+				'--inspector-offset': `${(1 - progress) * 104}%`,
+				'--inspector-scale': String(.985 + progress * .015)
+			}
+		}
+	},
+	watch: {
+		mobileInspectorOpen(open) {
+			animateAdminSpring({
+				owner: this,
+				from: this.inspectorProgress,
+				to: open ? 1 : 0,
+				preset: open ? ADMIN_MOTION_PRESETS.sheet : ADMIN_MOTION_PRESETS.quiet,
+				precision: .002,
+				onUpdate: value => {
+					this.inspectorProgress = Math.max(0, Math.min(1, value))
+				}
+			})
+		}
+	},
 	onShow() {
-		this.loadPage()
+		this.runAfterAdminRouteGuard(() => this.loadPage())
+	},
+	onUnload() {
+		cancelAdminMotion(this)
+	},
+	beforeDestroy() {
+		cancelAdminMotion(this)
+	},
+	beforeUnmount() {
+		cancelAdminMotion(this)
 	},
 	methods: {
 		sourceLabel: aiModelIconUrlSource,
+		navigateProtected(route) {
+			if (route === '/pages/ai-model-icons/index' || this.writing) return
+			return guardedAdminNavigate(route)
+		},
 		goBack() {
-			if (!this.writing) uni.navigateBack({ delta: 1 })
+			if (!this.writing) return leaveAdminChildPage()
+		},
+		openCreateInspector() {
+			if (this.writing) return
+			this.editing = null
+			this.mobileInspectorOpen = true
+		},
+		openEditInspector(icon) {
+			this.startEdit(icon)
+			this.mobileInspectorOpen = true
+		},
+		closeInspector() {
+			if (this.writing) return
+			this.mobileInspectorOpen = false
+			this.editing = null
 		},
 		setMessage(message, error = false, diagnosticError = null) {
 			this.message = message
 			this.messageError = error
 			this.messageDiagnostics = error ? this.errorDiagnostics(diagnosticError) : null
+			this.diagnosticsOpen = false
 		},
 		errorDiagnostics(error) {
 			if (!error) return null
@@ -262,6 +362,7 @@ export default {
 					await adminAiModelIconApi.createUpload(this.createForm)
 				}
 				this.createForm = emptyCreateForm()
+				this.mobileInspectorOpen = false
 				this.page.pageNum = 1
 				this.setMessage('模型图标已经创建。')
 				await this.loadPage()
@@ -281,6 +382,7 @@ export default {
 		},
 		cancelEdit() {
 			this.editing = null
+			this.mobileInspectorOpen = false
 		},
 		async saveEdit() {
 			if (!this.editing || this.writing) return
@@ -293,6 +395,7 @@ export default {
 			try {
 				await adminAiModelIconApi.patch(this.editing.publicId, patch)
 				this.editing = null
+				this.mobileInspectorOpen = false
 				this.setMessage('图标字段已经更新。')
 				await this.loadPage()
 			} catch (error) {
@@ -353,65 +456,261 @@ export default {
 <style lang="scss" scoped>
 @import '@/common/app-theme.scss';
 
-.icon-page { min-height: 100vh; background: $app-bg; color: $app-text; }
-.icon-shell { width: min(1180px, calc(100% - 40rpx)); margin: 0 auto; padding: 30rpx 0 80rpx; }
-.page-head, .panel-heading, .library-head, .panel-actions, .pagination, .upload-row, .card-actions {
+.icon-shell {
+	width: 100%;
+	margin-top: $app-space-4;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+	grid-template-areas:
+		"feedback feedback"
+		"library inspector";
+	gap: $app-space-3;
+	align-items: start;
+	color: $app-text;
+}
+
+.feedback-stack {
+	grid-area: feedback;
+}
+
+.panel-heading,
+.library-head,
+.panel-actions,
+.pagination,
+.upload-row,
+.card-actions {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 18rpx;
 }
-.page-head { align-items: flex-start; margin-bottom: 24rpx; }
-.head-copy { flex: 1; }
-.eyebrow, .page-title, .page-copy, .panel-title, .panel-copy, .label, .icon-name, .description, .source { display: block; }
-.eyebrow { color: $app-green; font-size: 17rpx; font-weight: 800; letter-spacing: .12em; }
-.page-title { margin-top: 8rpx; font-size: 42rpx; font-weight: 800; }
-.page-copy, .panel-copy { margin-top: 7rpx; color: $app-muted; font-size: 20rpx; line-height: 1.5; }
-.message { margin-bottom: 18rpx; padding: 16rpx 18rpx; border: 1px solid rgba(57, 214, 210, .3); border-radius: $app-radius-control; background: rgba(57, 214, 210, .07); color: #c9f4f0; }
-.message.error { border-color: rgba(217, 104, 107, .42); background: rgba(217, 104, 107, .09); color: $app-danger-text; }
-.message-summary, .message-diagnostics text { display: block; }
-.message-diagnostics { margin-top: 12rpx; padding-top: 12rpx; border-top: 1px solid rgba(217, 104, 107, .28); color: #d5b9ba; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 17rpx; line-height: 1.55; overflow-wrap: anywhere; }
-.create-panel, .edit-panel, .library-panel { margin-top: 20rpx; padding: 26rpx; border: 1px solid $app-border; border-radius: $app-radius-panel; background: $app-surface; }
-.edit-panel { border-color: rgba(232, 154, 74, .34); }
+
+.panel-title,
+.panel-copy,
+.label,
+.icon-name,
+.description,
+.source,
+.message-diagnostics text {
+	display: block;
+}
+
+.diagnostics-toggle {
+	min-height: 60rpx;
+	margin: 10rpx 0 0;
+	padding: 0 16rpx;
+	border: 0;
+	border-radius: $app-radius-control;
+	background: rgba($app-muted, .08);
+	color: $app-muted;
+	font-size: $app-font-size-caption;
+}
+
+.diagnostics-toggle::after {
+	border: 0;
+}
+
+.diagnostics-toggle:focus-visible {
+	@include admin-focus-ring;
+}
+
+.message-diagnostics {
+	margin-top: 12rpx;
+	padding: 18rpx;
+	border-radius: $app-radius-control;
+	background: rgba($app-danger, .07);
+	color: #e3c4c5;
+	font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+	font-size: $app-font-size-caption;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+
+.create-panel,
+.edit-panel,
+.library-panel {
+	padding: 28rpx;
+	@include admin-solid-panel;
+}
+
+.create-panel,
+.edit-panel {
+	position: sticky;
+	top: $app-space-4;
+	grid-area: inspector;
+}
+
+.library-panel {
+	grid-area: library;
+}
+
 .panel-title { font-size: 28rpx; font-weight: 760; }
-.source-tabs { display: flex; padding: 4rpx; border: 1px solid $app-border; border-radius: 12rpx; background: #0b1115; }
-.source-tabs button { min-height: 58rpx; margin: 0; padding: 0 20rpx; border-radius: 9rpx; background: transparent; color: $app-muted; font-size: 19rpx; }
+.panel-copy { margin-top: 7rpx; color: $app-muted; font-size: 24rpx; line-height: 1.5; }
+.source-tabs { display: flex; padding: 4rpx; border: 1px solid $app-border; border-radius: 12rpx; background: $app-surface-soft; }
+.source-tabs button { min-height: 64rpx; margin: 0; padding: 0 18rpx; border: 0; border-radius: 9rpx; background: transparent; color: $app-muted; font-size: 24rpx; }
 .source-tabs button.active { background: rgba(57, 214, 210, .12); color: $app-green; }
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; }
+.form-grid { display: grid; grid-template-columns: 1fr; gap: 16rpx; }
 .field { margin-top: 18rpx; }
-.label { margin-bottom: 9rpx; color: #c9d5d8; font-size: 20rpx; font-weight: 680; }
-.field input { min-height: 82rpx; padding: 0 18rpx; border: 1px solid $app-border; border-radius: $app-radius-control; background: #0b1115; color: $app-text; }
+.label { margin-bottom: 9rpx; color: #c9d5d8; font-size: 24rpx; font-weight: 680; }
+.field input { min-height: 90rpx; padding: 0 18rpx; border: 1px solid $app-border; border-radius: $app-radius-control; background: $app-surface-soft; color: $app-text; font-size: 26rpx; }
 .upload-row { justify-content: flex-start; margin-top: 20rpx; color: $app-muted; }
 .panel-actions { justify-content: flex-end; margin-top: 22rpx; }
 .library-head { align-items: flex-start; margin-bottom: 20rpx; }
-.icon-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14rpx; }
-.icon-card { min-width: 0; padding: 18rpx; border: 1px solid $app-border; border-radius: $app-radius-control; display: grid; grid-template-columns: 76rpx minmax(0, 1fr); gap: 14rpx; background: #0b1115; }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14rpx; }
+.icon-card { min-width: 0; padding: 18rpx; border-radius: $app-radius-control; display: grid; grid-template-columns: 76rpx minmax(0, 1fr); gap: 14rpx; background: $app-surface-soft; }
 .preview { width: 76rpx; height: 76rpx; border-radius: 14rpx; background: rgba(255, 255, 255, .05); }
 .preview-fallback { display: grid; place-items: center; color: $app-muted; font-size: 28rpx; font-weight: 800; }
 .identity { min-width: 0; }
 .icon-name, .description, .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.icon-name { font-size: 22rpx; font-weight: 740; }
-.description, .source { margin-top: 5rpx; color: $app-muted; font-size: 17rpx; }
+.icon-name { font-size: 26rpx; font-weight: 740; }
+.description, .source { margin-top: 5rpx; color: $app-muted; font-size: 24rpx; }
 .source { color: #7ea4aa; }
 .card-actions { grid-column: 1 / -1; justify-content: flex-end; padding-top: 12rpx; border-top: 1px solid rgba(115, 154, 162, .12); }
-.empty-state { min-height: 180rpx; display: grid; place-items: center; color: $app-muted; }
-.pagination { justify-content: center; margin-top: 22rpx; color: $app-muted; }
+.empty-state { min-height: 220rpx; display: grid; place-items: center; color: $app-muted; font-size: $app-font-size-body; text-align: center; }
+.pagination { justify-content: center; margin-top: 22rpx; color: $app-muted; font-size: $app-font-size-caption; }
+.mobile-inspector-close,
+.mobile-inspector-backdrop { display: none; }
 button::after { border: 0; }
-button:focus-visible, input:focus-visible { outline: 2px solid $app-focus; outline-offset: 2px; }
+button:focus-visible, input:focus-visible { @include admin-focus-ring; }
 
-@media (max-width: 880px) {
-	.icon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (hover: hover) and (pointer: fine) {
+	.icon-card {
+		transition: transform $app-motion-micro $app-ease-out, background-color $app-motion-state ease;
+	}
+
+	.icon-card:hover {
+		transform: translate3d(0, -2rpx, 0);
+		background: $app-surface-elevated;
+	}
+
+	.diagnostics-toggle:hover {
+		background: rgba($app-muted, .14);
+		cursor: pointer;
+	}
 }
 
-@media (max-width: 640px) {
-	.icon-shell { width: 100%; padding-top: 20rpx; }
-	.page-head, .panel-heading, .library-head { padding: 0 20rpx; flex-direction: column; align-items: stretch; }
-	.create-panel, .edit-panel, .library-panel { padding: 22rpx 20rpx; border-left: 0; border-right: 0; border-radius: 0; }
-	.form-grid, .icon-grid { grid-template-columns: 1fr; }
+@media (max-width: 1023px) {
+	.icon-shell {
+		grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+	}
+}
+
+@media (max-width: 767px) {
+	.icon-shell {
+		margin-top: $app-space-3;
+		display: block;
+	}
+
+	.feedback-stack {
+		margin-bottom: $app-space-3;
+	}
+
+	.library-panel {
+		padding: 24rpx 20rpx;
+	}
+
+	.panel-heading,
+	.library-head {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.create-panel,
+	.edit-panel {
+		position: fixed;
+		inset: auto 0 0;
+		z-index: 82;
+		max-height: 86vh;
+		padding: 36rpx 24rpx calc(28rpx + env(safe-area-inset-bottom));
+		border: 0;
+		border-radius: $app-radius-sheet $app-radius-sheet 0 0;
+		overflow-y: auto;
+		@include admin-glass-chrome(true);
+		box-shadow: $app-shadow-sheet;
+		opacity: var(--inspector-opacity, 0);
+		transform: translate3d(0, var(--inspector-offset, 104%), 0) scale(var(--inspector-scale, .985));
+		pointer-events: none;
+		transition:
+			transform $app-motion-surface $app-ease-out,
+			opacity $app-motion-state ease;
+	}
+
+	.mobile-inspector-open .create-panel,
+	.mobile-inspector-open .edit-panel {
+		pointer-events: auto;
+	}
+
+	.spring-inspector .create-panel,
+	.spring-inspector .edit-panel {
+		transition: none;
+	}
+
+	.mobile-inspector-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 80;
+		width: 100%;
+		height: 100%;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		display: block;
+		background: $app-scrim;
+	}
+
+	.mobile-inspector-close {
+		position: absolute;
+		top: 22rpx;
+		right: 22rpx;
+		width: 64rpx;
+		height: 64rpx;
+		min-height: 64rpx;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba($app-muted, .12);
+		color: $app-text;
+		font-size: 36rpx;
+	}
+
+	.desktop-cancel-edit {
+		display: none;
+	}
+
+	.icon-grid { grid-template-columns: 1fr; }
 	.source-tabs button { flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-	* { transition-duration: .01ms !important; }
+	.create-panel,
+	.edit-panel,
+	.icon-card,
+	.diagnostics-toggle {
+		transition: opacity 80ms linear, background-color 80ms linear;
+		transform: none !important;
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) {
+	.create-panel,
+	.edit-panel {
+		background: $app-surface-elevated;
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+@media (prefers-contrast: more) {
+	.create-panel,
+	.edit-panel,
+	.library-panel {
+		border: 2px solid $app-text;
+		background: $app-canvas;
+	}
 }
 </style>

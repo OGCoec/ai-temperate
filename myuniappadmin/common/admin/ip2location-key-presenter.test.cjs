@@ -58,9 +58,23 @@ test('status handles invalid dates expired keys zero quota and expiring keys', a
 	const now = Date.parse('2026-07-25T00:00:00Z')
 
 	assert.equal(ip2LocationKeyStatus({ expiresAt: 'invalid', remainingQuota: 1 }, now).code, 'INVALID')
-	assert.equal(ip2LocationKeyStatus({ expiresAt: '2026-07-24T00:00:00Z', remainingQuota: 1 }, now).code, 'EXPIRED')
-	assert.equal(ip2LocationKeyStatus({ expiresAt: '2026-08-25T00:00:00Z', remainingQuota: 0 }, now).code, 'EXHAUSTED')
-	assert.equal(ip2LocationKeyStatus({ expiresAt: '2026-07-27T00:00:00Z', remainingQuota: 1 }, now).code, 'EXPIRING')
+	assert.equal(ip2LocationKeyStatus({ expiresAt: '2026-07-24T00:00:00Z', remainingQuota: 0 }, now).code, 'EXPIRED')
+	assert.equal(ip2LocationKeyStatus({
+		expiresAt: new Date(now + (60 * 60 * 1000)).toISOString(),
+		remainingQuota: 0
+	}, now).code, 'EXHAUSTED')
+	assert.equal(ip2LocationKeyStatus({
+		expiresAt: new Date(now + (24 * 60 * 60 * 1000)).toISOString(),
+		remainingQuota: 1
+	}, now).code, 'EXPIRING')
+	assert.equal(ip2LocationKeyStatus({
+		expiresAt: new Date(now + (24 * 60 * 60 * 1000) - 1).toISOString(),
+		remainingQuota: 1
+	}, now).code, 'EXPIRING')
+	assert.equal(ip2LocationKeyStatus({
+		expiresAt: new Date(now + (24 * 60 * 60 * 1000) + 1).toISOString(),
+		remainingQuota: 1
+	}, now).code, 'ACTIVE')
 	assert.equal(ip2LocationKeyStatus({ expiresAt: '2026-08-25T00:00:00Z', remainingQuota: 1 }, now).code, 'ACTIVE')
 })
 

@@ -1,6 +1,6 @@
 export const IP2LOCATION_KEY_LIMIT = 100
 export const IP2LOCATION_KEY_PAGE_SIZE = 20
-export const IP2LOCATION_EXPIRING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+export const IP2LOCATION_EXPIRING_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export function parseIp2LocationKeyText(rawText) {
 	const seen = new Set()

@@ -15,6 +15,8 @@ import com.example.temperate.common.security.hmac.HmacSha256Identifier;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
 import com.example.temperate.service.auth.login.audit.observer.LoginAuditObserver;
 import com.example.temperate.service.auth.login.component.normalizer.LoginInputNormalizer;
 import com.example.temperate.service.auth.login.dto.command.LoginCommand;
@@ -59,6 +61,7 @@ class LoginServiceImplTest {
     private RefreshSessionStore sessionStore;
     private AuthSessionSecretProtector protector;
     private PublicIdCodec publicIds;
+    private IdentityPresenceFilter identityPresenceFilter;
     private LoginServiceImpl service;
 
     @BeforeEach
@@ -72,6 +75,11 @@ class LoginServiceImplTest {
         sessionStore = mock(RefreshSessionStore.class);
         protector = mock(AuthSessionSecretProtector.class);
         publicIds = new PublicIdCodec();
+        identityPresenceFilter = mock(IdentityPresenceFilter.class);
+        when(identityPresenceFilter.checkEmail(any()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
+        when(identityPresenceFilter.checkPhone(any()))
+                .thenReturn(IdentityPresenceDecision.UNAVAILABLE);
         service = new LoginServiceImpl(
                 normalizer,
                 identityMapper,
@@ -81,7 +89,8 @@ class LoginServiceImplTest {
                 tokenService,
                 sessionStore,
                 protector,
-                publicIds);
+                publicIds,
+                identityPresenceFilter);
     }
 
     @Test
@@ -169,6 +178,32 @@ class LoginServiceImplTest {
                                 .isEqualTo(LoginErrorCode.AUTHENTICATION_FAILED));
         verify(sessionStore, never()).create(any());
         verify(tokenService, never()).issueAccessToken(anyLong());
+    }
+
+    @Test
+    void definiteBloomMissSkipsDatabaseButStillRunsDummyPasswordHash() {
+        LoginCommand command = new LoginCommand(
+                "missing@example.test", "wrong", DEVICE_ID, "127.0.0.1");
+        when(normalizer.normalize(command)).thenReturn(new NormalizedLoginInput(
+                LoginIdentifierType.EMAIL,
+                "missing@example.test",
+                "wrong",
+                DEVICE_ID,
+                "127.0.0.1"));
+        when(rateLimitService.check(any())).thenReturn(LoginLimitDecision.ALLOWED);
+        when(rateLimitService.recordFailure(any())).thenReturn(LoginLimitDecision.ALLOWED);
+        when(identityPresenceFilter.checkEmail("missing@example.test"))
+                .thenReturn(IdentityPresenceDecision.DEFINITELY_ABSENT);
+        when(passwordEncoder.matches("wrong", LoginServiceImpl.DUMMY_PASSWORD_HASH))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.login(command))
+                .isInstanceOf(LoginException.class);
+
+        verify(identityMapper, never())
+                .findAuthenticationByNormalizedEmail("missing@example.test");
+        verify(passwordEncoder)
+                .matches("wrong", LoginServiceImpl.DUMMY_PASSWORD_HASH);
     }
 
     private static HmacIdentifier id(String value) {

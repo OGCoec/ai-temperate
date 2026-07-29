@@ -5,6 +5,9 @@ import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecision;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
+import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.password.policy.PasswordStrengthPolicy;
 import com.example.temperate.service.auth.password.policy.PasswordValidationException;
 import com.example.temperate.service.auth.passwordreset.PasswordResetErrorCode;
@@ -76,6 +79,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
     private final PasswordResetNotificationService notificationService;
     private final SessionAuthenticationService sessionService;
     private final PasswordEncoder passwordEncoder;
+    private final IdentityPresenceFilter identityPresenceFilter;
     private final Clock clock;
 
     public PasswordResetServiceImpl(
@@ -92,6 +96,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
             PasswordResetNotificationService notificationService,
             SessionAuthenticationService sessionService,
             PasswordEncoder passwordEncoder,
+            IdentityPresenceFilter identityPresenceFilter,
             Clock clock) {
         this.identityMapper = Objects.requireNonNull(identityMapper);
         this.inputNormalizer = Objects.requireNonNull(inputNormalizer);
@@ -106,6 +111,7 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
         this.notificationService = Objects.requireNonNull(notificationService);
         this.sessionService = Objects.requireNonNull(sessionService);
         this.passwordEncoder = Objects.requireNonNull(passwordEncoder);
+        this.identityPresenceFilter = Objects.requireNonNull(identityPresenceFilter);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -130,9 +136,20 @@ public final class PasswordResetServiceImpl implements PasswordResetService {
                     "找回密码暂时被限制，请稍后再试。");
         }
 
-        UserLoginIdentity identity = command.channel() == VerificationChannel.EMAIL
-                ? identityMapper.findByNormalizedEmail(identifier)
-                : identityMapper.findByNormalizedPhone(identifier);
+        IdentityPresenceKind kind = command.channel() == VerificationChannel.EMAIL
+                ? IdentityPresenceKind.EMAIL
+                : IdentityPresenceKind.PHONE;
+        IdentityPresenceDecision presence = kind == IdentityPresenceKind.EMAIL
+                ? identityPresenceFilter.checkEmail(identifier)
+                : identityPresenceFilter.checkPhone(identifier);
+        UserLoginIdentity identity = null;
+        if (presence != IdentityPresenceDecision.DEFINITELY_ABSENT) {
+            identity = kind == IdentityPresenceKind.EMAIL
+                    ? identityMapper.findByNormalizedEmail(identifier)
+                    : identityMapper.findByNormalizedPhone(identifier);
+            identityPresenceFilter.recordDatabaseVerification(
+                    kind, presence, identity != null);
+        }
         long userId = availableUserId(identity);
         Instant now = clock.instant();
         flowStore.create(access, command.channel(), identifier, userId, now);

@@ -8,10 +8,10 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 使用 Spring 事务同步在注册提交后执行 Redis 清理、在未提交时释放领取状态的实现。
+ * 使用 Spring 事务同步在注册提交后执行 Redis 流程清理与幂等派生状态更新、在未提交时释放领取状态的实现。
  *
- * <p>外部清理不能早于数据库提交，否则回滚会删除仍有效的注册流程；提交后清理采用有限重试，耗尽时
- * 记录可观测失败而不进行无限重试。</p>
+ * <p>外部派生更新与清理不能早于数据库提交，否则回滚会污染 Bloom 或删除仍有效的注册流程；提交后动作
+ * 采用有限重试，耗尽时记录可观测失败而不进行无限重试。</p>
  */
 @Component
 public final class SpringRegistrationAfterCommitExecutor
@@ -34,7 +34,7 @@ public final class SpringRegistrationAfterCommitExecutor
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new IllegalStateException("Registration cleanup requires an active transaction.");
         }
-        // 事务完成状态决定两个动作的互斥分支：提交后清理流程，回滚或未知状态释放完成领取权。
+        // 事务完成状态决定两个动作的互斥分支：提交后更新派生状态并清理流程，回滚或未知状态释放完成领取权。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
@@ -55,7 +55,7 @@ public final class SpringRegistrationAfterCommitExecutor
             } catch (RuntimeException exception) {
                 LOGGER.log(
                         System.Logger.Level.WARNING,
-                        "event=registration_redis_cleanup_retry_failed operation=flow_delete attempt="
+                        "event=registration_post_commit_action_retry_failed attempt="
                                 + attempt
                                 + " maxAttempts="
                                 + MAX_CLEANUP_ATTEMPTS,

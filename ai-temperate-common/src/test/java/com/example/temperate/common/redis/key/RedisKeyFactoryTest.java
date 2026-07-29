@@ -69,6 +69,24 @@ final class RedisKeyFactoryTest {
     }
 
     @Test
+    void createsIdentityPresenceBloomLifecycleKeys() {
+        RedisKeyFactory factory = new RedisKeyFactory("test");
+
+        assertEquals(
+                "ait:test:bloom:uli-presence:v1:control:state",
+                factory.identityPresenceBloomControlKey());
+        assertEquals(
+                "ait:test:bloom:uli-presence:v1:build-lock:lease",
+                factory.identityPresenceBloomBuildLockKey());
+        assertEquals(
+                "ait:test:bloom:uli-presence:v1-g123:meta:config",
+                factory.identityPresenceBloomMetaKey("v1-g123"));
+        assertEquals(
+                "ait:test:bloom:uli-presence:v1-g123:receipt:0007",
+                factory.identityPresenceBloomReceiptKey("v1-g123", 7));
+    }
+
+    @Test
     void rejectsInvalidNamespaceSegments() {
         assertThrows(IllegalArgumentException.class, () -> new RedisKeyFactory(null));
         assertThrows(IllegalArgumentException.class, () -> new RedisKeyFactory("Prod"));

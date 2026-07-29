@@ -11,7 +11,7 @@
 		</view>
 
 		<template v-else>
-			<view class="selection-bar" :class="{ visible: selectedIds.length }" aria-live="polite">
+			<view v-if="selectedIds.length" class="selection-bar visible" aria-live="polite">
 				<text>已选择 {{ selectedIds.length }} 条</text>
 				<view class="selection-actions">
 					<button type="button" @click="clearSelection">取消选择</button>
@@ -122,16 +122,15 @@ export default {
 .skeleton-row { height: 94rpx; background: linear-gradient(90deg, rgba($app-raised, .8), rgba($app-border, .5), rgba($app-raised, .8)); background-size: 220% 100%; animation: skeleton 1.4s linear infinite; }
 .empty-state { min-height: 420rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .empty-title { color: $app-text; font-size: 31rpx; font-weight: 740; }
-.empty-copy { max-width: 560rpx; margin-top: 12rpx; color: $app-muted; font-size: 23rpx; line-height: 1.6; }
+.empty-copy { max-width: 560rpx; margin-top: 12rpx; color: $app-muted; font-size: 24rpx; line-height: 1.6; }
 .empty-action { min-width: 220rpx; min-height: 84rpx; margin-top: 28rpx; border: 0; border-radius: $app-radius-control; background: $app-lime; color: #171306; font-weight: 760; }
-.selection-bar { min-height: 0; max-height: 0; opacity: 0; overflow: hidden; display: flex; align-items: center; justify-content: space-between; color: $app-text; transition: max-height 180ms ease, opacity 180ms ease; }
-.selection-bar.visible { min-height: 76rpx; max-height: 76rpx; opacity: 1; }
+.selection-bar { min-height: 76rpx; padding: 0 18rpx; display: flex; align-items: center; justify-content: space-between; border-radius: $app-radius-control; color: $app-text; background: rgba($app-green, .08); animation: selection-arrive $app-motion-surface $app-ease-out both; }
 .selection-actions { display: flex; gap: 12rpx; }
-.selection-actions button { min-height: 64rpx; border: 0; background: transparent; color: $app-green; font-size: 22rpx; }
+.selection-actions button { min-height: 64rpx; border: 0; background: transparent; color: $app-green; font-size: 24rpx; }
 .selection-actions .danger-text { color: $app-danger-text; }
 .desktop-table { border-top: 1px solid $app-border; }
-.table-row { min-height: 92rpx; display: grid; grid-template-columns: 64rpx minmax(170rpx, 1.35fr) minmax(100rpx, .7fr) minmax(100rpx, .7fr) minmax(190rpx, 1.2fr) minmax(110rpx, .75fr) 70rpx; gap: 14rpx; align-items: center; padding: 0 20rpx; border-bottom: 1px solid rgba($app-border, .72); color: $app-text; font-size: 22rpx; }
-.table-head { min-height: 70rpx; color: $app-muted; font-size: 20rpx; text-transform: uppercase; letter-spacing: .04em; }
+.table-row { min-height: 92rpx; display: grid; grid-template-columns: 64rpx minmax(170rpx, 1.35fr) minmax(100rpx, .7fr) minmax(100rpx, .7fr) minmax(190rpx, 1.2fr) minmax(110rpx, .75fr) 70rpx; gap: 14rpx; align-items: center; padding: 0 20rpx; border-bottom: 1px solid rgba($app-border, .72); color: $app-text; font-size: 24rpx; }
+.table-head { min-height: 70rpx; color: $app-muted; font-size: 24rpx; }
 .right-column { text-align: right; justify-self: end; }
 .select-button, .row-delete { min-width: 64rpx; min-height: 64rpx; padding: 0; border: 0; background: transparent; }
 .select-mark { width: 30rpx; height: 30rpx; box-sizing: border-box; border: 1px solid $app-border; border-radius: 7rpx; background: $app-raised; }
@@ -140,21 +139,25 @@ export default {
 .plan-label { color: $app-teal; font-weight: 700; }
 .numeric { font-variant-numeric: tabular-nums; }
 .expiry-cell { display: flex; flex-direction: column; gap: 4rpx; }
-.secondary-line { color: $app-muted; font-size: 19rpx; }
-.status-label { display: inline-flex; min-height: 44rpx; align-items: center; padding: 0 13rpx; border-radius: 999rpx; font-size: 19rpx; font-weight: 720; }
+.secondary-line { color: $app-muted; font-size: 24rpx; }
+.status-label { display: inline-flex; min-height: 44rpx; align-items: center; padding: 0 13rpx; border-radius: 999rpx; font-size: 24rpx; font-weight: 720; }
 .status-active { background: rgba($app-green, .1); color: $app-green; }
 .status-expiring { background: rgba($app-warning, .12); color: $app-warning; }
 .status-exhausted, .status-expired, .status-invalid { background: rgba($app-danger, .1); color: $app-danger-text; }
-.row-delete { color: $app-danger-text; font-size: 21rpx; }
+.row-delete { color: $app-danger-text; font-size: 24rpx; }
 .mobile-list { display: none; }
 .pagination { min-height: 92rpx; display: flex; align-items: center; justify-content: center; gap: 18rpx; color: $app-muted; }
-.pagination button { min-width: 104rpx; min-height: 72rpx; border: 1px solid $app-border; border-radius: 10rpx; background: $app-raised; color: $app-text; font-size: 22rpx; }
+.pagination button { min-width: 104rpx; min-height: 72rpx; border: 1px solid $app-border; border-radius: 10rpx; background: $app-raised; color: $app-text; font-size: 24rpx; }
 .pagination button[disabled] { opacity: .38; }
-.page-size { margin-left: 18rpx; font-size: 20rpx; }
+.page-size { margin-left: 18rpx; font-size: 24rpx; }
 button::after { border: 0; }
 button:focus-visible { outline: 2px solid $app-focus; outline-offset: 2px; }
 
 @keyframes skeleton { to { background-position: -220% 0; } }
+@keyframes selection-arrive {
+	from { opacity: 0; transform: translate3d(0, 10rpx, 0); }
+	to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
 
 @media (max-width: 760px) {
 	.desktop-table { display: none; }
@@ -162,13 +165,13 @@ button:focus-visible { outline: 2px solid $app-focus; outline-offset: 2px; }
 	.mobile-row { padding: 22rpx 4rpx; border-bottom: 1px solid rgba($app-border, .72); }
 	.mobile-primary { min-height: 60rpx; display: grid; grid-template-columns: 64rpx minmax(0, 1fr) auto; gap: 10rpx; align-items: center; }
 	.mobile-metrics, .mobile-secondary { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; padding-left: 74rpx; }
-	.mobile-metrics { margin-top: 10rpx; color: $app-text; font-size: 22rpx; }
+	.mobile-metrics { margin-top: 10rpx; color: $app-text; font-size: 24rpx; }
 	.mobile-secondary { min-height: 74rpx; margin-top: 10rpx; }
 	.mobile-secondary .secondary-line { flex: 1; }
 	.select-button, .row-delete, .pagination button, .empty-action { min-height: 96rpx; }
-	.selection-bar.visible { min-height: 96rpx; max-height: 96rpx; }
+	.selection-bar.visible { min-height: 96rpx; }
 	.page-size { display: none; }
 }
 
-@media (prefers-reduced-motion: reduce) { .selection-bar { transition: none; } .skeleton-row { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .selection-bar { animation: none; } .skeleton-row { animation: none; } }
 </style>

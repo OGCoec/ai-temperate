@@ -76,6 +76,57 @@ public final class RedisKeyFactory {
                 String.format(Locale.ROOT, "%04d", bucketNumber));
     }
 
+    /**
+     * 生成已注册身份 Bloom 双版本状态机使用的固定控制 Key。
+     */
+    public String identityPresenceBloomControlKey() {
+        return create(
+                "bloom",
+                "uli-presence",
+                "v1",
+                IdentifierType.BLOOM_CONTROL,
+                "state");
+    }
+
+    /**
+     * 生成全量构建使用的分布式租约 Key，防止多个应用实例同时重建。
+     */
+    public String identityPresenceBloomBuildLockKey() {
+        return create(
+                "bloom",
+                "uli-presence",
+                "v1",
+                IdentifierType.BLOOM_BUILD_LOCK,
+                "lease");
+    }
+
+    /**
+     * 生成某一构建代次的参数和统计元数据 Key。
+     */
+    public String identityPresenceBloomMetaKey(String generation) {
+        return create(
+                "bloom",
+                "uli-presence",
+                requireNamespaceSegment("generation", generation),
+                IdentifierType.BLOOM_META,
+                "config");
+    }
+
+    /**
+     * 生成某一构建代次的用户 ID 幂等分片 Key。
+     */
+    public String identityPresenceBloomReceiptKey(String generation, int shardNumber) {
+        if (shardNumber < 0 || shardNumber > 9_999) {
+            throw new IllegalArgumentException("Bloom receipt shard must be between 0 and 9999.");
+        }
+        return create(
+                "bloom",
+                "uli-presence",
+                requireNamespaceSegment("generation", generation),
+                IdentifierType.BLOOM_RECEIPT,
+                String.format(Locale.ROOT, "%04d", shardNumber));
+    }
+
     public String registrationFlowKey(HmacIdentifier identifier) {
         return registrationKey(IdentifierType.REGISTRATION_FLOW, identifier);
     }
@@ -452,6 +503,10 @@ public final class RedisKeyFactory {
         EMAIL("email"),
         PHONE("phone"),
         BUCKET("bucket"),
+        BLOOM_CONTROL("control"),
+        BLOOM_BUILD_LOCK("build-lock"),
+        BLOOM_META("meta"),
+        BLOOM_RECEIPT("receipt"),
         REGISTRATION_FLOW("flow"),
         REGISTRATION_EMAIL_CODE("email-code"),
         REGISTRATION_PHONE_CODE("phone-code"),

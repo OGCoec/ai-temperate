@@ -98,6 +98,7 @@ class PasswordResetDeliveryMethodTest {
                 mock(PasswordResetNotificationService.class),
                 mock(SessionAuthenticationService.class),
                 mock(PasswordEncoder.class),
+                mock(com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter.class),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

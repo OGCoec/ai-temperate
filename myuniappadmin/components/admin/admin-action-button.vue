@@ -73,7 +73,7 @@ export default {
 	justify-content: center;
 	gap: 12rpx;
 	color: $app-text;
-	font-size: 22rpx;
+	font-size: 26rpx;
 	font-weight: 720;
 	line-height: 1;
 	text-align: center;
@@ -107,13 +107,13 @@ export default {
 .admin-action-button.size-compact {
 	min-height: 72rpx;
 	padding: 0 20rpx;
-	font-size: 20rpx;
+	font-size: 24rpx;
 }
 
 .admin-action-button.size-large {
 	min-height: 96rpx;
 	padding: 0 32rpx;
-	font-size: 23rpx;
+	font-size: 27rpx;
 }
 
 .tone-neutral {
@@ -229,7 +229,7 @@ export default {
 	}
 
 	.loading-indicator {
-		animation-duration: 1.4s;
+		animation: none;
 	}
 }
 
