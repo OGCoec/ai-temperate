@@ -30,6 +30,7 @@ public final class AdminAiModelMergePatchMapper {
             "tags",
             "vendor",
             "inputRatio",
+            "cachedInputRatio",
             "outputRatio",
             "capabilities");
 
@@ -57,6 +58,7 @@ public final class AdminAiModelMergePatchMapper {
                 stringListField(document, "tags"),
                 textField(document, "vendor", false),
                 decimalField(document, "inputRatio"),
+                decimalField(document, "cachedInputRatio"),
                 decimalField(document, "outputRatio"),
                 stringListField(document, "capabilities"));
     }

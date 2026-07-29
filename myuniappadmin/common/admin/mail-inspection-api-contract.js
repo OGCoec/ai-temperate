@@ -1,10 +1,11 @@
 const REQUIRED_API_METHODS = Object.freeze([
 	'createJob',
 	'getJob',
+	'eventsPath',
 	'getRecoveredJobs',
 	'resumeJob'
 ])
-const REQUIRED_CONTRACT_VERSION = 3
+const REQUIRED_CONTRACT_VERSION = 4
 const VERSION_MISMATCH_MESSAGE = '前端资源版本不一致，请清除本站缓存后重新加载。'
 
 function versionMismatchError() {
@@ -27,10 +28,12 @@ export function createUnavailableAdminMailInspectionApi(error) {
 		? error
 		: versionMismatchError()
 	const reject = async () => { throw unavailableError }
+	const rejectPath = () => { throw unavailableError }
 	return Object.freeze({
 		contractVersion: 0,
 		createJob: reject,
 		getJob: reject,
+		eventsPath: rejectPath,
 		getRecoveredJobs: reject,
 		resumeJob: reject
 	})

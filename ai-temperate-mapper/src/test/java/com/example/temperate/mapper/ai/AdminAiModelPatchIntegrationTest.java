@@ -85,6 +85,19 @@ final class AdminAiModelPatchIntegrationTest {
     }
 
     @Test
+    void editableUpdatePersistsCachedInputRatio() {
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            AiModelMapper mapper = session.getMapper(AiModelMapper.class);
+            AiModel changed = model("gpt-5.6");
+            changed.setCachedInputRatio(new BigDecimal("0.25000000"));
+
+            assertThat(mapper.updateEditable(changed, 1L)).isEqualTo(1);
+            assertThat(mapper.findById(MODEL_ID).getCachedInputRatio())
+                    .isEqualByComparingTo("0.25000000");
+        }
+    }
+
+    @Test
     void mainUpdateAndCapabilityReplacementRollBackTogether() {
         try (SqlSession session = sqlSessionFactory.openSession(false)) {
             AiModelMapper modelMapper = session.getMapper(AiModelMapper.class);
@@ -158,6 +171,7 @@ final class AdminAiModelPatchIntegrationTest {
         model.setDescriptionTokensJson("[\"integration\",\"model\"]");
         model.setVendor("openai");
         model.setInputRatio(BigDecimal.ONE);
+        model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(BigDecimal.TWO);
         model.setEnabled(true);
         return model;

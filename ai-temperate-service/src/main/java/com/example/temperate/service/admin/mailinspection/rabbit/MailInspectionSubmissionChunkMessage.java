@@ -15,8 +15,8 @@ public record MailInspectionSubmissionChunkMessage(
         String traceId,
         String clientRequestId,
         String requestFingerprint,
-        long jobInternalId,
         String jobId,
+        String jobKeyHash,
         MailInspectionType inspectionType,
         int chunkIndex,
         int chunkCount,
@@ -36,11 +36,18 @@ public record MailInspectionSubmissionChunkMessage(
         Objects.requireNonNull(clientRequestId);
         Objects.requireNonNull(requestFingerprint);
         Objects.requireNonNull(jobId);
+        Objects.requireNonNull(jobKeyHash);
         Objects.requireNonNull(inspectionType);
         Objects.requireNonNull(createdAt);
         Objects.requireNonNull(protectedPayload);
         if (chunkIndex < 0 || chunkCount < 1 || chunkIndex >= chunkCount) {
             throw new IllegalArgumentException("submission chunk index is invalid");
+        }
+        if (schemaVersion != MailInspectionRabbitNames.SUBMISSION_SCHEMA_VERSION
+                || !jobId.matches("^[A-Za-z0-9_-]{22}$")
+                || !jobKeyHash.matches("^[A-Za-z0-9_-]{43}$")) {
+            throw new IllegalArgumentException(
+                    "submission job identity or schema is invalid");
         }
     }
 
@@ -48,8 +55,8 @@ public record MailInspectionSubmissionChunkMessage(
     public String toString() {
         return "MailInspectionSubmissionChunkMessage[messageId="
                 + messageId
-                + ",jobId="
-                + jobId
+                + ",jobRef="
+                + jobKeyHash.substring(0, 16)
                 + ",inspectionType="
                 + inspectionType
                 + ",chunkIndex="

@@ -17,6 +17,7 @@ public record AiModelCacheEntry(
         String icon,
         List<String> tags,
         BigDecimal inputRatio,
+        BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
         List<AiModelCapabilityCode> capabilities) {
 

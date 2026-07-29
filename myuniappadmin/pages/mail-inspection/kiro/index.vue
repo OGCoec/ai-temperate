@@ -1,31 +1,6 @@
-<template>
-	<mail-inspection-workspace
-		v-if="adminRouteReady"
-		ref="workspace"
-		inspection-type="KIRO_STATUS"
-		active-business="KIRO"
-		eyebrow="MAIL EVIDENCE · KIRO"
-		title="Kiro 邮件证据检查"
-		description="通过 Microsoft OAuth 与 Outlook IMAP 搜索 Kiro / AWS 邮件，区分正常证据、限制证据、无注册证据和无法分类。"
-	/>
-</template>
-
+<template><view class="legacy-workspace-entry" aria-live="polite">正在打开 Kiro 邮件检查…</view></template>
 <script>
-import MailInspectionWorkspace from '@/components/admin/mail-inspection-workspace.vue'
-import { createAdminPageGuardMixin } from '@/common/admin/admin-page-guard.js'
-
-export default {
-	mixins: [createAdminPageGuardMixin('/pages/mail-inspection/kiro/index')],
-	components: { MailInspectionWorkspace },
-	onShow() {
-		this.runAfterAdminRouteGuard(() =>
-			this.$nextTick(() => this.$refs.workspace?.resume()))
-	},
-	onHide() {
-		this.$refs.workspace?.pause()
-	},
-	onUnload() {
-		this.$refs.workspace?.pause()
-	}
-}
+import { redirectLegacyAdminWorkspace } from '@/common/admin/admin-workspace-legacy-entry.js'
+export default { onLoad() { redirectLegacyAdminWorkspace('/pages/mail-inspection/kiro/index') } }
 </script>
+<style scoped>.legacy-workspace-entry { min-height: 100vh; padding: 32px; box-sizing: border-box; background: #080b0d; color: #819098; }</style>

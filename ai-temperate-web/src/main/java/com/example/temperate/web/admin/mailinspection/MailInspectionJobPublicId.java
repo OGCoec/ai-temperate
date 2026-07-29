@@ -1,18 +1,19 @@
 package com.example.temperate.web.admin.mailinspection;
 
-import java.util.Objects;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 
 /**
- * 表示已由 Spring Converter 校验并解码的邮箱检查任务公共 ID。
+ * 表示已由 Spring Converter 完成规范校验的 128 位邮箱检查任务公共 ID。
  *
- * <p>Controller 只接收该值对象，不直接执行 Base64URL 解码；内部 Long 不会进入响应。</p>
+ * <p>值对象只保留 22 字符公共文本，不暴露或派生数据库 Long。</p>
  */
-public record MailInspectionJobPublicId(String value, long internalId) {
+public record MailInspectionJobPublicId(String value) {
+
+    private static final HybridBase64UrlCodec CODEC =
+            new HybridBase64UrlCodec();
 
     public MailInspectionJobPublicId {
-        Objects.requireNonNull(value, "value must not be null");
-        if (internalId <= 0) {
-            throw new IllegalArgumentException("internalId must be positive");
-        }
+        // 值对象自身再次锁定规范性，避免测试、反序列化或未来非 MVC 调用绕过 Converter。
+        CODEC.decode(value);
     }
 }

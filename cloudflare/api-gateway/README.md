@@ -52,4 +52,12 @@ Spring Boot 首次部署使用 `EDGE_PROXY_MODE=OPTIONAL`；两个前端和正�
 旧父域 Cookie 已清理后改为 `EDGE_PROXY_MODE=REQUIRED`。生产环境不得启用
 `workers.dev`，不得把 Secret 写入 `wrangler.jsonc`、日志或 Git。
 
+邮件检查实时接口固定匹配
+`/api/admin/mail-inspection/jobs/{22字符jobId}/events`。Worker 不读取完整响应体，
+直接流式转发 Origin 的 `text/event-stream`，透传 `Last-Event-ID`、`X-Trace-Id`，
+并把客户端取消信号传播到 Origin。响应固定禁止浏览器和 CDN 缓存及转换。
+
+`SSE_ROUTE_LOG_SAMPLE_RATE` 只控制低比例入口诊断日志。日志仅包含固定路由模板、
+HTTP 状态和有界 `CF-Ray`，禁止记录真实 Job ID、Cookie、Authorization 或请求头。
+
 第一阶段只交付源码，不自动执行 `npm install`、`npm test` 或 `wrangler deploy`。

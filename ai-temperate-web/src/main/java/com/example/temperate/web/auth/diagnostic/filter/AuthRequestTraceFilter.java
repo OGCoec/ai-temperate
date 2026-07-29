@@ -175,6 +175,16 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             return "UNKNOWN";
         }
         String normalized = value.replace('\r', '_').replace('\n', '_');
+        // 邮件任务段在格式校验前也必须模板化，避免无效路径把攻击者输入写入认证诊断日志。
+        normalized = normalized.replaceFirst(
+                "^/api/admin/mail-inspection/jobs/[^/]+/events$",
+                "/api/admin/mail-inspection/jobs/{jobId}/events");
+        normalized = normalized.replaceFirst(
+                "^/api/admin/mail-inspection/jobs/[^/]+/resume$",
+                "/api/admin/mail-inspection/jobs/{jobId}/resume");
+        normalized = normalized.replaceFirst(
+                "^/api/admin/mail-inspection/jobs/[^/]+$",
+                "/api/admin/mail-inspection/jobs/{jobId}");
         return normalized.length() <= 255 ? normalized : normalized.substring(0, 255);
     }
 

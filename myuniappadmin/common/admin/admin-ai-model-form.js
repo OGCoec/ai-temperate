@@ -19,7 +19,24 @@ export function createEmptyAiModelForm() {
 		tagsText: '',
 		vendor: '',
 		inputRatio: '1',
+		cachedInputRatio: '1',
 		outputRatio: '1',
+		capabilities: []
+	}
+}
+
+/**
+ * 把网关发现结果收敛为一次性新增表单草稿；计费倍率和能力必须由管理员重新确认。
+ */
+export function createDiscoveredAiModelForm(prefill = {}) {
+	const modelId = String(prefill?.modelId || '').trim().slice(0, 128)
+	return {
+		...createEmptyAiModelForm(),
+		modelName: modelId,
+		vendor: '',
+		inputRatio: '',
+		cachedInputRatio: '',
+		outputRatio: '',
 		capabilities: []
 	}
 }
@@ -40,6 +57,7 @@ export function modelToAiModelForm(model) {
 		tagsText: Array.isArray(model?.tags) ? model.tags.join(', ') : '',
 		vendor: String(model?.vendor || ''),
 		inputRatio: String(model?.inputRatio ?? ''),
+		cachedInputRatio: String(model?.cachedInputRatio ?? ''),
 		outputRatio: String(model?.outputRatio ?? ''),
 		capabilities: orderedCapabilities(model?.capabilities)
 	}
@@ -99,6 +117,8 @@ export function validateAiModelForm(form) {
 	}
 	const tags = normalizeTags(form?.tagsText, errors)
 	const inputRatio = normalizeRatio(form?.inputRatio, 'inputRatio', errors)
+	const cachedInputRatio =
+		normalizeRatio(form?.cachedInputRatio, 'cachedInputRatio', errors)
 	const outputRatio = normalizeRatio(form?.outputRatio, 'outputRatio', errors)
 	const rawCapabilities = Array.isArray(form?.capabilities) ? form.capabilities : []
 	const capabilities = orderedCapabilities(rawCapabilities)
@@ -117,6 +137,7 @@ export function validateAiModelForm(form) {
 			tags,
 			vendor,
 			inputRatio,
+			cachedInputRatio,
 			outputRatio,
 			capabilities
 		}
@@ -132,7 +153,13 @@ export function createMergePatch(snapshot, draft) {
 	const current = validateAiModelForm(draft)
 	if (!current.valid) return {}
 	const patch = {}
-	for (const field of ['modelName', 'vendor', 'inputRatio', 'outputRatio']) {
+	for (const field of [
+		'modelName',
+		'vendor',
+		'inputRatio',
+		'cachedInputRatio',
+		'outputRatio'
+	]) {
 		if (initial.command[field] !== current.command[field]) patch[field] = current.command[field]
 	}
 	for (const field of ['description']) {

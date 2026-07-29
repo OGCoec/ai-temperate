@@ -25,6 +25,7 @@ final class AdminAiModelMergePatchMapperTest {
                   "description": null,
                   "iconPublicId": null,
                   "inputRatio": 1.25,
+                  "cachedInputRatio": 0.125,
                   "capabilities": ["RESPONSES", "IMAGE"]
                 }
                 """));
@@ -35,6 +36,8 @@ final class AdminAiModelMergePatchMapperTest {
         assertThat(command.iconPublicId().present()).isTrue();
         assertThat(command.iconPublicId().value()).isNull();
         assertThat(command.inputRatio().value()).isEqualByComparingTo(new BigDecimal("1.25"));
+        assertThat(command.cachedInputRatio().value())
+                .isEqualByComparingTo(new BigDecimal("0.125"));
         assertThat(command.capabilities().value()).containsExactly("RESPONSES", "IMAGE");
     }
 
@@ -51,6 +54,7 @@ final class AdminAiModelMergePatchMapperTest {
     void rejectsWrongJsonTypes() throws Exception {
         assertPatchInvalid("{\"tags\":\"chat\"}");
         assertPatchInvalid("{\"inputRatio\":\"1.25\"}");
+        assertPatchInvalid("{\"cachedInputRatio\":null}");
         assertPatchInvalid("{\"capabilities\":[\"RESPONSES\",9]}");
     }
 

@@ -95,8 +95,8 @@ test('session expiry notice is one-shot and the login entry is the only redirect
 	assert.doesNotMatch(`${navigation}\n${runtime}`, /returnUrl|redirectUrl|fromRoute/)
 })
 
-test('every administrator business page gates its first render and first request on the shared page guard', () => {
-	const protectedPages = [
+test('one persistent workspace guards business panels while legacy pages only replace their URL', () => {
+	const legacyPages = [
 		'pages/risk/ip2location-keys.vue',
 		'pages/ai-models/index.vue',
 		'pages/ai-models/create.vue',
@@ -107,38 +107,34 @@ test('every administrator business page gates its first render and first request
 		'pages/mail-inspection/ip2location/index.vue'
 	]
 
-	for (const page of protectedPages) {
+	for (const page of legacyPages) {
 		const pageSource = source(page)
-		assert.match(pageSource, /createAdminPageGuardMixin/)
-		assert.match(pageSource, /adminRouteReady/)
-		assert.match(pageSource, /runAfterAdminRouteGuard|v-if="adminRouteReady"/)
-		assert.match(pageSource, /onShow\(\)\s*\{[\s\S]{0,240}runAfterAdminRouteGuard/)
-		assert.doesNotMatch(pageSource, /ADMIN_SESSION_INVALID/)
-		assert.doesNotMatch(pageSource, /uni\.reLaunch\(/)
+		assert.match(pageSource, /redirectLegacyAdminWorkspace/)
+		assert.doesNotMatch(pageSource, /adminApi|adminRouteReady|runAfterAdminRouteGuard/)
 	}
-	assert.match(source('common/admin/admin-page-guard.js'), /guardLoading:\s*true/)
+	const workspace = source('pages/admin/workspace.vue')
+	assert.match(workspace, /ensureAdminSession/)
+	assert.match(workspace, /VERIFYING_SESSION/)
+	assert.match(workspace, /TRANSIENT_FAILURE/)
+	assert.doesNotMatch(workspace, /v-if="adminRouteReady"/)
 })
 
-test('dashboard and mailbox business tabs use guarded navigation for protected routes', () => {
-	const dashboard = source('pages/index/index.vue')
-	const tabs = source('components/admin/mail-inspection-business-tabs.vue')
+test('workspace navigation switches view state without using the uni page stack', () => {
+	const workspace = source('pages/admin/workspace.vue')
+	const navigation = source('components/admin/admin-side-navigation.vue')
 
-	assert.match(dashboard, /guardedAdminNavigate/)
-	assert.doesNotMatch(dashboard, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/(?:risk\/ip2location-keys|ai-models|ai-model-icons|mail-inspection)/)
-	assert.match(tabs, /guardedAdminRedirect/)
-	assert.doesNotMatch(tabs, /uni\.redirectTo\(/)
+	assert.match(navigation, /\$emit\('navigate', item\.location \|\| \{ view: item\.view \}\)/)
+	assert.doesNotMatch(`${workspace}\n${navigation}`, /uni\.(?:navigateTo|redirectTo)\(/)
 })
 
-test('mail workspaces cannot mount and restore recovered jobs before the page guard succeeds', () => {
-	for (const page of [
-		'pages/mail-inspection/openai/index.vue',
-		'pages/mail-inspection/kiro/index.vue',
-		'pages/mail-inspection/ip2location/index.vue'
-	]) {
-		assert.match(source(page), /<mail-inspection-workspace[\s\S]{0,120}v-if="adminRouteReady"/)
-	}
-	const workspace = source('components/admin/mail-inspection-workspace.vue')
-	assert.match(workspace, /mounted\(\)[\s\S]{0,320}refreshRecoveredJobs/)
+test('mail panel mounts only in the READY branch and pauses when the workspace deactivates it', () => {
+	const workspace = source('pages/admin/workspace.vue')
+	const panel = source('components/admin/workspace/mail-inspection-panel.vue')
+
+	assert.match(workspace, /v-else-if="sessionState === 'READY'"/)
+	assert.match(workspace, /import MailInspectionPanel from/)
+	assert.match(panel, /mounted\(\)[\s\S]{0,480}refreshRecoveredJobs/)
+	assert.match(panel, /onWorkspaceDeactivated\(\)[\s\S]{0,160}this\.pause\(\)/)
 })
 
 test('initial unauthenticated bootstrap on the login entry neither loops nor queues an expiry notice', async () => {

@@ -6,18 +6,11 @@ import java.security.SecureRandom;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * 混合时间戳、机房、工作节点与随机熵的 128 位 ID 生成器实现文件。
+ * 使用时间戳、机房、工作节点与随机熵生成 128 位二进制资源 ID。
  *
- * <p>用途：为需要跨节点低冲突概率的场景生成二进制 ID。</p>
- *
- * <p>并发安全原理：同一实例必须在互斥锁内更新最近时间戳和随机熵；时钟回拨或同毫秒熵耗尽时不能继续按旧状态
- * 发号，以避免产生重复 ID。</p>
+ * <p>不同实例必须配置不同的机房和工作节点组合；同一实例在本地互斥锁内更新时间戳与随机熵。
+ * 该工作器不使用 Redis 协调，时钟回拨或同毫秒熵空间耗尽时拒绝沿用旧状态，以避免重复发号。</p>
  */
-/**
- * 终极混合型 128 位 ID 生成器 (支持多机房异地多活)
- * 引入 Redis 锁保证集群安全
- */
-// ULID的改进版本，引入了机房id和机器id，运用的是8位机房id和8位机器id来集群
 public class HybridSemaphoreIdWorker {
 
     private final long datacenterIdBits = 8L;

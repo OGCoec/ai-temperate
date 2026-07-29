@@ -1,7 +1,7 @@
 package com.example.temperate.service.admin.mailinspection.service.impl;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
-import com.example.temperate.common.id.snowflake.component.SnowflakeIdWorker;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
+import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.service.admin.AdminErrorCode;
 import com.example.temperate.service.admin.AdminException;
 import com.example.temperate.service.admin.mailinspection.config.AdminMailInspectionProperties;
@@ -14,7 +14,8 @@ import com.example.temperate.service.admin.mailinspection.domain.MailInspectionJ
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionRequestFingerprint;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.job.AdminMailInspectionJobStore;
-import com.example.temperate.service.admin.mailinspection.job.MailInspectionJobState;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionJobKeyHasher;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionRedisJobDocument;
 import com.example.temperate.service.admin.mailinspection.parser.MailboxCredentialParseBatch;
 import com.example.temperate.service.admin.mailinspection.parser.MailboxCredentialParser;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionListenerControl;
@@ -31,14 +32,15 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 编排管理员邮箱检查的幂等创建、查询与人工恢复，并以类型生命周期锁隔离恢复和清理竞态。
+ * 编排 Redis 权威邮箱任务的幂等创建、持久提交、查询和管理员恢复。
  *
- * <p>本实现只在全部 Submission Chunk 获得 Publisher Confirm 后返回任务；逐凭证 Work 消息由独立 Dispatcher 异步生成。</p>
+ * <p>本实现只持有不可变文档；每次状态变化都回到 JobStore 的 Lua 原子命令，Rabbit Confirm 完成后才登记提交分块。</p>
  */
 @Service
 public final class AdminMailInspectionJobServiceImpl
@@ -52,8 +54,9 @@ public final class AdminMailInspectionJobServiceImpl
     private final MailInspectionSubmissionPublisher submissionPublisher;
     private final MailInspectionSubmissionListenerControl submissionListenerControl;
     private final MailInspectionListenerControl workListenerControl;
-    private final SnowflakeIdWorker snowflakeIdWorker;
-    private final PublicIdCodec publicIdCodec;
+    private final HybridSemaphoreIdWorker hybridIdWorker;
+    private final HybridBase64UrlCodec jobIdCodec;
+    private final MailInspectionJobKeyHasher keyHasher;
     private final AdminMailInspectionProperties properties;
     private final Clock clock;
     private final MailInspectionTypeLifecycleGuard lifecycleGuard;
@@ -67,8 +70,9 @@ public final class AdminMailInspectionJobServiceImpl
             MailInspectionSubmissionPublisher submissionPublisher,
             MailInspectionSubmissionListenerControl submissionListenerControl,
             MailInspectionListenerControl workListenerControl,
-            SnowflakeIdWorker snowflakeIdWorker,
-            PublicIdCodec publicIdCodec,
+            HybridSemaphoreIdWorker hybridIdWorker,
+            HybridBase64UrlCodec jobIdCodec,
+            MailInspectionJobKeyHasher keyHasher,
             AdminMailInspectionProperties properties,
             Clock clock,
             MailInspectionTypeLifecycleGuard lifecycleGuard) {
@@ -82,8 +86,9 @@ public final class AdminMailInspectionJobServiceImpl
         this.submissionListenerControl = Objects.requireNonNull(
                 submissionListenerControl);
         this.workListenerControl = Objects.requireNonNull(workListenerControl);
-        this.snowflakeIdWorker = Objects.requireNonNull(snowflakeIdWorker);
-        this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
+        this.hybridIdWorker = Objects.requireNonNull(hybridIdWorker);
+        this.jobIdCodec = Objects.requireNonNull(jobIdCodec);
+        this.keyHasher = Objects.requireNonNull(keyHasher);
         this.properties = Objects.requireNonNull(properties);
         this.clock = Objects.requireNonNull(clock);
         this.lifecycleGuard = Objects.requireNonNull(lifecycleGuard);
@@ -103,44 +108,60 @@ public final class AdminMailInspectionJobServiceImpl
             AdminMailInspectionCreateCommand command) {
         strategyRegistry.getRequired(type);
         validateBusinessConcurrency(command.businessConcurrency());
+        if (command.credentialLines().size()
+                > properties.job().maxCredentialLines()) {
+            throw new AdminException(
+                    AdminErrorCode.ADMIN_MAIL_INSPECTION_INVALID_REQUEST,
+                    "mail inspection credential line limit exceeded");
+        }
         MailboxCredentialParseBatch batch = parser.parse(
                 command.credentialLines());
         MailInspectionRequestFingerprint fingerprint =
                 fingerprinter.fingerprint(type, command);
-
-        long candidateId = snowflakeIdWorker.nextId();
-        String candidatePublicId = publicIdCodec.encode(candidateId);
-        Instant candidateCreatedAt = clock.instant();
-        List<MailInspectionSubmissionChunkMessage> candidateChunks =
-                chunks(
-                        command.clientRequestId(),
-                        fingerprint,
-                        candidateId,
-                        candidatePublicId,
-                        type,
-                        command.businessConcurrency(),
-                        candidateCreatedAt,
-                        batch);
-        MailInspectionJobState candidate = MailInspectionJobState.submitting(
-                candidateId,
-                candidatePublicId,
+        String candidateJobId = jobIdCodec.encode(hybridIdWorker.nextId());
+        String candidateJobHash =
+                keyHasher.hashJobId(candidateJobId).value();
+        Instant createdAt = clock.instant();
+        List<MailInspectionSubmissionChunkMessage> candidateChunks = chunks(
+                command.clientRequestId(),
+                fingerprint,
+                candidateJobId,
+                candidateJobHash,
                 type,
+                command.businessConcurrency(),
+                createdAt,
+                batch);
+        MailInspectionRedisJobDocument candidate = new MailInspectionRedisJobDocument(
+                MailInspectionRedisJobDocument.SCHEMA_VERSION,
+                candidateJobId,
+                candidateJobHash,
+                type,
+                MailInspectionJobStatus.DISPATCHING,
                 batch.requestedCount(),
                 batch.credentials().size(),
                 batch.duplicateCount(),
                 batch.invalidCount(),
                 command.businessConcurrency(),
+                batch.requestedCount(),
                 command.clientRequestId(),
-                fingerprint,
+                fingerprint.value(),
                 candidateChunks.size(),
-                candidateCreatedAt,
-                properties.submission().incompleteRetention(),
-                batch.immediateResults());
+                false,
+                false,
+                0,
+                false,
+                List.of(),
+                createdAt,
+                null,
+                null,
+                createdAt.plus(properties.job().activeLease()),
+                createdAt.plus(
+                        properties.submission().incompleteRetention()),
+                null,
+                0L);
 
         MailInspectionJobReservation reservation = jobStore.reserveOrFind(
-                command.clientRequestId(),
-                fingerprint,
-                candidate);
+                candidate, batch.immediateResults());
         if (reservation.status()
                 == MailInspectionJobReservationStatus.FINGERPRINT_CONFLICT) {
             return Mono.error(idempotencyConflict());
@@ -152,44 +173,52 @@ public final class AdminMailInspectionJobServiceImpl
 
         boolean replayed = reservation.status()
                 == MailInspectionJobReservationStatus.REPLAYED;
-        MailInspectionJobState state = reservation.state();
-        if (replayed && !requiresSubmission(state.status())) {
-            return Mono.just(createResult(state, true));
+        MailInspectionRedisJobDocument document = reservation.document();
+        if (replayed && !requiresSubmission(document.status())) {
+            return Mono.just(createResult(
+                    requiredSnapshot(document.jobId()), true));
         }
-
         List<MailInspectionSubmissionChunkMessage> messages = replayed
                 ? chunks(
-                        state.clientRequestId(),
-                        state.requestFingerprint(),
-                        state.internalId(),
-                        state.publicId(),
-                        state.type(),
-                        state.businessConcurrency(),
-                        state.createdAt(),
+                        document.clientRequestId(),
+                        new MailInspectionRequestFingerprint(
+                                document.requestFingerprint()),
+                        document.jobId(),
+                        document.jobHash(),
+                        document.inspectionType(),
+                        document.businessConcurrency(),
+                        document.createdAt(),
                         batch)
                 : candidateChunks;
-        if (!state.markDispatching(
-                clock.instant(),
-                properties.submission().incompleteRetention())) {
-            return Mono.error(submissionIncomplete(
-                    new IllegalStateException(
-                            "mail inspection submission cleanup already claimed")));
+        if (replayed) {
+            jobStore.changeStatus(
+                    document.jobId(),
+                    Set.of(
+                            MailInspectionJobStatus.DISPATCHING,
+                            MailInspectionJobStatus
+                                    .AWAITING_CLIENT_RESUBMISSION),
+                    MailInspectionJobStatus.DISPATCHING,
+                    clock.instant());
         }
-        return publishMissingChunks(state, messages)
-                // Chunk Confirm 回调在订阅后才执行，完整性判断也必须延迟到发布链完成之后。
-                .then(Mono.defer(() -> startSubmissionIfRequired(state)))
-                .then(Mono.fromSupplier(() -> createResult(state, replayed)))
+        return publishMissingChunks(document.jobId(), messages)
+                .then(Mono.defer(() ->
+                        startSubmissionIfRequired(document.jobId())))
+                .then(Mono.fromSupplier(() -> createResult(
+                        requiredSnapshot(document.jobId()), replayed)))
                 .onErrorMap(exception -> {
-                    state.markAwaitingClientResubmission(
-                            clock.instant(),
-                            properties.submission().incompleteRetention());
+                    jobStore.changeStatus(
+                            document.jobId(),
+                            Set.of(MailInspectionJobStatus.DISPATCHING),
+                            MailInspectionJobStatus
+                                    .AWAITING_CLIENT_RESUBMISSION,
+                            clock.instant());
                     return submissionIncomplete(exception);
                 });
     }
 
     @Override
-    public MailInspectionJobSnapshot get(long internalJobId) {
-        return requiredState(internalJobId).snapshot();
+    public MailInspectionJobSnapshot get(String jobId) {
+        return requiredSnapshot(jobId);
     }
 
     @Override
@@ -198,43 +227,58 @@ public final class AdminMailInspectionJobServiceImpl
     }
 
     @Override
-    public Mono<MailInspectionJobSnapshot> resume(long internalJobId) {
-        MailInspectionJobState state = requiredState(internalJobId);
+    public Mono<MailInspectionJobSnapshot> resume(String jobId) {
+        MailInspectionRedisJobDocument document = requiredDocument(jobId);
         return Mono.defer(() -> lifecycleGuard.withLock(
-                state.type(),
-                () -> resumeWithinLifecycle(state)));
+                document.inspectionType(),
+                () -> resumeWithinLifecycle(document)));
     }
 
     private Mono<MailInspectionJobSnapshot> resumeWithinLifecycle(
-            MailInspectionJobState state) {
-        if (!state.isAwaitingResume()) {
+            MailInspectionRedisJobDocument document) {
+        if (document.status()
+                != MailInspectionJobStatus.AWAITING_ADMIN_RESUME) {
             return Mono.error(conflict());
         }
-        // 有 Submission 尚未派发时，管理员批准先恢复 Dispatcher，Work 消费者仍保持停止。
-        if (state.submissionChunkCount() > 0
-                && !state.allSubmissionChunksDispatched()) {
-            if (!state.markDispatching(
-                    clock.instant(),
-                    properties.submission().incompleteRetention())) {
+        MailInspectionJobSnapshot snapshot =
+                requiredSnapshot(document.jobId());
+        if (snapshot.submissionChunkCount() > 0
+                && snapshot.dispatchedSubmissionChunkCount()
+                < snapshot.submissionChunkCount()) {
+            if (!jobStore.changeStatus(
+                    document.jobId(),
+                    Set.of(MailInspectionJobStatus.AWAITING_ADMIN_RESUME),
+                    MailInspectionJobStatus.DISPATCHING,
+                    clock.instant())) {
                 return Mono.error(conflict());
             }
-            return submissionListenerControl.start(state.type())
-                    .then(Mono.fromSupplier(state::snapshot))
+            return submissionListenerControl
+                    .start(document.inspectionType())
+                    .then(Mono.fromSupplier(() ->
+                            requiredSnapshot(document.jobId())))
                     .onErrorMap(exception -> {
-                        state.markAwaitingAdminResume();
+                        returnToAwaitingResume(document.jobId());
                         return unavailable(exception);
                     });
         }
-        if (!state.markRunning(clock.instant())) {
+        if (!jobStore.changeStatus(
+                document.jobId(),
+                Set.of(MailInspectionJobStatus.AWAITING_ADMIN_RESUME),
+                MailInspectionJobStatus.RUNNING,
+                clock.instant())) {
             return Mono.error(conflict());
         }
         return workListenerControl
-                .prepare(state.type(), state.businessConcurrency())
+                .prepare(
+                        document.inspectionType(),
+                        document.businessConcurrency())
                 .then(workListenerControl.start(
-                        state.type(), state.businessConcurrency()))
-                .then(Mono.fromSupplier(state::snapshot))
+                        document.inspectionType(),
+                        document.businessConcurrency()))
+                .then(Mono.fromSupplier(() ->
+                        requiredSnapshot(document.jobId())))
                 .onErrorMap(exception -> {
-                    state.markAwaitingAdminResume();
+                    returnToAwaitingResume(document.jobId());
                     return unavailable(exception);
                 });
     }
@@ -242,8 +286,8 @@ public final class AdminMailInspectionJobServiceImpl
     private List<MailInspectionSubmissionChunkMessage> chunks(
             String clientRequestId,
             MailInspectionRequestFingerprint fingerprint,
-            long internalId,
-            String publicId,
+            String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             int businessConcurrency,
             Instant createdAt,
@@ -251,8 +295,8 @@ public final class AdminMailInspectionJobServiceImpl
         return submissionMessageFactory.createChunks(
                 clientRequestId,
                 fingerprint,
-                internalId,
-                publicId,
+                jobId,
+                jobKeyHash,
                 type,
                 batch.requestedCount(),
                 batch.credentials().size(),
@@ -264,60 +308,76 @@ public final class AdminMailInspectionJobServiceImpl
     }
 
     /**
-     * HTTP 取消只会停止尚未开始的发布；已经确认的索引保存在任务状态中，相同幂等键重试只补发缺口。
+     * HTTP 取消只停止尚未开始的发布；Redis 中的确认位使相同幂等请求只补发缺失分块。
      */
     private Mono<Void> publishMissingChunks(
-            MailInspectionJobState state,
+            String jobId,
             List<MailInspectionSubmissionChunkMessage> chunks) {
+        Set<Integer> confirmed =
+                jobStore.confirmedSubmissionChunks(jobId);
         return Flux.fromIterable(chunks)
-                .filter(message -> !state.isSubmissionChunkConfirmed(
-                        message.chunkIndex()))
+                .filter(message -> !confirmed.contains(message.chunkIndex()))
                 .flatMap(message -> submissionPublisher.publish(message)
                                 .then(Mono.fromRunnable(() ->
-                                        state.confirmSubmissionChunk(
+                                        jobStore.recordSubmissionConfirmed(
+                                                jobId,
                                                 message.chunkIndex(),
-                                                clock.instant(),
-                                                properties.submission()
-                                                        .incompleteRetention()))),
+                                                clock.instant()))),
                         properties.submission().publishConcurrency())
                 .then();
     }
 
-    private Mono<Void> startSubmissionIfRequired(
-            MailInspectionJobState state) {
-        if (state.hasCompletedWork()) {
-            state.complete(clock.instant(), properties.job().retention());
+    private Mono<Void> startSubmissionIfRequired(String jobId) {
+        MailInspectionJobSnapshot snapshot = requiredSnapshot(jobId);
+        if (snapshot.processedCount() >= snapshot.requestedCount()) {
+            jobStore.markTerminal(
+                    jobId,
+                    MailInspectionJobStatus.COMPLETED,
+                    clock.instant());
             return Mono.empty();
         }
-        if (!state.allSubmissionChunksConfirmed()) {
+        if (snapshot.confirmedSubmissionChunkCount()
+                < snapshot.submissionChunkCount()) {
             return Mono.error(new IllegalStateException(
                     "mail inspection submission remains incomplete"));
         }
-        if (state.recoveredAfterRestart()) {
-            state.markAwaitingAdminResume();
+        MailInspectionRedisJobDocument document = requiredDocument(jobId);
+        if (document.recoveredAfterRestart()) {
+            returnToAwaitingResume(jobId);
             return Mono.empty();
         }
-        return submissionListenerControl.start(state.type())
+        return submissionListenerControl.start(document.inspectionType())
                 .onErrorResume(exception -> {
-                    state.markAwaitingAdminResume();
+                    returnToAwaitingResume(jobId);
                     return Mono.empty();
                 });
     }
 
+    private void returnToAwaitingResume(String jobId) {
+        jobStore.changeStatus(
+                jobId,
+                Set.of(
+                        MailInspectionJobStatus.DISPATCHING,
+                        MailInspectionJobStatus.QUEUED,
+                        MailInspectionJobStatus.RUNNING,
+                        MailInspectionJobStatus.RECOVERY_FAILED),
+                MailInspectionJobStatus.AWAITING_ADMIN_RESUME,
+                clock.instant());
+    }
+
     private MailInspectionJobCreateResult createResult(
-            MailInspectionJobState state,
+            MailInspectionJobSnapshot snapshot,
             boolean replayed) {
-        MailInspectionJobSnapshot snapshot = state.snapshot();
         return new MailInspectionJobCreateResult(
                 snapshot.jobId(),
                 snapshot.inspectionType(),
                 snapshot.status(),
                 snapshot.requestedCount(),
-                state.acceptedCount(),
-                state.duplicateCount(),
-                state.invalidCount(),
-                state.businessConcurrency(),
-                state.businessConcurrency(),
+                snapshot.acceptedCount(),
+                snapshot.duplicateCount(),
+                snapshot.invalidCount(),
+                snapshot.businessConcurrency(),
+                snapshot.businessConcurrency(),
                 snapshot.dispatchFailedCount(),
                 replayed,
                 snapshot.submissionChunkCount(),
@@ -325,8 +385,7 @@ public final class AdminMailInspectionJobServiceImpl
                 snapshot.dispatchedSubmissionChunkCount(),
                 snapshot.submissionPendingChunkCount(),
                 snapshot.submissionExpiresAt(),
-                snapshot.createdAt(),
-                properties.job().pollAfter().toMillis());
+                snapshot.createdAt());
     }
 
     private void validateBusinessConcurrency(int value) {
@@ -338,17 +397,25 @@ public final class AdminMailInspectionJobServiceImpl
         }
     }
 
-    private MailInspectionJobState requiredState(long internalJobId) {
-        return jobStore.find(internalJobId)
+    private MailInspectionRedisJobDocument requiredDocument(String jobId) {
+        return jobStore.findSnapshotMeta(jobId)
                 .orElseThrow(() -> new AdminException(
                         AdminErrorCode.ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND,
                         "mail inspection job not found"));
     }
 
-    private static boolean requiresSubmission(MailInspectionJobStatus status) {
+    private MailInspectionJobSnapshot requiredSnapshot(String jobId) {
+        return jobStore.findSnapshot(jobId)
+                .orElseThrow(() -> new AdminException(
+                        AdminErrorCode.ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND,
+                        "mail inspection job not found"));
+    }
+
+    private static boolean requiresSubmission(
+            MailInspectionJobStatus status) {
         return status == MailInspectionJobStatus.DISPATCHING
                 || status
-                        == MailInspectionJobStatus.AWAITING_CLIENT_RESUBMISSION;
+                == MailInspectionJobStatus.AWAITING_CLIENT_RESUBMISSION;
     }
 
     private static AdminException conflict() {
@@ -384,12 +451,25 @@ public final class AdminMailInspectionJobServiceImpl
     }
 
     /**
-     * 关闭时同时停止 Submission 和 Work 监听器；Rabbit 会把尚未 ACK 的消息恢复为 Ready。
+     * 关闭时先关闭 Redis 接收闸门，再停止 Submission 与 Work 监听器，使未 ACK 消息返回 Rabbit Ready。
      */
     @PreDestroy
     public void shutdown() {
-        jobStore.stopAllAccepting();
-        submissionListenerControl.stopAll();
-        workListenerControl.stopAll();
+        // 关闭阶段按控制面逐项尽力执行；Redis 故障不能阻断 Rabbit 监听器停止，反之亦然。
+        try {
+            jobStore.stopAllAccepting();
+        } catch (RuntimeException ignored) {
+            // Redis 已不可用时无法持久化闸门，但进程退出仍必须继续停止全部监听器。
+        }
+        try {
+            submissionListenerControl.stopAll();
+        } catch (RuntimeException ignored) {
+            // Submission 控制面异常不能阻断 Work 控制面关闭。
+        }
+        try {
+            workListenerControl.stopAll();
+        } catch (RuntimeException ignored) {
+            // 进程关闭阶段不以控制面清理异常覆盖原始退出流程。
+        }
     }
 }

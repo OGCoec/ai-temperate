@@ -9,8 +9,8 @@ import java.util.List;
  */
 public record AiModelCacheSnapshot(int schemaVersion, List<AiModelCacheEntry> models) {
 
-    // v2 将图片、视频能力收敛为能力大类并新增音频大类，避免新应用误读旧枚举快照。
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    // v3 增加缓存输入倍率，避免计费链路把缺少该字段的旧快照当作完整模型配置。
+    public static final int CURRENT_SCHEMA_VERSION = 3;
 
     public AiModelCacheSnapshot {
         models = models == null ? List.of() : List.copyOf(models);

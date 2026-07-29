@@ -18,6 +18,7 @@ test('administrator route policy protects every business page and leaves securit
 
 	assert.equal(ADMIN_ENTRY_ROUTE, '/pages/index/index')
 	for (const route of [
+		'/pages/admin/workspace?view=dashboard',
 		'/pages/risk/ip2location-keys',
 		'/pages/ai-models/index',
 		'/pages/ai-models/create',
@@ -116,4 +117,27 @@ test('administrator session errors identify both the controlled code and protect
 	assert.equal(isAdminSessionInvalidError({ statusCode: 401 }), true)
 	assert.equal(isAdminSessionInvalidError({ statusCode: 403 }), false)
 	assert.equal(isAdminSessionInvalidError({ code: 'ADMIN_LOGIN_FAILED', statusCode: 401 }), false)
+})
+
+test('successful workspace validation is reused for thirty seconds and can be forced after resume', async () => {
+	const { createAdminRouteGuard } = await loadModule()
+	let now = 1_000
+	let bootstrapCalls = 0
+	const guard = createAdminRouteGuard({
+		validateSession: async () => { bootstrapCalls += 1 },
+		navigate: () => undefined,
+		onSessionInvalid: () => undefined,
+		now: () => now,
+		sessionValidationMaxAgeMs: 30_000
+	})
+
+	assert.equal(await guard.ensureAdminSession(), true)
+	now += 29_999
+	assert.equal(await guard.ensureAdminSession(), true)
+	assert.equal(bootstrapCalls, 1)
+	now += 2
+	assert.equal(await guard.ensureAdminSession(), true)
+	assert.equal(bootstrapCalls, 2)
+	assert.equal(await guard.ensureAdminSession({ force: true }), true)
+	assert.equal(bootstrapCalls, 3)
 })

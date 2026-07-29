@@ -19,7 +19,7 @@ test('administrator key console uses only fixed protected API paths and the shar
 })
 
 test('raw keys remain transient and never enter persistence headers urls or logs', () => {
-	const page = source('pages/risk/ip2location-keys.vue')
+	const page = source('components/admin/workspace/ip2location-keys-panel.vue')
 	const sheet = source('components/admin/ip2location-key-import-sheet.vue')
 	const api = source('common/admin/admin-ip2location-key-api.js')
 
@@ -33,7 +33,7 @@ test('raw keys remain transient and never enter persistence headers urls or logs
 })
 
 test('the complete set is sorted before twenty-row client pagination', () => {
-	const page = source('pages/risk/ip2location-keys.vue')
+	const page = source('components/admin/workspace/ip2location-keys-panel.vue')
 	const presenter = source('common/admin/ip2location-key-presenter.js')
 
 	assert.match(page, /sortIp2LocationKeys\(this\.allKeys\)/)
@@ -53,15 +53,15 @@ test('android file picker capability fallback preserves multiline paste', () => 
 
 test('route and authenticated dashboard expose the credential console', () => {
 	const routes = source('pages.json')
-	const dashboard = source('pages/index/index.vue')
+	const dashboard = source('components/admin/workspace/dashboard-panel.vue')
 
 	assert.match(routes, /pages\/risk\/ip2location-keys/)
 	assert.match(dashboard, /IP 信誉凭据/)
-	assert.match(dashboard, /navigateToIp2LocationKeys/)
+	assert.match(dashboard, /view: 'ip2location-keys'/)
 })
 
 test('registered IP2Location components use Vue-compatible hyphenated tag names', () => {
-	const page = source('pages/risk/ip2location-keys.vue')
+	const page = source('components/admin/workspace/ip2location-keys-panel.vue')
 
 	assert.match(page, /<ip2-location-key-list/)
 	assert.match(page, /<ip2-location-key-import-sheet/)

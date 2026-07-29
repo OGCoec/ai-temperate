@@ -29,11 +29,11 @@ final class MailInspectionRabbitNamesTest {
     @Test
     void keepsDirectExchangeAndDeadLetterNamesStable() {
         assertThat(MailInspectionRabbitNames.WORK_EXCHANGE)
-                .isEqualTo("ait.admin.mail-inspection.work.v1");
+                .isEqualTo("ait.admin.mail-inspection.work.v2");
         assertThat(MailInspectionRabbitNames.DEAD_EXCHANGE)
-                .isEqualTo("ait.admin.mail-inspection.dead.v1");
+                .isEqualTo("ait.admin.mail-inspection.dead.v2");
         assertThat(MailInspectionRabbitNames.DEAD_QUEUE)
-                .isEqualTo("ait.admin.mail-inspection.dead.v1");
+                .isEqualTo("ait.admin.mail-inspection.dead.v2");
         assertThat(MailInspectionRabbitNames.DEAD_ROUTING_KEY)
                 .isEqualTo("mail-inspection.dead");
     }

@@ -5,6 +5,14 @@ target/
 *.iml
 *.log
 .env
+.env.*
+/CLIProxyAPI_*/
+/CLIProxyAPI_*/config.yaml
+/CLIProxyAPI_*/config.example.yaml
+/CLIProxyAPI_*/logs/
+/CLIProxyAPI_*/*.log
+/CLIProxyAPI_*/*.exe
+/CLIProxyAPI_*/auths/
 /IP2LOCATION-LITE-DB11.IPV6.BIN
 /.admin/
 /.superpowers/

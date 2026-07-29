@@ -6,6 +6,7 @@ import com.example.temperate.service.admin.mailinspection.job.AdminMailInspectio
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionListenerControl;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionRabbitNames;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
@@ -14,8 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -146,13 +147,22 @@ public final class RabbitMailInspectionListenerControl
      */
     @Scheduled(fixedDelay = 1000L)
     public void stopIdleContainers() {
+        Set<MailInspectionType> runningTypes;
+        try {
+            runningTypes = jobStore.findActiveJobs().stream()
+                    .filter(state -> state.status()
+                            == MailInspectionJobStatus.RUNNING)
+                    .map(state -> state.inspectionType())
+                    .collect(java.util.stream.Collectors.toCollection(
+                            () -> EnumSet.noneOf(MailInspectionType.class)));
+        } catch (RuntimeException exception) {
+            // 无法读取 Redis 权威活动列表时立即停止全部消费者，禁止以旧的本地容器状态继续 ACK。
+            stopAll();
+            throw exception;
+        }
         for (MailInspectionType type :
                 MailInspectionRabbitNames.supportedTypes()) {
-            boolean running = jobStore.findActiveByType(type)
-                    .map(state -> state.status()
-                            == MailInspectionJobStatus.RUNNING)
-                    .orElse(false);
-            if (!running) {
+            if (!runningTypes.contains(type)) {
                 stop(type);
             }
         }

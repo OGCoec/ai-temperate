@@ -23,7 +23,9 @@ test('administrator H5 entry keeps viewport behavior in an external script', () 
 	const scriptSource = index.match(/script-src ([^;]+)/)?.[1]
 	assert.ok(scriptSource, 'administrator index must declare script-src')
 	assert.doesNotMatch(scriptSource, /'unsafe-inline'/)
+	assert.match(index, /\/static\/bootstrap\/initial-shell\.css/)
 	assert.match(index, /\/static\/bootstrap\/viewport-bootstrap\.js/)
+	assert.equal(fs.existsSync(path.join(root, 'static/bootstrap/initial-shell.css')), true)
 	assert.equal(fs.existsSync(path.join(root, 'static/bootstrap/viewport-bootstrap.js')), true)
 })
 

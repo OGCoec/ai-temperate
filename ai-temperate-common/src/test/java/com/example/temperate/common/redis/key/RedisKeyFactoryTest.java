@@ -1,21 +1,20 @@
 package com.example.temperate.common.redis.key;
 
-import com.example.temperate.common.security.hmac.HmacIdentifier;
-import com.example.temperate.common.security.hmac.HmacSha256Identifier;
-import org.junit.jupiter.api.Test;
-
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
-
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.example.temperate.common.security.hmac.HmacIdentifier;
+import com.example.temperate.common.security.hmac.HmacSha256Identifier;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.Test;
 
 /**
  * 验证 Redis Key 的命名空间、敏感标识保护、长度边界和规范化格式。
@@ -272,7 +271,52 @@ final class RedisKeyFactoryTest {
     void createsFixedAiModelEnabledSnapshotKey() {
         RedisKeyFactory factory = new RedisKeyFactory("prod");
 
-        assertEquals("ait:prod:ai:model:v2:enabled", factory.aiModelEnabledSnapshotKey());
+        assertEquals("ait:prod:ai:model:v3:enabled", factory.aiModelEnabledSnapshotKey());
+    }
+
+    @Test
+    void createsMailInspectionKeysWithoutRawJobOrClientRequestIds() {
+        RedisKeyFactory factory = new RedisKeyFactory("test");
+        HmacSha256Identifier hmac = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));
+        HmacIdentifier jobHash = hmac.identify("mail-job-id:v2",
+                "abcdefghijklmnopqrstuv".getBytes(StandardCharsets.UTF_8));
+        HmacIdentifier requestHash = hmac.identify("mail-client-request-id:v2",
+                "request-1".getBytes(StandardCharsets.UTF_8));
+
+        assertEquals("ait:test:admin-mail:job:v2:meta:" + jobHash.value(),
+                factory.adminMailInspectionJobMetaKey(jobHash));
+        assertEquals("ait:test:admin-mail:job:v2:counts:" + jobHash.value(),
+                factory.adminMailInspectionJobCountsKey(jobHash));
+        assertEquals("ait:test:admin-mail:job:v2:results:" + jobHash.value() + ":0007",
+                factory.adminMailInspectionJobResultBucketKey(jobHash, 7));
+        assertEquals("ait:test:admin-mail:job:v2:idempotency:" + requestHash.value(),
+                factory.adminMailInspectionJobIdempotencyKey(requestHash));
+        assertEquals("ait:test:admin-mail:job:v2:active:openai-status",
+                factory.adminMailInspectionJobActiveKey("openai-status"));
+        assertEquals("ait:test:admin-mail:job:v2:acceptance:openai-status",
+                factory.adminMailInspectionJobAcceptanceKey("openai-status"));
+        assertEquals("ait:test:admin-mail:job:v2:revision:" + jobHash.value(),
+                factory.adminMailInspectionJobRevisionKey(jobHash));
+        assertEquals("ait:test:admin-mail:job:v2:events",
+                factory.adminMailInspectionJobEventsChannel());
+    }
+
+    @Test
+    void rejectsInvalidMailInspectionBucketAndTypeSegments() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        HmacIdentifier jobHash = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8))
+                .identify("mail-job-id:v2", "job".getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.adminMailInspectionJobResultBucketKey(jobHash, -1));
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.adminMailInspectionJobResultBucketKey(jobHash, 10_000));
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.adminMailInspectionJobActiveKey("OPENAI_STATUS"));
+        assertThrows(IllegalArgumentException.class,
+                () -> factory.adminMailInspectionJobAcceptanceKey("openai/status"));
     }
 
     @Test

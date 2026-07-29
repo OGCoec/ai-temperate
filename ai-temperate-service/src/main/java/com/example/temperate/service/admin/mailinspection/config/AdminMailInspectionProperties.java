@@ -16,7 +16,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * 绑定管理员邮箱检查的固定代理、有限重试、并发、扫描与进程内任务生命周期参数。
+ * 绑定管理员邮箱检查的固定代理、有限重试、Redis 任务租约、并发与扫描参数。
  *
  * <p>该配置不接收邮箱凭证；Rabbit 加密密钥只从部署环境绑定，代理只有一个显式端点且不提供直连或备用端口。</p>
  */
@@ -37,7 +37,7 @@ public record AdminMailInspectionProperties(
     }
 
     /**
-     * 提供与批准计划完全一致的无 Secret 默认值，供纯单元测试构造组件。
+     * 提供与批准计划一致的边界值和固定非生产测试密钥，仅供纯单元测试直接构造组件。
      */
     public static AdminMailInspectionProperties defaults() {
         return new AdminMailInspectionProperties(
@@ -69,9 +69,13 @@ public record AdminMailInspectionProperties(
                         64,
                         12_288,
                         1_048_576,
-                        Duration.ofMinutes(30),
-                        Duration.ofMinutes(1),
-                        Duration.ofSeconds(2)),
+                        Duration.ofMinutes(15),
+                        Duration.ofMinutes(15),
+                        Duration.ofSeconds(30),
+                        10_000,
+                        32,
+                        100,
+                        Base64.getEncoder().encodeToString(new byte[32])),
                 new Rabbit(
                         false,
                         Base64.getEncoder().encodeToString(new byte[32]),
@@ -183,7 +187,7 @@ public record AdminMailInspectionProperties(
     }
 
     /**
-     * 定义任务容量、批量输入、处理并发、保留和清理周期。
+     * 定义任务容量、批量输入、Redis 滑动租约、终态保留和结果分桶边界。
      */
     public record Job(
             @Min(1) @Max(8) int maxActiveJobs,
@@ -192,17 +196,28 @@ public record AdminMailInspectionProperties(
             @Min(1) @Max(64) int maxBusinessConcurrency,
             @Min(1024) int maxLineChars,
             @Min(1024) int maxRequestBytes,
-            @NotNull Duration retention,
-            @NotNull Duration cleanupInterval,
-            @NotNull Duration pollAfter) {
+            @NotNull Duration activeLease,
+            @NotNull Duration terminalRetention,
+            @NotNull Duration leaseHeartbeatInterval,
+            @Min(1) @Max(10_000) int maxCredentialLines,
+            @Min(1) @Max(128) int resultBucketSize,
+            @Min(1) @Max(100) int snapshotBatchSize,
+            @NotBlank String keyHmacSecretBase64) {
 
         public Job {
-            requirePositive(retention, "job.retention");
-            requirePositive(cleanupInterval, "job.cleanupInterval");
-            requirePositive(pollAfter, "job.pollAfter");
+            requirePositive(activeLease, "job.activeLease");
+            requirePositive(terminalRetention, "job.terminalRetention");
+            requirePositive(
+                    leaseHeartbeatInterval,
+                    "job.leaseHeartbeatInterval");
+            requireHmacKey(keyHmacSecretBase64);
             if (defaultBusinessConcurrency > maxBusinessConcurrency) {
                 throw new IllegalArgumentException(
                         "default business concurrency exceeds maximum");
+            }
+            if (leaseHeartbeatInterval.compareTo(activeLease) >= 0) {
+                throw new IllegalArgumentException(
+                        "job lease heartbeat must be shorter than active lease");
             }
         }
     }
@@ -337,6 +352,29 @@ public record AdminMailInspectionProperties(
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException(
                     "mail inspection Rabbit payload key must be canonical Base64",
+                    exception);
+        }
+    }
+
+    private static void requireHmacKey(String encodedKey) {
+        if (encodedKey == null || encodedKey.isBlank()) {
+            throw new IllegalArgumentException(
+                    "mail inspection Job HMAC key is required");
+        }
+        try {
+            byte[] decoded = Base64.getDecoder().decode(encodedKey);
+            if (decoded.length < 32) {
+                throw new IllegalArgumentException(
+                        "mail inspection Job HMAC key must contain at least 32 bytes");
+            }
+            if (!Base64.getEncoder().encodeToString(decoded)
+                    .equals(encodedKey)) {
+                throw new IllegalArgumentException(
+                        "mail inspection Job HMAC key is non-canonical");
+            }
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(
+                    "mail inspection Job HMAC key must be canonical Base64",
                     exception);
         }
     }

@@ -328,6 +328,22 @@ app:
   admin:
     # 隐藏管理员 YAML 路径支持部署环境挂载到持久化 Secret 目录。
     config-path: ${ADMIN_CONFIG_PATH:.admin/complete.yaml}
+    # 管理员通过 CLIProxyAPI 发现当前网关模型的只读服务端配置。
+    ai-model-discovery:
+      # CLIProxyAPI 模型发现客户端配置，地址与密钥禁止由浏览器传入。
+      cli-proxy:
+        # 功能默认关闭，部署确认本机网关和普通代理密钥后才显式启用。
+        enabled: ${CLI_PROXY_MODEL_DISCOVERY_ENABLED:false}
+        # 后端固定访问本机 CLIProxyAPI，不向浏览器暴露 8317 端口。
+        base-url: ${CLI_PROXY_BASE_URL:http://127.0.0.1:8317}
+        # 普通代理 Bearer 密钥只从环境变量读取，不配置任何明文默认值。
+        api-key: ${CLI_PROXY_API_KEY:}
+        # 建立本机连接允许等待的最长时间。
+        connect-timeout: ${CLI_PROXY_CONNECT_TIMEOUT:2s}
+        # 读取模型列表允许等待的最长时间。
+        read-timeout: ${CLI_PROXY_READ_TIMEOUT:5s}
+        # 单次最多接受五百个模型，超过上限拒绝整个响应。
+        max-models: ${CLI_PROXY_MAX_MODELS:500}
     # 管理员 Flow 和会话标识使用独立规范 Base64 HMAC 密钥，禁止复用 JWT 或普通用户 HMAC。
     session-hmac-secret-base64: ${ADMIN_SESSION_HMAC_SECRET_BASE64}
     # 管理员不透明会话每次成功访问后滑动续期六小时。
@@ -420,7 +436,7 @@ app:
         same-site: ${ADMIN_LOGIN_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员页面必须能读取登录 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
         path: ${ADMIN_LOGIN_CSRF_COOKIE_PATH:/}
-    # 管理员批量邮箱检查使用固定本机代理、有限重试和进程内短期任务。
+    # 管理员批量邮箱检查使用固定本机代理、有限重试和 Redis 权威任务。
     mail-inspection:
       # OAuth HTTP CONNECT 与 IMAP SOCKS 共用唯一的本机 mixed 代理。
       proxy:
@@ -468,7 +484,7 @@ app:
         scan-timeout: ${ADMIN_MAIL_INSPECTION_IMAP_SCAN_TIMEOUT:45s}
         # 临时 IMAP I/O 首次加两次重试，总尝试次数不超过三次。
         max-attempts: ${ADMIN_MAIL_INSPECTION_IMAP_MAX_ATTEMPTS:3}
-      # 进程内任务容量、批量边界和保留策略。
+      # Redis 权威任务的容量、批量边界、租约和保留策略。
       job:
         # 单实例同时最多运行两个不同类型任务。
         max-active-jobs: ${ADMIN_MAIL_INSPECTION_MAX_ACTIVE_JOBS:2}
@@ -482,12 +498,30 @@ app:
         max-line-chars: ${ADMIN_MAIL_INSPECTION_MAX_LINE_CHARS:12288}
         # 单次 JSON 中凭证文本的 UTF-8 总量不得超过一 MiB。
         max-request-bytes: ${ADMIN_MAIL_INSPECTION_MAX_REQUEST_BYTES:1048576}
-        # 完成或失败任务只在当前进程保留三十分钟。
-        retention: ${ADMIN_MAIL_INSPECTION_JOB_RETENTION:30m}
-        # 每分钟删除一次已经过期的完成任务。
-        cleanup-interval: ${ADMIN_MAIL_INSPECTION_JOB_CLEANUP_INTERVAL:1m}
-        # 创建响应建议客户端两秒后开始查询。
-        poll-after: ${ADMIN_MAIL_INSPECTION_POLL_AFTER:2s}
+        # 活动任务使用十五分钟滑动租约，只有后端租约心跳允许续签。
+        active-lease: ${ADMIN_MAIL_INSPECTION_JOB_ACTIVE_LEASE:15m}
+        # 完成、失败或废弃任务使用固定十五分钟保留期，普通读取不得续期。
+        terminal-retention: ${ADMIN_MAIL_INSPECTION_JOB_TERMINAL_RETENTION:15m}
+        # 后端每三十秒批量续签活动任务，浏览器状态不参与租约决策。
+        lease-heartbeat-interval: ${ADMIN_MAIL_INSPECTION_JOB_LEASE_HEARTBEAT_INTERVAL:30s}
+        # 单个任务最多接收一万行，补齐仅限制 UTF-8 字节数无法约束大量空行的缺口。
+        max-credential-lines: ${ADMIN_MAIL_INSPECTION_MAX_CREDENTIAL_LINES:10000}
+        # Redis 每个结果 Hash Bucket 固定最多保存三十二行结果。
+        result-bucket-size: ${ADMIN_MAIL_INSPECTION_RESULT_BUCKET_SIZE:32}
+        # 首次 SSE 快照每批最多发送一百条结果，避免单事件过大。
+        snapshot-batch-size: ${ADMIN_MAIL_INSPECTION_SNAPSHOT_BATCH_SIZE:100}
+        # Job ID 和幂等 ID 的 Redis Key 使用独立 HMAC 密钥且禁止生产默认值。
+        key-hmac-secret-base64: ${ADMIN_MAIL_INSPECTION_JOB_HMAC_SECRET_BASE64}
+      # 邮件检查 SSE 连接、心跳和每个管理员会话的并发上限。
+      sse:
+        # 服务端每十五秒发送心跳并比较 Redis revision 以修复 Pub/Sub 丢失。
+        heartbeat-interval: ${ADMIN_MAIL_INSPECTION_SSE_HEARTBEAT_INTERVAL:15s}
+        # 客户端四十五秒未收到任何事件时应主动重连。
+        idle-reconnect-threshold: ${ADMIN_MAIL_INSPECTION_SSE_IDLE_RECONNECT_THRESHOLD:45s}
+        # 单条 SSE 连接最长保持三十分钟，到期后由客户端携带 revision 重建。
+        connection-timeout: ${ADMIN_MAIL_INSPECTION_SSE_CONNECTION_TIMEOUT:30m}
+        # 每个管理员会话最多允许四条并行 SSE 连接。
+        max-connections-per-admin: ${ADMIN_MAIL_INSPECTION_SSE_MAX_CONNECTIONS_PER_ADMIN:4}
       # RabbitMQ 工作消息加密、可靠发布确认和重启恢复扫描配置。
       rabbit:
         # 默认启用 Rabbit 工作调度；隔离单元测试可显式关闭并使用不可用替身，生产任务禁止回退进程内队列。

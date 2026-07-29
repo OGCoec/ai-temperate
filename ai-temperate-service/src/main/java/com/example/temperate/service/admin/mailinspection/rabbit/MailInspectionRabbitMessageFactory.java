@@ -26,8 +26,8 @@ public final class MailInspectionRabbitMessageFactory {
     }
 
     public MailInspectionWorkMessage create(
-            long jobInternalId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType inspectionType,
             int requestedCount,
             int acceptedCount,
@@ -41,11 +41,11 @@ public final class MailInspectionRabbitMessageFactory {
         return new MailInspectionWorkMessage(
                 messageId,
                 MailInspectionRabbitNames.EVENT_TYPE,
-                MailInspectionRabbitNames.LEGACY_WORK_SCHEMA_VERSION,
+                MailInspectionRabbitNames.WORK_SCHEMA_VERSION,
                 clock.instant(),
                 traceId,
-                jobInternalId,
                 jobId,
+                jobKeyHash,
                 inspectionType,
                 credential.lineNumber(),
                 requestedCount,
@@ -57,8 +57,12 @@ public final class MailInspectionRabbitMessageFactory {
                 payloadProtector.protect(
                         messageId,
                         jobId,
+                        jobKeyHash,
                         inspectionType,
-                        credential));
+                        credential),
+                "direct-v2",
+                "direct-v2",
+                0);
     }
 
     public MailInspectionWorkMessage createFromSubmission(
@@ -80,8 +84,8 @@ public final class MailInspectionRabbitMessageFactory {
                 MailInspectionRabbitNames.WORK_SCHEMA_VERSION,
                 clock.instant(),
                 submission.traceId(),
-                submission.jobInternalId(),
                 submission.jobId(),
+                submission.jobKeyHash(),
                 submission.inspectionType(),
                 credential.lineNumber(),
                 submission.requestedCount(),
@@ -93,6 +97,7 @@ public final class MailInspectionRabbitMessageFactory {
                 payloadProtector.protect(
                         messageId,
                         submission.jobId(),
+                        submission.jobKeyHash(),
                         submission.inspectionType(),
                         mailboxCredential),
                 submission.clientRequestId(),

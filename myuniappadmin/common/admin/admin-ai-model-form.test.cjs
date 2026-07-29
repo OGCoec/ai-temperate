@@ -14,11 +14,29 @@ test('empty form uses a safe disabled create default outside editable fields', a
 
 	assert.equal(form.modelName, '')
 	assert.equal(form.vendor, '')
+	assert.equal(form.cachedInputRatio, '1')
 	assert.deepEqual(form.capabilities, [])
 	assert.equal(Object.hasOwn(form, 'enabled'), false)
 	assert.deepEqual(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code), [
 		'CHAT_COMPLETIONS', 'RESPONSES', 'IMAGE', 'VIDEO', 'AUDIO'
 	])
+})
+
+test('gateway discovery prefill never supplies billing ratios or capabilities', async () => {
+	const { createDiscoveredAiModelForm } = await loadModule()
+
+	const form = createDiscoveredAiModelForm({
+		modelId: ' GPT-5.4-Codex ',
+		owner: ' OpenAI '
+	})
+
+	assert.equal(form.modelName, 'GPT-5.4-Codex')
+	assert.equal(form.vendor, '')
+	assert.equal(form.inputRatio, '')
+	assert.equal(form.cachedInputRatio, '')
+	assert.equal(form.outputRatio, '')
+	assert.deepEqual(form.capabilities, [])
+	assert.equal(Object.hasOwn(form, 'enabled'), false)
 })
 
 test('validation normalizes tags, ratios and capabilities without losing decimal text', async () => {
@@ -30,6 +48,7 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		iconPublicId: 'AAAAAAAAAAE',
 		tagsText: 'chat, chat\nreasoning',
 		inputRatio: '1.25000000',
+		cachedInputRatio: '0.12500000',
 		outputRatio: '2.00000000',
 		capabilities: ['RESPONSES', 'IMAGE']
 	})
@@ -42,6 +61,7 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		tags: ['chat', 'reasoning'],
 		vendor: 'openai',
 		inputRatio: '1.25000000',
+		cachedInputRatio: '0.12500000',
 		outputRatio: '2.00000000',
 		capabilities: ['RESPONSES', 'IMAGE']
 	})
@@ -56,13 +76,14 @@ test('validation reports field-specific errors and requires at least one capabil
 		iconPublicId: '',
 		tagsText: '',
 		inputRatio: '-1',
+		cachedInputRatio: 'not-a-ratio',
 		outputRatio: 'not-a-ratio',
 		capabilities: []
 	})
 
 	assert.equal(result.valid, false)
 	assert.deepEqual(Object.keys(result.errors).sort(), [
-		'capabilities', 'inputRatio', 'modelName', 'outputRatio', 'vendor'
+		'cachedInputRatio', 'capabilities', 'inputRatio', 'modelName', 'outputRatio', 'vendor'
 	])
 })
 
@@ -76,6 +97,7 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		tags: ['chat'],
 		vendor: 'openai',
 		inputRatio: 1,
+		cachedInputRatio: 0.5,
 		outputRatio: 2,
 		capabilities: ['RESPONSES'],
 		enabled: true
@@ -85,6 +107,7 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		description: '',
 		iconPublicId: '',
 		tagsText: 'chat,reasoning',
+		cachedInputRatio: '0.25',
 		outputRatio: '2.50',
 		capabilities: ['RESPONSES', 'IMAGE']
 	}
@@ -93,6 +116,7 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		description: null,
 		iconPublicId: null,
 		tags: ['chat', 'reasoning'],
+		cachedInputRatio: '0.25',
 		outputRatio: '2.50',
 		capabilities: ['RESPONSES', 'IMAGE']
 	})

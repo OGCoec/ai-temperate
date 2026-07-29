@@ -31,7 +31,7 @@ function safeInspectionType(value) {
 
 function safeJobId(value) {
 	const normalized = String(value || '')
-	return /^[A-Za-z0-9_-]{11}$/.test(normalized) ? normalized : 'no-job'
+	return /^[A-Za-z0-9_-]{22}$/.test(normalized) ? normalized : 'no-job'
 }
 
 function exportPlatform(options = {}) {

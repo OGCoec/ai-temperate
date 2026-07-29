@@ -3,7 +3,10 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const source = fs.readFileSync(path.join(__dirname, 'index.vue'), 'utf8')
+const source = fs.readFileSync(
+	path.resolve(__dirname, '..', '..', 'components', 'admin', 'workspace', 'ai-model-icons-panel.vue'),
+	'utf8'
+)
 const adminHttp = fs.readFileSync(
 	path.resolve(__dirname, '..', '..', 'common', 'admin', 'admin-http.js'),
 	'utf8'
@@ -12,23 +15,6 @@ const adminIndex = fs.readFileSync(
 	path.resolve(__dirname, '..', '..', 'index.html'),
 	'utf8'
 )
-const navigationModulePath = path.resolve(
-	__dirname,
-	'..',
-	'..',
-	'common',
-	'admin',
-	'admin-page-navigation.js'
-)
-
-async function loadNavigationModule() {
-	assert.ok(
-		fs.existsSync(navigationModulePath),
-		'icon library back navigation must have a testable shared implementation'
-	)
-	const navigationSource = fs.readFileSync(navigationModulePath, 'utf8')
-	return import(`data:text/javascript;base64,${Buffer.from(navigationSource).toString('base64')}`)
-}
 
 function cspSources(directiveName) {
 	const policy = adminIndex.match(
@@ -73,43 +59,10 @@ test('icon library displays backend exception chain diagnostics below the stable
 	assert.match(source, /errorDiagnostics/)
 })
 
-test('icon library back navigation preserves a real parent and falls back from empty or duplicate stacks', async () => {
-	const { leaveAdminChildPage } = await loadNavigationModule()
-	const navigateBackCalls = []
-	const reLaunchCalls = []
-	const dependencies = pages => ({
-		getPages: () => pages,
-		navigateBack: options => navigateBackCalls.push(options),
-		reLaunch: options => reLaunchCalls.push(options)
-	})
-
-	assert.equal(leaveAdminChildPage(dependencies([
-		{ route: 'pages/index/index' },
-		{ route: 'pages/ai-model-icons/index' }
-	])), 'BACK')
-	assert.equal(navigateBackCalls.length, 1)
-	assert.equal(navigateBackCalls[0].delta, 1)
-	assert.equal(reLaunchCalls.length, 0)
-
-	assert.equal(leaveAdminChildPage(dependencies([
-		{ route: 'pages/ai-model-icons/index' }
-	])), 'DASHBOARD')
-	assert.deepEqual(reLaunchCalls.pop(), { url: '/pages/index/index' })
-
-	assert.equal(leaveAdminChildPage(dependencies([
-		{ route: 'pages/ai-model-icons/index' },
-		{ route: '/pages/ai-model-icons/index' }
-	])), 'DASHBOARD')
-	assert.deepEqual(reLaunchCalls.pop(), { url: '/pages/index/index' })
-
-	navigateBackCalls[0].fail()
-	assert.deepEqual(reLaunchCalls.pop(), { url: '/pages/index/index' })
-})
-
-test('icon library delegates its return button to guarded admin child-page navigation', () => {
-	assert.match(source, /import\s+\{\s*leaveAdminChildPage\s*\}/)
-	assert.match(source, /goBack\(\)\s*\{[\s\S]*leaveAdminChildPage\(\)/)
-	assert.doesNotMatch(source, /goBack\(\)\s*\{[\s\S]{0,120}uni\.navigateBack/)
+test('icon library is a workspace panel and does not manipulate the page stack', () => {
+	assert.match(source, /name: 'AiModelIconsPanel'/)
+	assert.match(source, /onWorkspaceActivated\(\)/)
+	assert.doesNotMatch(source, /uni\.(?:navigateBack|navigateTo|redirectTo|reLaunch)/)
 })
 
 test('administrator CSP permits HTTPS icon previews without broadening active content sources', () => {

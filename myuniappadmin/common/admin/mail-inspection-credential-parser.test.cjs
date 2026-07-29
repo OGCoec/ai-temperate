@@ -66,7 +66,7 @@ test('client validation enforces field boundaries without interpreting token exp
 	assert.equal(empty.errors[0].code, 'CREDENTIAL_LINES_EMPTY')
 })
 
-test('request byte size remains the only batch-wide capacity boundary', async () => {
+test('request byte size and ten-thousand-line limit are batch-wide boundaries', async () => {
 	const { analyzeMailboxCredentialText } = await loadModule()
 	const oversized = Array.from(
 		{ length: 180 },
@@ -77,4 +77,14 @@ test('request byte size remains the only batch-wide capacity boundary', async ()
 
 	assert.equal(result.byteCount > 1024 * 1024, true)
 	assert.equal(result.errors.some(error => error.code === 'REQUEST_TOO_LARGE'), true)
+
+	const tooMany = analyzeMailboxCredentialText(
+		Array.from(
+			{ length: 10001 },
+			(_, index) => valid(`p${index}@x.io`)
+		).join('\n'))
+	assert.equal(
+		tooMany.errors.some(error =>
+			error.code === 'CREDENTIAL_LINES_LIMIT_EXCEEDED'),
+		true)
 })

@@ -24,6 +24,9 @@ public interface AiModelMapper {
 
     List<AiModel> findByIds(@Param("ids") List<Long> ids);
 
+    List<AiModel> findByNormalizedModelNames(
+            @Param("modelNames") List<String> modelNames);
+
     List<AiModel> findPage(
             @Param("keyword") String keyword,
             @Param("enabled") Boolean enabled);

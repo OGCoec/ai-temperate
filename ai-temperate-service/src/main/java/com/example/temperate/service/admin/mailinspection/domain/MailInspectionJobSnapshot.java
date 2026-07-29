@@ -8,9 +8,13 @@ import java.util.List;
  */
 public record MailInspectionJobSnapshot(
         String jobId,
+        long revision,
         MailInspectionType inspectionType,
         MailInspectionJobStatus status,
         int requestedCount,
+        int acceptedCount,
+        int duplicateCount,
+        int invalidCount,
         int processedCount,
         int runningCount,
         int queuedCount,
@@ -52,9 +56,13 @@ public record MailInspectionJobSnapshot(
             List<MailInspectionResult> results) {
         this(
                 jobId,
+                0L,
                 inspectionType,
                 status,
                 requestedCount,
+                0,
+                0,
+                0,
                 processedCount,
                 runningCount,
                 queuedCount,
@@ -82,6 +90,9 @@ public record MailInspectionJobSnapshot(
     }
 
     public MailInspectionJobSnapshot {
+        if (revision < 0) {
+            throw new IllegalArgumentException("revision must not be negative");
+        }
         pendingItems = pendingItems == null
                 ? List.of()
                 : List.copyOf(pendingItems);

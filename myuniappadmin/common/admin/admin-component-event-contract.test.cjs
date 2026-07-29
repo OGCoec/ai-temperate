@@ -27,7 +27,7 @@ test('existing administrator component event names stay stable', () => {
 			'retry', 'copy-retry', 'copy-value'
 		]],
 		['components/admin/mail-inspection-recovered-jobs.vue', ['approve']],
-		['components/admin/mail-inspection-workspace.vue', ['update:ip2-mode']]
+		['components/admin/workspace/mail-inspection-panel.vue', ['update:ip2-mode']]
 	])
 
 	for (const [file, events] of contracts) {
@@ -71,36 +71,37 @@ test('administrator component event payload shapes stay stable', () => {
 	const recovered = read('components/admin/mail-inspection-recovered-jobs.vue')
 	assert.match(recovered, /\$emit\('approve',\s*job\)/)
 
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
 	assert.match(workspace, /\$emit\('update:ip2-mode',\s*option\.value\)/)
 })
 
 test('business pages keep requests behind their existing protected API modules', () => {
 	const pageSources = [
-		'pages/ai-models/index.vue',
-		'pages/ai-models/create.vue',
-		'pages/ai-models/detail.vue',
-		'pages/ai-model-icons/index.vue',
-		'pages/risk/ip2location-keys.vue',
-		'components/admin/mail-inspection-workspace.vue'
+		'components/admin/workspace/ai-model-list-panel.vue',
+		'components/admin/workspace/ai-model-discovery-panel.vue',
+		'components/admin/workspace/ai-model-create-panel.vue',
+		'components/admin/workspace/ai-model-detail-panel.vue',
+		'components/admin/workspace/ai-model-icons-panel.vue',
+		'components/admin/workspace/ip2location-keys-panel.vue',
+		'components/admin/workspace/mail-inspection-panel.vue'
 	].map(read).join('\n')
 
 	assert.doesNotMatch(pageSources, /uni\.(?:request|uploadFile)/)
 	assert.match(pageSources, /adminAiModelApi/)
+	assert.match(pageSources, /adminCliProxyModelApi/)
 	assert.match(pageSources, /adminAiModelIconApi/)
 	assert.match(pageSources, /adminIp2LocationKeyApi/)
 	assert.match(pageSources, /adminMailInspectionApi/)
 })
 
-test('guarded mail pages still mount their workspace only after session approval', () => {
+test('legacy mail pages redirect without mounting business components or sending requests', () => {
 	for (const file of [
 		'pages/mail-inspection/openai/index.vue',
 		'pages/mail-inspection/kiro/index.vue',
 		'pages/mail-inspection/ip2location/index.vue'
 	]) {
 		const source = read(file)
-		assert.match(source, /v-if="adminRouteReady"/)
-		assert.match(source, /createAdminPageGuardMixin/)
-		assert.match(source, /runAfterAdminRouteGuard/)
+		assert.match(source, /redirectLegacyAdminWorkspace/)
+		assert.doesNotMatch(source, /adminMailInspectionApi|MailInspectionPanel/)
 	}
 })

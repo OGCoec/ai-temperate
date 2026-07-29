@@ -226,6 +226,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 textTokenizer.tokenize(normalized.description())));
         model.setVendor(normalized.vendor());
         model.setInputRatio(normalized.inputRatio());
+        model.setCachedInputRatio(normalized.cachedInputRatio());
         model.setOutputRatio(normalized.outputRatio());
         model.setEnabled(normalized.enabled());
 
@@ -323,6 +324,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
         Long iconId = requireIconId(command.iconPublicId());
         List<String> tags = normalizeTags(command.tags());
         BigDecimal inputRatio = validRatio(command.inputRatio());
+        BigDecimal cachedInputRatio = validRatio(command.cachedInputRatio());
         BigDecimal outputRatio = validRatio(command.outputRatio());
         List<AiModelCapabilityCode> capabilities = normalizeCapabilities(command.capabilities());
         return new NormalizedCreate(
@@ -332,6 +334,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 tags,
                 vendor,
                 inputRatio,
+                cachedInputRatio,
                 outputRatio,
                 command.enabled(),
                 capabilities);
@@ -358,6 +361,9 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
         BigDecimal inputRatio = command.inputRatio().present()
                 ? validRatio(command.inputRatio().value())
                 : current.getInputRatio();
+        BigDecimal cachedInputRatio = command.cachedInputRatio().present()
+                ? validRatio(command.cachedInputRatio().value())
+                : current.getCachedInputRatio();
         BigDecimal outputRatio = command.outputRatio().present()
                 ? validRatio(command.outputRatio().value())
                 : current.getOutputRatio();
@@ -371,6 +377,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 tags,
                 vendor,
                 inputRatio,
+                cachedInputRatio,
                 outputRatio,
                 command.capabilities().present(),
                 capabilities);
@@ -389,6 +396,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 textTokenizer.tokenize(normalized.description())));
         merged.setVendor(normalized.vendor());
         merged.setInputRatio(normalized.inputRatio());
+        merged.setCachedInputRatio(normalized.cachedInputRatio());
         merged.setOutputRatio(normalized.outputRatio());
         merged.setEnabled(current.getEnabled());
         merged.setRowVersion(current.getRowVersion());
@@ -459,6 +467,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 readTags(model.getTagsJson()),
                 model.getVendor(),
                 model.getInputRatio(),
+                model.getCachedInputRatio(),
                 model.getOutputRatio(),
                 Boolean.TRUE.equals(model.getEnabled()),
                 capabilities,
@@ -482,6 +491,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
                 readTags(model.getTagsJson()),
                 model.getVendor(),
                 model.getInputRatio(),
+                model.getCachedInputRatio(),
                 model.getOutputRatio(),
                 Boolean.TRUE.equals(model.getEnabled()),
                 List.copyOf(capabilities),
@@ -666,6 +676,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
             List<String> tags,
             String vendor,
             BigDecimal inputRatio,
+            BigDecimal cachedInputRatio,
             BigDecimal outputRatio,
             boolean enabled,
             List<AiModelCapabilityCode> capabilities) {
@@ -683,6 +694,7 @@ public final class AdminAiModelServiceImpl implements AdminAiModelService {
             List<String> tags,
             String vendor,
             BigDecimal inputRatio,
+            BigDecimal cachedInputRatio,
             BigDecimal outputRatio,
             boolean capabilitiesPresent,
             List<AiModelCapabilityCode> capabilities) {

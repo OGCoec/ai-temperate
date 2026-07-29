@@ -1,0 +1,11 @@
+{
+  "id": "ait-sse",
+  "displayName": "AIT Android SSE",
+  "version": "1.0.0",
+  "description": "Android HTTPS incremental SSE transport for administrator mail inspection.",
+  "uni_modules": {
+    "artifacts": [
+      "utssdk"
+    ]
+  }
+}

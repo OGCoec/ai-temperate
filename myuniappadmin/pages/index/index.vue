@@ -1,28 +1,23 @@
 <template>
-	<admin-page-shell
+	<view
 		v-if="screenState === 'AUTHENTICATED'"
-		current-path="/pages/index/index"
-		kicker="管理员工作台"
-		title="控制台"
-		description="集中查看当前管理员会话，并进入模型、凭据与邮件证据工作流。"
-		:busy="busy"
-		@navigate="navigateProtected"
+		class="legacy-dashboard-transition"
 	>
-		<template #meta>
+		<view class="legacy-dashboard-meta">
 			<view class="session-chip">
 				<view class="session-chip-dot" aria-hidden="true" />
 				<text>会话已验证</text>
 			</view>
 			<text class="session-expiry">滑动到期：{{ expiresLabel }}</text>
-		</template>
-		<template #actions>
+		</view>
+		<view class="legacy-dashboard-actions">
 			<admin-action-button tone="teal" size="compact" :loading="busy" @click="refreshProfile">
 				刷新会话
 			</admin-action-button>
 			<admin-action-button tone="neutral" size="compact" :disabled="busy" @click="logoutCurrent">
 				退出当前设备
 			</admin-action-button>
-		</template>
+		</view>
 
 		<admin-feedback-banner
 			v-if="message"
@@ -116,7 +111,7 @@
 				</admin-action-button>
 			</view>
 		</view>
-	</admin-page-shell>
+	</view>
 
 	<view v-else class="admin-auth-page">
 		<view class="ambient-light ambient-light-primary" aria-hidden="true" />
@@ -244,10 +239,11 @@
 	import LoginPasswordField from '@/components/admin/admin-login-password-field.vue'
 	import { adminApi } from '@/common/admin/admin-api.js'
 	import {
-		guardedAdminNavigate,
+		guardedAdminRedirect,
 		markAdminSessionAuthenticated
 	} from '@/common/admin/admin-route-guard-runtime.js'
 	import { takeAdminSessionExpiryNotice } from '@/common/admin/admin-session-expiry-navigation.js'
+	import { buildAdminWorkspaceUrl } from '@/common/admin/admin-workspace-route.js'
 	import { requestAdminHcaptchaToken } from '@/common/admin/admin-hcaptcha.js'
 	import { clearAdminFlow } from '@/common/admin/admin-secure-vault.js'
 	import {
@@ -343,21 +339,20 @@
 			this.resolveInitialCountry()
 		},
 		methods: {
-			navigateProtected(route) {
-				if (route === '/pages/index/index') return
-				return guardedAdminNavigate(route)
+			openWorkspace(location) {
+				return guardedAdminRedirect(buildAdminWorkspaceUrl(location))
 			},
 			navigateToIp2LocationKeys() {
-				return guardedAdminNavigate('/pages/risk/ip2location-keys')
+				return this.openWorkspace({ view: 'ip2location-keys' })
 			},
 			navigateToAiModels() {
-				return guardedAdminNavigate('/pages/ai-models/index')
+				return this.openWorkspace({ view: 'ai-models' })
 			},
 			navigateToAiModelIcons() {
-				return guardedAdminNavigate('/pages/ai-model-icons/index')
+				return this.openWorkspace({ view: 'ai-model-icons' })
 			},
 			navigateToMailInspection() {
-				return guardedAdminNavigate('/pages/mail-inspection/openai/index')
+				return this.openWorkspace({ view: 'mail-openai' })
 			},
 			updateEmailCode(value) {
 				this.form.emailCode = value
@@ -440,8 +435,11 @@
 						if (state.state === 'ACTIVE') {
 							try {
 								this.profile = await adminApi.bootstrap()
-								this.screenState = 'AUTHENTICATED'
 								markAdminSessionAuthenticated()
+								uni.redirectTo({
+									url: buildAdminWorkspaceUrl({ view: 'dashboard' }),
+									fail: () => { this.screenState = 'AUTHENTICATED' }
+								})
 							} catch (error) {
 								if (error.code !== 'ADMIN_SESSION_INVALID') throw error
 								this.screenState = 'ACTIVE'
@@ -555,8 +553,11 @@
 						})
 						this.form.password = ''
 						this.profile = response.admin
-						this.screenState = 'AUTHENTICATED'
 						markAdminSessionAuthenticated()
+						uni.redirectTo({
+							url: buildAdminWorkspaceUrl({ view: 'dashboard' }),
+							fail: () => { this.screenState = 'AUTHENTICATED' }
+						})
 					})
 				} catch (_) {
 					this.form.password = ''

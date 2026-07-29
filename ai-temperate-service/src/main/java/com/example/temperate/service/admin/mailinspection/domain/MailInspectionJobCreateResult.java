@@ -3,7 +3,7 @@ package com.example.temperate.service.admin.mailinspection.domain;
 import java.time.Instant;
 
 /**
- * 返回进程内邮箱检查任务已被接受后的公共 ID、初始计数和建议轮询间隔。
+ * 返回 Redis 邮箱检查任务已被接受后的公共 ID、初始计数和提交状态。
  */
 public record MailInspectionJobCreateResult(
         String jobId,
@@ -22,8 +22,7 @@ public record MailInspectionJobCreateResult(
         int dispatchedSubmissionChunkCount,
         int submissionPendingChunkCount,
         Instant submissionExpiresAt,
-        Instant createdAt,
-        long pollAfterMillis) {
+        Instant createdAt) {
 
     public MailInspectionJobCreateResult(
             String jobId,
@@ -33,8 +32,7 @@ public record MailInspectionJobCreateResult(
             int acceptedCount,
             int duplicateCount,
             int invalidCount,
-            Instant createdAt,
-            long pollAfterMillis) {
+            Instant createdAt) {
         this(
                 jobId,
                 inspectionType,
@@ -52,7 +50,6 @@ public record MailInspectionJobCreateResult(
                 0,
                 0,
                 null,
-                createdAt,
-                pollAfterMillis);
+                createdAt);
     }
 }

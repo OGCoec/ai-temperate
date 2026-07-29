@@ -12,10 +12,10 @@ import java.util.List;
  */
 public record AdminMailInspectionRecoveredJobResponse(
         @Schema(
-                minLength = 11,
-                maxLength = 11,
-                pattern = "^[A-Za-z0-9_-]{11}$",
-                example = "AAAAAAAAAAE")
+                minLength = 22,
+                maxLength = 22,
+                pattern = "^[A-Za-z0-9_-]{22}$",
+                example = "AZ9nEjRWeJCrze8SNFZ4kA")
         String jobId,
         MailInspectionType inspectionType,
         MailInspectionJobStatus status,
@@ -50,9 +50,7 @@ public record AdminMailInspectionRecoveredJobResponse(
 
     @Override
     public String toString() {
-        return "AdminMailInspectionRecoveredJobResponse[jobId="
-                + jobId
-                + ",status="
+        return "AdminMailInspectionRecoveredJobResponse[status="
                 + status
                 + ",pendingItems=protected]";
     }

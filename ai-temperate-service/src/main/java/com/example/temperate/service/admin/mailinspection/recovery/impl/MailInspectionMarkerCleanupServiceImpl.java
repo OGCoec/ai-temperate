@@ -1,18 +1,20 @@
 package com.example.temperate.service.admin.mailinspection.recovery.impl;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.config.AdminMailInspectionProperties;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionRequestFingerprint;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.job.AdminMailInspectionJobStore;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionJobKeyHasher;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionRedisJobDocument;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionDispatchMarkerMessage;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionRabbitNames;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionMarkerCleanupService;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryConnectionFactory;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryObserver;
-import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryPlanner;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryPlanner.QueueKind;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryPlanner.ScannedMessage;
+import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryPlanner;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoverySession;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionTypeLifecycleGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -55,7 +57,8 @@ public final class MailInspectionMarkerCleanupServiceImpl
     private final MailInspectionRecoveryObserver recoveryObserver;
     private final ObjectMapper objectMapper;
     private final AdminMailInspectionJobStore jobStore;
-    private final PublicIdCodec publicIdCodec;
+    private final HybridBase64UrlCodec jobIdCodec;
+    private final MailInspectionJobKeyHasher keyHasher;
     private final AdminMailInspectionProperties properties;
 
     public MailInspectionMarkerCleanupServiceImpl(
@@ -65,7 +68,8 @@ public final class MailInspectionMarkerCleanupServiceImpl
             MailInspectionRecoveryObserver recoveryObserver,
             ObjectMapper objectMapper,
             AdminMailInspectionJobStore jobStore,
-            PublicIdCodec publicIdCodec,
+            HybridBase64UrlCodec jobIdCodec,
+            MailInspectionJobKeyHasher keyHasher,
             AdminMailInspectionProperties properties) {
         this.connectionFactory = Objects.requireNonNull(connectionFactory);
         this.recoveryPlanner = Objects.requireNonNull(recoveryPlanner);
@@ -73,7 +77,8 @@ public final class MailInspectionMarkerCleanupServiceImpl
         this.recoveryObserver = Objects.requireNonNull(recoveryObserver);
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.jobStore = Objects.requireNonNull(jobStore);
-        this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
+        this.jobIdCodec = Objects.requireNonNull(jobIdCodec);
+        this.keyHasher = Objects.requireNonNull(keyHasher);
         this.properties = Objects.requireNonNull(properties);
     }
 
@@ -82,18 +87,27 @@ public final class MailInspectionMarkerCleanupServiceImpl
             fixedDelayString =
                     "${app.admin.mail-inspection.rabbit.marker-cleanup-interval:PT1M}")
     public void cleanupTerminalMarkers() {
+        // 四种类型共享同一份 Redis 权威快照，全部类型锁阻止本实例在快照后并发创建新任务。
+        lifecycleGuard.withLocks(
+                MailInspectionRabbitNames.supportedTypes(),
+                this::cleanupAllTypes);
+    }
+
+    private void cleanupAllTypes() {
+        Set<MailInspectionType> activeTypes = new HashSet<>();
+        for (MailInspectionRedisJobDocument document :
+                jobStore.findActiveJobs()) {
+            activeTypes.add(document.inspectionType());
+        }
         for (MailInspectionType type :
                 MailInspectionRabbitNames.supportedTypes()) {
-            lifecycleGuard.withLock(
-                    type,
-                    () -> cleanupType(type));
+            if (!activeTypes.contains(type)) {
+                cleanupType(type);
+            }
         }
     }
 
     private void cleanupType(MailInspectionType type) {
-        if (jobStore.findActiveByType(type).isPresent()) {
-            return;
-        }
         MailInspectionRecoverySession session = null;
         LinkedHashSet<Long> unsettled = new LinkedHashSet<>();
         int scannedCount = 0;
@@ -247,9 +261,10 @@ public final class MailInspectionMarkerCleanupServiceImpl
                             .DISPATCH_MARKER_EVENT_TYPE
                             .equals(marker.eventType())
                     && marker.inspectionType() == expectedType
-                    && marker.jobInternalId() > 0
-                    && publicIdCodec.encode(marker.jobInternalId())
-                            .equals(marker.jobId())
+                    && jobIdCodec.decode(marker.jobId()).length
+                            == HybridBase64UrlCodec.BINARY_LENGTH
+                    && keyHasher.hashJobId(marker.jobId()).value()
+                            .equals(marker.jobKeyHash())
                     && marker.clientRequestId().matches(
                             "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
                                     + "[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -271,8 +286,8 @@ public final class MailInspectionMarkerCleanupServiceImpl
     private static boolean sameIdentity(
             MailInspectionDispatchMarkerMessage expected,
             MailInspectionDispatchMarkerMessage actual) {
-        return expected.jobInternalId() == actual.jobInternalId()
-                && expected.jobId().equals(actual.jobId())
+        return expected.jobId().equals(actual.jobId())
+                && expected.jobKeyHash().equals(actual.jobKeyHash())
                 && expected.inspectionType() == actual.inspectionType()
                 && expected.clientRequestId().equals(
                         actual.clientRequestId())

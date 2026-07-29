@@ -1,0 +1,25 @@
+export type MailInspectionSseFailure = {
+  code: string
+  statusCode: number
+  message: string
+}
+
+export type MailInspectionSseOptions = {
+  url: string
+  headers: UTSJSONObject
+  onOpen: (traceId: string) => void
+  onChunk: (chunk: string) => void
+  onError: (failure: MailInspectionSseFailure) => void
+  onClosed: () => void
+}
+
+export type MailInspectionSseConnection = {
+  close: () => void
+}
+
+/**
+ * 打开只允许 HTTPS 的增量事件流；调用方负责解析 SSE 帧和持久化 revision。
+ */
+export function openMailInspectionSse(
+  options: MailInspectionSseOptions
+): MailInspectionSseConnection

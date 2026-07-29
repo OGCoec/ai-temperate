@@ -7,6 +7,7 @@
 			</view>
 			<text v-if="jobId" class="job-id">{{ jobId }}</text>
 		</view>
+		<text v-if="connectionLabel" class="connection-state">{{ connectionLabel }}</text>
 
 		<view
 			class="progress-track"
@@ -61,8 +62,17 @@ const STATE_LABELS = Object.freeze({
 	ABANDONED: '残缺任务已放弃',
 	COMPLETED: '检查已完成',
 	FAILED: '任务未完成',
-	POLLING_INTERRUPTED: '查询连接中断',
 	EXPIRED: '任务已失效'
+})
+
+const CONNECTION_LABELS = Object.freeze({
+	CONNECTING: '正在连接实时通道',
+	SYNCING: '正在同步权威快照',
+	STREAMING: '实时通道已连接',
+	RECONNECTING: '实时通道有限重连中',
+	COMPLETED: '实时通道已完成',
+	FAILED: '实时通道已中断',
+	EXPIRED: '任务已过期'
 })
 
 export default {
@@ -71,11 +81,15 @@ export default {
 		state: { type: String, default: 'IDLE' },
 		job: { type: Object, default: null },
 		jobId: { type: String, default: '' },
-		message: { type: String, default: '' }
+		message: { type: String, default: '' },
+		connectionState: { type: String, default: '' }
 	},
 	computed: {
 		stateLabel() {
 			return STATE_LABELS[this.state] || this.state
+		},
+		connectionLabel() {
+			return CONNECTION_LABELS[this.connectionState] || ''
 		},
 		requestedCount() {
 			return Number(this.job?.requestedCount) || 0
@@ -98,9 +112,9 @@ export default {
 			return this.progressPercent / 100
 		},
 		stateCopy() {
-			if (this.state === 'IDLE') return '输入任意行 Microsoft 邮箱凭证后创建检查任务，凭证总量不超过 1 MiB。'
+			if (this.state === 'IDLE') return '输入 Microsoft 邮箱凭证后创建检查任务，单次最多 10,000 行且总量不超过 1 MiB。'
 			if (this.state === 'COMPLETED') return '结果已按输入行号排序；原始凭证不会出现在普通结果中。'
-			if (this.state === 'RUNNING' || this.state === 'QUEUED') return '后端正在执行有限重试，请保持管理员会话有效。'
+			if (this.state === 'RUNNING' || this.state === 'QUEUED') return '后端正在执行有限重试，进度通过 SSE 单向推送。'
 			if (this.state === 'DISPATCHING') {
 				const confirmed = Number(this.job?.confirmedSubmissionChunkCount) || 0
 				const total = Number(this.job?.submissionChunkCount) || 0
@@ -206,12 +220,18 @@ export default {
 }
 
 .progress-copy,
-.progress-message {
+.progress-message,
+.connection-state {
 	display: block;
 	margin-top: 20rpx;
 	color: $app-muted;
 	font-size: 24rpx;
 	line-height: 1.5;
+}
+
+.connection-state {
+	color: $app-action-teal;
+	font-size: 22rpx;
 }
 
 .progress-message {

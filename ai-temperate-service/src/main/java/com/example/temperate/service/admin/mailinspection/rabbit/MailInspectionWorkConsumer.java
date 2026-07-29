@@ -1,7 +1,8 @@
 package com.example.temperate.service.admin.mailinspection.rabbit;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
-import com.example.temperate.service.admin.mailinspection.config.AdminMailInspectionProperties;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
+import com.example.temperate.service.admin.AdminErrorCode;
+import com.example.temperate.service.admin.AdminException;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionFailureStage;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionJobStatus;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionResult;
@@ -9,7 +10,8 @@ import com.example.temperate.service.admin.mailinspection.domain.MailInspectionR
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.domain.MailboxCredential;
 import com.example.temperate.service.admin.mailinspection.job.AdminMailInspectionJobStore;
-import com.example.temperate.service.admin.mailinspection.job.MailInspectionJobState;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionJobKeyHasher;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionRedisJobDocument;
 import com.example.temperate.service.admin.mailinspection.strategy.MailInspectionStrategy;
 import com.example.temperate.service.admin.mailinspection.strategy.MailInspectionStrategyRegistry;
 import java.time.Clock;
@@ -21,9 +23,9 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 /**
- * 统一消费四类管理员邮箱检查工作消息，并在异步 OAuth、IMAP 与结果保存全部完成后才结束监听器返回的 Mono。
+ * 消费 Rabbit v2 邮件工作消息，并在 Redis 结果原子写入成功后才允许监听 Mono 完成。
  *
- * <p>Spring AMQP 在 Mono 成功完成后发送 Consumer ACK；本组件不持有 Channel，也不会在异步处理完成前手工确认消息。</p>
+ * <p>同一行由 Redis claim 去重；已有结果的 Rabbit 重投递直接完成，仍在处理的重复投递则失败并等待后续重试。</p>
  */
 @Component
 @ConditionalOnProperty(
@@ -36,22 +38,25 @@ public final class MailInspectionWorkConsumer {
     private final AdminMailInspectionJobStore jobStore;
     private final MailInspectionStrategyRegistry strategyRegistry;
     private final AdminMailInspectionPayloadProtector payloadProtector;
-    private final PublicIdCodec publicIdCodec;
-    private final AdminMailInspectionProperties properties;
+    private final HybridBase64UrlCodec jobIdCodec;
+    private final MailInspectionJobKeyHasher keyHasher;
+    private final MailInspectionListenerControl listenerControl;
     private final Clock clock;
 
     public MailInspectionWorkConsumer(
             AdminMailInspectionJobStore jobStore,
             MailInspectionStrategyRegistry strategyRegistry,
             AdminMailInspectionPayloadProtector payloadProtector,
-            PublicIdCodec publicIdCodec,
-            AdminMailInspectionProperties properties,
+            HybridBase64UrlCodec jobIdCodec,
+            MailInspectionJobKeyHasher keyHasher,
+            MailInspectionListenerControl listenerControl,
             Clock clock) {
         this.jobStore = Objects.requireNonNull(jobStore);
         this.strategyRegistry = Objects.requireNonNull(strategyRegistry);
         this.payloadProtector = Objects.requireNonNull(payloadProtector);
-        this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
-        this.properties = Objects.requireNonNull(properties);
+        this.jobIdCodec = Objects.requireNonNull(jobIdCodec);
+        this.keyHasher = Objects.requireNonNull(keyHasher);
+        this.listenerControl = Objects.requireNonNull(listenerControl);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -97,26 +102,28 @@ public final class MailInspectionWorkConsumer {
                 message);
     }
 
-    /**
-     * lineNumber 是同一 job 内的幂等键；结果已存在说明上一次业务已完成但 ACK 可能丢失，此次直接成功完成以确认重投递。
-     */
     Mono<Void> consume(
             MailInspectionType expectedType,
             MailInspectionWorkMessage message) {
         return Mono.defer(() -> {
                     validateEnvelope(expectedType, message);
-                    MailInspectionJobState state = jobStore
-                            .find(message.jobInternalId())
-                            .orElseThrow(() -> new IllegalStateException(
-                                    "mail inspection job state unavailable"));
-                    validateState(state, message);
-                    if (state.hasResult(message.lineNumber())) {
+                    MailInspectionRedisJobDocument document =
+                            jobStore.findSnapshotMeta(message.jobId())
+                                    .orElseThrow(() ->
+                                            new AdminException(
+                                                    AdminErrorCode
+                                                            .ADMIN_MAIL_INSPECTION_UNAVAILABLE,
+                                                    "mail inspection Redis job unavailable"));
+                    validateDocument(document, message);
+                    if (jobStore.hasResult(
+                            message.jobId(), message.lineNumber())) {
                         return Mono.empty();
                     }
                     MailInspectionProtectedCredential protectedCredential =
                             payloadProtector.unprotect(
                                     message.messageId(),
                                     message.jobId(),
+                                    message.jobKeyHash(),
                                     message.inspectionType(),
                                     message.lineNumber(),
                                     message.protectedPayload());
@@ -125,8 +132,14 @@ public final class MailInspectionWorkConsumer {
                             protectedCredential.email(),
                             protectedCredential.clientId(),
                             protectedCredential.refreshToken());
-                    if (!state.itemStarted(message.lineNumber())) {
-                        // 另一条投递仍在处理时不能提前 ACK；让 Rabbit 保留这次重复投递，避免原处理因进程中断而造成静默丢失。
+                    if (!jobStore.claimLine(
+                            message.jobId(),
+                            message.lineNumber(),
+                            clock.instant())) {
+                        if (jobStore.hasResult(
+                                message.jobId(), message.lineNumber())) {
+                            return Mono.empty();
+                        }
                         return Mono.error(new IllegalStateException(
                                 "mail inspection line is already in flight"));
                     }
@@ -136,16 +149,15 @@ public final class MailInspectionWorkConsumer {
                             .switchIfEmpty(Mono.just(
                                     internalFailure(credential)))
                             .onErrorReturn(internalFailure(credential))
-                            .doOnNext(result -> {
-                                state.recordResult(result);
-                                if (state.hasCompletedWork()) {
-                                    state.complete(
-                                            clock.instant(),
-                                            properties.job().retention());
-                                }
-                            })
+                            .flatMap(result -> Mono.fromRunnable(() ->
+                                    jobStore.recordResult(
+                                            message.jobId(),
+                                            result,
+                                            clock.instant())))
                             .then();
                 })
+                .doOnError(exception ->
+                        pauseOnRedisFailure(expectedType, exception))
                 .onErrorMap(
                         this::isPoisonMessage,
                         exception -> new AmqpRejectAndDontRequeueException(
@@ -156,54 +168,58 @@ public final class MailInspectionWorkConsumer {
     private void validateEnvelope(
             MailInspectionType expectedType,
             MailInspectionWorkMessage message) {
-        if (message == null
-                || !isSupportedSchema(message.schemaVersion())
-                || !MailInspectionRabbitNames.EVENT_TYPE.equals(
-                        message.eventType())
-                || message.inspectionType() != expectedType
-                || message.jobInternalId() <= 0
-                || !publicIdCodec.encode(message.jobInternalId())
-                        .equals(message.jobId())
-                || message.lineNumber() < 1
-                || message.businessConcurrency() < 1
-                || message.businessConcurrency() > 64) {
+        try {
+            if (message == null
+                    || message.schemaVersion()
+                    != MailInspectionRabbitNames.WORK_SCHEMA_VERSION
+                    || !MailInspectionRabbitNames.EVENT_TYPE.equals(
+                            message.eventType())
+                    || message.inspectionType() != expectedType
+                    || jobIdCodec.decode(message.jobId()).length
+                    != HybridBase64UrlCodec.BINARY_LENGTH
+                    || !keyHasher.hashJobId(message.jobId()).value()
+                            .equals(message.jobKeyHash())
+                    || message.lineNumber() < 1
+                    || message.businessConcurrency() < 1
+                    || message.businessConcurrency() > 64) {
+                throw new MailInspectionPoisonMessageException(
+                        "mail inspection message envelope is invalid");
+            }
+        } catch (IllegalArgumentException exception) {
             throw new MailInspectionPoisonMessageException(
-                    "mail inspection message envelope is invalid");
+                    "mail inspection message envelope is invalid",
+                    exception);
         }
     }
 
-    private static boolean isSupportedSchema(int schemaVersion) {
-        return schemaVersion
-                        == MailInspectionRabbitNames.LEGACY_WORK_SCHEMA_VERSION
-                || schemaVersion
-                        == MailInspectionRabbitNames.WORK_SCHEMA_VERSION;
-    }
-
-    private static void validateState(
-            MailInspectionJobState state,
+    private static void validateDocument(
+            MailInspectionRedisJobDocument document,
             MailInspectionWorkMessage message) {
-        if (!state.publicId().equals(message.jobId())
-                || state.type() != message.inspectionType()
-                || state.businessConcurrency()
-                        != message.businessConcurrency()
-                || (message.schemaVersion()
-                                == MailInspectionRabbitNames.WORK_SCHEMA_VERSION
-                        && (!Objects.equals(
-                                        state.clientRequestId(),
-                                        message.clientRequestId())
-                                || state.requestFingerprint() == null
-                                || !state.requestFingerprint().value().equals(
-                                        message.requestFingerprint())
-                                || message.sourceChunkIndex() == null
-                                || message.sourceChunkIndex() < 0))) {
+        // Redis 文档是唯一事实来源，消息中的计数、分块和身份字段必须逐项一致后才能解密并执行邮箱业务。
+        if (!document.jobId().equals(message.jobId())
+                || !document.jobHash().equals(message.jobKeyHash())
+                || document.inspectionType() != message.inspectionType()
+                || document.requestedCount() != message.requestedCount()
+                || document.acceptedCount() != message.acceptedCount()
+                || document.duplicateCount() != message.duplicateCount()
+                || document.invalidCount() != message.invalidCount()
+                || document.businessConcurrency()
+                != message.businessConcurrency()
+                || !Objects.equals(
+                        document.clientRequestId(),
+                        message.clientRequestId())
+                || !Objects.equals(
+                        document.requestFingerprint(),
+                        message.requestFingerprint())
+                || message.sourceChunkIndex() == null
+                || message.sourceChunkIndex() < 0
+                || message.sourceChunkIndex()
+                >= document.submissionChunkCount()
+                || message.lineNumber() > document.requestedCount()) {
             throw new MailInspectionPoisonMessageException(
-                    "mail inspection message does not match job state");
+                    "mail inspection message does not match Redis job");
         }
-        // 结果已落入任务状态说明业务处理完成，只是 Consumer ACK 可能丢失；此时必须允许重复投递直接成功结束。
-        if (state.hasResult(message.lineNumber())) {
-            return;
-        }
-        if (state.status() != MailInspectionJobStatus.RUNNING) {
+        if (document.status() != MailInspectionJobStatus.RUNNING) {
             throw new IllegalStateException(
                     "mail inspection consumer started before job approval");
         }
@@ -211,8 +227,37 @@ public final class MailInspectionWorkConsumer {
 
     private boolean isPoisonMessage(Throwable exception) {
         return exception instanceof MailInspectionPayloadException
-                || exception
-                        instanceof MailInspectionPoisonMessageException;
+                || exception instanceof MailInspectionPoisonMessageException;
+    }
+
+    private void pauseOnRedisFailure(
+            MailInspectionType type, Throwable failure) {
+        if (!isRedisAuthorityFailure(failure)) {
+            return;
+        }
+        // 停止监听器可能等待当前消费线程退出，因此交给独立调度线程执行，当前消息保持未 ACK 并回到 Ready。
+        reactor.core.scheduler.Schedulers.boundedElastic().schedule(() -> {
+            try {
+                listenerControl.stop(type);
+            } catch (RuntimeException ignored) {
+                // 控制面停止失败不能掩盖原始 Redis 故障，启动恢复检查会继续保持接收闸门关闭。
+            }
+        });
+    }
+
+    private static boolean isRedisAuthorityFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof AdminException adminException
+                    && (adminException.code()
+                    == AdminErrorCode.ADMIN_MAIL_INSPECTION_UNAVAILABLE
+                    || adminException.code()
+                    == AdminErrorCode.ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static MailInspectionResult internalFailure(

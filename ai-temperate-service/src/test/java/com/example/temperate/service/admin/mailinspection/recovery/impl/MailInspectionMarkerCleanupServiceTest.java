@@ -8,10 +8,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.config.AdminMailInspectionProperties;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.job.AdminMailInspectionJobStore;
+import com.example.temperate.service.admin.mailinspection.job.redis.MailInspectionJobKeyHasher;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionDispatchMarkerMessage;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionRabbitNames;
 import com.example.temperate.service.admin.mailinspection.recovery.MailInspectionRecoveryConnectionFactory;
@@ -27,7 +28,6 @@ import com.rabbitmq.client.Envelope;
 import com.rabbitmq.client.GetResponse;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -42,10 +42,16 @@ final class MailInspectionMarkerCleanupServiceTest {
     @Test
     void clearsCompleteMarkerLedgerWhenTypeHasNoActiveJob()
             throws Exception {
-        PublicIdCodec publicIdCodec = new PublicIdCodec();
+        HybridBase64UrlCodec publicIdCodec = new HybridBase64UrlCodec();
+        String jobId = publicIdCodec.encode(new byte[16]);
+        MailInspectionJobKeyHasher keyHasher =
+                new MailInspectionJobKeyHasher(
+                        AdminMailInspectionProperties.defaults(),
+                        publicIdCodec);
+        String jobHash = keyHasher.hashJobId(jobId).value();
         List<MailInspectionDispatchMarkerMessage> markers = List.of(
-                marker(publicIdCodec, 31L, 0),
-                marker(publicIdCodec, 31L, 1));
+                marker(jobId, jobHash, 0),
+                marker(jobId, jobHash, 1));
         MailInspectionRecoveryConnectionFactory connectionFactory =
                 mock(MailInspectionRecoveryConnectionFactory.class);
         Connection connection = mock(Connection.class);
@@ -57,8 +63,7 @@ final class MailInspectionMarkerCleanupServiceTest {
                 mock(AMQP.Queue.DeclareOk.class);
         AtomicInteger markerReads = new AtomicInteger();
         when(emptyQueue.getMessageCount()).thenReturn(0);
-        when(jobStore.findActiveByType(any(MailInspectionType.class)))
-                .thenReturn(Optional.empty());
+        when(jobStore.findActiveJobs()).thenReturn(List.of());
         when(connectionFactory.open(
                 any(MailInspectionType.class),
                 eq("marker-cleanup"))).thenAnswer(ignored ->
@@ -96,10 +101,12 @@ final class MailInspectionMarkerCleanupServiceTest {
                         objectMapper,
                         jobStore,
                         publicIdCodec,
+                        keyHasher,
                         AdminMailInspectionProperties.defaults());
 
         service.cleanupTerminalMarkers();
 
+        verify(jobStore).findActiveJobs();
         verify(channel).basicAck(1L, false);
         verify(channel).basicAck(2L, false);
     }
@@ -116,8 +123,8 @@ final class MailInspectionMarkerCleanupServiceTest {
     }
 
     private static MailInspectionDispatchMarkerMessage marker(
-            PublicIdCodec publicIdCodec,
-            long internalId,
+            String jobId,
+            String jobHash,
             int chunkIndex) {
         return new MailInspectionDispatchMarkerMessage(
                 "marker-" + chunkIndex,
@@ -127,8 +134,8 @@ final class MailInspectionMarkerCleanupServiceTest {
                 "trace-test",
                 "550e8400-e29b-41d4-a716-446655440000",
                 "A".repeat(43),
-                internalId,
-                publicIdCodec.encode(internalId),
+                jobId,
+                jobHash,
                 MailInspectionType.OPENAI_STATUS,
                 chunkIndex,
                 2,

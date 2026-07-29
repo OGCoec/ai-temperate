@@ -26,6 +26,7 @@ public class AiModel {
     private String descriptionTokensJson;
     private String vendor;
     private BigDecimal inputRatio;
+    private BigDecimal cachedInputRatio;
     private BigDecimal outputRatio;
     private Boolean enabled;
     private Long rowVersion;

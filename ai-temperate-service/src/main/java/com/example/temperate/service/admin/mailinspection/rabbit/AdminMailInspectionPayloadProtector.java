@@ -44,6 +44,7 @@ public final class AdminMailInspectionPayloadProtector {
     public MailInspectionProtectedPayload protect(
             String messageId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             MailboxCredential credential) {
         Objects.requireNonNull(credential, "credential must not be null");
@@ -54,6 +55,7 @@ public final class AdminMailInspectionPayloadProtector {
             cipher.updateAAD(aad(
                     messageId,
                     jobId,
+                    jobKeyHash,
                     type,
                     credential.lineNumber()));
             byte[] ciphertext = cipher.doFinal(encode(credential));
@@ -72,6 +74,7 @@ public final class AdminMailInspectionPayloadProtector {
     public MailInspectionProtectedCredential unprotect(
             String messageId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             int lineNumber,
             MailInspectionProtectedPayload payload) {
@@ -83,7 +86,8 @@ public final class AdminMailInspectionPayloadProtector {
                         "mail inspection payload IV is invalid");
             }
             Cipher cipher = cipher(Cipher.DECRYPT_MODE, iv);
-            cipher.updateAAD(aad(messageId, jobId, type, lineNumber));
+            cipher.updateAAD(aad(
+                    messageId, jobId, jobKeyHash, type, lineNumber));
             byte[] plaintext = cipher.doFinal(
                     Base64.getUrlDecoder().decode(payload.ciphertext()));
             return decode(plaintext);
@@ -109,11 +113,19 @@ public final class AdminMailInspectionPayloadProtector {
     private static byte[] aad(
             String messageId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             int lineNumber) {
-        String value = Objects.requireNonNull(messageId)
+        // Schema 与事件类型进入 AAD，使 v2 密文不能被旧消费者或其他 Rabbit 事件类型复用。
+        String value = MailInspectionRabbitNames.WORK_SCHEMA_VERSION
+                + "\u0000"
+                + MailInspectionRabbitNames.EVENT_TYPE
+                + "\u0000"
+                + Objects.requireNonNull(messageId)
                 + "\u0000"
                 + Objects.requireNonNull(jobId)
+                + "\u0000"
+                + Objects.requireNonNull(jobKeyHash)
                 + "\u0000"
                 + Objects.requireNonNull(type).name()
                 + "\u0000"

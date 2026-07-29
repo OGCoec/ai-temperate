@@ -123,13 +123,18 @@ export async function handleRequest(request, env, runtime = {}) {
 		const upstreamRequest = await signedUpstreamRequest(request, env, route, now)
 		upstreamResponse = await fetchImpl(upstreamRequest)
 	} catch (_) {
+		logSse(route, request, null, env, runtime)
 		return jsonError(502, 'EDGE_UPSTREAM_UNAVAILABLE')
 	}
 
 	if (isCrossHostRedirect(upstreamResponse, route.surface)) {
 		return jsonError(502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
 	}
-	return guardedResponse(upstreamResponse, route.surface)
+	logSse(route, request, upstreamResponse, env, runtime)
+	return guardedResponse(
+		upstreamResponse,
+		route.surface,
+		route.streaming === true)
 }
 
 function classifyRoute(url) {
@@ -155,8 +160,24 @@ function classifyRoute(url) {
 		if (url.pathname === '/api/admin/_edge/cookie-scope') {
 			return { allowed: true, migration: true, surface: 'admin' }
 		}
+		const mailSse = url.pathname.match(
+			/^\/api\/admin\/mail-inspection\/jobs\/([A-Za-z0-9_-]{22})\/events$/)
+		if (mailSse) {
+			return {
+				allowed: true,
+				migration: false,
+				surface: 'admin',
+				streaming: true,
+				routeTemplate: '/api/admin/mail-inspection/jobs/{jobId}/events'
+			}
+		}
 		if (pathWithin(url.pathname, '/api/admin')) {
-			return { allowed: true, migration: false, surface: 'admin' }
+			return {
+				allowed: true,
+				migration: false,
+				surface: 'admin',
+				streaming: false
+			}
 		}
 		return denied()
 	}
@@ -230,7 +251,9 @@ async function signedUpstreamRequest(request, env, route, now) {
 		method: request.method,
 		headers,
 		cache: 'no-store',
-		redirect: 'manual'
+		redirect: 'manual',
+		// 浏览器关闭页面或主动重连时立即取消 Origin 读取，避免遗留无消费者的 SSE。
+		signal: request.signal
 	}
 	if (request.method !== 'GET' && request.method !== 'HEAD') {
 		init.body = request.body
@@ -360,7 +383,7 @@ function hasCookie(header, expectedName, expectedValue) {
 	})
 }
 
-function guardedResponse(response, surface) {
+function guardedResponse(response, surface, streaming = false) {
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null) {
 		return jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
@@ -377,11 +400,34 @@ function guardedResponse(response, surface) {
 	headers.delete('Set-Cookie')
 	for (const cookie of setCookies) headers.append('Set-Cookie', cookie)
 	applyNoStore(headers)
+	if (streaming) {
+		headers.set('Cache-Control', 'no-store, private, no-transform')
+		headers.set('X-Accel-Buffering', 'no')
+	}
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,
 		headers
 	})
+}
+
+function logSse(route, request, response, env, runtime) {
+	if (!route.streaming) return
+	const sampleRate = Number(env.SSE_ROUTE_LOG_SAMPLE_RATE)
+	const random = runtime.random || Math.random
+	if (!Number.isFinite(sampleRate)
+		|| sampleRate <= 0
+		|| random() >= Math.min(1, sampleRate)) {
+		return
+	}
+	const logger = runtime.log || console
+	logger.info(JSON.stringify({
+		event: 'admin_mail_inspection_sse_edge',
+		route: route.routeTemplate,
+		method: request.method,
+		status: response?.status || 502,
+		cfRay: String(request.headers.get('CF-Ray') || '').slice(0, 128)
+	}))
 }
 
 function readSetCookies(headers) {

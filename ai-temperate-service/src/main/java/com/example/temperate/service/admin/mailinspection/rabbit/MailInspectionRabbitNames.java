@@ -11,61 +11,60 @@ import java.util.Set;
 public final class MailInspectionRabbitNames {
 
     public static final String WORK_EXCHANGE =
-            "ait.admin.mail-inspection.work.v1";
+            "ait.admin.mail-inspection.work.v2";
     public static final String SUBMISSION_EXCHANGE =
-            "ait.admin.mail-inspection.submission.v1";
+            "ait.admin.mail-inspection.submission.v2";
     public static final String DISPATCH_STATE_EXCHANGE =
-            "ait.admin.mail-inspection.dispatch-state.v1";
+            "ait.admin.mail-inspection.dispatch-state.v2";
     public static final String DEAD_EXCHANGE =
-            "ait.admin.mail-inspection.dead.v1";
+            "ait.admin.mail-inspection.dead.v2";
     public static final String DEAD_QUEUE =
-            "ait.admin.mail-inspection.dead.v1";
+            "ait.admin.mail-inspection.dead.v2";
     public static final String DEAD_ROUTING_KEY =
             "mail-inspection.dead";
     public static final String SUBMISSION_DEAD_EXCHANGE =
-            "ait.admin.mail-inspection.submission.dead.v1";
+            "ait.admin.mail-inspection.submission.dead.v2";
     public static final String SUBMISSION_DEAD_QUEUE =
-            "ait.admin.mail-inspection.submission.dead.v1";
+            "ait.admin.mail-inspection.submission.dead.v2";
     public static final String SUBMISSION_DEAD_ROUTING_KEY =
             "mail-inspection.submission.dead";
     public static final String EVENT_TYPE =
             "ADMIN_MAIL_INSPECTION_WORK";
-    public static final int LEGACY_WORK_SCHEMA_VERSION = 1;
     public static final int WORK_SCHEMA_VERSION = 2;
     public static final int SCHEMA_VERSION = WORK_SCHEMA_VERSION;
     public static final String SUBMISSION_EVENT_TYPE =
             "ADMIN_MAIL_INSPECTION_SUBMISSION_CHUNK";
     public static final String DISPATCH_MARKER_EVENT_TYPE =
             "ADMIN_MAIL_INSPECTION_DISPATCH_MARKER";
-    public static final int SUBMISSION_SCHEMA_VERSION = 1;
-    public static final int DISPATCH_MARKER_SCHEMA_VERSION = 1;
+    public static final int SUBMISSION_SCHEMA_VERSION = 2;
+    public static final int DISPATCH_MARKER_SCHEMA_VERSION = 2;
 
     public static final String OPENAI_QUEUE =
-            "ait.admin.mail-inspection.openai-status.work.v1";
+            "ait.admin.mail-inspection.openai-status.work.v2";
     public static final String KIRO_QUEUE =
-            "ait.admin.mail-inspection.kiro-status.work.v1";
+            "ait.admin.mail-inspection.kiro-status.work.v2";
     public static final String IP2_REGISTRATION_QUEUE =
-            "ait.admin.mail-inspection.ip2location-registration.work.v1";
+            "ait.admin.mail-inspection.ip2location-registration.work.v2";
     public static final String IP2_VERIFY_QUEUE =
-            "ait.admin.mail-inspection.ip2location-verify-link.work.v1";
+            "ait.admin.mail-inspection.ip2location-verify-link.work.v2";
 
     public static final String OPENAI_SUBMISSION_QUEUE =
-            "ait.admin.mail-inspection.openai-status.submission.v1";
+            "ait.admin.mail-inspection.openai-status.submission.v2";
     public static final String KIRO_SUBMISSION_QUEUE =
-            "ait.admin.mail-inspection.kiro-status.submission.v1";
+            "ait.admin.mail-inspection.kiro-status.submission.v2";
     public static final String IP2_REGISTRATION_SUBMISSION_QUEUE =
-            "ait.admin.mail-inspection.ip2location-registration.submission.v1";
+            "ait.admin.mail-inspection.ip2location-registration.submission.v2";
     public static final String IP2_VERIFY_SUBMISSION_QUEUE =
-            "ait.admin.mail-inspection.ip2location-verify-link.submission.v1";
+            "ait.admin.mail-inspection.ip2location-verify-link.submission.v2";
 
     public static final String OPENAI_DISPATCH_STATE_QUEUE =
-            "ait.admin.mail-inspection.openai-status.dispatch-state.v1";
+            "ait.admin.mail-inspection.openai-status.dispatch-state.v2";
     public static final String KIRO_DISPATCH_STATE_QUEUE =
-            "ait.admin.mail-inspection.kiro-status.dispatch-state.v1";
+            "ait.admin.mail-inspection.kiro-status.dispatch-state.v2";
     public static final String IP2_REGISTRATION_DISPATCH_STATE_QUEUE =
-            "ait.admin.mail-inspection.ip2location-registration.dispatch-state.v1";
+            "ait.admin.mail-inspection.ip2location-registration.dispatch-state.v2";
     public static final String IP2_VERIFY_DISPATCH_STATE_QUEUE =
-            "ait.admin.mail-inspection.ip2location-verify-link.dispatch-state.v1";
+            "ait.admin.mail-inspection.ip2location-verify-link.dispatch-state.v2";
 
     public static final String OPENAI_ROUTING_KEY =
             "mail-inspection.openai-status";

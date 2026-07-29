@@ -239,6 +239,8 @@ public class AdminAiModelController {
             @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 8)
             BigDecimal inputRatio,
             @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 8)
+            BigDecimal cachedInputRatio,
+            @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 8)
             BigDecimal outputRatio,
             @NotNull Boolean enabled,
             @ArraySchema(schema = @Schema(
@@ -262,6 +264,7 @@ public class AdminAiModelController {
                     tags,
                     vendor,
                     inputRatio,
+                    cachedInputRatio,
                     outputRatio,
                     enabled,
                     capabilities);

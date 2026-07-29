@@ -164,6 +164,7 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
                 model.getIcon(),
                 readTags(model.getTagsJson()),
                 model.getInputRatio(),
+                model.getCachedInputRatio(),
                 model.getOutputRatio(),
                 capabilities);
     }

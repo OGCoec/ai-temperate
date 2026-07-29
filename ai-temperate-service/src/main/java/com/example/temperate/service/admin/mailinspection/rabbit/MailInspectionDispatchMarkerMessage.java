@@ -15,8 +15,8 @@ public record MailInspectionDispatchMarkerMessage(
         String traceId,
         String clientRequestId,
         String requestFingerprint,
-        long jobInternalId,
         String jobId,
+        String jobKeyHash,
         MailInspectionType inspectionType,
         int chunkIndex,
         int chunkCount,
@@ -32,17 +32,25 @@ public record MailInspectionDispatchMarkerMessage(
         Objects.requireNonNull(clientRequestId);
         Objects.requireNonNull(requestFingerprint);
         Objects.requireNonNull(jobId);
+        Objects.requireNonNull(jobKeyHash);
         Objects.requireNonNull(inspectionType);
         Objects.requireNonNull(createdAt);
         Objects.requireNonNull(dispatchedAt);
+        if (schemaVersion
+                != MailInspectionRabbitNames.DISPATCH_MARKER_SCHEMA_VERSION
+                || !jobId.matches("^[A-Za-z0-9_-]{22}$")
+                || !jobKeyHash.matches("^[A-Za-z0-9_-]{43}$")) {
+            throw new IllegalArgumentException(
+                    "dispatch marker job identity or schema is invalid");
+        }
     }
 
     @Override
     public String toString() {
         return "MailInspectionDispatchMarkerMessage[messageId="
                 + messageId
-                + ",jobId="
-                + jobId
+                + ",jobRef="
+                + jobKeyHash.substring(0, 16)
                 + ",inspectionType="
                 + inspectionType
                 + ",chunkIndex="

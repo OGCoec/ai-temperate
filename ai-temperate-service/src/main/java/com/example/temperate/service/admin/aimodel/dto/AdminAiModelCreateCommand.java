@@ -15,6 +15,7 @@ public record AdminAiModelCreateCommand(
         List<String> tags,
         String vendor,
         BigDecimal inputRatio,
+        BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
         Boolean enabled,
         List<String> capabilities) {

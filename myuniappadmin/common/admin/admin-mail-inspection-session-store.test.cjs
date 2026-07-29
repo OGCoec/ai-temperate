@@ -4,7 +4,9 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 async function loadModule() {
-	let source = fs.readFileSync(path.join(__dirname, 'admin-mail-inspection-session-store.js'), 'utf8')
+	let source = fs.readFileSync(
+		path.join(__dirname, 'admin-mail-inspection-session-store.js'),
+		'utf8')
 	source = source.replace(
 		"import { adminClientPlatform } from './admin-config.js'",
 		"const adminClientPlatform = () => 'H5'")
@@ -23,7 +25,7 @@ function sessionStorageStub() {
 	}
 }
 
-test('H5 store persists only approved job context fields in session storage', async () => {
+test('H5 persists only a 22-character Job ID and last revision', async () => {
 	const { createAdminMailInspectionSessionStore } = await loadModule()
 	const storage = sessionStorageStub()
 	const store = createAdminMailInspectionSessionStore({
@@ -32,30 +34,46 @@ test('H5 store persists only approved job context fields in session storage', as
 	})
 
 	store.save('OPENAI_STATUS', {
-		draftText: 'secret-line',
-		credentialLines: ['secret-line'],
-		jobId: 'AAAAAAAAAAE',
-		jobStatus: 'RUNNING',
-		businessConcurrency: 32,
-		results: [{ verifyToken: 'must-not-persist' }],
-		verifyUrl: 'https://must-not-persist.example'
+		jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
+		lastRevision: 81,
+		jobStatus: 'STREAMING',
+		draftText: 'must-not-persist',
+		credentialLines: ['must-not-persist'],
+		results: [{ verifyToken: 'must-not-persist' }]
 	})
 
-	const restored = store.load('OPENAI_STATUS')
-	assert.deepEqual(restored.credentialLines, ['secret-line'])
-	assert.equal(restored.jobId, 'AAAAAAAAAAE')
-	assert.equal(restored.businessConcurrency, 32)
-	assert.equal('results' in restored, false)
-	assert.equal('verifyUrl' in restored, false)
-	assert.doesNotMatch(storage.getItem('ait.admin.mail-inspection.v2'), /must-not-persist/)
+	assert.deepEqual(store.load('OPENAI_STATUS'), {
+		jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
+		lastRevision: 81
+	})
+	const raw = storage.getItem('ait.admin.mail-inspection.v3')
+	assert.doesNotMatch(raw, /STREAMING|must-not-persist|verifyToken/)
+	assert.equal(storage.getItem('ait.admin.mail-inspection.v2'), null)
 })
 
-test('Android storage delegates to an encrypted adapter and never browser storage', async () => {
+test('invalid IDs and revisions are discarded rather than normalized', async () => {
+	const { createAdminMailInspectionSessionStore } = await loadModule()
+	const store = createAdminMailInspectionSessionStore({
+		platform: 'H5',
+		browserStorage: sessionStorageStub()
+	})
+	store.save('OPENAI_STATUS', {
+		jobId: 'AAAAAAAAAAE',
+		lastRevision: -1
+	})
+	assert.deepEqual(store.load('OPENAI_STATUS'), {})
+})
+
+test('Android encrypted adapter receives the same minimal context', async () => {
 	const { createAdminMailInspectionSessionStore } = await loadModule()
 	const calls = []
+	let root = { schemaVersion: 3, contexts: {} }
 	const encrypted = {
-		load: () => ({}),
-		save: state => calls.push(['save', state]),
+		load: () => root,
+		save: state => {
+			root = state
+			calls.push(['save', state])
+		},
 		clear: () => calls.push(['clear'])
 	}
 	const store = createAdminMailInspectionSessionStore({
@@ -63,42 +81,16 @@ test('Android storage delegates to an encrypted adapter and never browser storag
 		androidEncryptedStorage: encrypted
 	})
 
-	store.save('KIRO_STATUS', { draftText: 'secret-line', credentialLines: ['secret-line'] })
+	store.save('KIRO_STATUS', {
+		jobId: 'BZ9nEjRWeJCrze8SNFZ4kA',
+		lastRevision: 3,
+		draftText: 'must-not-persist'
+	})
+	assert.deepEqual(store.load('KIRO_STATUS'), {
+		jobId: 'BZ9nEjRWeJCrze8SNFZ4kA',
+		lastRevision: 3
+	})
+	assert.doesNotMatch(JSON.stringify(calls), /must-not-persist/)
 	store.clearAll()
 	assert.deepEqual(calls.map(call => call[0]), ['save', 'clear'])
-})
-
-test('clearing one type and all types removes retained credential lines', async () => {
-	const { createAdminMailInspectionSessionStore } = await loadModule()
-	const store = createAdminMailInspectionSessionStore({
-		platform: 'H5',
-		browserStorage: sessionStorageStub()
-	})
-	store.save('OPENAI_STATUS', { credentialLines: ['one'] })
-	store.save('KIRO_STATUS', { credentialLines: ['two'] })
-	store.clear('OPENAI_STATUS')
-	assert.deepEqual(store.load('OPENAI_STATUS'), {})
-	assert.deepEqual(store.load('KIRO_STATUS').credentialLines, ['two'])
-	store.clearAll()
-	assert.deepEqual(store.load('KIRO_STATUS'), {})
-})
-
-test('session v2 preserves more than one hundred lines under one MiB', async () => {
-	const { createAdminMailInspectionSessionStore } = await loadModule()
-	const store = createAdminMailInspectionSessionStore({
-		platform: 'H5',
-		browserStorage: sessionStorageStub()
-	})
-	const lines = Array.from({ length: 1000 }, (_, index) => `credential-${index}`)
-	store.save('OPENAI_STATUS', {
-		credentialLines: lines,
-		clientRequestId: '550e8400-e29b-41d4-a716-446655440000',
-		jobStatus: 'SUBMISSION_UNKNOWN',
-		submissionStartedAt: '2026-07-28T12:00:00Z'
-	})
-	const restored = store.load('OPENAI_STATUS')
-	assert.equal(restored.credentialLines.length, 1000)
-	assert.equal(
-		restored.clientRequestId,
-		'550e8400-e29b-41d4-a716-446655440000')
 })

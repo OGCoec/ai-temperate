@@ -7,17 +7,19 @@ const projectRoot = path.resolve(__dirname, '..', '..')
 const read = relativePath => fs.readFileSync(path.join(projectRoot, relativePath), 'utf8')
 
 const uiFiles = [
-	'pages/ai-models/index.vue',
-	'pages/ai-models/create.vue',
-	'pages/ai-models/detail.vue',
-	'pages/ai-model-icons/index.vue',
+	'components/admin/workspace/ai-model-list-panel.vue',
+	'components/admin/workspace/ai-model-discovery-panel.vue',
+	'components/admin/workspace/ai-model-create-panel.vue',
+	'components/admin/workspace/ai-model-detail-panel.vue',
+	'components/admin/workspace/ai-model-icons-panel.vue',
 	'components/admin/ai-model-form.vue'
 ]
 
 const modelPages = [
-	'pages/ai-models/index.vue',
-	'pages/ai-models/create.vue',
-	'pages/ai-models/detail.vue'
+	'components/admin/workspace/ai-model-list-panel.vue',
+	'components/admin/workspace/ai-model-discovery-panel.vue',
+	'components/admin/workspace/ai-model-create-panel.vue',
+	'components/admin/workspace/ai-model-detail-panel.vue'
 ]
 
 test('all model operations use the protected admin API layer without physical delete', () => {
@@ -38,7 +40,7 @@ test('all model operations use the protected admin API layer without physical de
 test('detail editing uses If-Match and keeps status outside merge patch', () => {
 	const api = read('common/admin/admin-ai-model-api.js')
 	const form = read('common/admin/admin-ai-model-form.js')
-	const detail = read('pages/ai-models/detail.vue')
+	const detail = read('components/admin/workspace/ai-model-detail-panel.vue')
 
 	assert.match(api, /'If-Match': etag/)
 	assert.match(api, /application\/merge-patch\+json/)
@@ -49,7 +51,7 @@ test('detail editing uses If-Match and keeps status outside merge patch', () => 
 })
 
 test('list filters are server-backed and selection never crosses query or page boundaries', () => {
-	const list = read('pages/ai-models/index.vue')
+	const list = read('components/admin/workspace/ai-model-list-panel.vue')
 	const api = read('common/admin/admin-ai-model-api.js')
 
 	assert.match(api, /appendQuery\(parts, 'keyword'/)
@@ -63,7 +65,7 @@ test('list filters are server-backed and selection never crosses query or page b
 
 test('routes and dashboard expose all three custom-navigation model pages', () => {
 	const pages = JSON.parse(read('pages.json'))
-	const dashboard = read('pages/index/index.vue')
+	const dashboard = read('components/admin/workspace/dashboard-panel.vue')
 	const byPath = new Map(pages.pages.map(page => [page.path, page.style]))
 
 	for (const route of [
@@ -78,9 +80,9 @@ test('routes and dashboard expose all three custom-navigation model pages', () =
 	assert.equal(byPath.get('pages/ai-models/create')?.['app-plus']?.softinputMode, 'adjustResize')
 	assert.equal(byPath.get('pages/ai-models/detail')?.['app-plus']?.softinputMode, 'adjustResize')
 	assert.match(dashboard, /AI 模型目录/)
-	assert.match(dashboard, /\/pages\/ai-models\/index/)
+	assert.match(dashboard, /view: 'ai-models'/)
 	assert.match(dashboard, /模型图标库/)
-	assert.match(dashboard, /\/pages\/ai-model-icons\/index/)
+	assert.match(dashboard, /view: 'ai-model-icons'/)
 })
 
 test('model form selects icon public IDs and never submits a handwritten URL', () => {
@@ -96,10 +98,22 @@ test('model form selects icon public IDs and never submits a handwritten URL', (
 	assert.doesNotMatch(formView, /图标地址/)
 })
 
+test('model billing exposes cached input ratio independently from Redis caching', () => {
+	const formLogic = read('common/admin/admin-ai-model-form.js')
+	const formView = read('components/admin/ai-model-form.vue')
+	const catalog = read('components/admin/workspace/ai-model-list-panel.vue')
+
+	assert.match(formLogic, /cachedInputRatio/)
+	assert.match(formLogic, /normalizeRatio\(form\?\.cachedInputRatio/)
+	assert.match(formView, /缓存输入倍率/)
+	assert.match(formView, /上游 cached_tokens，与 Redis 无关/)
+	assert.match(catalog, /model\.cachedInputRatio/)
+})
+
 test('icon uploads reuse protected admin headers and pages never call network primitives directly', () => {
 	const http = read('common/admin/admin-http.js')
 	const api = read('common/admin/admin-ai-model-icon-api.js')
-	const page = read('pages/ai-model-icons/index.vue')
+	const page = read('components/admin/workspace/ai-model-icons-panel.vue')
 	const requestSection = http.slice(
 		http.indexOf('export async function adminRequest'),
 		http.indexOf('export async function adminUploadFile'))
@@ -151,7 +165,7 @@ test('model pages share the semantic action button without exposing physical del
 })
 
 test('model catalog provides adaptive table, cards, filter sheet, skeletons and mobile batch actions', () => {
-	const list = read('pages/ai-models/index.vue')
+	const list = read('components/admin/workspace/ai-model-list-panel.vue')
 
 	assert.match(list, /class="[^"]*\bdesktop-query-panel\b[^"]*"/)
 	assert.match(list, /class="mobile-query-panel"/)
@@ -160,7 +174,7 @@ test('model catalog provides adaptive table, cards, filter sheet, skeletons and 
 	assert.match(list, /aria-modal="true"/)
 	assert.match(list, /resetDraftFilters/)
 	assert.match(list, /applyMobileFilters/)
-	assert.match(list, /onBackPress\(\)/)
+	assert.match(list, /closeWorkspaceOverlay\(\)/)
 	assert.match(list, /class="skeleton-list"/)
 	assert.match(list, /class="mobile-batch-bar"/)
 	assert.match(list, /env\(safe-area-inset-bottom\)/)
@@ -170,9 +184,9 @@ test('model catalog provides adaptive table, cards, filter sheet, skeletons and 
 })
 
 test('model page actions keep their approved semantic color roles', () => {
-	const list = read('pages/ai-models/index.vue')
-	const create = read('pages/ai-models/create.vue')
-	const detail = read('pages/ai-models/detail.vue')
+	const list = read('components/admin/workspace/ai-model-list-panel.vue')
+	const create = read('components/admin/workspace/ai-model-create-panel.vue')
+	const detail = read('components/admin/workspace/ai-model-detail-panel.vue')
 	const theme = read('common/app-theme.scss')
 
 	assert.match(theme, /\$app-action-teal:\s*#39d6d2/i)

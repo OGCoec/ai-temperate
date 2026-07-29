@@ -7,15 +7,15 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 
 /**
- * 返回邮箱检查任务被接受时的公共 ID、初始计数和建议轮询间隔。
+ * 返回 Redis 邮箱检查任务被接受时的公共 ID、初始计数和提交状态。
  */
 public record AdminMailInspectionCreateResponse(
         @Schema(
-                description = "固定 11 位 Base64URL 任务公共 ID。",
-                minLength = 11,
-                maxLength = 11,
-                pattern = "^[A-Za-z0-9_-]{11}$",
-                example = "AAAAAAAAAAE")
+                description = "固定 22 位 Base64URL 任务公共 ID。",
+                minLength = 22,
+                maxLength = 22,
+                pattern = "^[A-Za-z0-9_-]{22}$",
+                example = "AZ9nEjRWeJCrze8SNFZ4kA")
         String jobId,
         MailInspectionType inspectionType,
         MailInspectionJobStatus status,
@@ -32,9 +32,7 @@ public record AdminMailInspectionCreateResponse(
         int dispatchedSubmissionChunkCount,
         int submissionPendingChunkCount,
         Instant submissionExpiresAt,
-        Instant createdAt,
-        @Schema(description = "建议客户端等待的毫秒数。", example = "2000")
-        long pollAfterMillis) {
+        Instant createdAt) {
 
     public static AdminMailInspectionCreateResponse from(
             MailInspectionJobCreateResult result) {
@@ -55,7 +53,6 @@ public record AdminMailInspectionCreateResponse(
                 result.dispatchedSubmissionChunkCount(),
                 result.submissionPendingChunkCount(),
                 result.submissionExpiresAt(),
-                result.createdAt(),
-                result.pollAfterMillis());
+                result.createdAt());
     }
 }

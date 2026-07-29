@@ -90,6 +90,7 @@ final class AdminAiModelControllerPatchTest {
                 List.of("chat"),
                 "openai",
                 BigDecimal.ONE,
+                new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
                 true,
                 List.of(AiModelCapabilityCode.RESPONSES),

@@ -2,7 +2,7 @@ package com.example.temperate.web.admin.mailinspection;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.domain.AdminMailInspectionCreateCommand;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionJobCreateResult;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionJobSnapshot;
@@ -91,15 +91,15 @@ final class AdminMailInspectionControllerContractTest {
     }
 
     @Test
-    void publicIdOpenApiConstantsRemainElevenCharacterBase64Url() {
-        assertThat(PublicIdCodec.ENCODED_LENGTH).isEqualTo(11);
-        assertThat(PublicIdCodec.ENCODED_PATTERN)
-                .isEqualTo("^[A-Za-z0-9_-]{11}$");
+    void mailJobPublicIdUsesDedicatedTwentyTwoCharacterBase64Url() {
+        assertThat(HybridBase64UrlCodec.ENCODED_LENGTH).isEqualTo(22);
+        assertThat(HybridBase64UrlCodec.ENCODED_PATTERN)
+                .isEqualTo("^[A-Za-z0-9_-]{22}$");
     }
 
     @Test
     void createAndQueryResponsesArePrivateNoStore() {
-        String publicId = new PublicIdCodec().encode(1L);
+        String publicId = new HybridBase64UrlCodec().encode(new byte[16]);
         Instant now = Instant.parse("2026-07-28T10:00:00Z");
         AdminMailInspectionJobService service = new AdminMailInspectionJobService() {
             @Override
@@ -114,12 +114,11 @@ final class AdminMailInspectionControllerContractTest {
                         1,
                         0,
                         0,
-                        now,
-                        2000));
+                        now));
             }
 
             @Override
-            public MailInspectionJobSnapshot get(long internalJobId) {
+            public MailInspectionJobSnapshot get(String jobId) {
                 return new MailInspectionJobSnapshot(
                         publicId,
                         MailInspectionType.OPENAI_STATUS,
@@ -143,8 +142,8 @@ final class AdminMailInspectionControllerContractTest {
 
             @Override
             public Mono<MailInspectionJobSnapshot> resume(
-                    long internalJobId) {
-                return Mono.just(get(internalJobId));
+                    String jobId) {
+                return Mono.just(get(jobId));
             }
         };
         AdminMailInspectionController controller =
@@ -156,7 +155,7 @@ final class AdminMailInspectionControllerContractTest {
         var created = controller.createOpenAi(
                 "550e8400-e29b-41d4-a716-446655440000",
                 request).block();
-        var queried = controller.get(new MailInspectionJobPublicId(publicId, 1L));
+        var queried = controller.get(new MailInspectionJobPublicId(publicId));
 
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(created.getHeaders().getFirst(HttpHeaders.LOCATION))

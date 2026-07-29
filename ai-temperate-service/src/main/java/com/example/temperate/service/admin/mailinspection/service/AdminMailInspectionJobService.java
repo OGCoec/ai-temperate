@@ -8,7 +8,7 @@ import java.util.List;
 import reactor.core.publisher.Mono;
 
 /**
- * 定义管理员创建和查询四类进程内邮箱检查任务的统一业务入口。
+ * 定义管理员创建、查询和恢复四类 Redis 邮箱检查任务的统一业务入口。
  */
 public interface AdminMailInspectionJobService {
 
@@ -16,9 +16,9 @@ public interface AdminMailInspectionJobService {
             MailInspectionType type,
             AdminMailInspectionCreateCommand command);
 
-    MailInspectionJobSnapshot get(long internalJobId);
+    MailInspectionJobSnapshot get(String jobId);
 
     List<MailInspectionJobSnapshot> getRecovered();
 
-    Mono<MailInspectionJobSnapshot> resume(long internalJobId);
+    Mono<MailInspectionJobSnapshot> resume(String jobId);
 }

@@ -252,6 +252,44 @@ app:
     login-flow-ttl: 10m
     # 测试管理员邮箱检查只验证属性绑定，不创建 Rabbit 连接或执行外部邮箱调用。
     mail-inspection:
+      # 测试 Redis JobStore 使用非生产固定边界且不连接生产 Redis。
+      job:
+        # 测试同时最多保留两个活动任务类型。
+        max-active-jobs: 2
+        # 测试同一检查类型只允许一个活动任务。
+        max-active-jobs-per-type: 1
+        # 测试任务默认使用四个业务并发额度。
+        default-business-concurrency: 4
+        # 测试任务业务并发上限保持六十四。
+        max-business-concurrency: 64
+        # 测试单行字符边界保持十二 KiB。
+        max-line-chars: 12288
+        # 测试请求 UTF-8 总量边界保持一 MiB。
+        max-request-bytes: 1048576
+        # 测试活动租约固定十五分钟。
+        active-lease: 15m
+        # 测试终态保留固定十五分钟。
+        terminal-retention: 15m
+        # 测试租约心跳固定三十秒。
+        lease-heartbeat-interval: 30s
+        # 测试单任务最多一万行。
+        max-credential-lines: 10000
+        # 测试结果桶固定三十二条。
+        result-bucket-size: 32
+        # 测试 SSE 快照批次固定一百条。
+        snapshot-batch-size: 100
+        # 固定测试 HMAC 密钥恰好解码为三十二字节，不对应生产环境。
+        key-hmac-secret-base64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # 测试 SSE 属性只验证绑定，不建立真实浏览器连接。
+      sse:
+        # 测试心跳间隔固定十五秒。
+        heartbeat-interval: 15s
+        # 测试空闲重连阈值固定四十五秒。
+        idle-reconnect-threshold: 45s
+        # 测试连接超时固定三十分钟。
+        connection-timeout: 30m
+        # 测试每个管理员会话最多四条连接。
+        max-connections-per-admin: 4
       # 测试环境关闭真实 Rabbit 工作调度并使用 Fail Closed 替身。
       rabbit:
         # 普通上下文测试不注册 Rabbit 拓扑、消费者或启动恢复扫描器。

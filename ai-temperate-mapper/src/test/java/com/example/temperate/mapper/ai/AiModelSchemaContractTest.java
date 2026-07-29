@@ -22,6 +22,9 @@ final class AiModelSchemaContractTest {
         assertThat(sql)
                 .contains("id BIGINT NOT NULL")
                 .doesNotContain("id BIGINT GENERATED ALWAYS AS IDENTITY")
+                .contains("cached_input_ratio NUMERIC(20, 8) NOT NULL DEFAULT 1")
+                .contains("CHECK (cached_input_ratio >= 0)")
+                .contains("COMMENT ON COLUMN ai_model.cached_input_ratio")
                 .contains("is_enabled BOOLEAN NOT NULL DEFAULT FALSE")
                 .contains("created_at DATE NOT NULL DEFAULT CURRENT_DATE")
                 .contains("NEW.updated_at = CURRENT_DATE");

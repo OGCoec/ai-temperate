@@ -1,7 +1,7 @@
 package com.example.temperate.service.admin.mailinspection.domain;
 
 /**
- * 定义进程内邮箱检查任务从排队到结束的公开生命周期状态。
+ * 定义 Redis 邮箱检查任务从持久提交到终态保留的公开生命周期状态。
  */
 public enum MailInspectionJobStatus {
     DISPATCHING,
@@ -12,5 +12,13 @@ public enum MailInspectionJobStatus {
     RECOVERY_FAILED,
     COMPLETED,
     FAILED,
-    ABANDONED
+    ABANDONED;
+
+    public boolean terminal() {
+        return this == COMPLETED || this == FAILED || this == ABANDONED;
+    }
+
+    public boolean active() {
+        return !terminal();
+    }
 }

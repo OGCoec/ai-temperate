@@ -119,7 +119,7 @@ final class AdminAiModelControllerContractTest {
     void createRequestUsesIconPublicIdAndDoesNotExposeLegacyIconUrlInput() {
         assertThat(Arrays.stream(AdminAiModelController.CreateRequest.class.getRecordComponents())
                 .map(component -> component.getName()))
-                .contains("iconPublicId")
+                .contains("iconPublicId", "inputRatio", "cachedInputRatio", "outputRatio")
                 .doesNotContain("icon");
     }
 
@@ -134,6 +134,7 @@ final class AdminAiModelControllerContractTest {
                   "tags": ["chat"],
                   "vendor": "openai",
                   "inputRatio": 1,
+                  "cachedInputRatio": 0.1,
                   "outputRatio": 1,
                   "enabled": false,
                   "capabilities": ["RESPONSES"]

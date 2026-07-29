@@ -9,4 +9,9 @@ public final class MailInspectionPoisonMessageException
     public MailInspectionPoisonMessageException(String message) {
         super(message);
     }
+
+    public MailInspectionPoisonMessageException(
+            String message, Throwable cause) {
+        super(message, cause);
+    }
 }

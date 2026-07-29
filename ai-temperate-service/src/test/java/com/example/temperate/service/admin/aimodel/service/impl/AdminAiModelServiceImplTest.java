@@ -115,6 +115,8 @@ final class AdminAiModelServiceImplTest {
         verify(modelMapper).insert(modelCaptor.capture());
         assertThat(modelCaptor.getValue().getId()).isEqualTo(MODEL_ID);
         assertThat(modelCaptor.getValue().getEnabled()).isTrue();
+        assertThat(modelCaptor.getValue().getCachedInputRatio())
+                .isEqualByComparingTo("0.50000000");
         assertThat(modelCaptor.getValue().getModelNameTokensJson())
                 .isEqualTo("[\"token\"]");
         assertThat(modelCaptor.getValue().getDescriptionTokensJson())
@@ -187,6 +189,7 @@ final class AdminAiModelServiceImplTest {
                 List.of("chat"),
                 "OpenAI",
                 BigDecimal.ONE,
+                new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
                 false,
                 List.of("RESPONSES")));
@@ -210,6 +213,7 @@ final class AdminAiModelServiceImplTest {
                 List.of("chat"),
                 "OpenAI",
                 BigDecimal.ONE,
+                new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
                 false,
                 List.of("RESPONSES"))))
@@ -357,6 +361,7 @@ final class AdminAiModelServiceImplTest {
                 service.detail(publicIdCodec.encode(MODEL_ID));
 
         assertThat(result.rowVersion()).isEqualTo(7L);
+        assertThat(result.cachedInputRatio()).isEqualByComparingTo("0.50000000");
         assertThat(result.capabilities())
                 .containsExactly(AiModelCapabilityCode.RESPONSES);
         assertThat(result.availableCapabilities())
@@ -370,6 +375,7 @@ final class AdminAiModelServiceImplTest {
         AiModel after = model(MODEL_ID, true);
         after.setModelName("gpt-5.6");
         after.setDescription(null);
+        after.setCachedInputRatio(new BigDecimal("0.25000000"));
         after.setRowVersion(4L);
         when(modelMapper.findById(MODEL_ID)).thenReturn(before, after);
         when(modelMapper.updateEditable(any(AiModel.class), org.mockito.ArgumentMatchers.eq(3L)))
@@ -391,6 +397,8 @@ final class AdminAiModelServiceImplTest {
         verify(modelMapper).updateEditable(updated.capture(), org.mockito.ArgumentMatchers.eq(3L));
         assertThat(updated.getValue().getModelName()).isEqualTo("gpt-5.6");
         assertThat(updated.getValue().getDescription()).isNull();
+        assertThat(updated.getValue().getCachedInputRatio())
+                .isEqualByComparingTo("0.25000000");
         verify(capabilityMapper).deleteByAiModelId(MODEL_ID);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiModelCapability>> capabilities =
@@ -423,6 +431,7 @@ final class AdminAiModelServiceImplTest {
                         AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
                         AiModelPatchField.of(null),
+                        AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
@@ -509,6 +518,7 @@ final class AdminAiModelServiceImplTest {
                 List.of("chat"),
                 "OpenAI",
                 BigDecimal.ONE,
+                new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
                 enabled,
                 capabilities);
@@ -522,6 +532,7 @@ final class AdminAiModelServiceImplTest {
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
+                AiModelPatchField.of(new BigDecimal("0.25000000")),
                 AiModelPatchField.absent(),
                 AiModelPatchField.of(List.of("RESPONSES", "IMAGE")));
     }
@@ -530,6 +541,7 @@ final class AdminAiModelServiceImplTest {
         return new AdminAiModelPatchCommand(
                 AiModelPatchField.absent(),
                 AiModelPatchField.of(description),
+                AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
@@ -548,6 +560,7 @@ final class AdminAiModelServiceImplTest {
         model.setDescriptionTokensJson("[]");
         model.setVendor("openai");
         model.setInputRatio(BigDecimal.ONE);
+        model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(BigDecimal.TWO);
         model.setEnabled(enabled);
         model.setRowVersion(1L);

@@ -8,6 +8,7 @@ import {
 
 const ENV = {
 	API_UPSTREAM_ORIGIN: 'https://api.niko000o.site',
+	SSE_ROUTE_LOG_SAMPLE_RATE: '0',
 	EDGE_PROXY_HMAC_SECRET_BASE64: Buffer
 		.from('worker-edge-test-secret-0123456789abcdef')
 		.toString('base64')
@@ -24,7 +25,8 @@ function request(host, path, options = {}) {
 	const value = new Request(`https://${host}${path}`, {
 		method: options.method || 'GET',
 		headers,
-		body: options.body
+		body: options.body,
+		signal: options.signal
 	})
 	Object.defineProperty(value, 'cf', {
 		value: options.cf || {
@@ -416,4 +418,99 @@ test('cross-host upstream redirects fail closed', async () => {
 
 	assert.equal(response.status, 502)
 	assert.equal(directApi.status, 502)
+})
+
+test('mail inspection SSE stays streaming and preserves safe correlation headers', async () => {
+	const jobId = 'AZ9nEjRWeJCrze8SNFZ4kA'
+	const body = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(
+				'event: heartbeat\nid: 7\ndata: {"revision":7,"data":{}}\n\n'))
+		}
+	})
+	let upstreamRequest
+	const response = await handleRequest(
+		request(
+			'admin.niko000o.site',
+			`/api/admin/mail-inspection/jobs/${jobId}/events`,
+			{
+				headers: {
+					Accept: 'text/event-stream',
+					'Last-Event-ID': '6',
+					'X-Trace-Id': 'trace-test'
+				}
+			}),
+		ENV,
+		runtime(upstream => {
+			upstreamRequest = upstream
+			return new Response(body, {
+				headers: {
+					'Content-Type': 'text/event-stream',
+					'X-Trace-Id': 'trace-origin'
+				}
+			})
+		})
+	)
+
+	assert.equal(upstreamRequest.headers.get('Last-Event-ID'), '6')
+	assert.equal(upstreamRequest.headers.get('X-Trace-Id'), 'trace-test')
+	assert.equal(response.headers.get('Content-Type'), 'text/event-stream')
+	assert.equal(response.headers.get('X-Trace-Id'), 'trace-origin')
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+	assert.equal(
+		response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+	assert.equal(response.body, body)
+})
+
+test('mail inspection SSE propagates client cancellation to the Origin request', async () => {
+	const controller = new AbortController()
+	let upstreamSignal
+	let releaseFetch
+	let markCaptured
+	const captured = new Promise(resolve => { markCaptured = resolve })
+	const responsePromise = handleRequest(
+		request(
+			'admin.niko000o.site',
+			'/api/admin/mail-inspection/jobs/AZ9nEjRWeJCrze8SNFZ4kA/events',
+			{
+				headers: { Accept: 'text/event-stream' },
+				signal: controller.signal
+			}),
+		ENV,
+		runtime(upstream => {
+			upstreamSignal = upstream.signal
+			markCaptured()
+			return new Promise(resolve => { releaseFetch = resolve })
+		})
+	)
+	await captured
+	assert.equal(upstreamSignal.aborted, false)
+	controller.abort()
+	assert.equal(upstreamSignal.aborted, true)
+	releaseFetch(new Response(null, {
+		headers: { 'Content-Type': 'text/event-stream' }
+	}))
+	await responsePromise
+})
+
+test('sampled SSE logs use a route template and never contain the Job ID', async () => {
+	const entries = []
+	const jobId = 'AZ9nEjRWeJCrze8SNFZ4kA'
+	await handleRequest(
+		request(
+			'admin.niko000o.site',
+			`/api/admin/mail-inspection/jobs/${jobId}/events`),
+		{ ...ENV, SSE_ROUTE_LOG_SAMPLE_RATE: '1' },
+		{
+			...runtime(() => new Response(null, {
+				headers: { 'Content-Type': 'text/event-stream' }
+			})),
+			random: () => 0,
+			log: { info: value => entries.push(value) }
+		}
+	)
+	assert.equal(entries.length, 1)
+	assert.match(entries[0], /\/jobs\/\{jobId\}\/events/)
+	assert.doesNotMatch(entries[0], new RegExp(jobId))
 })

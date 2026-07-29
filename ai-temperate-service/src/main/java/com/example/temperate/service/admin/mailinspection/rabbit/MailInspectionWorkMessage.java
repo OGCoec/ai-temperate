@@ -13,8 +13,8 @@ public record MailInspectionWorkMessage(
         int schemaVersion,
         Instant occurredAt,
         String traceId,
-        long jobInternalId,
         String jobId,
+        String jobKeyHash,
         MailInspectionType inspectionType,
         int lineNumber,
         int requestedCount,
@@ -28,54 +28,13 @@ public record MailInspectionWorkMessage(
         String requestFingerprint,
         Integer sourceChunkIndex) {
 
-    /**
-     * 保留v1工作消息构造边界，使升级前已经进入Rabbit的消息仍可反序列化、恢复和消费。
-     */
-    public MailInspectionWorkMessage(
-            String messageId,
-            String eventType,
-            int schemaVersion,
-            Instant occurredAt,
-            String traceId,
-            long jobInternalId,
-            String jobId,
-            MailInspectionType inspectionType,
-            int lineNumber,
-            int requestedCount,
-            int acceptedCount,
-            int duplicateCount,
-            int invalidCount,
-            int businessConcurrency,
-            Instant createdAt,
-            MailInspectionProtectedPayload protectedPayload) {
-        this(
-                messageId,
-                eventType,
-                schemaVersion,
-                occurredAt,
-                traceId,
-                jobInternalId,
-                jobId,
-                inspectionType,
-                lineNumber,
-                requestedCount,
-                acceptedCount,
-                duplicateCount,
-                invalidCount,
-                businessConcurrency,
-                createdAt,
-                protectedPayload,
-                null,
-                null,
-                null);
-    }
-
     public MailInspectionWorkMessage {
         Objects.requireNonNull(messageId, "messageId must not be null");
         Objects.requireNonNull(eventType, "eventType must not be null");
         Objects.requireNonNull(occurredAt, "occurredAt must not be null");
         Objects.requireNonNull(traceId, "traceId must not be null");
         Objects.requireNonNull(jobId, "jobId must not be null");
+        Objects.requireNonNull(jobKeyHash, "jobKeyHash must not be null");
         Objects.requireNonNull(
                 inspectionType,
                 "inspectionType must not be null");
@@ -83,17 +42,19 @@ public record MailInspectionWorkMessage(
         Objects.requireNonNull(
                 protectedPayload,
                 "protectedPayload must not be null");
-        if (schemaVersion >= MailInspectionRabbitNames.WORK_SCHEMA_VERSION) {
-            Objects.requireNonNull(
-                    clientRequestId,
-                    "clientRequestId must not be null for work v2");
-            Objects.requireNonNull(
-                    requestFingerprint,
-                    "requestFingerprint must not be null for work v2");
-            if (sourceChunkIndex == null || sourceChunkIndex < 0) {
-                throw new IllegalArgumentException(
-                        "sourceChunkIndex must be non-negative for work v2");
-            }
+        Objects.requireNonNull(
+                clientRequestId,
+                "clientRequestId must not be null for work v2");
+        Objects.requireNonNull(
+                requestFingerprint,
+                "requestFingerprint must not be null for work v2");
+        if (schemaVersion != MailInspectionRabbitNames.WORK_SCHEMA_VERSION
+                || !jobId.matches("^[A-Za-z0-9_-]{22}$")
+                || !jobKeyHash.matches("^[A-Za-z0-9_-]{43}$")
+                || sourceChunkIndex == null
+                || sourceChunkIndex < 0) {
+            throw new IllegalArgumentException(
+                    "work job identity, schema or source chunk is invalid");
         }
     }
 
@@ -101,8 +62,8 @@ public record MailInspectionWorkMessage(
     public String toString() {
         return "MailInspectionWorkMessage[messageId="
                 + messageId
-                + ",jobId="
-                + jobId
+                + ",jobRef="
+                + jobKeyHash.substring(0, 16)
                 + ",inspectionType="
                 + inspectionType
                 + ",lineNumber="

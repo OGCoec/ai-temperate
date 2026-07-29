@@ -10,6 +10,7 @@ CREATE TABLE ai_model (
     tags JSONB NOT NULL DEFAULT '[]'::JSONB,
     vendor VARCHAR(128) NOT NULL,
     input_ratio NUMERIC(20, 8) NOT NULL DEFAULT 1,
+    cached_input_ratio NUMERIC(20, 8) NOT NULL DEFAULT 1,
     output_ratio NUMERIC(20, 8) NOT NULL DEFAULT 1,
     is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     row_version BIGINT NOT NULL DEFAULT 1,
@@ -29,6 +30,8 @@ CREATE TABLE ai_model (
         CHECK (JSONB_TYPEOF(tags) = 'array'),
     CONSTRAINT chk_ai_model_input_ratio
         CHECK (input_ratio >= 0),
+    CONSTRAINT chk_ai_model_cached_input_ratio
+        CHECK (cached_input_ratio >= 0),
     CONSTRAINT chk_ai_model_output_ratio
         CHECK (output_ratio >= 0),
     CONSTRAINT chk_ai_model_row_version
@@ -130,8 +133,12 @@ COMMENT ON COLUMN ai_model.description_tokens IS '模型描述经 Java IK 分词
 COMMENT ON COLUMN ai_model.icon_id IS '可选图标资源内部 ID，逻辑关联 ai_model_icon.id，不建立物理外键';
 COMMENT ON COLUMN ai_model.tags IS '模型标签 JSON 数组';
 COMMENT ON COLUMN ai_model.vendor IS '模型厂商名称或稳定厂商代码';
-COMMENT ON COLUMN ai_model.input_ratio IS '输入 Token 绝对倍率';
-COMMENT ON COLUMN ai_model.output_ratio IS '输出 Token 绝对倍率；粗略额度=(输入Token×输入倍率+输出Token×输出倍率)×分组倍率';
+COMMENT ON COLUMN ai_model.input_ratio IS
+    '未命中上游 Prompt Cache 的输入 Token 绝对计费倍率';
+COMMENT ON COLUMN ai_model.cached_input_ratio IS
+    '上游模型 Prompt Cache 命中输入 Token 的绝对计费倍率，与本项目 Redis 缓存无关';
+COMMENT ON COLUMN ai_model.output_ratio IS
+    '输出 Token 绝对倍率；粗略额度=(未缓存输入Token×输入倍率+缓存命中Token×缓存输入倍率+输出Token×输出倍率)×分组倍率';
 COMMENT ON COLUMN ai_model.is_enabled IS '模型总开关；TRUE=启用，FALSE=禁用，默认禁用用于防止漏传配置时意外上线';
 COMMENT ON COLUMN ai_model.row_version IS '模型字段和启停状态的乐观锁版本；每次受控修改原子递增';
 COMMENT ON COLUMN ai_model.created_at IS '创建日期';

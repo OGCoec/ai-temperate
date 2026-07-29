@@ -10,9 +10,10 @@ async function loadModule() {
 
 function completeApi() {
 	return {
-		contractVersion: 3,
+		contractVersion: 4,
 		createJob() {},
 		getJob() {},
+		eventsPath() {},
 		getRecoveredJobs() {},
 		resumeJob() {}
 	}

@@ -43,6 +43,7 @@ public final class AdminMailInspectionSubmissionPayloadProtector {
             String messageId,
             String clientRequestId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             int chunkIndex,
             int chunkCount,
@@ -60,6 +61,7 @@ public final class AdminMailInspectionSubmissionPayloadProtector {
                     messageId,
                     clientRequestId,
                     jobId,
+                    jobKeyHash,
                     type,
                     chunkIndex,
                     chunkCount));
@@ -90,6 +92,7 @@ public final class AdminMailInspectionSubmissionPayloadProtector {
                     message.messageId(),
                     message.clientRequestId(),
                     message.jobId(),
+                    message.jobKeyHash(),
                     message.inspectionType(),
                     message.chunkIndex(),
                     message.chunkCount()));
@@ -117,16 +120,22 @@ public final class AdminMailInspectionSubmissionPayloadProtector {
             String messageId,
             String clientRequestId,
             String jobId,
+            String jobKeyHash,
             MailInspectionType type,
             int chunkIndex,
             int chunkCount) {
-        return (MailInspectionRabbitNames.SUBMISSION_EVENT_TYPE
+        // Schema 与事件类型进入 AAD，使 Submission v2 密文无法跨版本或跨消息类型重放。
+        return (MailInspectionRabbitNames.SUBMISSION_SCHEMA_VERSION
+                + "\u0000"
+                + MailInspectionRabbitNames.SUBMISSION_EVENT_TYPE
                 + "\u0000"
                 + messageId
                 + "\u0000"
                 + clientRequestId
                 + "\u0000"
                 + jobId
+                + "\u0000"
+                + jobKeyHash
                 + "\u0000"
                 + type.name()
                 + "\u0000"

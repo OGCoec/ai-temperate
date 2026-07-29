@@ -14,20 +14,17 @@ final class MailInspectionDiagnosticLoggingContractTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
 
     @Test
-    void recoveryLogsStableFailurePointAndRootCauseType() throws Exception {
+    void recoveryLogsStableTypeAndExceptionClass() throws Exception {
         String source = source(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/"
                         + "admin/mailinspection/recovery/impl/"
                         + "MailInspectionRecoveryCoordinatorImpl.java");
 
         assertThat(source).contains(
-                "admin_mail_inspection_recovery_started",
-                "admin_mail_inspection_recovery_queue_failed",
-                "admin_mail_inspection_recovery_ready",
-                "failurePoint={}",
-                "rootCauseType={}",
-                "RECOVERY_BASIC_GET",
-                "RECOVERY_PAYLOAD_DECRYPT");
+                "admin_mail_inspection_recovery_terminated",
+                "admin_mail_inspection_recovery_type_unavailable",
+                "inspectionType={}",
+                "exceptionType={}");
         assertThat(source).doesNotContain(
                 "exception.getMessage()",
                 "exception.getLocalizedMessage()");
@@ -38,14 +35,28 @@ final class MailInspectionDiagnosticLoggingContractTest {
             throws Exception {
         String store = source(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/"
-                        + "admin/mailinspection/job/"
-                        + "InMemoryAdminMailInspectionJobStore.java");
+                        + "admin/mailinspection/job/impl/"
+                        + "RedisAdminMailInspectionJobStore.java");
+        String aspect = source(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/"
+                        + "admin/mailinspection/diagnostic/"
+                        + "MailInspectionDiagnosticAspect.java");
+        String publisher = source(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/"
+                        + "admin/mailinspection/event/impl/"
+                        + "RedisMailInspectionJobEventPublisherImpl.java");
 
         assertThat(store).contains(
-                "admin_mail_inspection_acceptance_initialized",
-                "admin_mail_inspection_create_rejected",
-                "admin_mail_inspection_acceptance_changed");
-        assertThat(store).doesNotContain(
+                "changeAcceptanceState",
+                "adminMailInspectionJobAcceptanceKey");
+        assertThat(publisher).contains(
+                "jobRef",
+                "admin_mail_inspection_event_publish_failed");
+        assertThat(aspect).contains(
+                "admin_mail_inspection_operation",
+                "failureCategory={}",
+                "exceptionType={}");
+        assertThat(store + publisher + aspect).doesNotContain(
                 "exception.getMessage()",
                 "exception.getLocalizedMessage()",
                 "protectedPayload",

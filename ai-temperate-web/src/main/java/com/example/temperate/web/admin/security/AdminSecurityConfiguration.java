@@ -76,12 +76,15 @@ public class AdminSecurityConfiguration {
                 "X-Admin-Login-Flow-Token",
                 "X-Admin-CSRF-Token",
                 "Idempotency-Key",
+                "Last-Event-ID",
+                "X-Trace-Id",
                 "X-Admin-Challenge",
                 PreAuthTransport.APP_HEADER,
                 PreAuthTransport.RESET_HEADER,
                 "X-Auth-Attempt-Id"));
         configuration.setExposedHeaders(List.of(
                 "X-Trace-Id",
+                "X-Accel-Buffering",
                 "Idempotency-Replayed"));
         configuration.setMaxAge(600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

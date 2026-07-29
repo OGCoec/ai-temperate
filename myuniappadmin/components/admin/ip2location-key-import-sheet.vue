@@ -39,7 +39,7 @@
 						已识别 {{ parsed.apiKeys.length }} 条，已去除 {{ parsed.duplicateCount }} 条重复记录。
 					</text>
 					<text v-if="fileName" class="file-note">{{ fileName }} · {{ formattedFileSize }}</text>
-					<text v-if="!filePickerAvailable" class="field-help">当前 Android 运行时请使用多行粘贴。</text>
+					<text v-if="!filePickerAvailable" class="field-help">Android 当前版本请使用多行粘贴。</text>
 				</view>
 
 				<view class="field-grid">

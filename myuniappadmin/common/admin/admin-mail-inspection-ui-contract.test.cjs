@@ -12,8 +12,7 @@ const pages = [
 	'pages/mail-inspection/ip2location/index.vue'
 ]
 const components = [
-	'components/admin/mail-inspection-workspace.vue',
-	'components/admin/mail-inspection-business-tabs.vue',
+	'components/admin/workspace/mail-inspection-panel.vue',
 	'components/admin/mail-inspection-credential-input.vue',
 	'components/admin/mail-inspection-job-progress.vue',
 	'components/admin/mail-inspection-recovered-jobs.vue',
@@ -23,7 +22,7 @@ const components = [
 
 test('dashboard exposes one entry and pages provide three custom-navigation routes', () => {
 	const routes = JSON.parse(read('pages.json'))
-	const dashboard = read('pages/index/index.vue')
+	const dashboard = read('components/admin/workspace/dashboard-panel.vue')
 	const byPath = new Map(routes.pages.map(page => [page.path, page.style]))
 
 	for (const route of [
@@ -36,12 +35,12 @@ test('dashboard exposes one entry and pages provide three custom-navigation rout
 		assert.equal(byPath.get(route)?.['app-plus']?.softinputMode, 'adjustResize')
 	}
 	assert.match(dashboard, /邮箱证据检查/)
-	assert.match(dashboard, /\/pages\/mail-inspection\/openai\/index/)
+	assert.match(dashboard, /view: 'mail-openai'/)
 })
 
 test('business concurrency and restart recovery require explicit administrator actions', () => {
 	const input = read('components/admin/mail-inspection-credential-input.vue')
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
 	const recovery = read('components/admin/mail-inspection-recovered-jobs.vue')
 	const api = read('common/admin/admin-mail-inspection-api.js')
 
@@ -73,8 +72,8 @@ test('H5 development assets explicitly disable browser caching', () => {
 	assert.match(vite, /Pragma:\s*'no-cache'/)
 })
 
-test('workspace validates one shared API instance before restoring or polling', () => {
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
+test('workspace validates one shared API instance before restoring SSE', () => {
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
 	const contract = read('common/admin/mail-inspection-api-contract.js')
 
 	assert.match(workspace, /requireAdminMailInspectionApi\(adminMailInspectionApi\)/)
@@ -84,14 +83,25 @@ test('workspace validates one shared API instance before restoring or polling', 
 	assert.match(contract, /前端资源版本不一致，请清除本站缓存后重新加载。/)
 })
 
-test('three thin pages share one workspace and IP2Location alone exposes two modes', () => {
+test('three legacy mail pages redirect and IP2Location alone exposes two workspace modes', () => {
 	const sources = pages.map(read)
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
-	assert.ok(sources.every(source => /MailInspectionWorkspace/.test(source)))
-	assert.match(workspace, /MailInspectionBusinessTabs/)
-	assert.match(sources[2], /IP2LOCATION_REGISTRATION/)
-	assert.match(sources[2], /IP2LOCATION_VERIFY_LINK/)
-	assert.doesNotMatch(`${sources[0]}\n${sources[1]}`, /IP2LOCATION_VERIFY_LINK/)
+	const workspace = read('pages/admin/workspace.vue')
+	const panel = read('components/admin/workspace/mail-inspection-panel.vue')
+	assert.ok(sources.every(source => /redirectLegacyAdminWorkspace/.test(source)))
+	assert.doesNotMatch(panel, /MailInspectionBusinessTabs/)
+	assert.match(workspace, /IP2LOCATION_REGISTRATION/)
+	assert.match(workspace, /IP2LOCATION_VERIFY_LINK/)
+	assert.match(panel, /showIp2Modes/)
+})
+
+test('IP2Location mode labels are centered inside both controls', () => {
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
+	const rule = workspace.match(/\.mode-tabs button\s*\{([^}]*)\}/s)?.[1] || ''
+
+	assert.match(rule, /display:\s*flex;/)
+	assert.match(rule, /align-items:\s*center;/)
+	assert.match(rule, /justify-content:\s*center;/)
+	assert.match(rule, /text-align:\s*center;/)
 })
 
 test('mail pages use the protected API and never call network primitives directly', () => {
@@ -110,7 +120,7 @@ test('mail pages use the protected API and never call network primitives directl
 test('raw credential recovery is limited to retry exhaustion and explicit unregistered results', () => {
 	const presenter = read('common/admin/mail-inspection-presenter.js')
 	const results = read('components/admin/mail-inspection-result-list.vue')
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
 
 	assert.match(presenter, /retryable === true && result\.retryExhausted === true/)
 	assert.match(presenter, /recoverUnregisteredCredentialLines/)
@@ -140,7 +150,7 @@ test('business result controls vary by inspection type without parsing labels', 
 })
 
 test('workspace hides unregistered plaintext across lifecycle and destructive actions', () => {
-	const workspace = read('components/admin/mail-inspection-workspace.vue')
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
 	const store = read('common/admin/admin-mail-inspection-session-store.js')
 
 	assert.match(workspace, /visibleUnregisteredCredentialLines/)
@@ -151,16 +161,29 @@ test('workspace hides unregistered plaintext across lifecycle and destructive ac
 	assert.match(store, /clearMailInspectionCredentialExports/)
 })
 
-test('mail inspection has no fixed line-count limit and virtualizes large result sets', () => {
+test('missing active job expands credentials and shows one informational recovery banner', () => {
+	const workspace = read('components/admin/workspace/mail-inspection-panel.vue')
+
+	assert.match(workspace, /previousJobId\s*&&\s*!next\.jobId/)
+	assert.match(
+		workspace,
+		/next\.message\s*===\s*MAIL_INSPECTION_MISSING_JOB_MESSAGE/)
+	assert.match(workspace, /this\.inputCollapsed\s*=\s*false/)
+	assert.match(workspace, /this\.bannerMessage\s*=\s*next\.message/)
+	assert.match(workspace, /this\.bannerType\s*=\s*'info'/)
+})
+
+test('mail inspection exposes the ten-thousand-line limit and virtualizes large result sets', () => {
 	const parser = read('common/admin/mail-inspection-credential-parser.js')
 	const input = read('components/admin/mail-inspection-credential-input.vue')
 	const progress = read('components/admin/mail-inspection-job-progress.vue')
 	const results = read('components/admin/mail-inspection-result-list.vue')
 
-	assert.doesNotMatch(parser, /MAX_BATCH_SIZE|BATCH_SIZE_INVALID/)
 	assert.match(parser, /CREDENTIAL_LINES_EMPTY/)
+	assert.match(parser, /MAX_CREDENTIAL_LINES = 10000/)
 	assert.doesNotMatch(`${input}\n${progress}`, /1～100|\/100 行/)
 	assert.match(input, /总量不超过 1 MiB/)
+	assert.match(input, /10,000 行/)
 	assert.match(results, /const VIRTUAL_WINDOW_SIZE = 40/)
 	assert.match(results, /visibleResults/)
 	assert.match(results, /topSpacerStyle/)
@@ -175,7 +198,7 @@ test('Android mail credentials use a separate AES-GCM key and auth invalidation 
 	const http = read('common/admin/admin-http.js')
 	const sessionExpiry = read('common/admin/admin-session-expiry-navigation.js')
 
-	assert.match(store, /ait-admin-mail-inspection-v2/)
+	assert.match(store, /ait-admin-mail-inspection-v3/)
 	assert.match(store, /AES\/GCM\/NoPadding/)
 	assert.match(store, /AndroidKeyStore/)
 	assert.doesNotMatch(store, /ait-admin-credentials-v1/)

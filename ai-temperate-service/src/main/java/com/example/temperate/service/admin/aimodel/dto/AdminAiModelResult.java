@@ -19,6 +19,7 @@ public record AdminAiModelResult(
         List<String> tags,
         String vendor,
         BigDecimal inputRatio,
+        BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
         boolean enabled,
         List<AiModelCapabilityCode> capabilities,

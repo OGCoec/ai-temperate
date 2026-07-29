@@ -15,6 +15,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -42,7 +43,9 @@ public final class AdminWebExceptionHandler {
         this.exceptionLogger = Objects.requireNonNull(exceptionLogger);
     }
 
-    @ExceptionHandler(AdminException.class)
+    @ExceptionHandler(
+            value = AdminException.class,
+            produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiErrorResponse> handle(
             AdminException exception,
             HttpServletRequest request,
@@ -112,7 +115,9 @@ public final class AdminWebExceptionHandler {
             case HCAPTCHA_REJECTED -> HttpStatus.FORBIDDEN;
             case ADMIN_CREDENTIALS_INVALID, ADMIN_SESSION_INVALID,
                     ADMIN_FLOW_INVALID -> HttpStatus.UNAUTHORIZED;
-            case ADMIN_RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
+            case ADMIN_RATE_LIMITED,
+                    ADMIN_MAIL_INSPECTION_SSE_CONNECTION_LIMIT ->
+                    HttpStatus.TOO_MANY_REQUESTS;
             default -> HttpStatus.BAD_REQUEST;
         };
     }
@@ -147,9 +152,11 @@ public final class AdminWebExceptionHandler {
             case ADMIN_MAIL_INSPECTION_SUBMISSION_INCOMPLETE ->
                     "部分凭证尚未持久化，请使用原提交编号继续确认。";
             case ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND ->
-                    "邮箱检查任务不存在或已过期。";
+                    "原检查任务已过期或不存在，请重新创建检查任务。";
             case ADMIN_MAIL_INSPECTION_JOB_CONFLICT ->
                     "同类邮箱检查任务正在运行或任务容量已满。";
+            case ADMIN_MAIL_INSPECTION_SSE_CONNECTION_LIMIT ->
+                    "当前管理员会话的实时连接数量已达到上限。";
             case ADMIN_MAIL_INSPECTION_TYPE_UNAVAILABLE ->
                     "邮箱检查策略暂时不可用。";
             case ADMIN_MAIL_INSPECTION_UNAVAILABLE ->

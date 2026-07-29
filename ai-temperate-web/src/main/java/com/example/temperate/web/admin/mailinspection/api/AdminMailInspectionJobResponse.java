@@ -9,18 +9,22 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 返回进程内邮箱检查任务当前生命周期、计数、汇总和按行号排序的安全结果。
+ * 返回 Redis 邮箱检查任务当前修订号、生命周期、计数、汇总和按行号排序的安全结果。
  */
 public record AdminMailInspectionJobResponse(
         @Schema(
-                minLength = 11,
-                maxLength = 11,
-                pattern = "^[A-Za-z0-9_-]{11}$",
-                example = "AAAAAAAAAAE")
+                minLength = 22,
+                maxLength = 22,
+                pattern = "^[A-Za-z0-9_-]{22}$",
+                example = "AZ9nEjRWeJCrze8SNFZ4kA")
         String jobId,
+        long revision,
         MailInspectionType inspectionType,
         MailInspectionJobStatus status,
         int requestedCount,
+        int acceptedCount,
+        int duplicateCount,
+        int invalidCount,
         int processedCount,
         int runningCount,
         int queuedCount,
@@ -55,9 +59,13 @@ public record AdminMailInspectionJobResponse(
             MailInspectionJobSnapshot snapshot) {
         return new AdminMailInspectionJobResponse(
                 snapshot.jobId(),
+                snapshot.revision(),
                 snapshot.inspectionType(),
                 snapshot.status(),
                 snapshot.requestedCount(),
+                snapshot.acceptedCount(),
+                snapshot.duplicateCount(),
+                snapshot.invalidCount(),
                 snapshot.processedCount(),
                 snapshot.runningCount(),
                 snapshot.queuedCount(),
@@ -90,9 +98,7 @@ public record AdminMailInspectionJobResponse(
 
     @Override
     public String toString() {
-        return "AdminMailInspectionJobResponse[jobId="
-                + jobId
-                + ",status="
+        return "AdminMailInspectionJobResponse[status="
                 + status
                 + ",results=protected]";
     }

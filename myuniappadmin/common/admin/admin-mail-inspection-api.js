@@ -2,7 +2,7 @@ import { adminRequest } from './admin-http.js'
 
 import { requireMailInspectionClientRequestId } from './mail-inspection-idempotency.js'
 
-export const ADMIN_MAIL_INSPECTION_API_CONTRACT_VERSION = 3
+export const ADMIN_MAIL_INSPECTION_API_CONTRACT_VERSION = 4
 
 export const MAIL_INSPECTION_TYPES = Object.freeze({
 	OPENAI_STATUS: 'OPENAI_STATUS',
@@ -29,7 +29,7 @@ const JOB_STATUSES = new Set([
 	'COMPLETED',
 	'FAILED'
 ])
-const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
+const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/
 
 function apiError(code, message) {
 	const error = new Error(message)
@@ -94,8 +94,7 @@ function validateCreateResponse(response) {
 		|| !requireCount(response.dispatchedSubmissionChunkCount)
 		|| !requireCount(response.submissionPendingChunkCount)
 		|| !Number.isInteger(response.requestedBusinessConcurrency)
-		|| !Number.isInteger(response.appliedBusinessConcurrency)
-		|| !Number.isFinite(Number(response.pollAfterMillis))) {
+		|| !Number.isInteger(response.appliedBusinessConcurrency)) {
 		throw apiError('MAIL_INSPECTION_RESPONSE_INVALID', '邮箱检查任务创建响应无效。')
 	}
 	return Object.freeze({
@@ -115,8 +114,7 @@ function validateCreateResponse(response) {
 		dispatchedSubmissionChunkCount: response.dispatchedSubmissionChunkCount,
 		submissionPendingChunkCount: response.submissionPendingChunkCount,
 		submissionExpiresAt: response.submissionExpiresAt || null,
-		createdAt: response.createdAt || null,
-		pollAfterMillis: Number(response.pollAfterMillis)
+		createdAt: response.createdAt || null
 	})
 }
 
@@ -150,7 +148,11 @@ function validateJobResponse(response) {
 		|| !PUBLIC_ID_PATTERN.test(String(response.jobId || ''))
 		|| !Object.values(MAIL_INSPECTION_TYPES).includes(response.inspectionType)
 		|| !JOB_STATUSES.has(response.status)
+		|| !requireCount(response.revision)
 		|| !requireCount(response.requestedCount)
+		|| !requireCount(response.acceptedCount)
+		|| !requireCount(response.duplicateCount)
+		|| !requireCount(response.invalidCount)
 		|| !requireCount(response.processedCount)
 		|| !requireCount(response.runningCount)
 		|| !requireCount(response.queuedCount)
@@ -162,9 +164,13 @@ function validateJobResponse(response) {
 	}
 	return Object.freeze({
 		jobId: response.jobId,
+		revision: response.revision,
 		inspectionType: response.inspectionType,
 		status: requireJobStatus(response.status),
 		requestedCount: response.requestedCount,
+		acceptedCount: response.acceptedCount,
+		duplicateCount: response.duplicateCount,
+		invalidCount: response.invalidCount,
 		processedCount: response.processedCount,
 		runningCount: response.runningCount,
 		queuedCount: response.queuedCount,
@@ -266,6 +272,11 @@ export function createAdminMailInspectionApi(request = adminRequest) {
 				`/api/admin/mail-inspection/jobs/${encodeURIComponent(publicId)}`,
 				{ method: 'GET', timeout: 10000 })
 			return validateJobResponse(response)
+		},
+
+		eventsPath(jobId) {
+			const publicId = requirePublicId(jobId)
+			return `/api/admin/mail-inspection/jobs/${encodeURIComponent(publicId)}/events`
 		},
 
 		async getRecoveredJobs() {

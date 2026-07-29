@@ -5,11 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.temperate.web.admin.security.AdminClientPlatformResolver;
 import com.example.temperate.web.admin.security.AdminSecurityConfiguration;
 import com.example.temperate.web.admin.security.AdminWebMvcConfiguration;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -26,14 +26,15 @@ final class AdminMailInspectionSecurityContractTest {
             "/api/admin/mail-inspection/ip2location-registration-jobs",
             "/api/admin/mail-inspection/ip2location-verify-link-jobs",
             "/api/admin/mail-inspection/recovered-jobs",
-            "/api/admin/mail-inspection/jobs/AAAAAAAAAAE/resume");
+            "/api/admin/mail-inspection/jobs/AZ9nEjRWeJCrze8SNFZ4kA/resume",
+            "/api/admin/mail-inspection/jobs/AZ9nEjRWeJCrze8SNFZ4kA/events");
 
     private static final List<String> POST_ROUTES = List.of(
             "/api/admin/mail-inspection/openai-status-jobs",
             "/api/admin/mail-inspection/kiro-status-jobs",
             "/api/admin/mail-inspection/ip2location-registration-jobs",
             "/api/admin/mail-inspection/ip2location-verify-link-jobs",
-            "/api/admin/mail-inspection/jobs/AAAAAAAAAAE/resume");
+            "/api/admin/mail-inspection/jobs/AZ9nEjRWeJCrze8SNFZ4kA/resume");
 
     @Test
     void routesAreNotAddedToPublicAdministratorPaths() throws Exception {

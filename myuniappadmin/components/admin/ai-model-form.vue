@@ -66,7 +66,7 @@
 			<view class="section-heading">
 				<view>
 					<text class="section-title">计费倍率</text>
-					<text class="section-copy">输入和输出倍率独立保存，最多保留八位小数。</text>
+					<text class="section-copy">普通输入、缓存输入和输出倍率独立保存，最多保留八位小数；缓存输入只用于上游 cached_tokens，与 Redis 无关。</text>
 				</view>
 			</view>
 			<view class="ratio-grid">
@@ -87,6 +87,24 @@
 						/>
 					</view>
 					<text v-if="errors.inputRatio" id="model-input-ratio-error" class="field-error" role="alert">{{ errors.inputRatio }}</text>
+				</view>
+				<view class="ratio-field">
+					<text class="field-label">缓存输入倍率</text>
+					<view class="ratio-control">
+						<text aria-hidden="true">CACHE</text>
+						<input
+							type="text"
+							inputmode="decimal"
+							:value="modelValue.cachedInputRatio"
+							:disabled="readonly || busy"
+							:aria-invalid="Boolean(errors.cachedInputRatio)"
+							:aria-describedby="errors.cachedInputRatio ? 'model-cached-input-ratio-error' : undefined"
+							aria-label="缓存输入倍率"
+							placeholder="1.00000000"
+							@input="updateField('cachedInputRatio', $event.detail.value)"
+						/>
+					</view>
+					<text v-if="errors.cachedInputRatio" id="model-cached-input-ratio-error" class="field-error" role="alert">{{ errors.cachedInputRatio }}</text>
 				</view>
 				<view class="ratio-field">
 					<text class="field-label">输出倍率</text>
@@ -339,7 +357,8 @@ export default {
 .section-heading { margin-bottom: 26rpx; }
 .section-title { display: block; color: $app-text; font-size: 28rpx; font-weight: 780; letter-spacing: -.015em; }
 .section-copy { display: block; margin-top: 6rpx; color: $app-muted; font-size: 24rpx; line-height: 1.5; }
-.field-grid, .ratio-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; }
+.ratio-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20rpx; }
 .field-block, .ratio-field { min-width: 0; margin-top: 20rpx; }
 .field-grid .field-block, .ratio-grid .ratio-field { margin-top: 0; }
 .field-label { display: block; margin-bottom: 10rpx; color: #c9d5d8; font-size: 24rpx; font-weight: 690; }
@@ -451,7 +470,7 @@ export default {
 .icon-name, .icon-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-name { color: $app-text; font-size: 24rpx; font-weight: 720; }
 .icon-description { margin-top: 4rpx; color: $app-muted; font-size: 24rpx; }
-.ratio-control { display: grid; grid-template-columns: 68rpx minmax(0, 1fr); align-items: center; padding: 0 18rpx; }
+.ratio-control { display: grid; grid-template-columns: 82rpx minmax(0, 1fr); align-items: center; padding: 0 18rpx; }
 .ratio-control > text { color: $app-green; font-size: 24rpx; font-weight: 820; letter-spacing: .08em; }
 .ratio-control input { width: 100%; color: inherit; font-size: 28rpx; font-variant-numeric: tabular-nums; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; }

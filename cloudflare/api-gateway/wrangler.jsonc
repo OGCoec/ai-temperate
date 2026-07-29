@@ -16,6 +16,7 @@
     }
   ],
   "vars": {
-    "API_UPSTREAM_ORIGIN": "https://api.niko000o.site"
+    "API_UPSTREAM_ORIGIN": "https://api.niko000o.site",
+    "SSE_ROUTE_LOG_SAMPLE_RATE": "0.05"
   }
 }

@@ -1,0 +1,170 @@
+import ByteArrayOutputStream from 'java.io.ByteArrayOutputStream'
+import BufferedReader from 'java.io.BufferedReader'
+import InputStreamReader from 'java.io.InputStreamReader'
+import HttpURLConnection from 'java.net.HttpURLConnection'
+import URL from 'java.net.URL'
+import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import Thread from 'java.lang.Thread'
+
+import {
+  MailInspectionSseConnection,
+  MailInspectionSseFailure,
+  MailInspectionSseOptions
+} from '../interface.uts'
+
+const MAX_ERROR_BODY_BYTES = 16 * 1024
+const MISSING_JOB_CODE = 'ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND'
+const MISSING_JOB_MESSAGE = '原检查任务已过期或不存在，请重新创建检查任务。'
+
+function defaultHttpFailure(statusCode: number): MailInspectionSseFailure {
+  if (statusCode == 404) {
+    return {
+      code: MISSING_JOB_CODE,
+      statusCode,
+      message: MISSING_JOB_MESSAGE
+    }
+  }
+  return {
+    code: `HTTP_${statusCode}`,
+    statusCode,
+    message: '实时连接建立失败。'
+  }
+}
+
+function readBoundedErrorBody(connection: HttpURLConnection): string {
+  const stream = connection.getErrorStream()
+  if (stream == null) return ''
+  try {
+    const output = new ByteArrayOutputStream()
+    const buffer = ByteArray(4096)
+    let total = 0
+    while (true) {
+      const length = stream.read(buffer)
+      if (length < 0) break
+      total += length
+      if (total > MAX_ERROR_BODY_BYTES) return ''
+      if (length > 0) output.write(buffer, 0, length)
+    }
+    return output.toString('UTF-8')
+  } catch (_: Throwable) {
+    return ''
+  } finally {
+    try {
+      stream.close()
+    } catch (_: Throwable) {
+    }
+  }
+}
+
+function responseFailure(
+  statusCode: number,
+  errorBody: string
+): MailInspectionSseFailure {
+  const fallback = defaultHttpFailure(statusCode)
+  if (errorBody.length == 0) return fallback
+  try {
+    const payload = JSON.parse(errorBody) as UTSJSONObject
+    const code = payload.getString('code', '')
+    const message = payload.getString('message', '')
+    return {
+      code: code.length > 0 ? code : fallback.code,
+      statusCode,
+      message: message.length > 0 ? message : fallback.message
+    }
+  } catch (_: Throwable) {
+    return fallback
+  }
+}
+
+/**
+ * 使用 Android 原生 HTTPS 连接增量读取 UTF-8 字节，不缓存完整响应且不输出 URL、Header 或 Token。
+ */
+export function openMailInspectionSse(
+  options: MailInspectionSseOptions
+): MailInspectionSseConnection {
+  const closed = new AtomicBoolean(false)
+  const callbackCompleted = new AtomicBoolean(false)
+  let activeConnection: HttpURLConnection | null = null
+  let activeReader: BufferedReader | null = null
+
+  const notifyFailure = (failure: MailInspectionSseFailure) => {
+    if (!closed.get() && callbackCompleted.compareAndSet(false, true)) {
+      options.onError(failure)
+    }
+  }
+
+  const worker = new Thread(() => {
+    try {
+      const target = new URL(options.url)
+      if (target.getProtocol().lowercase() != 'https') {
+        notifyFailure({
+          code: 'MAIL_INSPECTION_SSE_HTTPS_REQUIRED',
+          statusCode: 0,
+          message: 'Android 实时连接只允许使用 HTTPS。'
+        })
+        return
+      }
+      const connection = target.openConnection() as HttpURLConnection
+      activeConnection = connection
+      connection.setRequestMethod('GET')
+      connection.setConnectTimeout(15000)
+      connection.setReadTimeout(60000)
+      connection.setUseCaches(false)
+      connection.setDoInput(true)
+      options.headers.forEach((value: any, name: string) => {
+        connection.setRequestProperty(name, value.toString())
+      })
+      connection.connect()
+      const status = connection.getResponseCode()
+      if (status < 200 || status >= 300) {
+        notifyFailure(responseFailure(
+          status,
+          readBoundedErrorBody(connection)))
+        return
+      }
+      options.onOpen(connection.getHeaderField('X-Trace-Id') ?: '')
+      // InputStreamReader 会跨底层字节分片保留不完整 UTF-8 序列，避免中文 JSON 被截断。
+      const reader = new BufferedReader(
+        new InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
+      activeReader = reader
+      const chars = CharArray(4096)
+      while (!closed.get()) {
+        const length = reader.read(chars)
+        if (length < 0) break
+        if (length > 0) {
+          options.onChunk(chars.concatToString(0, length))
+        }
+      }
+    } catch (_: Throwable) {
+      notifyFailure({
+        code: 'MAIL_INSPECTION_SSE_ANDROID_IO',
+        statusCode: 0,
+        message: 'Android 实时连接已中断。'
+      })
+    } finally {
+      try {
+        activeReader?.close()
+      } catch (_: Throwable) {
+      }
+      activeConnection?.disconnect()
+      if (!closed.get()
+        && callbackCompleted.compareAndSet(false, true)) {
+        options.onClosed()
+      }
+    }
+  })
+  worker.setName('ait-mail-inspection-sse')
+  worker.start()
+
+  return {
+    close: () => {
+      if (!closed.compareAndSet(false, true)) return
+      try {
+        activeReader?.close()
+      } catch (_: Throwable) {
+      }
+      activeConnection?.disconnect()
+      worker.interrupt()
+    }
+  }
+}

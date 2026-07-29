@@ -1,6 +1,6 @@
 package com.example.temperate.web.admin.mailinspection;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionJobCreateResult;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.service.AdminMailInspectionJobService;
@@ -26,8 +26,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
@@ -130,17 +130,17 @@ public class AdminMailInspectionController {
     public ResponseEntity<AdminMailInspectionJobResponse> get(
             @PathVariable
             @Parameter(
-                    description = "固定 11 位规范 Base64URL 任务公共 ID。",
+                    description = "固定 22 位规范 Base64URL 任务公共 ID。",
                     schema = @Schema(
-                            minLength = PublicIdCodec.ENCODED_LENGTH,
-                            maxLength = PublicIdCodec.ENCODED_LENGTH,
-                            pattern = PublicIdCodec.ENCODED_PATTERN,
-                            example = "AAAAAAAAAAE"))
+                            minLength = HybridBase64UrlCodec.ENCODED_LENGTH,
+                            maxLength = HybridBase64UrlCodec.ENCODED_LENGTH,
+                            pattern = HybridBase64UrlCodec.FORMAT,
+                            example = "AZ9nEjRWeJCrze8SNFZ4kA"))
             MailInspectionJobPublicId jobId) {
         return ResponseEntity.ok()
                 .cacheControl(PRIVATE_NO_STORE)
                 .body(AdminMailInspectionJobResponse.from(
-                        jobService.get(jobId.internalId())));
+                        jobService.get(jobId.value())));
     }
 
     @GetMapping("/recovered-jobs")
@@ -170,14 +170,14 @@ public class AdminMailInspectionController {
     public Mono<ResponseEntity<AdminMailInspectionJobResponse>> resume(
             @PathVariable
             @Parameter(
-                    description = "固定 11 位规范 Base64URL 任务公共 ID。",
+                    description = "固定 22 位规范 Base64URL 任务公共 ID。",
                     schema = @Schema(
-                            minLength = PublicIdCodec.ENCODED_LENGTH,
-                            maxLength = PublicIdCodec.ENCODED_LENGTH,
-                            pattern = PublicIdCodec.ENCODED_PATTERN,
-                            example = "AAAAAAAAAAE"))
+                            minLength = HybridBase64UrlCodec.ENCODED_LENGTH,
+                            maxLength = HybridBase64UrlCodec.ENCODED_LENGTH,
+                            pattern = HybridBase64UrlCodec.FORMAT,
+                            example = "AZ9nEjRWeJCrze8SNFZ4kA"))
             MailInspectionJobPublicId jobId) {
-        return jobService.resume(jobId.internalId())
+        return jobService.resume(jobId.value())
                 .map(snapshot -> ResponseEntity.accepted()
                         .cacheControl(PRIVATE_NO_STORE)
                         .body(AdminMailInspectionJobResponse.from(snapshot)));

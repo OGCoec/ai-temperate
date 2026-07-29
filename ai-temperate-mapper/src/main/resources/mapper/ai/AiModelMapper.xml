@@ -16,11 +16,23 @@
         <result property="descriptionTokensJson" column="description_tokens_json"/>
         <result property="vendor" column="vendor"/>
         <result property="inputRatio" column="input_ratio"/>
+        <result property="cachedInputRatio" column="cached_input_ratio"/>
         <result property="outputRatio" column="output_ratio"/>
         <result property="enabled" column="is_enabled"/>
         <result property="rowVersion" column="row_version"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <resultMap id="AiModelDiscoveryResultMap"
+               type="com.example.temperate.model.ai.entity.AiModel">
+        <id property="id" column="id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="vendor" column="vendor"/>
+        <result property="inputRatio" column="input_ratio"/>
+        <result property="cachedInputRatio" column="cached_input_ratio"/>
+        <result property="outputRatio" column="output_ratio"/>
+        <result property="enabled" column="is_enabled"/>
     </resultMap>
 
     <sql id="AiModelColumns">
@@ -34,6 +46,7 @@
         model.description_tokens::TEXT AS description_tokens_json,
         model.vendor AS vendor,
         model.input_ratio AS input_ratio,
+        model.cached_input_ratio AS cached_input_ratio,
         model.output_ratio AS output_ratio,
         model.is_enabled AS is_enabled,
         model.row_version AS row_version,
@@ -53,6 +66,7 @@
             description_tokens,
             vendor,
             input_ratio,
+            cached_input_ratio,
             output_ratio,
             is_enabled
         )
@@ -66,6 +80,7 @@
             CAST(#{descriptionTokensJson,jdbcType=VARCHAR} AS JSONB),
             #{vendor,jdbcType=VARCHAR},
             #{inputRatio,jdbcType=NUMERIC},
+            #{cachedInputRatio,jdbcType=NUMERIC},
             #{outputRatio,jdbcType=NUMERIC},
             #{enabled,jdbcType=BOOLEAN}
         )
@@ -83,6 +98,7 @@
                 CAST(#{model.descriptionTokensJson,jdbcType=VARCHAR} AS JSONB),
             vendor = #{model.vendor,jdbcType=VARCHAR},
             input_ratio = #{model.inputRatio,jdbcType=NUMERIC},
+            cached_input_ratio = #{model.cachedInputRatio,jdbcType=NUMERIC},
             output_ratio = #{model.outputRatio,jdbcType=NUMERIC},
             row_version = row_version + 1
         WHERE id = #{model.id,jdbcType=BIGINT}
@@ -105,6 +121,22 @@
             #{id,jdbcType=BIGINT}
         </foreach>
         ORDER BY model.id DESC
+    </select>
+
+    <select id="findByNormalizedModelNames" resultMap="AiModelDiscoveryResultMap">
+        SELECT model.id,
+               model.model_name,
+               model.vendor,
+               model.input_ratio,
+               model.cached_input_ratio,
+               model.output_ratio,
+               model.is_enabled
+        FROM ai_model model
+        WHERE model.model_name IN
+        <foreach collection="modelNames" item="modelName" open="(" separator="," close=")">
+            #{modelName,jdbcType=VARCHAR}
+        </foreach>
+        ORDER BY model.model_name, model.id
     </select>
 
     <select id="findPage" resultMap="AiModelResultMap">

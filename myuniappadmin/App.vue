@@ -43,5 +43,21 @@
 </script>
 
 <style>
-	/* 每个页面公共样式。 */
+	/* 原生页面、H5 根节点和 uni-app 页面容器必须在任何模块加载前保持同一深色画布。 */
+	html,
+	body,
+	#app,
+	uni-app,
+	uni-page,
+	uni-page-wrapper,
+	uni-page-body,
+	page {
+		min-height: 100%;
+		background: #080b0d;
+		color: #f2f7f7;
+	}
+
+	body {
+		margin: 0;
+	}
 </style>

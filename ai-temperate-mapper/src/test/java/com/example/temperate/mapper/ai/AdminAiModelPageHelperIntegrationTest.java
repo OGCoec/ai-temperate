@@ -239,6 +239,7 @@ final class AdminAiModelPageHelperIntegrationTest {
         model.setDescriptionTokensJson("[]");
         model.setVendor(vendor);
         model.setInputRatio(new BigDecimal(inputRatio));
+        model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(new BigDecimal(outputRatio));
         model.setEnabled(enabled);
         return model;

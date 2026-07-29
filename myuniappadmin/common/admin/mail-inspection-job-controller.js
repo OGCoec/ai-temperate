@@ -1,29 +1,41 @@
 import { analyzeMailboxCredentialText } from './mail-inspection-credential-parser.js'
 import { recoverRetryCredentialLines } from './mail-inspection-presenter.js'
 import { createMailInspectionClientRequestId } from './mail-inspection-idempotency.js'
+import {
+	createMailInspectionSseClient,
+	MAIL_INSPECTION_CONNECTION_STATES
+} from './mail-inspection-sse-client.js'
 
-const TERMINAL_STATES = new Set([
+const TERMINAL_JOB_STATES = new Set([
 	'COMPLETED',
 	'FAILED',
 	'ABANDONED',
-	'SUBMISSION_UNKNOWN',
-	'SERVICE_UNAVAILABLE',
-	'AWAITING_CLIENT_RESUBMISSION',
-	'EXPIRED',
-	'AWAITING_ADMIN_RESUME',
-	'RECOVERY_FAILED'
+	'EXPIRED'
 ])
-const NETWORK_BACKOFF = [2000, 4000, 8000, 15000]
+const PERSISTABLE_EVENT_TYPES = new Set([
+	'sync-complete',
+	'progress',
+	'result',
+	'status',
+	'terminal',
+	'heartbeat'
+])
+const MISSING_JOB_CODES = new Set([
+	'ADMIN_MAIL_INSPECTION_JOB_NOT_FOUND',
+	'ADMIN_MAIL_INSPECTION_JOB_EXPIRED',
+	'MAIL_INSPECTION_JOB_NOT_FOUND',
+	'MAIL_INSPECTION_JOB_EXPIRED'
+])
 
-function clampPollDelay(value) {
-	return Math.min(10000, Math.max(1000, Number(value) || 2000))
+export const MAIL_INSPECTION_MISSING_JOB_MESSAGE =
+	'原检查任务已过期或不存在，请重新创建检查任务。'
+
+function isMissingJob(error) {
+	return MISSING_JOB_CODES.has(String(error?.code || ''))
+		|| Number(error?.statusCode) === 404
 }
 
-function isNotFound(error) {
-	return error?.statusCode === 404 || error?.code === 'HTTP_404'
-}
-
-function isPollingNetworkError(error) {
+function isSubmissionRetryable(error) {
 	return error?.code === 'NETWORK_ERROR'
 		|| error?.code === 'HTTP_408'
 		|| error?.code === 'HTTP_429'
@@ -37,18 +49,25 @@ function safeMessage(error, fallback) {
 		: fallback
 }
 
-export function createMailInspectionJobController(options) {
-	const inspectionType = options.inspectionType
-	const api = options.api
-	const store = options.store
-	const notify = typeof options.onChange === 'function' ? options.onChange : () => {}
-	const setTimer = options.setTimer || setTimeout
-	const clearTimer = options.clearTimer || clearTimeout
-	const wait = options.wait || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)))
-	let timerId = null
-	let pollingFailures = 0
-	let state = {
+function safeRevision(value) {
+	const revision = Number(value)
+	return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0
+}
+
+function upsertResults(current, incoming) {
+	const byLine = new Map(current.map(result => [result.lineNumber, result]))
+	for (const result of incoming) {
+		if (Number.isInteger(result?.lineNumber) && result.lineNumber > 0) {
+			byLine.set(result.lineNumber, Object.freeze({ ...result }))
+		}
+	}
+	return [...byLine.values()].sort((left, right) => left.lineNumber - right.lineNumber)
+}
+
+function initialState(inspectionType) {
+	return {
 		state: 'IDLE',
+		connectionState: '',
 		inspectionType,
 		draftText: '',
 		analysis: analyzeMailboxCredentialText(''),
@@ -56,12 +75,24 @@ export function createMailInspectionJobController(options) {
 		clientRequestId: '',
 		submissionStartedAt: '',
 		jobId: '',
+		lastRevision: 0,
 		job: null,
 		results: [],
 		message: '',
-		pollAfterMillis: 2000,
 		businessConcurrency: 4
 	}
+}
+
+export function createMailInspectionJobController(options) {
+	const inspectionType = options.inspectionType
+	const api = options.api
+	const store = options.store
+	const streamClient = options.streamClient || createMailInspectionSseClient()
+	const notify = typeof options.onChange === 'function' ? options.onChange : () => {}
+	const wait = options.wait
+		|| (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)))
+	let connection = null
+	let state = initialState(inspectionType)
 
 	function snapshot() {
 		return {
@@ -73,7 +104,10 @@ export function createMailInspectionJobController(options) {
 			},
 			credentialLines: [...state.credentialLines],
 			results: [...state.results],
-			job: state.job ? { ...state.job, results: [...(state.job.results || [])] } : null
+			job: state.job ? {
+				...state.job,
+				results: [...state.results]
+			} : null
 		}
 	}
 
@@ -85,30 +119,130 @@ export function createMailInspectionJobController(options) {
 
 	function persist() {
 		store.save(inspectionType, {
-			draftText: state.draftText,
-			credentialLines: state.credentialLines,
-			clientRequestId: state.clientRequestId,
-			submissionStartedAt: state.submissionStartedAt,
 			jobId: state.jobId,
-			jobStatus: state.state,
-			pollAfterMillis: state.pollAfterMillis,
-			businessConcurrency: state.businessConcurrency,
-			createdAt: state.job?.createdAt,
-			expiresAt: state.job?.expiresAt
+			lastRevision: state.lastRevision
 		})
 	}
 
-	function pause() {
-		if (timerId !== null) clearTimer(timerId)
-		timerId = null
+	function closeConnection() {
+		connection?.close()
+		connection = null
 	}
 
-	function schedule(delay) {
-		pause()
-		timerId = setTimer(async () => {
-			timerId = null
-			await pollNow()
-		}, delay)
+	function resetMissingJob(expectedJobId) {
+		if (!expectedJobId || state.jobId !== expectedJobId) return false
+		const businessConcurrency = state.businessConcurrency
+		closeConnection()
+		store.clear(inspectionType)
+		state = {
+			...initialState(inspectionType),
+			businessConcurrency,
+			message: MAIL_INSPECTION_MISSING_JOB_MESSAGE
+		}
+		emit()
+		return true
+	}
+
+	function applyMeta(meta) {
+		if (!meta || typeof meta !== 'object') return
+		state.job = {
+			...(state.job || {}),
+			...meta,
+			jobId: state.jobId,
+			inspectionType,
+			results: [...state.results]
+		}
+		if (typeof meta.status === 'string') state.state = meta.status
+		if (Number.isInteger(meta.businessConcurrency)) {
+			state.businessConcurrency = meta.businessConcurrency
+		}
+	}
+
+	function updateRevision(event) {
+		if (!PERSISTABLE_EVENT_TYPES.has(event.type)) return
+		const eventRevision = safeRevision(event.data?.revision || event.id)
+		state.lastRevision = Math.max(state.lastRevision, eventRevision)
+		persist()
+	}
+
+	function acceptStreamEvent(event) {
+		const envelope = event?.data
+		if (!envelope || typeof envelope !== 'object'
+			|| !Number.isSafeInteger(Number(envelope.revision))
+			|| Number(envelope.revision) < 0) {
+			const error = new Error('实时事件修订号无效。')
+			error.code = 'MAIL_INSPECTION_SSE_PROTOCOL_INVALID'
+			throw error
+		}
+		if (event.type === 'snapshot-meta') {
+			state.results = []
+			applyMeta(envelope.data)
+		} else if (event.type === 'result-batch') {
+			state.results = upsertResults(
+				state.results,
+				Array.isArray(envelope.data?.results) ? envelope.data.results : [])
+		} else if (event.type === 'result') {
+			state.results = upsertResults(state.results, [envelope.data])
+		} else if (['progress', 'status', 'terminal'].includes(event.type)) {
+			applyMeta(envelope.data)
+		}
+		updateRevision(event)
+		if (event.type === 'sync-complete') {
+			state.message = ''
+		}
+		if (event.type === 'terminal') {
+			state.connectionState = state.state === 'COMPLETED'
+				? MAIL_INSPECTION_CONNECTION_STATES.COMPLETED
+				: state.state === 'EXPIRED'
+					? MAIL_INSPECTION_CONNECTION_STATES.EXPIRED
+					: MAIL_INSPECTION_CONNECTION_STATES.FAILED
+			closeConnection()
+		}
+		if (state.job) state.job = { ...state.job, results: [...state.results] }
+		emit()
+	}
+
+	function handleConnectionState(connectionState) {
+		state.connectionState = connectionState
+		if (connectionState === MAIL_INSPECTION_CONNECTION_STATES.RECONNECTING) {
+			state.message = '实时连接已中断，正在进行有限重连。'
+		} else if (connectionState === MAIL_INSPECTION_CONNECTION_STATES.FAILED) {
+			state.message = '实时连接已中断；不会回退到 HTTP 轮询。'
+		} else if (connectionState === MAIL_INSPECTION_CONNECTION_STATES.EXPIRED) {
+			state.state = 'EXPIRED'
+			state.message = '任务已过期或不存在。'
+		} else if (connectionState === MAIL_INSPECTION_CONNECTION_STATES.STREAMING) {
+			state.message = ''
+		}
+		emit()
+	}
+
+	function connect() {
+		closeConnection()
+		if (!state.jobId || TERMINAL_JOB_STATES.has(state.state)) return emit()
+		const expectedJobId = state.jobId
+		connection = streamClient.connect({
+			path: api.eventsPath(expectedJobId),
+			lastRevision: () => state.lastRevision,
+			onState(connectionState) {
+				if (state.jobId === expectedJobId) {
+					handleConnectionState(connectionState)
+				}
+			},
+			onEvent(event) {
+				if (state.jobId === expectedJobId) acceptStreamEvent(event)
+			},
+			onError(error) {
+				if (isMissingJob(error)) {
+					resetMissingJob(expectedJobId)
+					return
+				}
+				if (state.jobId !== expectedJobId) return
+				state.message = safeMessage(error, '实时连接已中断。')
+				emit()
+			}
+		})
+		return emit()
 	}
 
 	function setDraftText(text) {
@@ -116,7 +250,6 @@ export function createMailInspectionJobController(options) {
 		state.analysis = analyzeMailboxCredentialText(state.draftText)
 		if (state.state === 'VALIDATING') state.state = 'IDLE'
 		state.message = ''
-		persist()
 		return emit()
 	}
 
@@ -129,30 +262,25 @@ export function createMailInspectionJobController(options) {
 		}
 		state.businessConcurrency = concurrency
 		state.message = ''
-		persist()
 		return emit()
 	}
 
-	async function startLines(lines, draftText, options = {}) {
-		pause()
-		const requestId = options.clientRequestId || createMailInspectionClientRequestId()
+	async function startLines(lines, draftText, startOptions = {}) {
+		closeConnection()
+		const requestId = startOptions.clientRequestId
+			|| createMailInspectionClientRequestId()
 		state = {
-			...state,
+			...initialState(inspectionType),
 			state: 'CREATING',
 			draftText,
 			analysis: analyzeMailboxCredentialText(draftText),
 			credentialLines: [...lines],
 			clientRequestId: requestId,
-			submissionStartedAt: options.clientRequestId
+			submissionStartedAt: startOptions.clientRequestId
 				? (state.submissionStartedAt || new Date().toISOString())
 				: new Date().toISOString(),
-			jobId: '',
-			job: null,
-			results: [],
-			message: '',
-			pollAfterMillis: 2000
+			businessConcurrency: state.businessConcurrency
 		}
-		persist()
 		emit()
 		try {
 			let created
@@ -163,10 +291,9 @@ export function createMailInspectionJobController(options) {
 					state.businessConcurrency,
 					requestId)
 			} catch (firstError) {
-				if (!isPollingNetworkError(firstError)) throw firstError
+				if (!isSubmissionRetryable(firstError)) throw firstError
 				state.state = 'SUBMISSION_UNKNOWN'
-				state.message = '提交结果暂不确定，正在使用原提交编号确认。'
-				persist()
+				state.message = '提交结果暂不确定，正在使用原提交编号确认一次。'
 				emit()
 				await wait(2000)
 				created = await api.createJob(
@@ -176,28 +303,26 @@ export function createMailInspectionJobController(options) {
 					requestId)
 			}
 			state.jobId = created.jobId
-			state.job = created
+			state.job = { ...created, revision: 0, results: [] }
 			state.state = created.status
-			state.pollAfterMillis = clampPollDelay(created.pollAfterMillis)
-			pollingFailures = 0
+			state.lastRevision = 0
 			persist()
 			emit()
-			return await pollNow()
+			return connect()
 		} catch (error) {
 			if (error?.code === 'ADMIN_MAIL_INSPECTION_UNAVAILABLE') {
 				state.state = 'SERVICE_UNAVAILABLE'
-				state.message = '该类型邮箱检查正在恢复或恢复失败，当前未接收新任务。原提交尚未创建，无需重复提交凭证。'
+				state.message = 'Redis 任务服务不可用，当前未回退到进程内任务。'
 			} else if (error?.code === 'ADMIN_MAIL_INSPECTION_SUBMISSION_INCOMPLETE') {
 				state.state = 'AWAITING_CLIENT_RESUBMISSION'
 				state.message = '部分凭证尚未持久化，请继续原提交。'
-			} else if (isPollingNetworkError(error)) {
+			} else if (isSubmissionRetryable(error)) {
 				state.state = 'SUBMISSION_UNKNOWN'
 				state.message = '提交结果暂不确定，请使用原提交编号继续确认。'
 			} else {
 				state.state = 'FAILED'
 				state.message = safeMessage(error, '邮箱检查任务创建失败。')
 			}
-			persist()
 			return emit()
 		}
 	}
@@ -209,118 +334,53 @@ export function createMailInspectionJobController(options) {
 		state.message = ''
 		if (!analysis.valid) {
 			state.state = 'VALIDATING'
-			persist()
 			return emit()
 		}
 		return startLines([...analysis.credentialLines], state.draftText)
 	}
 
-	async function pollNow() {
-		pause()
-		if (!state.jobId) return emit()
-		try {
-			const job = await api.getJob(state.jobId)
-			state.job = job
-			state.results = [...job.results]
-			state.state = job.status
-			state.message = ''
-			pollingFailures = 0
-			persist()
-			const current = emit()
-			if (!TERMINAL_STATES.has(state.state)) schedule(state.pollAfterMillis)
-			return current
-		} catch (error) {
-			if (isNotFound(error)) {
-				state.state = 'EXPIRED'
-				state.message = '任务已过期、服务进程已重启或任务不存在；原输入仍保留，可手动重新创建。'
-				persist()
-				return emit()
-			}
-			if (isPollingNetworkError(error)) {
-				const delay = NETWORK_BACKOFF[Math.min(pollingFailures, NETWORK_BACKOFF.length - 1)]
-				pollingFailures += 1
-				state.state = 'POLLING_INTERRUPTED'
-				state.message = `任务仍在后端运行，查询连接中断，将在 ${delay / 1000} 秒后继续。`
-				persist()
-				const current = emit()
-				schedule(delay)
-				return current
-			}
-			state.state = 'FAILED'
-			state.message = safeMessage(error, '邮箱检查任务查询失败。')
-			persist()
-			emit()
-			throw error
-		}
-	}
-
-	async function restore(options = {}) {
-		const allowNetwork = options.allowNetwork !== false
+	async function restore(restoreOptions = {}) {
 		const context = store.load(inspectionType)
-		state.draftText = context.draftText || ''
-		state.analysis = analyzeMailboxCredentialText(state.draftText)
-		state.credentialLines = [...(context.credentialLines || [])]
-		state.clientRequestId = context.clientRequestId || ''
-		state.submissionStartedAt = context.submissionStartedAt || ''
-		state.jobId = context.jobId || ''
-		state.state = context.jobStatus || 'IDLE'
-		state.pollAfterMillis = clampPollDelay(context.pollAfterMillis)
-		state.businessConcurrency = Number.isInteger(context.businessConcurrency)
-			? context.businessConcurrency
-			: 4
-		if (!state.jobId
-			&& state.clientRequestId
-			&& ['CREATING', 'DISPATCHING'].includes(state.state)) {
-			state.state = 'SUBMISSION_UNKNOWN'
-			state.message = '上次提交结果尚未确认，请使用原提交编号继续确认。'
-		}
-		if (!state.jobId && state.state === 'SERVICE_UNAVAILABLE') {
-			state.message = '该类型邮箱检查正在恢复或恢复失败，当前未接收新任务。原提交尚未创建，无需重复提交凭证。'
+		state = {
+			...initialState(inspectionType),
+			jobId: context.jobId || '',
+			lastRevision: safeRevision(context.lastRevision),
+			state: context.jobId ? 'QUEUED' : 'IDLE'
 		}
 		emit()
-		if (state.jobId && allowNetwork) return pollNow()
+		if (state.jobId && restoreOptions.allowNetwork !== false) connect()
 		return snapshot()
 	}
 
 	async function resume() {
-		if (!state.jobId) return emit()
-		return pollNow()
+		if (!state.jobId || TERMINAL_JOB_STATES.has(state.state)) return emit()
+		return connect()
 	}
 
 	async function trackJob(job) {
-		pause()
+		closeConnection()
 		state.jobId = job.jobId
-		state.job = job
+		state.job = { ...job, results: [...(job.results || [])] }
 		state.results = [...(job.results || [])]
 		state.state = job.status
-		state.businessConcurrency = Number(job.businessConcurrency) || state.businessConcurrency
+		state.lastRevision = safeRevision(job.revision)
+		state.businessConcurrency = Number(job.businessConcurrency)
+			|| state.businessConcurrency
 		state.message = ''
-		pollingFailures = 0
 		persist()
 		emit()
-		if (!TERMINAL_STATES.has(state.state)) return pollNow()
+		if (!TERMINAL_JOB_STATES.has(state.state)) connect()
 		return snapshot()
 	}
 
+	function pause() {
+		closeConnection()
+	}
+
 	function clear() {
-		pause()
+		closeConnection()
 		store.clear(inspectionType)
-		state = {
-			state: 'IDLE',
-			inspectionType,
-			draftText: '',
-			analysis: analyzeMailboxCredentialText(''),
-			credentialLines: [],
-			clientRequestId: '',
-			submissionStartedAt: '',
-			jobId: '',
-			job: null,
-			results: [],
-			message: '',
-			pollAfterMillis: 2000,
-			businessConcurrency: 4
-		}
-		pollingFailures = 0
+		state = initialState(inspectionType)
 		return emit()
 	}
 
@@ -355,7 +415,6 @@ export function createMailInspectionJobController(options) {
 		setDraftText,
 		setBusinessConcurrency,
 		submit,
-		pollNow,
 		restore,
 		resume,
 		trackJob,

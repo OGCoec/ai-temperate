@@ -14,6 +14,7 @@ import com.example.temperate.mapper.ai.AiModelMapper;
 import com.example.temperate.model.ai.entity.AiModel;
 import com.example.temperate.model.ai.entity.AiModelCapability;
 import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
+import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.admin.aimodel.config.AiModelCacheProperties;
 import com.example.temperate.service.admin.aimodel.security.AiModelCacheProtector;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,7 +40,7 @@ final class AiModelCacheServiceImplTest {
 
     private static final String TEST_KEY_BASE64 =
             Base64.getEncoder().encodeToString(new byte[32]);
-    private static final String CACHE_KEY = "ait:test:ai:model:v2:enabled";
+    private static final String CACHE_KEY = "ait:test:ai:model:v3:enabled";
 
     @Mock
     private AiModelMapper modelMapper;
@@ -102,6 +103,11 @@ final class AiModelCacheServiceImplTest {
                 .doesNotContain("gpt-5.5")
                 .doesNotContain("openai")
                 .doesNotContain("RESPONSES");
+        AiModelCacheSnapshot snapshot =
+                new AiModelCacheProtector(TEST_KEY_BASE64, new ObjectMapper())
+                        .unprotect(CACHE_KEY, valueCaptor.getValue());
+        assertThat(snapshot.models().get(0).cachedInputRatio())
+                .isEqualByComparingTo("0.50000000");
     }
 
     @Test
@@ -122,6 +128,7 @@ final class AiModelCacheServiceImplTest {
         model.setTagsJson("[\"chat\"]");
         model.setVendor("openai");
         model.setInputRatio(BigDecimal.ONE);
+        model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(BigDecimal.TWO);
         model.setEnabled(true);
         return model;

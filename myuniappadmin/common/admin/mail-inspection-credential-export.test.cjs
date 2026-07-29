@@ -14,7 +14,7 @@ test('credential export uses UTF-8 LF content and a safe deterministic filename'
 	const { createMailInspectionCredentialExport } = await loadModule()
 	const exported = createMailInspectionCredentialExport({
 		inspectionType: 'OPENAI_STATUS',
-		jobId: 'AQzUqWaCEAA',
+		jobId: 'AQzUqWaCEAAAQzUqWaCEAA',
 		credentialLines: ['line-one', 'line-two'],
 		now: new Date('2026-07-28T20:15:26Z')
 	})
@@ -22,7 +22,7 @@ test('credential export uses UTF-8 LF content and a safe deterministic filename'
 	assert.equal(exported.content, 'line-one\nline-two')
 	assert.equal(
 		exported.filename,
-		'mail-inspection-openai-status-unregistered-AQzUqWaCEAA-20260728-201526.txt')
+		'mail-inspection-openai-status-unregistered-AQzUqWaCEAAAQzUqWaCEAA-20260728-201526.txt')
 	assert.equal(exported.mimeType, 'text/plain;charset=utf-8')
 })
 

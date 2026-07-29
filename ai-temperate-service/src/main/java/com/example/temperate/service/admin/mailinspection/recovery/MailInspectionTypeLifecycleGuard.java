@@ -1,7 +1,10 @@
 package com.example.temperate.service.admin.mailinspection.recovery;
 
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
@@ -47,6 +50,41 @@ public final class MailInspectionTypeLifecycleGuard {
             action.run();
             return null;
         });
+    }
+
+    /**
+     * 按枚举顺序一次持有多个类型锁，供必须在同一权威快照下处理全部类型的维护任务使用。
+     *
+     * <p>固定顺序避免维护任务之间互相等待；调用方不得在动作中等待异步确认，
+     * 也不应把该入口用于普通单类型请求。</p>
+     *
+     * @param types 需要串行化的类型集合
+     * @param action 获取全部锁后执行的有界动作
+     */
+    public void withLocks(
+            Collection<MailInspectionType> types,
+            Runnable action) {
+        Objects.requireNonNull(types);
+        Objects.requireNonNull(action);
+        List<MailInspectionType> ordered = types.stream()
+                .map(Objects::requireNonNull)
+                .distinct()
+                .sorted()
+                .toList();
+        List<ReentrantLock> acquired = new ArrayList<>(ordered.size());
+        try {
+            for (MailInspectionType type : ordered) {
+                ReentrantLock lock = requiredLock(type);
+                lock.lock();
+                acquired.add(lock);
+            }
+            action.run();
+        } finally {
+            // 与加锁顺序相反释放，保留清晰的栈式资源边界。
+            for (int index = acquired.size() - 1; index >= 0; index--) {
+                acquired.get(index).unlock();
+            }
+        }
     }
 
     private ReentrantLock requiredLock(MailInspectionType type) {

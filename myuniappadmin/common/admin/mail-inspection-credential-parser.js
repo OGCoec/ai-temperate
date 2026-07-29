@@ -1,5 +1,6 @@
 const DELIMITER = '----'
 const MAX_REQUEST_BYTES = 1024 * 1024
+const MAX_CREDENTIAL_LINES = 10000
 const MAX_LINE_CHARS = 12288
 const MAX_EMAIL_CHARS = 320
 const MAX_PASSWORD_CHARS = 512
@@ -79,6 +80,12 @@ export function analyzeMailboxCredentialText(text) {
 			0,
 			'CREDENTIAL_LINES_EMPTY',
 			'至少需要输入一行邮箱凭证。'))
+	}
+	if (credentialLines.length > MAX_CREDENTIAL_LINES) {
+		errors.push(lineError(
+			0,
+			'CREDENTIAL_LINES_LIMIT_EXCEEDED',
+			'单个邮箱检查任务最多允许 10,000 行凭证。'))
 	}
 	if (byteCount > MAX_REQUEST_BYTES) {
 		errors.push(lineError(0, 'REQUEST_TOO_LARGE', '邮箱凭证请求总量不能超过 1 MiB。'))

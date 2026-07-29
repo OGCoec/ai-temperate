@@ -1,0 +1,7 @@
+{
+  "minSdkVersion": 24,
+  "permissions": [
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE"
+  ]
+}

@@ -99,6 +99,33 @@ function adminHeaders(path, method, options, platform, includeClientContext, jso
 	return headers
 }
 
+export async function prepareAdminEventStream(path, lastRevision = 0) {
+	await ensureAdminCookieScopeMigration()
+	await ensureAdminPreAuth()
+	await ensureAdminWebRtcVerified()
+	const platform = adminClientPlatform()
+	const headers = adminHeaders(
+		path,
+		'GET',
+		{
+			headers: {
+				Accept: 'text/event-stream, application/json;q=0.9',
+				...(Number(lastRevision) > 0
+					? { 'Last-Event-ID': String(lastRevision) }
+					: {})
+			}
+		},
+		platform,
+		true,
+		false)
+	return Object.freeze({
+		url: `${ADMIN_API_BASE_URL}${path}`,
+		headers: Object.freeze({ ...headers }),
+		platform,
+		withCredentials: true
+	})
+}
+
 export async function adminRequest(path, options = {}, retryState = {}) {
 	await ensureAdminCookieScopeMigration()
 	await ensureAdminPreAuth()

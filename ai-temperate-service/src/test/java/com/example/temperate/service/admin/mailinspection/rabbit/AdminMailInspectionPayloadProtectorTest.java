@@ -13,6 +13,9 @@ import org.junit.jupiter.api.Test;
  */
 final class AdminMailInspectionPayloadProtectorTest {
 
+    private static final String JOB_ID = "AZ9nEjRWeJCrze8SNFZ4kA";
+    private static final String JOB_HASH = "B".repeat(43);
+
     private final AdminMailInspectionPayloadProtector protector =
             new AdminMailInspectionPayloadProtector(
                     AdminMailInspectionProperties.defaults());
@@ -27,12 +30,14 @@ final class AdminMailInspectionPayloadProtectorTest {
 
         MailInspectionProtectedPayload payload = protector.protect(
                 "message-1",
-                "AAAAAAAAAAE",
+                JOB_ID,
+                JOB_HASH,
                 MailInspectionType.OPENAI_STATUS,
                 credential);
         MailInspectionProtectedCredential restored = protector.unprotect(
                 "message-1",
-                "AAAAAAAAAAE",
+                JOB_ID,
+                JOB_HASH,
                 MailInspectionType.OPENAI_STATUS,
                 7,
                 payload);
@@ -54,22 +59,33 @@ final class AdminMailInspectionPayloadProtectorTest {
                 "sensitive-refresh-token");
         MailInspectionProtectedPayload payload = protector.protect(
                 "message-1",
-                "AAAAAAAAAAE",
+                JOB_ID,
+                JOB_HASH,
                 MailInspectionType.OPENAI_STATUS,
                 credential);
 
         assertThatThrownBy(() -> protector.unprotect(
                 "message-1",
-                "AAAAAAAAAAI",
+                "BZ9nEjRWeJCrze8SNFZ4kA",
+                JOB_HASH,
                 MailInspectionType.OPENAI_STATUS,
                 7,
                 payload))
                 .isInstanceOf(MailInspectionPayloadException.class);
         assertThatThrownBy(() -> protector.unprotect(
                 "message-1",
-                "AAAAAAAAAAE",
+                JOB_ID,
+                JOB_HASH,
                 MailInspectionType.OPENAI_STATUS,
                 8,
+                payload))
+                .isInstanceOf(MailInspectionPayloadException.class);
+        assertThatThrownBy(() -> protector.unprotect(
+                "message-1",
+                JOB_ID,
+                "C".repeat(43),
+                MailInspectionType.OPENAI_STATUS,
+                7,
                 payload))
                 .isInstanceOf(MailInspectionPayloadException.class);
     }

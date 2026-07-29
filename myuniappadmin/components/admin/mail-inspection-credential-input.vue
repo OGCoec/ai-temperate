@@ -15,7 +15,7 @@
 
 		<view v-if="collapsed" class="collapsed-summary">
 			<text class="summary-number">{{ analysis.lineCount }}</text>
-			<text>行凭证已保留在当前管理员会话中，结果不会回显密码或 Token。</text>
+			<text>行凭证仅保留在当前页面内存中，结果不会回显密码或 Token。</text>
 		</view>
 
 		<template v-else>
@@ -28,7 +28,7 @@
 				:focus="focusInvalid"
 				:disabled="busy"
 				maxlength="-1"
-				placeholder="在此粘贴任意行凭证（总量不超过 1 MiB）"
+				placeholder="在此粘贴凭证（最多 10,000 行且总量不超过 1 MiB）"
 				aria-label="邮箱凭证多行输入"
 				:aria-invalid="analysis.errors.length ? 'true' : 'false'"
 				@input="$emit('update:draft-text', $event.detail.value)"
@@ -66,7 +66,7 @@
 			<view v-if="advancedOpen" id="mail-inspection-concurrency" class="concurrency-field">
 				<view class="concurrency-copy">
 					<text class="concurrency-title">业务并发数</text>
-					<text>控制 RabbitMQ 同时处理的凭证数量；输入行数不设上限，总量不超过 1 MiB。</text>
+					<text>控制 RabbitMQ 同时处理的凭证数量；单任务最多 10,000 行且总量不超过 1 MiB。</text>
 				</view>
 				<input
 					class="concurrency-input"

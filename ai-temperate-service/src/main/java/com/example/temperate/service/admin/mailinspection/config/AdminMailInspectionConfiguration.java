@@ -1,19 +1,22 @@
 package com.example.temperate.service.admin.mailinspection.config;
 
-import io.netty.channel.ChannelOption;
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
-import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionListenerControl;
-import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionWorkPublisher;
-import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionSubmissionPublisher;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionDispatchMarkerPublisher;
+import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionListenerControl;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionSubmissionListenerControl;
+import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionSubmissionPublisher;
+import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionWorkPublisher;
+import io.netty.channel.ChannelOption;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -24,9 +27,10 @@ import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.transport.ProxyProvider;
 
 /**
- * 装配管理员邮箱检查专用 HTTP CONNECT 客户端、IMAP 虚拟线程执行器、Rabbit 发布 Scheduler 和配置属性。
+ * 装配管理员邮箱检查专用 ID 编解码、Redis Pub/Sub、HTTP CONNECT 客户端、IMAP 执行器和 Rabbit 发布边界。
  *
- * <p>该配置只创建固定 7897 路径，不读取 local-proxy 候选、不直连且不回退 7892。</p>
+ * <p>Redis 监听容器只承载易失通知而不保存任务事实；网络客户端只创建固定 7897 路径，
+ * 不读取 local-proxy 候选、不直连且不回退 7892。</p>
  */
 @Configuration
 @EnableScheduling
@@ -34,6 +38,23 @@ import reactor.netty.transport.ProxyProvider;
 public class AdminMailInspectionConfiguration {
 
     private static final int RABBIT_PUBLISH_SCHEDULER_QUEUE_CAPACITY = 256;
+
+    @Bean
+    HybridBase64UrlCodec hybridBase64UrlCodec() {
+        return new HybridBase64UrlCodec();
+    }
+
+    /**
+     * 为邮件任务 Pub/Sub 唤醒创建共享监听容器；该容器不保存事件历史，权威数据仍只从 Redis Key 读取。
+     */
+    @Bean
+    RedisMessageListenerContainer mailInspectionRedisMessageListenerContainer(
+            RedisConnectionFactory connectionFactory) {
+        RedisMessageListenerContainer container =
+                new RedisMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
+        return container;
+    }
 
     @Bean(name = "adminMailInspectionConnectionProvider", destroyMethod = "dispose")
     ConnectionProvider adminMailInspectionConnectionProvider(

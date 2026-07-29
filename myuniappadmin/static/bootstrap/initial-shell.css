@@ -1,0 +1,8 @@
+html,
+body,
+#app {
+	min-height: 100%;
+	margin: 0;
+	background: #080b0d;
+	color: #f2f7f7;
+}

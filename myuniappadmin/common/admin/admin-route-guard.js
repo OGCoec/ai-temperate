@@ -1,6 +1,7 @@
 const ADMIN_ENTRY_ROUTE = '/pages/index/index'
 
 const PROTECTED_EXACT_ROUTES = new Set([
+	'/pages/admin/workspace',
 	'/pages/risk/ip2location-keys',
 	'/pages/ai-model-icons/index'
 ])
@@ -49,18 +50,25 @@ function isAdminSessionInvalidError(error) {
 export function createAdminRouteGuard({
 	validateSession,
 	navigate,
-	onSessionInvalid
+	onSessionInvalid,
+	now = () => Date.now(),
+	sessionValidationMaxAgeMs = 30_000
 }) {
 	let sessionInFlight = null
 	let invalidNotified = false
+	let lastValidatedAt = 0
 
-	async function ensureAdminSession() {
+	async function ensureAdminSession(options = {}) {
 		if (invalidNotified) return false
+		if (!options.force
+			&& lastValidatedAt > 0
+			&& now() - lastValidatedAt <= sessionValidationMaxAgeMs) return true
 		if (!sessionInFlight) {
 			sessionInFlight = Promise.resolve()
 				.then(() => validateSession())
 				.then(() => {
 					invalidNotified = false
+					lastValidatedAt = now()
 					return true
 				})
 				.catch(error => {
@@ -89,13 +97,24 @@ export function createAdminRouteGuard({
 
 	function markAdminSessionAuthenticated() {
 		invalidNotified = false
+		lastValidatedAt = now()
+	}
+
+	function invalidateAdminSessionValidation() {
+		lastValidatedAt = 0
+	}
+
+	function shouldRevalidateAdminSession() {
+		return lastValidatedAt <= 0 || now() - lastValidatedAt > sessionValidationMaxAgeMs
 	}
 
 	return Object.freeze({
 		ensureAdminSession,
 		guardAdminPage,
 		guardedAdminNavigate,
-		markAdminSessionAuthenticated
+		invalidateAdminSessionValidation,
+		markAdminSessionAuthenticated,
+		shouldRevalidateAdminSession
 	})
 }
 

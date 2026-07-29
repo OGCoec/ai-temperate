@@ -9,7 +9,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 验证邮箱检查默认配置锁定本机 7897、有限重试、并发和内存任务保留边界。
+ * 验证邮箱检查默认配置锁定本机 7897、有限重试、并发和 Redis 任务租约边界。
  */
 final class AdminMailInspectionPropertiesTest {
 
@@ -43,15 +43,22 @@ final class AdminMailInspectionPropertiesTest {
                             "app.admin.mail-inspection.job.max-business-concurrency=64",
                             "app.admin.mail-inspection.job.max-line-chars=12288",
                             "app.admin.mail-inspection.job.max-request-bytes=1048576",
-                            "app.admin.mail-inspection.job.retention=30m",
-                            "app.admin.mail-inspection.job.cleanup-interval=1m",
-                            "app.admin.mail-inspection.job.poll-after=2s",
+                            "app.admin.mail-inspection.job.active-lease=15m",
+                            "app.admin.mail-inspection.job.terminal-retention=15m",
+                            "app.admin.mail-inspection.job.lease-heartbeat-interval=30s",
+                            "app.admin.mail-inspection.job.max-credential-lines=10000",
+                            "app.admin.mail-inspection.job.result-bucket-size=32",
+                            "app.admin.mail-inspection.job.snapshot-batch-size=100",
+                            "app.admin.mail-inspection.job.key-hmac-secret-base64="
+                                    + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                             "app.admin.mail-inspection.rabbit.payload-key-base64="
                                     + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                             "app.admin.mail-inspection.rabbit.enabled=true",
                             "app.admin.mail-inspection.rabbit.confirm-timeout=5s",
                             "app.admin.mail-inspection.rabbit.publish-max-attempts=3",
                             "app.admin.mail-inspection.rabbit.publish-backoffs=200ms,500ms,1s",
+                            "app.admin.mail-inspection.rabbit.marker-cleanup-interval=1m",
+                            "app.admin.mail-inspection.rabbit.marker-cleanup-batch-size=500",
                             "app.admin.mail-inspection.submission.incomplete-retention=6h",
                             "app.admin.mail-inspection.submission.cleanup-interval=1m",
                             "app.admin.mail-inspection.submission.max-plaintext-chunk-bytes=163840",
@@ -83,8 +90,13 @@ final class AdminMailInspectionPropertiesTest {
         assertThat(properties.oauth().maxAttempts()).isEqualTo(3);
         assertThat(properties.oauth().concurrency()).isEqualTo(8);
         assertThat(properties.imap().concurrency()).isEqualTo(4);
-        assertThat(properties.job().retention())
-                .isEqualTo(Duration.ofMinutes(30));
+        assertThat(properties.job().activeLease())
+                .isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.job().terminalRetention())
+                .isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.job().maxCredentialLines()).isEqualTo(10_000);
+        assertThat(properties.job().resultBucketSize()).isEqualTo(32);
+        assertThat(properties.job().snapshotBatchSize()).isEqualTo(100);
         assertThat(properties.job().maxRequestBytes()).isEqualTo(1_048_576);
         assertThat(properties.job().defaultBusinessConcurrency()).isEqualTo(4);
         assertThat(properties.job().maxBusinessConcurrency()).isEqualTo(64);

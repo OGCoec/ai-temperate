@@ -281,8 +281,77 @@ public final class RedisKeyFactory {
      * <p>模型名称和厂商等业务内容只存在于加密 Value 中，Key 本身保持固定且不携带模型标识。</p>
      */
     public String aiModelEnabledSnapshotKey() {
-        // v2 与模型能力大类的缓存 Schema 同步，旧 v1 快照只依赖原 TTL 自然过期。
-        return fixedKey("ai", "model", "v2", "enabled");
+        // v3 与缓存输入倍率的快照 Schema 同步，旧 v2 快照只依赖原 TTL 自然过期。
+        return fixedKey("ai", "model", "v3", "enabled");
+    }
+
+    /**
+     * 生成邮件检查任务元数据 Key，原始 Job ID 不会进入 Redis 命名空间。
+     */
+    public String adminMailInspectionJobMetaKey(HmacIdentifier jobHash) {
+        return mailInspectionProtectedKey("meta", jobHash);
+    }
+
+    /**
+     * 生成邮件检查任务计数 Key，计数与元数据共享同一绝对过期时间。
+     */
+    public String adminMailInspectionJobCountsKey(HmacIdentifier jobHash) {
+        return mailInspectionProtectedKey("counts", jobHash);
+    }
+
+    /**
+     * 生成邮件检查任务结果桶 Key，每个桶编号固定宽度以便受界扫描和诊断。
+     */
+    public String adminMailInspectionJobResultBucketKey(
+            HmacIdentifier jobHash, int bucketNumber) {
+        if (bucketNumber < 0 || bucketNumber > 9_999) {
+            throw new IllegalArgumentException(
+                    "Mail inspection result bucket must be between 0 and 9999.");
+        }
+        return mailInspectionKey(
+                "results",
+                requireHmacIdentifier(jobHash),
+                String.format(Locale.ROOT, "%04d", bucketNumber));
+    }
+
+    /**
+     * 生成邮件检查创建请求幂等索引 Key，客户端请求 ID 必须先使用独立用途 HMAC。
+     */
+    public String adminMailInspectionJobIdempotencyKey(
+            HmacIdentifier requestHash) {
+        return mailInspectionProtectedKey("idempotency", requestHash);
+    }
+
+    /**
+     * 生成每种邮件检查类型的单活动任务索引 Key。
+     */
+    public String adminMailInspectionJobActiveKey(String inspectionType) {
+        return mailInspectionKey(
+                "active",
+                requireNamespaceSegment("inspectionType", inspectionType));
+    }
+
+    /**
+     * 生成每种邮件检查类型的接收闸门 Key。
+     */
+    public String adminMailInspectionJobAcceptanceKey(String inspectionType) {
+        return mailInspectionKey(
+                "acceptance",
+                requireNamespaceSegment("inspectionType", inspectionType));
+    }
+
+    /**
+     * 生成邮件检查任务单调修订号 Key。
+     */
+    public String adminMailInspectionJobRevisionKey(HmacIdentifier jobHash) {
+        return mailInspectionProtectedKey("revision", jobHash);
+    }
+
+    /**
+     * 生成邮件检查全局变更通知频道；该频道只承载唤醒通知，不保存任务历史。
+     */
+    public String adminMailInspectionJobEventsChannel() {
+        return mailInspectionKey("events");
     }
 
     /**
@@ -477,6 +546,46 @@ public final class RedisKeyFactory {
         return key;
     }
 
+    private String mailInspectionProtectedKey(
+            String type, HmacIdentifier identifier) {
+        return mailInspectionKey(type, requireHmacIdentifier(identifier));
+    }
+
+    private String mailInspectionKey(String... suffixSegments) {
+        String[] segments = new String[5 + suffixSegments.length];
+        segments[0] = PROJECT_PREFIX;
+        segments[1] = environment;
+        segments[2] = "admin-mail";
+        segments[3] = "job";
+        segments[4] = "v2";
+        for (int index = 0; index < suffixSegments.length; index++) {
+            String segment = suffixSegments[index];
+            if (segment == null
+                    || (!NAMESPACE_SEGMENT.matcher(segment).matches()
+                    && !IDENTIFIER.matcher(segment).matches())) {
+                throw new IllegalArgumentException(
+                        "Mail inspection Redis key segment is invalid.");
+            }
+            segments[index + 5] = segment;
+        }
+        String key = String.join(":", segments);
+        int byteLength = key.getBytes(StandardCharsets.UTF_8).length;
+        if (byteLength > ABSOLUTE_MAX_BYTES) {
+            throw new IllegalArgumentException(
+                    "Redis key exceeds the 256-byte absolute limit.");
+        }
+        if (byteLength > NORMAL_MAX_BYTES) {
+            warningSink.accept(new KeyLengthWarning(
+                    environment,
+                    "admin-mail",
+                    "job",
+                    "v2",
+                    IdentifierType.MAIL_JOB,
+                    byteLength));
+        }
+        return key;
+    }
+
     private static String requireNamespaceSegment(String name, String value) {
         if (value == null || !NAMESPACE_SEGMENT.matcher(value).matches()) {
             throw new IllegalArgumentException(name + " must be a lowercase ASCII namespace segment.");
@@ -530,7 +639,8 @@ public final class RedisKeyFactory {
         ADMIN_LOGIN_FLOW("flow"),
         IP_INTELLIGENCE("ip"),
         IP_SINGLE_FLIGHT("single-flight"),
-        PRE_AUTH("token");
+        PRE_AUTH("token"),
+        MAIL_JOB("job");
 
         private final String segment;
 

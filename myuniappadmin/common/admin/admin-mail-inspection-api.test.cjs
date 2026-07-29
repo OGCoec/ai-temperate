@@ -20,7 +20,7 @@ test('one API client maps four inspection types to fixed protected routes', asyn
 	const api = createAdminMailInspectionApi(async (requestPath, options) => {
 		calls.push({ requestPath, options })
 		return { data: {
-			jobId: 'AAAAAAAAAAE',
+			jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
 			inspectionType: requestPath.includes('kiro') ? 'KIRO_STATUS' : 'OPENAI_STATUS',
 			status: 'QUEUED',
 			requestedCount: 1,
@@ -34,8 +34,7 @@ test('one API client maps four inspection types to fixed protected routes', asyn
 			confirmedSubmissionChunkCount: 1,
 			dispatchedSubmissionChunkCount: 0,
 			submissionPendingChunkCount: 0,
-			createdAt: '2026-07-28T00:00:00Z',
-			pollAfterMillis: 2000
+			createdAt: '2026-07-28T00:00:00Z'
 		}, headers: { 'Idempotency-Replayed': 'false' } }
 	})
 
@@ -68,7 +67,7 @@ test('API client forwards credential arrays larger than one hundred lines', asyn
 	const api = createAdminMailInspectionApi(async (_requestPath, options) => {
 		submitted = options.data.credentialLines
 		return { data: {
-			jobId: 'AAAAAAAAAAE',
+			jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
 			inspectionType: 'OPENAI_STATUS',
 			status: 'QUEUED',
 			requestedCount: 101,
@@ -82,8 +81,7 @@ test('API client forwards credential arrays larger than one hundred lines', asyn
 			confirmedSubmissionChunkCount: 1,
 			dispatchedSubmissionChunkCount: 0,
 			submissionPendingChunkCount: 0,
-			createdAt: '2026-07-28T00:00:00Z',
-			pollAfterMillis: 2000
+			createdAt: '2026-07-28T00:00:00Z'
 		}, headers: {} }
 	})
 
@@ -98,9 +96,9 @@ test('the shared API singleton exposes the complete mailbox inspection contract'
 		adminMailInspectionApi
 	} = await loadModule()
 
-	assert.equal(ADMIN_MAIL_INSPECTION_API_CONTRACT_VERSION, 3)
-	assert.equal(adminMailInspectionApi.contractVersion, 3)
-	for (const method of ['createJob', 'getJob', 'getRecoveredJobs', 'resumeJob']) {
+	assert.equal(ADMIN_MAIL_INSPECTION_API_CONTRACT_VERSION, 4)
+	assert.equal(adminMailInspectionApi.contractVersion, 4)
+	for (const method of ['createJob', 'getJob', 'eventsPath', 'getRecoveredJobs', 'resumeJob']) {
 		assert.equal(typeof adminMailInspectionApi[method], 'function', `${method} must be callable`)
 	}
 })
@@ -112,7 +110,7 @@ test('recovered jobs remain paused until the explicit resume endpoint is called'
 		calls.push([requestPath, options.method])
 		if (requestPath.endsWith('/recovered-jobs')) {
 			return [{
-				jobId: 'AAAAAAAAAAE',
+				jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
 				inspectionType: 'OPENAI_STATUS',
 				status: 'AWAITING_ADMIN_RESUME',
 				remainingCount: 2,
@@ -127,10 +125,14 @@ test('recovered jobs remain paused until the explicit resume endpoint is called'
 			}]
 		}
 		return {
-			jobId: 'AAAAAAAAAAE',
+			jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
+			revision: 5,
 			inspectionType: 'OPENAI_STATUS',
 			status: 'RUNNING',
 			requestedCount: 100,
+			acceptedCount: 100,
+			duplicateCount: 0,
+			invalidCount: 0,
 			processedCount: 0,
 			runningCount: 0,
 			queuedCount: 2,
@@ -144,10 +146,10 @@ test('recovered jobs remain paused until the explicit resume endpoint is called'
 	const recovered = await api.getRecoveredJobs()
 	assert.equal(recovered[0].status, 'AWAITING_ADMIN_RESUME')
 	assert.equal(recovered[0].pendingItems[0].maskedEmail, 'o***@example.test')
-	await api.resumeJob('AAAAAAAAAAE')
+	await api.resumeJob('AZ9nEjRWeJCrze8SNFZ4kA')
 	assert.deepEqual(calls, [
 		['/api/admin/mail-inspection/recovered-jobs', 'GET'],
-		['/api/admin/mail-inspection/jobs/AAAAAAAAAAE/resume', 'POST']
+		['/api/admin/mail-inspection/jobs/AZ9nEjRWeJCrze8SNFZ4kA/resume', 'POST']
 	])
 })
 
@@ -171,10 +173,14 @@ test('job lookup rejects non-canonical public IDs before a request is issued', a
 test('job response must preserve the unified lifecycle and safe result array', async () => {
 	const { createAdminMailInspectionApi } = await loadModule()
 	const api = createAdminMailInspectionApi(async () => ({
-		jobId: 'AAAAAAAAAAE',
+		jobId: 'AZ9nEjRWeJCrze8SNFZ4kA',
+		revision: 3,
 		inspectionType: 'OPENAI_STATUS',
 		status: 'RUNNING',
 		requestedCount: 2,
+		acceptedCount: 2,
+		duplicateCount: 0,
+		invalidCount: 0,
 		processedCount: 1,
 		runningCount: 1,
 		queuedCount: 0,
@@ -192,7 +198,7 @@ test('job response must preserve the unified lifecycle and safe result array', a
 		}]
 	}))
 
-	const job = await api.getJob('AAAAAAAAAAE')
+	const job = await api.getJob('AZ9nEjRWeJCrze8SNFZ4kA')
 	assert.equal(job.status, 'RUNNING')
 	assert.equal(job.results[0].lineNumber, 1)
 	assert.equal(job.results[0].status, 'OPENAI_REGISTERED_NORMAL')

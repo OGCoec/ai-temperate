@@ -29,8 +29,8 @@ const adminRouteGuard = createAdminRouteGuard({
 	onSessionInvalid: error => handleAdminSessionInvalid(error, { forceRedirect: true })
 })
 
-export function ensureAdminSession() {
-	return adminRouteGuard.ensureAdminSession()
+export function ensureAdminSession(options = {}) {
+	return adminRouteGuard.ensureAdminSession(options)
 }
 
 export function guardAdminPage(route) {
@@ -54,6 +54,14 @@ export function guardedAdminRedirect(route, options = {}) {
 export function markAdminSessionAuthenticated() {
 	adminRouteGuard.markAdminSessionAuthenticated()
 	markAdminSessionExpiryRecovered()
+}
+
+export function invalidateAdminSessionValidation() {
+	adminRouteGuard.invalidateAdminSessionValidation()
+}
+
+export function shouldRevalidateAdminSession() {
+	return adminRouteGuard.shouldRevalidateAdminSession()
 }
 
 export {

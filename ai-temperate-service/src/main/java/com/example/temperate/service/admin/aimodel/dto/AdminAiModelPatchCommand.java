@@ -16,6 +16,7 @@ public record AdminAiModelPatchCommand(
         AiModelPatchField<List<String>> tags,
         AiModelPatchField<String> vendor,
         AiModelPatchField<BigDecimal> inputRatio,
+        AiModelPatchField<BigDecimal> cachedInputRatio,
         AiModelPatchField<BigDecimal> outputRatio,
         AiModelPatchField<List<String>> capabilities) {
 
@@ -26,6 +27,7 @@ public record AdminAiModelPatchCommand(
                 || tags.present()
                 || vendor.present()
                 || inputRatio.present()
+                || cachedInputRatio.present()
                 || outputRatio.present()
                 || capabilities.present();
     }
