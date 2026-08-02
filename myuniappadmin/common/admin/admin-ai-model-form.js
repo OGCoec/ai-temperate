@@ -1,6 +1,7 @@
 export const AI_MODEL_CAPABILITY_OPTIONS = Object.freeze([
 	{ code: 'CHAT_COMPLETIONS', label: 'Chat Completions', hint: '兼容对话补全协议' },
 	{ code: 'RESPONSES', label: 'Responses', hint: '统一响应与工具调用' },
+	{ code: 'WEB_SEARCH', label: '联网搜索', hint: 'Responses 托管 web_search 工具' },
 	{ code: 'IMAGE', label: '图像', hint: '图像生成或理解' },
 	{ code: 'VIDEO', label: '视频', hint: '视频生成或理解' },
 	{ code: 'AUDIO', label: '音频', hint: '语音、音频生成或理解' }

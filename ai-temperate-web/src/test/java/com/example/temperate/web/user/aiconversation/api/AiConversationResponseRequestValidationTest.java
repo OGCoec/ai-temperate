@@ -2,6 +2,7 @@ package com.example.temperate.web.user.aiconversation.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import java.util.List;
@@ -28,11 +29,30 @@ final class AiConversationResponseRequestValidationTest {
         assertThat(violations((short) 6)).isOne();
     }
 
+    @Test
+    void defaultsMissingWebSearchModeToOffAndAcceptsEveryExplicitMode() {
+        AiConversationResponseRequest defaulted = request(null, null);
+
+        assertThat(defaulted.webSearchMode())
+                .isEqualTo(AiConversationWebSearchMode.OFF);
+        for (AiConversationWebSearchMode mode
+                : AiConversationWebSearchMode.values()) {
+            assertThat(validator.validate(request((short) 2, mode))).isEmpty();
+        }
+    }
+
     private int violations(Short level) {
-        return validator.validate(new AiConversationResponseRequest(
-                        "AAAAAAAAAAA",
-                        level,
-                        new AiConversationInputRequest("hello", List.of())))
+        return validator.validate(request(level, null))
                 .size();
+    }
+
+    private static AiConversationResponseRequest request(
+            Short level,
+            AiConversationWebSearchMode webSearchMode) {
+        return new AiConversationResponseRequest(
+                "AAAAAAAAAAA",
+                level,
+                webSearchMode,
+                new AiConversationInputRequest("hello", List.of()));
     }
 }

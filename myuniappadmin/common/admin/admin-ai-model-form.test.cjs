@@ -8,6 +8,29 @@ async function loadModule() {
 	return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 }
 
+test('web search is an explicit model capability', async () => {
+	const { AI_MODEL_CAPABILITY_OPTIONS, validateAiModelForm } = await loadModule()
+	assert.equal(
+		AI_MODEL_CAPABILITY_OPTIONS.some(option => option.code === 'WEB_SEARCH'),
+		true
+	)
+	const result = validateAiModelForm({
+		modelName: 'gpt-web',
+		vendor: 'openai',
+		description: '',
+		iconPublicId: '',
+		tagsText: '',
+		inputRatio: '1',
+		cachedInputRatio: '1',
+		outputRatio: '1',
+		contextWindowK: '128',
+		maxOutputK: '16',
+		capabilities: ['RESPONSES', 'WEB_SEARCH']
+	})
+	assert.equal(result.valid, true)
+	assert.deepEqual(result.command.capabilities, ['RESPONSES', 'WEB_SEARCH'])
+})
+
 test('empty form uses a safe disabled create default outside editable fields', async () => {
 	const { createEmptyAiModelForm, AI_MODEL_CAPABILITY_OPTIONS } = await loadModule()
 	const form = createEmptyAiModelForm()

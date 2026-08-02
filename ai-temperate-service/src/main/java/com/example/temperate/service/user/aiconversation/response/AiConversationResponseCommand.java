@@ -14,6 +14,7 @@ public record AiConversationResponseCommand(
         byte[] conversationId,
         String modelPublicId,
         AiConversationReasoningEffort reasoningEffort,
+        AiConversationWebSearchMode webSearchMode,
         UUID idempotencyKey,
         AiConversationContent input) {
 
@@ -22,5 +23,6 @@ public record AiConversationResponseCommand(
                 ? null
                 : conversationId.clone();
         reasoningEffort = Objects.requireNonNull(reasoningEffort);
+        webSearchMode = Objects.requireNonNull(webSearchMode);
     }
 }

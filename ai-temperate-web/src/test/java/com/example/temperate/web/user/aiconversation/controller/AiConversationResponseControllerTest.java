@@ -88,6 +88,7 @@ final class AiConversationResponseControllerTest {
                 new AiConversationResponseRequest(
                         "AAAAAAAAAAA",
                         (short) 2,
+                        null,
                         new AiConversationInputRequest("hello", List.of()))))
                 .isInstanceOf(AiConversationException.class)
                 .hasMessage("Idempotency-Key must be a UUIDv4.");
@@ -128,6 +129,7 @@ final class AiConversationResponseControllerTest {
                         new AiConversationResponseRequest(
                                 "AAAAAAAAAAA",
                                 (short) 4,
+                                null,
                                 new AiConversationInputRequest(
                                         "hello", List.of())));
 
@@ -172,6 +174,7 @@ final class AiConversationResponseControllerTest {
                 new AiConversationResponseRequest(
                         "AAAAAAAAAAA",
                         null,
+                        null,
                         new AiConversationInputRequest("hello", List.of())));
 
         ArgumentCaptor<AiConversationResponseCommand> commandCaptor =
@@ -179,6 +182,10 @@ final class AiConversationResponseControllerTest {
         verify(service).respond(commandCaptor.capture());
         assertThat(commandCaptor.getValue().reasoningEffort())
                 .isEqualTo(AiConversationReasoningEffort.MEDIUM);
+        assertThat(commandCaptor.getValue().webSearchMode())
+                .isEqualTo(
+                        com.example.temperate.service.user.aiconversation.response
+                                .AiConversationWebSearchMode.OFF);
     }
 
     @Test

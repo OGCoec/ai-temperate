@@ -19,6 +19,7 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
+import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import com.example.temperate.web.aiconversation.AiConversationPublicId;
 import com.example.temperate.web.user.aiconversation.api.AiConversationResponseRequest;
 import com.example.temperate.web.user.aiconversation.api.AiConversationDirectResponseCancelResponse;
@@ -208,6 +209,7 @@ public final class AiConversationResponseController {
                         request.modelPublicId(),
                         AiConversationReasoningEffort.fromLevel(
                                 request.reasoningEffortLevel()),
+                        request.webSearchMode(),
                         idempotencyUuid,
                         new AiConversationContent(
                                 request.input().text(),
@@ -224,7 +226,9 @@ public final class AiConversationResponseController {
         AiConversationGenerationService generationService = generationServiceProvider == null
                 ? null
                 : generationServiceProvider.getIfAvailable();
-        if (generationService != null) {
+        if (generationService != null
+                && request.webSearchMode() == AiConversationWebSearchMode.OFF) {
+            // 旧 Generation 路径没有研究事件协议；联网搜索固定走直接 POST SSE，避免搜索状态丢失或重新经过 Redis Observer。
             return asyncResponse(
                     principal,
                     command,

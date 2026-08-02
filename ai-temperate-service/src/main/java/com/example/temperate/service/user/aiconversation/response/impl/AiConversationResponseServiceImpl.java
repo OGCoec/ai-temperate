@@ -72,6 +72,7 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
+import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingAction;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingDecision;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingPolicy;
@@ -255,6 +256,7 @@ public final class AiConversationResponseServiceImpl
                             command.conversationId(),
                             command.modelPublicId(),
                             command.reasoningEffort(),
+                            command.webSearchMode(),
                             command.idempotencyKey(),
                             command.input().validated(attachments));
             return respondValidated(prepared, traceContext);
@@ -281,6 +283,7 @@ public final class AiConversationResponseServiceImpl
             AiConversationLifecycleTraceContext requestTraceContext) {
         AiModelCacheEntry model = requiredModel(
                 publicIdCodec.decode(command.modelPublicId()));
+        validateProtocolCapabilities(model, command.webSearchMode());
         AiConversationLifecycleTraceContext validatedTraceContext =
                 requestTraceContext.withModelPublicId(command.modelPublicId());
         validateAttachmentCapabilities(model, command.input().attachments());
@@ -1830,15 +1833,6 @@ public final class AiConversationResponseServiceImpl
                         AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
                         "模型不存在或当前未启用",
                         false));
-        if (!model.capabilities().contains(
-                AiModelCapabilityCode.CHAT_COMPLETIONS)
-                && !model.capabilities().contains(
-                        AiModelCapabilityCode.RESPONSES)) {
-            throw new AiConversationException(
-                    AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
-                    "模型不支持当前会话协议",
-                    false);
-        }
         if (model.contextWindowTokens() <= 0L
                 || model.maxOutputTokens() <= 0L) {
             throw new AiConversationException(
@@ -1847,6 +1841,25 @@ public final class AiConversationResponseServiceImpl
                     false);
         }
         return model;
+    }
+
+    private static void validateProtocolCapabilities(
+            AiModelCacheEntry model,
+            AiConversationWebSearchMode webSearchMode) {
+        boolean supported = webSearchMode == AiConversationWebSearchMode.OFF
+                ? model.capabilities().contains(
+                        AiModelCapabilityCode.CHAT_COMPLETIONS)
+                : model.capabilities().contains(AiModelCapabilityCode.RESPONSES)
+                        && model.capabilities().contains(
+                                AiModelCapabilityCode.WEB_SEARCH);
+        if (!supported) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
+                    webSearchMode == AiConversationWebSearchMode.OFF
+                            ? "模型不支持普通对话协议"
+                            : "模型不支持 Responses 联网搜索",
+                    false);
+        }
     }
 
     private void releaseConcurrency(

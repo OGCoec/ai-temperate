@@ -104,12 +104,18 @@ final class AdminAiModelServiceImplTest {
         when(modelMapper.countByNormalizedModelName("gpt-5.5")).thenReturn(0);
         when(idGenerator.nextPositiveId()).thenReturn(MODEL_ID);
         when(modelMapper.insert(any(AiModel.class))).thenReturn(1);
-        when(capabilityMapper.insertBatch(any())).thenReturn(5);
+        when(capabilityMapper.insertBatch(any())).thenReturn(6);
         when(modelMapper.findById(MODEL_ID)).thenReturn(model(MODEL_ID, true));
 
         service.create(command(
                 true,
-                List.of("CHAT_COMPLETIONS", "RESPONSES", "IMAGE", "VIDEO", "AUDIO")));
+                List.of(
+                        "CHAT_COMPLETIONS",
+                        "RESPONSES",
+                        "WEB_SEARCH",
+                        "IMAGE",
+                        "VIDEO",
+                        "AUDIO")));
 
         ArgumentCaptor<AiModel> modelCaptor = ArgumentCaptor.forClass(AiModel.class);
         verify(modelMapper).insert(modelCaptor.capture());
@@ -132,6 +138,9 @@ final class AdminAiModelServiceImplTest {
                 .extracting(AiModelCapability::getId)
                 .allMatch(id -> id != null && id > 0)
                 .doesNotHaveDuplicates();
+        assertThat(capabilities.getValue())
+                .extracting(AiModelCapability::getCapabilityCode)
+                .contains(AiModelCapabilityCode.WEB_SEARCH);
         ArgumentCaptor<Runnable> refreshCaptor = ArgumentCaptor.forClass(Runnable.class);
         verify(afterCommitExecutor).execute(refreshCaptor.capture());
         verifyNoInteractions(cacheService);

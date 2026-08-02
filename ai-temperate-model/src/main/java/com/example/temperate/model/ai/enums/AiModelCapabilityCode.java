@@ -11,6 +11,7 @@ import java.util.Locale;
 public enum AiModelCapabilityCode {
     CHAT_COMPLETIONS,
     RESPONSES,
+    WEB_SEARCH,
     IMAGE,
     VIDEO,
     AUDIO;

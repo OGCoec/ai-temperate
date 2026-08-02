@@ -100,6 +100,7 @@ final class AiModelSchemaContractTest {
                 .contains("UNIQUE (ai_model_id, capability_code)")
                 .contains("CHAT_COMPLETIONS")
                 .contains("RESPONSES")
+                .contains("'WEB_SEARCH'")
                 .contains("'IMAGE'")
                 .contains("'VIDEO'")
                 .contains("'AUDIO'")
@@ -114,6 +115,27 @@ final class AiModelSchemaContractTest {
         assertThat(orphanCheck)
                 .contains("LEFT JOIN ai_model")
                 .contains("WHERE model.id IS NULL");
+    }
+
+    @Test
+    void webSearchCapabilityMigrationExtendsOnlyTheCapabilityWhitelist()
+            throws IOException {
+        String migration = read(
+                "sql/migrations/015_add_ai_model_web_search_capability.sql");
+
+        assertThat(migration)
+                .contains("BEGIN;")
+                .contains("DROP CONSTRAINT IF EXISTS chk_ai_model_capability_code")
+                .contains("ADD CONSTRAINT chk_ai_model_capability_code")
+                .contains("'CHAT_COMPLETIONS'")
+                .contains("'RESPONSES'")
+                .contains("'WEB_SEARCH'")
+                .contains("'IMAGE'")
+                .contains("'VIDEO'")
+                .contains("'AUDIO'")
+                .doesNotContain("FOREIGN KEY")
+                .doesNotContain("REFERENCES")
+                .contains("COMMIT;");
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.example.temperate.web.user.aiconversation.api;
 
 import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -24,7 +25,18 @@ public record AiConversationResponseRequest(
                 defaultValue = "2",
                 example = "3")
         Short reasoningEffortLevel,
+        @Schema(
+                description = "联网搜索模式：OFF 保持普通对话，AUTO 允许模型自行搜索，REQUIRED 强制搜索；省略时为 OFF",
+                defaultValue = "OFF",
+                allowableValues = {"OFF", "AUTO", "REQUIRED"})
+        AiConversationWebSearchMode webSearchMode,
         @NotNull
         @Valid
         AiConversationInputRequest input) {
+
+    public AiConversationResponseRequest {
+        webSearchMode = webSearchMode == null
+                ? AiConversationWebSearchMode.OFF
+                : webSearchMode;
+    }
 }
