@@ -41,13 +41,44 @@
 						</view>
 						<view class="message-block assistant-message">
 							<view class="assistant-label"><text>AI</text><text v-if="message.stopped" class="stopped-label">已停止</text></view>
+							<view v-if="modelActivityText(message)" class="model-activity" role="status">
+								<view class="model-activity-dot"></view>
+								<text>{{ modelActivityText(message) }}</text>
+							</view>
+							<button
+								v-if="researchDetailsAvailable(message)"
+								class="research-toggle"
+								type="button"
+								:aria-expanded="String(Boolean(message.researchExpanded))"
+								@click="toggleResearch(message)"
+							>
+								<text>查看研究过程 · {{ message.research.sources.length }} 个来源</text>
+								<uni-icons :type="message.researchExpanded ? 'up' : 'down'" size="14" color="#8fdcbe" />
+							</button>
+							<view v-if="message.researchExpanded && researchDetailsAvailable(message)" class="research-panel">
+								<view v-for="activity in message.research.activities" :key="`activity-${activity.sequence}`" class="research-row">
+									<text class="research-time">{{ researchTime(activity.occurredAt) }}</text>
+									<text>{{ researchActivityText(activity) }}</text>
+								</view>
+								<view v-if="message.research.reasoningSummaries.length" class="research-summary">
+									<text class="research-section-label">推理摘要</text>
+									<text>{{ researchSummaryText(message) }}</text>
+								</view>
+								<view v-if="message.research.sources.length" class="research-sources">
+									<text class="research-section-label">已检索来源</text>
+									<button v-for="source in message.research.sources" :key="`${source.role}-${source.url}`" class="research-source" type="button" @click="openResearchSource(source)">
+										<text>{{ source.title || source.domain }}</text>
+										<text class="research-domain">{{ source.domain }}</text>
+									</button>
+								</view>
+							</view>
 							<user-markdown-message
 								v-if="message.responseText"
 								:text="message.responseText"
 								:streaming="Boolean(message.streaming)"
 								:message-key="message.localId || message.messagePublicId || ''"
 							/>
-							<text v-else-if="message.streaming" class="typing-indicator">正在生成…</text>
+							<text v-else-if="message.streaming && !modelActivityText(message)" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
 							<view v-if="message.responseAttachments?.length" class="attachment-grid">
 								<view v-for="attachment in message.responseAttachments" :key="attachment.attachmentId" class="attachment-card">
@@ -110,6 +141,19 @@
 								<uni-icons type="down" size="14" color="#9ba6a0" />
 							</view>
 						</picker>
+						<picker
+							v-if="webSearchAvailable"
+							:range="webSearchOptions"
+							range-key="label"
+							:value="selectedWebSearchModeIndex"
+							:disabled="generating"
+							@change="selectWebSearchMode"
+						>
+							<view class="web-search-picker">
+								<text>{{ selectedWebSearchModeLabel }}</text>
+								<uni-icons type="down" size="14" color="#9ba6a0" />
+							</view>
+						</picker>
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
 				</view>
@@ -149,6 +193,17 @@
 	import { createAiConversationStreamDiagnostics } from '@/common/aichat/ai-conversation-stream-diagnostics.js'
 	import { reportAiConversationStreamDiagnostics } from '@/common/aichat/ai-conversation-stream-diagnostics-reporter.js'
 	import { createAiConversationLifecycleDiagnostics } from '@/common/aichat/ai-conversation-lifecycle-diagnostics.js'
+	import {
+		createAiConversationResearchSession,
+		findAiConversationResearchSession
+	} from '@/common/aichat/ai-conversation-research-session.js'
+	import {
+		AI_CONVERSATION_WEB_SEARCH_MODES,
+		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
+		aiConversationWebSearchEnabled,
+		modelSupportsAiConversationWebSearch,
+		normalizeAiConversationWebSearchMode
+	} from '@/common/aichat/ai-conversation-web-search.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
 	import {
 		ATTACHMENT_UPLOAD_STATES,
@@ -165,6 +220,8 @@
 		discardTransientMessages,
 		markAiConversationHistoryStale,
 		patchLocalMessage,
+		patchLatestMessage,
+		patchMessage,
 		readAiConversationStore,
 		resetCurrentConversation,
 		selectConversation,
@@ -244,6 +301,7 @@
 				models: [],
 				selectedModelPublicId: '',
 				selectedReasoningEffortLevel: 2,
+				selectedWebSearchMode: AI_CONVERSATION_WEB_SEARCH_MODES.OFF,
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
@@ -259,6 +317,7 @@
 				markdownRenderState: null,
 				streamDiagnostics: null,
 				lifecycleDiagnostics: null,
+				activeResearchSession: null,
 				terminalPresentationPending: false,
 				activeLocalId: '',
 				activeIdempotencyKey: '',
@@ -283,6 +342,7 @@
 			this.markdownRenderState?.close?.()
 			this.streamDiagnostics?.finish?.('UNMOUNT')
 			this.lifecycleDiagnostics?.finish?.('UNMOUNT')
+			this.activeResearchSession?.close?.()
 			this.cancelPendingUploads()
 			this.releasePreviewUrls(this.pendingAttachments.map(file => file.path))
 			this.releaseAllLocalPreviews()
@@ -303,6 +363,18 @@
 			selectedReasoningEffortLabel() {
 				return this.reasoningEffortOptions.find(option =>
 					option.value === this.selectedReasoningEffortLevel)?.label || 'Medium'
+			},
+			webSearchOptions() { return AI_CONVERSATION_WEB_SEARCH_OPTIONS },
+			webSearchAvailable() {
+				return modelSupportsAiConversationWebSearch(this.selectedModel)
+			},
+			selectedWebSearchModeIndex() {
+				return Math.max(0, AI_CONVERSATION_WEB_SEARCH_OPTIONS.findIndex(option =>
+					option.value === this.selectedWebSearchMode))
+			},
+			selectedWebSearchModeLabel() {
+				return AI_CONVERSATION_WEB_SEARCH_OPTIONS.find(option =>
+					option.value === this.selectedWebSearchMode)?.label || '联网 · 关闭'
 			},
 			sendGate() {
 				return deriveSendGate({
@@ -325,6 +397,7 @@
 				if (!this.models.length && !this.modelsLoading) this.loadModels()
 				if (asyncGenerationEnabled()) this.restoreActiveGenerations()
 				else this.restoreStoppedDraftForCurrentConversation()
+				this.restoreResearchForCurrentConversation()
 			},
 			applyStore(value) {
 				Object.assign(this, value)
@@ -349,6 +422,8 @@
 						this.selectedModel,
 						rememberedEffort)
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
+					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
+						this.selectedWebSearchMode, this.selectedModel)
 				} catch (error) {
 					this.composerError = error.message || '模型列表加载失败。'
 				} finally {
@@ -376,6 +451,8 @@
 				this.cancelPendingUploads()
 				this.releasePreviewUrls(this.pendingAttachments.map(file => file.path))
 				this.releaseAllLocalPreviews()
+				this.activeResearchSession?.close?.()
+				this.activeResearchSession = null
 				this.applyStore(resetCurrentConversation())
 				this.draft = ''
 				this.pendingAttachments = []
@@ -385,6 +462,8 @@
 				if (publicId === this.currentConversationPublicId) return
 				if (this.generating && asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 				else if (this.generating) return
+				this.activeResearchSession?.close?.()
+				this.activeResearchSession = null
 				this.releaseAllLocalPreviews()
 				this.applyStore(selectConversation(publicId))
 				await this.reloadCurrentMessages()
@@ -399,6 +478,7 @@
 					const page = await aiConversationApi.messages(publicId)
 					if (publicId === this.currentConversationPublicId) {
 						this.applyStore(setMessagePage(page, false))
+						this.restoreResearchForCurrentConversation()
 					}
 					return true
 				} catch (error) {
@@ -433,6 +513,8 @@
 				uni.setStorageSync(MODEL_STORAGE_KEY, model.publicId)
 				const level = this.normalizeReasoningEffortForModel(model)
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
+				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
+					this.selectedWebSearchMode, model)
 			},
 			normalizeReasoningEffortForModel(
 				model,
@@ -455,6 +537,13 @@
 				const level = option.value
 				this.selectedReasoningEffortLevel = level
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
+			},
+			selectWebSearchMode(event) {
+				const option = AI_CONVERSATION_WEB_SEARCH_OPTIONS[
+					Number(event.detail.value)]
+				if (!option) return
+				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
+					option.value, this.selectedModel)
 			},
 			async chooseAttachments() {
 				if (this.attachmentPickerBusy) return
@@ -588,7 +677,9 @@
 						url: file.path,
 						state: 'AVAILABLE'
 					})),
-					responseText: '', responseAttachments: [], streaming: true, saving: false, stopped: false, error: ''
+					responseText: '', responseAttachments: [], streaming: true, saving: false,
+					stopped: false, error: '', modelActivity: null,
+					research: null, researchExpanded: false
 				}))
 				this.draft = ''
 				this.pendingAttachments = []
@@ -631,6 +722,8 @@
 					onDelta: chunk => this.textDrain?.push?.(chunk)
 				})
 				this.scrollBottom()
+				const webSearchMode = normalizeAiConversationWebSearchMode(
+					this.selectedWebSearchMode, this.selectedModel)
 				const command = {
 					conversationPublicId: this.currentConversationPublicId,
 					idempotencyKey: uuidV4(),
@@ -639,10 +732,21 @@
 					body: {
 						modelPublicId: this.selectedModelPublicId,
 						reasoningEffortLevel: this.selectedReasoningEffortLevel,
+						webSearchMode,
 						input: { text, attachments: attachmentRefs }
 					}
 				}
 				this.activeIdempotencyKey = command.idempotencyKey
+				this.activeResearchSession?.close?.()
+				this.activeResearchSession = webSearchMode === AI_CONVERSATION_WEB_SEARCH_MODES.OFF
+					? null
+					: createAiConversationResearchSession({
+						conversationPublicId: this.currentConversationPublicId,
+						localId,
+						idempotencyKey: command.idempotencyKey,
+						webSearchMode
+					})
+				if (this.activeResearchSession) this.patchResearch(localId)
 				if (asyncGenerationEnabled()) registerPendingGeneration({
 					idempotencyKey: command.idempotencyKey,
 					conversationPublicId: command.conversationPublicId,
@@ -672,6 +776,8 @@
 					await this.activeStream.completed
 				} catch (error) {
 					if (this.generating && this.activeLocalId === localId) {
+						this.activeResearchSession?.markTerminal?.('TRANSPORT_ERROR')
+						this.patchResearch(localId)
 						const message = aiConversationErrorMessage(error)
 						this.finishTextPresentation(() => {
 							this.applyStore(patchLocalMessage(localId, { streaming: false, saving: false, error: message }))
@@ -693,6 +799,9 @@
 				if (asyncGenerationEnabled() && localId !== this.activeLocalId) return
 				if (event.type === 'accepted') {
 					this.applyStore(setAcceptedConversation(event.data.conversationPublicId))
+					this.activeResearchSession?.bindConversation?.(
+						event.data.conversationPublicId)
+					this.patchResearch(localId)
 					if (!asyncGenerationEnabled()
 						&& this.transportCancelRequested
 						&& this.activeIdempotencyKey) {
@@ -710,6 +819,16 @@
 					if (event.data.generationPublicId) {
 						this.activeGenerationPublicId = event.data.generationPublicId
 						this.bindCurrentGenerationView(event.data.generationPublicId, localId)
+					}
+				} else if (event.type === 'activity') {
+					this.handleModelActivity(localId, event.data)
+				} else if (event.type === 'source') {
+					if (this.activeResearchSession?.appendSource?.(event.data)) {
+						this.patchResearch(localId)
+					}
+				} else if (event.type === 'reasoning_summary') {
+					if (this.activeResearchSession?.appendReasoningSummary?.(event.data)) {
+						this.patchResearch(localId)
 					}
 				} else if (event.type === 'snapshot') {
 					this.markdownRenderState?.applySnapshot?.({
@@ -754,6 +873,8 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
 				} else if (event.type === 'completed') {
+					this.activeResearchSession?.markTerminal?.('COMPLETED')
+					this.patchResearch(localId)
 					this.markdownRenderState?.complete?.({
 						finalText: event.data?.text
 					})
@@ -765,6 +886,7 @@
 							responseAttachments: event.data.responseAttachments || [],
 							streaming: false,
 							saving: false,
+							modelActivity: null,
 							warnings: event.data.warnings || []
 						}))
 						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
@@ -775,6 +897,8 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
 				} else if (event.type === 'error') {
+					this.activeResearchSession?.markTerminal?.('FAILED')
+					this.patchResearch(localId)
 					this.finishTextPresentation(() => {
 						const message = aiConversationErrorMessage(
 							event.data,
@@ -782,6 +906,7 @@
 						)
 						this.applyStore(patchLocalMessage(localId, {
 							streaming: false,
+							modelActivity: null,
 							error: message
 						}))
 						this.composerError = message
@@ -790,6 +915,105 @@
 							this.lifecycleDiagnostics?.finish?.('SSE_ERROR'))
 					})
 				}
+			},
+			handleModelActivity(localId, value) {
+				const activity = {
+					sequence: Number(value?.sequence || 0),
+					activityId: String(value?.activityId || ''),
+					phase: String(value?.phase || ''),
+					status: String(value?.status || ''),
+					query: value?.query == null ? null : String(value.query),
+					occurredAt: String(value?.occurredAt || '')
+				}
+				const patch = { modelActivity: activity }
+				if (activity.phase === 'FINALIZING') {
+					patch.streaming = false
+					patch.saving = true
+				}
+				this.applyStore(patchLocalMessage(localId, patch))
+				if (this.activeResearchSession?.appendActivity?.(activity)) {
+					this.patchResearch(localId)
+				}
+			},
+			patchResearch(localId) {
+				const research = this.activeResearchSession?.snapshot?.()
+				if (!research) return
+				this.applyStore(patchLocalMessage(localId, { research }))
+			},
+			modelActivityText(message) {
+				const activity = message?.modelActivity
+				if (!activity) return ''
+				if (activity.phase === 'PROCESSING') return '正在准备回答'
+				if (activity.phase === 'REASONING') return '正在推理和整理信息'
+				if (activity.phase === 'WEB_SEARCH') {
+					if (activity.status === 'COMPLETED') return '已完成联网检索，正在整理来源'
+					return activity.query ? `正在搜索：${activity.query}` : '正在执行联网搜索'
+				}
+				if (activity.phase === 'GENERATING') return '正在生成回答'
+				if (activity.phase === 'FINALIZING') return '正在保存生成内容'
+				return ''
+			},
+			researchDetailsAvailable(message) {
+				if (!aiConversationWebSearchEnabled() || !message?.research) return false
+				return Boolean(message.research.activities?.length
+					|| message.research.sources?.length
+					|| message.research.reasoningSummaries?.length)
+			},
+			toggleResearch(message) {
+				const messageKey = message?.localId || message?.messagePublicId
+				if (!messageKey) return
+				this.applyStore(patchMessage(messageKey, {
+					researchExpanded: !message.researchExpanded
+				}))
+			},
+			researchSummaryText(message) {
+				return (message?.research?.reasoningSummaries || [])
+					.map(item => item.textDelta || '').join('')
+			},
+			researchActivityText(activity) {
+				const status = activity.status === 'COMPLETED' ? '已完成' : '进行中'
+				if (activity.phase === 'WEB_SEARCH') {
+					return activity.query
+						? `${status} · 搜索 ${activity.query}`
+						: `${status} · 联网搜索`
+				}
+				if (activity.phase === 'REASONING') return `${status} · 整理和推理`
+				if (activity.phase === 'GENERATING') return `${status} · 生成回答`
+				if (activity.phase === 'FINALIZING') return `${status} · 保存回答`
+				return `${status} · 准备回答`
+			},
+			researchTime(value) {
+				const time = new Date(value)
+				return Number.isNaN(time.getTime()) ? '' : time.toLocaleTimeString([], {
+					hour: '2-digit', minute: '2-digit', second: '2-digit'
+				})
+			},
+			openResearchSource(source) {
+				let url = null
+				try {
+					const parsed = new URL(String(source?.url || ''))
+					if (['http:', 'https:'].includes(parsed.protocol)) url = parsed.href
+				} catch (_) {}
+				if (!url) return
+				// #ifdef H5
+				window.open(url, '_blank', 'noopener,noreferrer')
+				// #endif
+				// #ifdef APP-PLUS
+				plus.runtime.openURL(url)
+				// #endif
+			},
+			restoreResearchForCurrentConversation() {
+				if (!aiConversationWebSearchEnabled()
+					|| !this.currentConversationPublicId
+					|| !this.messages.length) return
+				const research = findAiConversationResearchSession({
+					conversationPublicId: this.currentConversationPublicId
+				})
+				if (!research) return
+				this.applyStore(patchLatestMessage({
+					research,
+					researchExpanded: false
+				}))
 			},
 			finishTextPresentation(callback) {
 				const drain = this.textDrain
@@ -836,6 +1060,8 @@
 					message.localId === cancelledLocalId)
 				if (!asyncGenerationEnabled()) {
 					// 先冻结视觉层和当前可见文本，再等待取消确认，避免重试期间继续向 UI 追加内容。
+					this.activeResearchSession?.markTerminal?.('USER_STOP')
+					this.patchResearch(cancelledLocalId)
 					this.textDrain?.close?.()
 					this.textDrain = null
 					this.transportCancelRequested = true
@@ -851,7 +1077,8 @@
 					this.applyStore(patchLocalMessage(cancelledLocalId, {
 						streaming: false,
 						saving: true,
-						stopped: true
+						stopped: true,
+						modelActivity: null
 					}))
 					try {
 						if (this.activeIdempotencyKey) {
@@ -953,6 +1180,10 @@
 				}
 				const current = this.messages.find(message =>
 					message.localId === this.activeLocalId)
+				if (!asyncGenerationEnabled() && this.activeStream) {
+					this.activeResearchSession?.markTerminal?.('TRANSPORT_DISCONNECT')
+					this.patchResearch(this.activeLocalId)
+				}
 				if (!asyncGenerationEnabled()) this.activeStream?.close?.(
 					'PAGE_UNLOAD', {
 					hasVisibleOutput: Boolean(current?.responseText),
@@ -1063,7 +1294,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .research-source { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -1084,6 +1315,17 @@
 	.assistant-message { margin-top: 12px; padding-left: 2px; background: transparent; }
 	.assistant-label { gap: 8px; margin-bottom: 8px; color: #37d39a; font-size: 12px; font-weight: 800; letter-spacing: .8px; }
 	.stopped-label { color: #f2a24d; font-weight: 600; letter-spacing: 0; }
+	.model-activity { min-height: 28px; margin: 2px 0 8px; display: flex; align-items: center; gap: 8px; color: #9faaa4; font-size: 12px; }
+	.model-activity-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #37d39a; box-shadow: 0 0 0 4px rgba(55, 211, 154, .1); }
+	.research-toggle { min-height: 36px; margin: 0 0 10px; padding: 0 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; color: #a9d8c5; font-size: 12px; }
+	.research-panel { max-width: 680px; margin: 0 0 12px; padding: 12px; border: 1px solid rgba(75, 101, 89, .52); border-radius: 13px; background: rgba(19, 25, 22, .72); }
+	.research-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 5px 0; color: #b9c5bf; font-size: 12px; line-height: 1.5; }
+	.research-time, .research-domain { color: #718078; }
+	.research-summary, .research-sources { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; color: #b9c5bf; font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+	.research-section-label { color: #78d7b2; font-size: 11px; font-weight: 700; letter-spacing: .4px; }
+	.research-source { width: 100%; min-height: 42px; margin: 0; padding: 7px 9px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; border-radius: 9px; color: #d5ded9; font-size: 12px; text-align: left; }
+	.research-source text:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.research-domain { flex: 0 0 auto; font-size: 10px; }
 	.message-text { color: #edf3f0; font-size: 15px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; }
 	.typing-indicator, .saving-indicator { color: #8b9690; font-size: 13px; }
 	.message-error, .message-warning, .composer-error { color: #f2a24d; font-size: 13px; }
@@ -1103,9 +1345,10 @@
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
 	.composer-meta { justify-content: space-between; gap: 12px; margin-top: 7px; padding: 0 4px; }
 	.composer-controls { min-width: 0; gap: 4px; }
-	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
+	.model-picker, .reasoning-effort-picker, .web-search-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.reasoning-effort-picker { color: #8fdcbe; }
+	.web-search-picker { color: #9bc8ec; }
 	.composer-note { color: #64706a; font-size: 10px; text-align: right; }
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #8ba198; font-size: 11px; }
 	.composer-error { display: block; padding: 5px 6px 0; }
@@ -1119,6 +1362,7 @@
 		.composer-meta { align-items: flex-start; flex-direction: column; gap: 2px; }
 		.composer-controls { max-width: 100%; }
 		.model-picker text { max-width: 42vw; }
+		.research-row { grid-template-columns: 1fr; gap: 2px; }
 		.composer-note { padding-left: 10px; text-align: left; }
 	}
 </style>

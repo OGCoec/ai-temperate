@@ -6,7 +6,12 @@ const BOUNDARIES = Object.freeze([
 const BOUNDARY_SET = new Set(BOUNDARIES)
 const EVENT_TYPES = new Set([
 	'HEADERS', 'BYTES', 'accepted', 'heartbeat', 'delta',
+	'activity', 'source', 'reasoning_summary',
 	'completed', 'error', 'message', 'unknown'
+])
+const SEQUENCED_EVENT_TYPES = new Set([
+	'accepted', 'delta', 'activity', 'source', 'reasoning_summary',
+	'completed', 'error'
 ])
 
 const NOOP_DIAGNOSTICS = Object.freeze({
@@ -220,7 +225,8 @@ export function createAiConversationStreamDiagnostics(options = {}) {
 			&& firstHeartbeatAt === null) firstHeartbeatAt = timestamp
 		if (boundary === 'BROWSER_SSE_PARSED' && eventType === 'delta'
 			&& textCharacters > 0 && firstDeltaAt === null) firstDeltaAt = timestamp
-		if (boundary === 'BROWSER_SSE_PARSED' && eventType === 'delta'
+		if (boundary === 'BROWSER_SSE_PARSED'
+			&& SEQUENCED_EVENT_TYPES.has(eventType)
 			&& sequence !== null) {
 			if (lastDeltaSequence !== null && sequence !== lastDeltaSequence + 1) {
 				deltaSequenceGapCount += 1

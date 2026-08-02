@@ -170,7 +170,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 			}
 			diagnostics.record?.('BROWSER_SSE_PARSED', {
 				eventType: event.type,
-				sequence: event.type === 'delta' ? event.data?.sequence : undefined,
+				sequence: event.data?.sequence,
 				textCharacters: event.type === 'delta'
 					? String(event.data?.text || '').length
 					: 0
@@ -279,7 +279,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 			}
 			diagnostics.record?.('BROWSER_SSE_PARSED', {
 				eventType: event.type,
-				sequence: event.type === 'delta' ? event.data?.sequence : undefined,
+				sequence: event.data?.sequence,
 				textCharacters: event.type === 'delta'
 					? String(event.data?.text || '').length
 					: 0

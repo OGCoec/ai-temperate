@@ -163,13 +163,32 @@ test('attachments preupload immediately and gate sending until every file is rea
 	assert.match(page, /sendBlockedReason/)
 })
 
-test('finalization uses the existing delta event name while showing attachment persistence progress', () => {
+test('finalization uses the activity event while showing attachment persistence progress', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 
-	assert.match(page, /event\.data\.type === 'FINALIZING'/)
+	assert.match(page, /event\.type === 'activity'/)
+	assert.match(page, /activity\.phase === 'FINALIZING'/)
 	assert.match(page, /saving:\s*true/)
 	assert.match(page, /正在保存生成内容/)
 	assert.match(page, /ATTACHMENT_STORAGE_PARTIAL/)
+})
+
+test('web search is capability gated and research events remain in session storage', () => {
+	const page = read('components/user/workspace/user-chat-panel.vue')
+	const capability = read('common/aichat/ai-conversation-web-search.js')
+	const research = read('common/aichat/ai-conversation-research-session.js')
+
+	assert.match(capability, /capabilities\.has\('RESPONSES'\)/)
+	assert.match(capability, /capabilities\.has\('WEB_SEARCH'\)/)
+	assert.match(page, /webSearchMode,/)
+	assert.match(page, /event\.type === 'activity'/)
+	assert.match(page, /event\.type === 'source'/)
+	assert.match(page, /event\.type === 'reasoning_summary'/)
+	assert.match(page, /requestAnimationFrame|createAiConversationTextDrain/)
+	assert.match(research, /globalThis\.sessionStorage/)
+	assert.match(research, /MAX_STORAGE_BYTES = 2 \* 1024 \* 1024/)
+	assert.match(research, /MAX_RECORDS = 20/)
+	assert.doesNotMatch(research, /localStorage/)
 })
 
 test('history reopening never merges Redis interrupted output into the visible timeline', () => {

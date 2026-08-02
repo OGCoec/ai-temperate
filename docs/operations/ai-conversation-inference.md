@@ -28,6 +28,31 @@ AI_INFERENCE_MAX_STREAM_DURATION=15m
 
 流式期间不逐片写 PostgreSQL。PostgreSQL 只处理请求开始时的预扣，以及成功、退款、客户端取消估算或待对账终态。前端的平滑逐字展示只调整渲染节奏，不修改真实 SSE、Usage 或持久化文本。
 
+## Responses 联网搜索
+
+联网搜索默认关闭。后端与前端必须同时设置以下变量并重新启动各自产物，才会显示 `OFF/AUTO/REQUIRED` 三档控制：
+
+```text
+AI_CONVERSATION_WEB_SEARCH_ENABLED=true
+AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH=/v1/responses
+```
+
+`OFF` 继续使用 Spring AI `ChatClient + OpenAiChatModel` 调用 `/v1/chat/completions`。`AUTO` 和 `REQUIRED` 使用 Spring Framework `WebClient` 读取 `/v1/responses` 原生 SSE；这是为了保留搜索状态、来源、引用和推理摘要，并不把 Spring MVC 服务端迁移为 WebFlux。
+
+上游供应商事件只在模型边界内存在，后端转换为 `activity`、`source`、`reasoning_summary`、`delta` 等项目事件后，才通过同一条浏览器 SSE 转发。研究过程只保存在请求内存和当前标签页 SessionStorage，不写入 Redis、PostgreSQL、普通内容日志或历史消息接口。
+
+在给模型配置 `RESPONSES + WEB_SEARCH` 能力之前，必须先取得第二阶段授权，并使用以下受限脚本验证本机 8317。脚本拒绝非 loopback 地址，只输出事件类型、字段存在性、来源域名数量和时间，不输出密钥、完整问题、网页正文或模型完整回答：
+
+```powershell
+$env:AI_INFERENCE_CLI_PROXY_BASE_URL = 'http://127.0.0.1:8317'
+$env:CLI_PROXY_API_KEY = '<由临时测试 Secret 注入>'
+$env:AI_DIAGNOSTIC_MODEL = '<低成本测试模型>'
+$env:AI_DIAGNOSTIC_WEB_SEARCH_MODE = 'AUTO'
+node scripts/diagnostics/ai-responses-web-search-probe.mjs
+```
+
+若当前账号或模型没有返回推理摘要，前端只显示真实的处理、搜索和生成状态，禁止模拟推理内容。
+
 ## 失败退款与客户端取消
 
 - 上游超时、限流、鉴权失败、5xx、连接失败、流中断或最终 Usage 缺失属于系统失败；即使已经向用户展示部分临时文本，也全额退回预扣。

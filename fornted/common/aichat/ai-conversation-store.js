@@ -116,6 +116,23 @@ export function patchLocalMessage(localId, patch) {
 	return snapshot()
 }
 
+export function patchLatestMessage(patch) {
+	if (!state.messages.length) return snapshot()
+	const lastIndex = state.messages.length - 1
+	state.messages = state.messages.map((item, index) => index === lastIndex
+		? { ...item, ...patch }
+		: item)
+	return snapshot()
+}
+
+export function patchMessage(messageKey, patch) {
+	state.messages = state.messages.map(item =>
+		(item.localId || item.messagePublicId) === messageKey
+			? { ...item, ...patch }
+			: item)
+	return snapshot()
+}
+
 export function discardTransientMessages() {
 	// 中断片段只允许停留在当前可见页面内存；离开页面后不能重新混入 PostgreSQL 历史。
 	state.messages = state.messages.filter(message => Boolean(message.messagePublicId))
