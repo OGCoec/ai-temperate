@@ -121,7 +121,7 @@ final class AiModelSchemaContractTest {
     void webSearchCapabilityMigrationExtendsOnlyTheCapabilityWhitelist()
             throws IOException {
         String migration = read(
-                "sql/migrations/015_add_ai_model_web_search_capability.sql");
+                "sql/migrations/022_add_ai_model_web_search_capability.sql");
 
         assertThat(migration)
                 .contains("BEGIN;")
