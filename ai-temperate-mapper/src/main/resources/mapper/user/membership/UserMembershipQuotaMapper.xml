@@ -10,6 +10,8 @@
         <result property="loginIdentityId" column="login_identity_id"/>
         <result property="membershipTier" column="membership_tier"/>
         <result property="quotaBalanceMinor" column="quota_balance_minor"/>
+        <result property="quotaPeriodStartedAt" column="quota_period_started_at"/>
+        <result property="quotaPeriodEndsAt" column="quota_period_ends_at"/>
     </resultMap>
 
     <insert id="insert"
@@ -18,10 +20,18 @@
             keyProperty="id"
             keyColumn="id">
         INSERT INTO user_membership_quota (
-            login_identity_id
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at
         )
         VALUES (
-            #{loginIdentityId,jdbcType=BIGINT}
+            #{loginIdentityId,jdbcType=BIGINT},
+            #{membershipTier,jdbcType=SMALLINT},
+            #{quotaBalanceMinor,jdbcType=BIGINT},
+            #{quotaPeriodStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         )
     </insert>
 
@@ -31,8 +41,60 @@
             id,
             login_identity_id,
             membership_tier,
-            quota_balance_minor
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at
         FROM user_membership_quota
         WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
     </select>
+
+    <select id="findByLoginIdentityIdForUpdate"
+            resultMap="UserMembershipQuotaResultMap">
+        SELECT
+            id,
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at
+        FROM user_membership_quota
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+        FOR UPDATE
+    </select>
+
+    <update id="updateBalanceAndPeriod"
+            parameterType="com.example.temperate.model.user.entity.UserMembershipQuota">
+        UPDATE user_membership_quota
+        SET quota_balance_minor = #{quotaBalanceMinor,jdbcType=BIGINT},
+            quota_period_started_at =
+                #{quotaPeriodStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            quota_period_ends_at =
+                #{quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </update>
+
+    <update id="addHistoricalAiRefunds">
+        WITH raw_refund(login_identity_id, refund_minor) AS (
+            VALUES
+            <foreach collection="candidates" item="candidate" separator=",">
+                (
+                    #{candidate.loginIdentityId,jdbcType=BIGINT},
+                    #{candidate.reservedQuotaMinor,jdbcType=BIGINT}
+                )
+            </foreach>
+        ),
+        refund AS (
+            SELECT
+                login_identity_id,
+                SUM(refund_minor) AS refund_minor
+            FROM raw_refund
+            GROUP BY login_identity_id
+        )
+        UPDATE user_membership_quota quota
+        SET quota_balance_minor = quota.quota_balance_minor
+                + refund.refund_minor
+        FROM refund
+        WHERE quota.login_identity_id = refund.login_identity_id
+    </update>
 </mapper>

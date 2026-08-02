@@ -1,0 +1,333 @@
+import {
+	prepareAuthorizedStreamingRequest,
+	recoverAuthorizedStreamingSession
+} from '../auth/http-client.js'
+import { clientPlatform } from '../auth/config.js'
+import { openAiConversationSseH5 } from './ai-conversation-sse-h5.js'
+import { createAiConversationStreamDiagnostics } from './ai-conversation-stream-diagnostics.js'
+import { reportAiConversationStreamDiagnostics } from './ai-conversation-stream-diagnostics-reporter.js'
+import { createAiConversationLifecycleDiagnostics } from './ai-conversation-lifecycle-diagnostics.js'
+import {
+	asyncGenerationEnabled,
+	bindGenerationObserver,
+	getGeneration,
+	markGenerationTerminal,
+	registerGeneration,
+	updateGeneration
+} from './ai-conversation-generation-manager.js'
+// #ifdef APP-PLUS
+import { openAiConversationSseApp } from './ai-conversation-sse-app.js'
+// #endif
+
+function responsePath(conversationPublicId) {
+	return conversationPublicId
+		? `/api/ai/conversations/${encodeURIComponent(conversationPublicId)}/responses`
+		: '/api/ai/conversations/responses'
+}
+
+function wait(milliseconds) {
+	return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function openOnce(command, handlers, lifecycleDiagnostics) {
+	const prepared = await prepareAuthorizedStreamingRequest(
+		responsePath(command.conversationPublicId),
+		{
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Accept: 'text/event-stream, application/json',
+				'Idempotency-Key': command.idempotencyKey,
+				...(lifecycleDiagnostics.clientRequestId === 'unavailable'
+					? {}
+					: { 'X-AI-Client-Request-Id': lifecycleDiagnostics.clientRequestId })
+			}
+		}
+	)
+	lifecycleDiagnostics.record?.('CLIENT_FETCH_SENT')
+	const request = { ...prepared, body: command.body }
+	if (clientPlatform() === 'ANDROID') {
+		// #ifdef APP-PLUS
+		return openAiConversationSseApp(request, handlers)
+		// #endif
+	}
+	return openAiConversationSseH5(request, handlers)
+}
+
+async function openGenerationOnce(generationPublicId, handlers, lifecycleDiagnostics) {
+	const prepared = await prepareAuthorizedStreamingRequest(
+		`/api/ai/conversations/generations/${encodeURIComponent(generationPublicId)}/events`,
+		{ method: 'GET', headers: { Accept: 'text/event-stream' } }
+	)
+	const request = { ...prepared }
+	if (clientPlatform() === 'ANDROID') {
+		// #ifdef APP-PLUS
+		return openAiConversationSseApp(request, handlers)
+		// #endif
+	}
+	return openAiConversationSseH5(request, handlers)
+}
+
+/**
+ * 打开一次 POST SSE；只有 accepted 尚未到达时才允许用同一个幂等键恢复认证并重试一次。
+ */
+export async function openAiConversationStream(command, handlers = {}) {
+	let accepted = false
+	let active = null
+	let closed = false
+	let closeReason = 'USER_STOP'
+	let closeDetails = {}
+	const diagnostics = handlers.diagnostics
+		|| createAiConversationStreamDiagnostics({
+			enabled: clientPlatform() === 'H5' ? undefined : false,
+			onSummary: reportAiConversationStreamDiagnostics
+		})
+	const lifecycleDiagnostics = handlers.lifecycleDiagnostics
+		|| createAiConversationLifecycleDiagnostics()
+	lifecycleDiagnostics.record?.('CLIENT_STREAM_CREATED')
+	let firstDeltaRecorded = false
+	let publicHandle = null
+	let generationPublicId = command.generationPublicId || ''
+	const wrapped = {
+		diagnostics,
+		lifecycleDiagnostics,
+		onGenerationId(value) {
+			diagnostics.bindGenerationPublicId?.(value)
+			if (!asyncGenerationEnabled() || !value) return
+			generationPublicId = value
+			registerGeneration({
+				generationPublicId: value,
+				conversationPublicId: command.conversationPublicId,
+				idempotencyKey: command.idempotencyKey,
+				localId: command.localId,
+				inputText: command.inputText,
+				status: 'QUEUED'
+			})
+			if (publicHandle) bindGenerationObserver(value, publicHandle)
+			handlers.onGenerationId?.(value)
+		},
+		onEvent(event) {
+			if (event.type === 'accepted') {
+				accepted = true
+				diagnostics.bindUsagePublicId?.(event.data?.usagePublicId)
+				diagnostics.bindGenerationPublicId?.(event.data?.generationPublicId)
+				lifecycleDiagnostics.bindUsagePublicId?.(
+					event.data?.usagePublicId)
+				lifecycleDiagnostics.record?.('CLIENT_SSE_ACCEPTED', {
+					hasReportedUsage: false
+				})
+				if (asyncGenerationEnabled() && event.data?.generationPublicId) {
+					generationPublicId = event.data.generationPublicId
+					registerGeneration({
+						generationPublicId: event.data.generationPublicId,
+						conversationPublicId: event.data.conversationPublicId,
+						usagePublicId: event.data.usagePublicId,
+						idempotencyKey: command.idempotencyKey,
+						localId: command.localId,
+						inputText: command.inputText,
+						status: 'RUNNING'
+					})
+					if (publicHandle) {
+						bindGenerationObserver(event.data.generationPublicId, publicHandle)
+					}
+					handlers.onGenerationId?.(event.data.generationPublicId)
+				}
+			}
+			if (event.type === 'snapshot' && generationPublicId) {
+				updateGeneration(generationPublicId, {
+					revision: Number(event.data?.revision || 0),
+					responseText: String(event.data?.text || '')
+				})
+			}
+			if (asyncGenerationEnabled() && event.type === 'delta'
+				&& event.data?.text && generationPublicId) {
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					revision: Math.max(Number(current?.revision || 0), Number(event.data?.revision || 0)),
+					responseText: `${current?.responseText || ''}${event.data.text}`
+				})
+			}
+			if (asyncGenerationEnabled() && event.type === 'completed'
+				&& generationPublicId) {
+				markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
+				updateGeneration(generationPublicId, {
+					terminalType: event.data.terminalType,
+					terminalReason: event.data.terminalReason
+				})
+			}
+			if (event.type === 'delta' && event.data?.type === 'TEXT'
+				&& String(event.data?.text || '').length > 0) {
+				const textCharacters = String(event.data?.text || '').length
+				lifecycleDiagnostics.observeVisibleOutput?.(textCharacters)
+				if (!firstDeltaRecorded) {
+					firstDeltaRecorded = true
+					lifecycleDiagnostics.record?.('CLIENT_FIRST_DELTA')
+				}
+			}
+			if (event.type === 'completed') {
+				// accepted 只是预扣记录；只有 completed 才能证明上游最终 Usage 已随终态到达。
+				lifecycleDiagnostics.reportedUsageObserved?.()
+			}
+			diagnostics.record?.('BROWSER_SSE_PARSED', {
+				eventType: event.type,
+				sequence: event.type === 'delta' ? event.data?.sequence : undefined,
+				textCharacters: event.type === 'delta'
+					? String(event.data?.text || '').length
+					: 0
+			})
+			handlers.onEvent?.(event)
+		}
+	}
+
+	async function connect(retried) {
+		active = await openOnce(command, wrapped, lifecycleDiagnostics)
+		// 停止动作可能早于认证准备或原生传输句柄创建；句柄一旦到达必须立即关闭，不能让请求在后台继续计费。
+		if (closed) {
+			active.close?.(closeReason, closeDetails)
+			return
+		}
+		try {
+			await active.completed
+		} catch (error) {
+			if (!closed && !accepted && !retried
+				&& await recoverAuthorizedStreamingSession(error)) {
+				return connect(true)
+			}
+			if (!closed && asyncGenerationEnabled() && generationPublicId) {
+				return reconnectGeneration(error)
+			}
+			if (!closed) throw error
+		}
+	}
+
+	async function reconnectGeneration(initialFailure) {
+		const deadline = Date.now() + 25_000
+		let lastFailure = initialFailure
+		let delay = 250
+		while (!closed && Date.now() < deadline) {
+			updateGeneration(generationPublicId, { observerAttached: false })
+			await wait(delay)
+			if (closed) return
+			try {
+				active = await openGenerationOnce(
+					generationPublicId, wrapped, lifecycleDiagnostics)
+				bindGenerationObserver(generationPublicId, publicHandle)
+				await active.completed
+				return
+			} catch (failure) {
+				lastFailure = failure
+				delay = Math.min(delay * 2, 2_000)
+			}
+		}
+		if (!closed) throw lastFailure
+	}
+
+	publicHandle = Object.freeze({
+		completed: connect(false),
+		close(reason = 'USER_STOP', details = {}) {
+			closed = true
+			closeReason = reason
+			closeDetails = details
+			lifecycleDiagnostics.stopRequested?.(reason, details)
+			active?.close?.(reason, details)
+		},
+		finishPresentation(outcome, details = {}) {
+			lifecycleDiagnostics.finish?.(outcome, details)
+		},
+		lifecycleDiagnostics
+	})
+	return publicHandle
+}
+
+/**
+ * 在刷新、路由返回或 SSE 传输恢复时重新观察既有 Generation；关闭句柄只表示 DETACHED。
+ */
+export async function openAiConversationGenerationStream(generationPublicId, handlers = {}) {
+	const diagnostics = handlers.diagnostics
+		|| createAiConversationStreamDiagnostics({
+			enabled: clientPlatform() === 'H5' ? undefined : false,
+			onSummary: reportAiConversationStreamDiagnostics
+		})
+	diagnostics.bindGenerationPublicId?.(generationPublicId)
+	const lifecycleDiagnostics = handlers.lifecycleDiagnostics
+		|| createAiConversationLifecycleDiagnostics()
+	const wrapped = {
+		...handlers,
+		diagnostics,
+		lifecycleDiagnostics,
+		onEvent(event) {
+			if (event.type === 'snapshot') {
+				updateGeneration(generationPublicId, {
+					revision: Number(event.data?.revision || 0),
+					responseText: String(event.data?.text || ''),
+					observerAttached: true
+				})
+			}
+			if (event.type === 'delta' && event.data?.text) {
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					revision: Math.max(Number(current?.revision || 0), Number(event.data?.revision || 0)),
+					responseText: `${current?.responseText || ''}${event.data.text}`
+				})
+			}
+			if (event.type === 'completed') {
+				markGenerationTerminal(generationPublicId, event.data?.status || 'COMPLETED')
+				updateGeneration(generationPublicId, {
+					terminalType: event.data?.terminalType,
+					terminalReason: event.data?.terminalReason
+				})
+			}
+			diagnostics.record?.('BROWSER_SSE_PARSED', {
+				eventType: event.type,
+				sequence: event.type === 'delta' ? event.data?.sequence : undefined,
+				textCharacters: event.type === 'delta'
+					? String(event.data?.text || '').length
+					: 0
+			})
+			handlers.onEvent?.(event)
+		}
+	}
+	let active = await openGenerationOnce(generationPublicId, wrapped, lifecycleDiagnostics)
+	let closed = false
+	let handle = null
+	const completed = (async () => {
+		let outcome = 'TRANSPORT_ERROR'
+		try {
+			await active.completed
+			outcome = 'COMPLETE'
+			return
+		} catch (initialFailure) {
+			let lastFailure = initialFailure
+			let delay = 250
+			const deadline = Date.now() + 25_000
+			while (!closed && Date.now() < deadline) {
+				updateGeneration(generationPublicId, { observerAttached: false })
+				await wait(delay)
+				if (closed) return
+				try {
+					active = await openGenerationOnce(
+						generationPublicId, wrapped, lifecycleDiagnostics)
+					bindGenerationObserver(generationPublicId, handle)
+					await active.completed
+					outcome = 'COMPLETE'
+					return
+				} catch (failure) {
+					lastFailure = failure
+					delay = Math.min(delay * 2, 2_000)
+				}
+			}
+			if (!closed) throw lastFailure
+		} finally {
+			diagnostics.finish?.(closed ? 'CLIENT_DETACHED' : outcome)
+		}
+	})()
+	handle = Object.freeze({
+		completed,
+		close() {
+			closed = true
+			active.close?.('CLIENT_DETACHED')
+		}
+	})
+	bindGenerationObserver(generationPublicId, handle)
+	return handle
+}

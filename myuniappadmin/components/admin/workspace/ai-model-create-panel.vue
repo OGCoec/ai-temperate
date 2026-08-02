@@ -69,7 +69,7 @@
 				</view>
 				<view class="dock-actions">
 					<admin-action-button tone="neutral" :disabled="saving" @click="requestLeave">取消</admin-action-button>
-					<admin-action-button tone="amber" :loading="saving" @click="save">保存模型</admin-action-button>
+					<admin-action-button tone="amber" :disabled="!tokenLimitsComplete" :loading="saving" @click="save">保存模型</admin-action-button>
 				</view>
 			</view>
 		</view>
@@ -99,10 +99,14 @@ export default {
 		discoveryPrefill: { type: Object, default: null }
 	},
 	computed: {
+		tokenLimitsComplete() {
+			return String(this.form?.contextWindowK ?? '').trim().length > 0
+				&& String(this.form?.maxOutputK ?? '').trim().length > 0
+		},
 		discoveryNotice() {
 			const owner = String(this.discoveryPrefill?.owner || '').trim()
 			const ownerHint = owner ? `所有者提示：${owner}。` : '上游没有提供所有者提示。'
-			return `模型 ID 来自网关发现结果，${ownerHint}厂商、计费倍率、能力和启用状态尚未配置，请核对后再保存。`
+			return `模型 ID 来自网关发现结果，${ownerHint}厂商、计费倍率、上下文与输出限制、能力和启用状态尚未配置，请核对后再保存。`
 		}
 	},
 	data() {

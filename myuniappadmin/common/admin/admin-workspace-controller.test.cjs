@@ -22,7 +22,7 @@ function createHistoryProbe() {
 	}
 }
 
-test('peer navigation deactivates and activates panels without rebuilding the shell', async () => {
+test('peer navigation deactivates the old panel and lets the workspace mount the new panel', async () => {
 	const { createAdminWorkspaceController } = await loadModule()
 	const history = createHistoryProbe()
 	const events = []
@@ -37,7 +37,7 @@ test('peer navigation deactivates and activates panels without rebuilding the sh
 	})
 
 	assert.equal(await controller.navigate({ view: 'ai-models' }), true)
-	assert.deepEqual(events, ['dashboard:off', 'models:on'])
+	assert.deepEqual(events, ['dashboard:off'])
 	assert.deepEqual(history.calls, [['push', 'ai-models']])
 })
 

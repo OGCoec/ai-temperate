@@ -1,0 +1,6 @@
+{
+  "id": "ait-sse",
+  "displayName": "AI Temperate POST SSE",
+  "version": "1.0.0",
+  "description": "Android HTTPS POST SSE transport with cancellation"
+}

@@ -18,6 +18,8 @@ public record AdminAiModelPatchCommand(
         AiModelPatchField<BigDecimal> inputRatio,
         AiModelPatchField<BigDecimal> cachedInputRatio,
         AiModelPatchField<BigDecimal> outputRatio,
+        AiModelPatchField<Long> contextWindowTokens,
+        AiModelPatchField<Long> maxOutputTokens,
         AiModelPatchField<List<String>> capabilities) {
 
     public boolean hasChanges() {
@@ -29,6 +31,8 @@ public record AdminAiModelPatchCommand(
                 || inputRatio.present()
                 || cachedInputRatio.present()
                 || outputRatio.present()
+                || contextWindowTokens.present()
+                || maxOutputTokens.present()
                 || capabilities.present();
     }
 }

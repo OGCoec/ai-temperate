@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiConversationMapper">
+
+    <resultMap id="AiConversationResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversation">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="active" column="is_active"/>
+        <result property="title" column="title"/>
+        <result property="lastMessageId" column="last_message_id"/>
+        <result property="lastCompactedMessageId" column="last_compacted_message_id"/>
+        <result property="compactedContextJson" column="compacted_context_json"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <sql id="ConversationColumns">
+        id,
+        login_identity_id,
+        is_active,
+        title,
+        last_message_id,
+        last_compacted_message_id,
+        compacted_context::TEXT AS compacted_context_json,
+        created_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiConversation">
+        INSERT INTO ai_conversation (
+            id,
+            login_identity_id,
+            is_active,
+            title,
+            last_message_id,
+            last_compacted_message_id,
+            compacted_context
+        )
+        VALUES (
+            #{id,jdbcType=BINARY},
+            #{loginIdentityId,jdbcType=BIGINT},
+            #{active,jdbcType=BOOLEAN},
+            #{title,jdbcType=VARCHAR},
+            #{lastMessageId,jdbcType=BIGINT},
+            #{lastCompactedMessageId,jdbcType=BIGINT},
+            CAST(#{compactedContextJson,jdbcType=VARCHAR} AS JSONB)
+        )
+    </insert>
+
+    <select id="findActiveOwned" resultMap="AiConversationResultMap">
+        SELECT
+            <include refid="ConversationColumns"/>
+        FROM ai_conversation
+        WHERE id = #{conversationId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND is_active = TRUE
+    </select>
+
+    <select id="findById" resultMap="AiConversationResultMap">
+        SELECT
+            <include refid="ConversationColumns"/>
+        FROM ai_conversation
+        WHERE id = #{conversationId,jdbcType=BINARY}
+    </select>
+
+    <select id="findActivePage" resultMap="AiConversationResultMap">
+        SELECT
+            <include refid="ConversationColumns"/>
+        FROM ai_conversation
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND is_active = TRUE
+          AND last_message_id IS NOT NULL
+          <if test="beforeLastMessageId != null and beforeConversationId != null">
+            AND (last_message_id, id) &lt; (
+                #{beforeLastMessageId,jdbcType=BIGINT},
+                #{beforeConversationId,jdbcType=BINARY}
+            )
+          </if>
+        ORDER BY last_message_id DESC, id DESC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <update id="updateAfterPersistedMessage">
+        UPDATE ai_conversation
+        SET title = CASE
+                WHEN last_message_id IS NULL
+                    THEN #{initialTitle,jdbcType=VARCHAR}
+                ELSE title
+            END,
+            last_message_id = #{messageId,jdbcType=BIGINT}
+        WHERE id = #{conversationId,jdbcType=BINARY}
+          AND (
+              last_message_id IS NULL
+              OR last_message_id &lt; #{messageId,jdbcType=BIGINT}
+          )
+    </update>
+
+    <update id="updateCompactionCompareAndSet">
+        UPDATE ai_conversation
+        SET last_compacted_message_id = #{lastCompactedMessageId,jdbcType=BIGINT},
+            compacted_context = CAST(#{compactedContextJson,jdbcType=VARCHAR} AS JSONB)
+        WHERE id = #{conversationId,jdbcType=BINARY}
+          AND (
+            (
+              #{expectedLastCompactedMessageId,jdbcType=BIGINT} IS NULL
+              AND last_compacted_message_id IS NULL
+            )
+            OR last_compacted_message_id =
+               #{expectedLastCompactedMessageId,jdbcType=BIGINT}
+          )
+    </update>
+</mapper>

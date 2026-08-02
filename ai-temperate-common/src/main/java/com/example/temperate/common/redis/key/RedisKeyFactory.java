@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * 统一生成符合项目命名空间、长度和敏感标识保护规则的 Redis Key。
  *
  * <p>该工厂将环境、业务域、版本和标识组合成受校验的键，并强制邮箱、手机号、令牌等敏感标识使用
- * HMAC 值；它不执行 Redis 读写，也不负责业务数据的序列化。</p>
+ * HMAC 值、用户资料内部 ID 使用专用加密标识；它不执行 Redis 读写，也不负责业务数据序列化。</p>
  */
 public final class RedisKeyFactory {
 
@@ -281,8 +281,116 @@ public final class RedisKeyFactory {
      * <p>模型名称和厂商等业务内容只存在于加密 Value 中，Key 本身保持固定且不携带模型标识。</p>
      */
     public String aiModelEnabledSnapshotKey() {
-        // v3 与缓存输入倍率的快照 Schema 同步，旧 v2 快照只依赖原 TTL 自然过期。
-        return fixedKey("ai", "model", "v3", "enabled");
+        // v4 与十进制 K 的容量语义同步，改用新 Key 可避免新应用读取旧语义的加密快照。
+        return fixedKey("ai", "model", "v4", "enabled");
+    }
+
+    /**
+     * 生成保存压缩摘要、持久化尾部和中断覆盖层的 AI 会话上下文 Hash Key。
+     */
+    public String aiConversationContextKey(ConversationRedisId conversationId) {
+        return aiConversationKey(IdentifierType.AI_CONVERSATION_CONTEXT, conversationId);
+    }
+
+    /**
+     * 生成会话上下文分批重建的临时 Hash Key；提升成功前不会覆盖正式上下文。
+     */
+    public String aiConversationContextBuildKey(
+            ConversationRedisId conversationId,
+            ConversationRedisBuildId buildId) {
+        if (conversationId == null || buildId == null) {
+            throw new IllegalArgumentException(
+                    "AI conversation Redis build key requires both IDs.");
+        }
+        return create(
+                "ai",
+                "conversation",
+                "v1",
+                IdentifierType.AI_CONVERSATION_CONTEXT_BUILD,
+                conversationId.value() + "_" + buildId.value());
+    }
+
+    /**
+     * 生成同一会话单活流式生成所使用的短期租约 Key。
+     */
+    public String aiConversationInflightKey(ConversationRedisId conversationId) {
+        return aiConversationKey(IdentifierType.AI_CONVERSATION_INFLIGHT, conversationId);
+    }
+
+    /**
+     * 生成同一会话持久化压缩任务所使用的单飞租约 Key。
+     */
+    public String aiConversationCompactionKey(ConversationRedisId conversationId) {
+        return aiConversationKey(IdentifierType.AI_CONVERSATION_COMPACTION, conversationId);
+    }
+
+    /**
+     * 生成全部应用实例共享的 AI 会话全局并发租约集合 Key。
+     */
+    public String aiConversationGlobalConcurrencyKey() {
+        return fixedKey("ai", "conversation", "v1", "concurrency-global");
+    }
+
+    /**
+     * 生成单个用户的 AI 会话并发租约集合 Key，内部用户 ID 必须先经过用途隔离 HMAC。
+     */
+    public String aiConversationUserConcurrencyKey(HmacIdentifier userIdentifier) {
+        return create(
+                "ai",
+                "conversation",
+                "v1",
+                IdentifierType.AI_CONVERSATION_USER_CONCURRENCY,
+                requireHmacIdentifier(userIdentifier));
+    }
+
+    /**
+     * 生成异步 Generation 的分块输出快照 Hash Key，公共 Generation ID 不包含内部数据库标识。
+     */
+    public String aiConversationGenerationSnapshotKey(
+            GenerationRedisId generationId) {
+        return create(
+                "ai",
+                "generation",
+                "v1",
+                IdentifierType.AI_GENERATION_SNAPSHOT,
+                Objects.requireNonNull(generationId).value());
+    }
+
+    /**
+     * 生成浏览器流式诊断摘要的单 Generation 去重 Key，公共 ID 仅用于限制重复提交，
+     * Key 本身不保存模型正文、用户身份或诊断负载。
+     */
+    public String aiConversationGenerationBrowserDiagnosticKey(
+            GenerationRedisId generationId) {
+        return create(
+                "ai",
+                "generation",
+                "v1",
+                IdentifierType.AI_GENERATION_BROWSER_DIAGNOSTIC,
+                Objects.requireNonNull(generationId).value());
+    }
+
+    /**
+     * 生成异步 Generation 的全局易失通知频道，事件丢失由快照 revision 恢复。
+     */
+    public String aiConversationGenerationEventsChannel() {
+        return fixedKey("ai", "generation", "v1", "events");
+    }
+
+    /**
+     * 生成普通用户资料快照 Key，内部用户 ID 必须先经过专用 AES-256 保护器转换。
+     */
+    public String userProfileKey(EncryptedRedisId encryptedId) {
+        if (encryptedId == null) {
+            throw new IllegalArgumentException(
+                    "User profile Redis key requires an encrypted ID.");
+        }
+        return create(
+                "user",
+                "profile",
+                "v1",
+                IdentifierType.ENCRYPTED_ID,
+                encryptedId.value());
     }
 
     /**
@@ -495,6 +603,15 @@ public final class RedisKeyFactory {
                 requireHmacIdentifier(identifier));
     }
 
+    private String aiConversationKey(
+            IdentifierType type, ConversationRedisId conversationId) {
+        if (conversationId == null) {
+            throw new IllegalArgumentException(
+                    "AI conversation Redis key requires a conversation ID.");
+        }
+        return create("ai", "conversation", "v1", type, conversationId.value());
+    }
+
     private String create(
             String domain,
             String object,
@@ -640,6 +757,14 @@ public final class RedisKeyFactory {
         IP_INTELLIGENCE("ip"),
         IP_SINGLE_FLIGHT("single-flight"),
         PRE_AUTH("token"),
+        ENCRYPTED_ID("enc-id"),
+        AI_CONVERSATION_CONTEXT("ctx"),
+        AI_CONVERSATION_CONTEXT_BUILD("ctx-build"),
+        AI_CONVERSATION_INFLIGHT("inflight"),
+        AI_CONVERSATION_COMPACTION("compact"),
+        AI_CONVERSATION_USER_CONCURRENCY("concurrency-user"),
+        AI_GENERATION_SNAPSHOT("snapshot"),
+        AI_GENERATION_BROWSER_DIAGNOSTIC("browser-diagnostic"),
         MAIL_JOB("job");
 
         private final String segment;

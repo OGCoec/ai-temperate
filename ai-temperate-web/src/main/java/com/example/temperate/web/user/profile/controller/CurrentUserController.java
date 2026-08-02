@@ -1,7 +1,7 @@
 package com.example.temperate.web.user.profile.controller;
 
-import com.example.temperate.model.user.domain.CurrentUserProfile;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.user.profile.CurrentUserProfileResult;
 import com.example.temperate.service.user.profile.CurrentUserProfileService;
 import com.example.temperate.web.user.profile.api.CurrentUserResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,8 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/users")
 @Tag(
         name = "用户-当前用户资料",
-        description = "为已通过 Access Token 认证的 H5 和 Android 客户端返回当前用户展示名称、邮箱、手机号和头像 URL。"
-                + "接口不读取 Refresh Token，不返回内部用户 ID、密码、令牌、设备标识或请求 IP，也不负责修改资料。")
+        description = "为已通过 Access Token 认证的 H5 和 Android 客户端返回当前用户资料、会员等级、"
+                + "剩余额度和预计重置时间。接口不读取 Refresh Token，不返回内部用户 ID、密码、令牌、"
+                + "设备标识或请求 IP，也不负责额度扣减和最终结算。")
 public final class CurrentUserController {
 
     private final CurrentUserProfileService currentUserProfileService;
@@ -37,12 +38,23 @@ public final class CurrentUserController {
     public ResponseEntity<CurrentUserResponse> me(
             @AuthenticationPrincipal SessionPrincipal principal) {
         // principal 由统一认证拦截器写入，Controller 不接受客户端提交的用户 ID，也不重复解析 Token。
-        CurrentUserProfile profile = currentUserProfileService.getRequired(principal.userId());
+        CurrentUserProfileResult profile =
+                currentUserProfileService.getRequired(principal.userId());
         CurrentUserResponse response = new CurrentUserResponse(
                 profile.displayName(),
                 profile.email(),
                 profile.phone(),
-                profile.avatarUrl());
+                profile.avatarUrl(),
+                profile.membershipTier(),
+                profile.quotaBalanceMinor(),
+                profile.quotaBalance(),
+                profile.quotaTotalMinor(),
+                profile.quotaTotal(),
+                profile.quotaUsedMinor(),
+                profile.quotaUsed(),
+                profile.quotaUsagePercent(),
+                profile.quotaPeriodStartedAt(),
+                profile.quotaResetAt());
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore().cachePrivate())
                 .body(response);

@@ -64,6 +64,8 @@ class PersistenceJavaContractTest {
         assertBeanProperty(membershipQuota, "loginIdentityId", Long.class);
         assertBeanProperty(membershipQuota, "membershipTier", Integer.class);
         assertBeanProperty(membershipQuota, "quotaBalanceMinor", Long.class);
+        assertBeanProperty(membershipQuota, "quotaPeriodStartedAt", OffsetDateTime.class);
+        assertBeanProperty(membershipQuota, "quotaPeriodEndsAt", OffsetDateTime.class);
         assertTrue(Arrays.stream(membershipQuota.getDeclaredConstructors())
                 .anyMatch(constructor -> constructor.getParameterCount() == 0));
     }

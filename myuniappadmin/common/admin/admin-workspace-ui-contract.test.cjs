@@ -17,6 +17,11 @@ test('workspace owns one persistent shell and statically imports every business 
 	}
 	assert.match(workspace, /components:\s*\{[^}]*AdminPageShell/)
 	assert.doesNotMatch(workspace, /v-if="adminRouteReady"/)
+	assert.doesNotMatch(workspace, /mode="out-in"/)
+	assert.match(workspace, /errorCaptured\s*\(/)
+	assert.match(workspace, /schedulePanelActivation\s*\(/)
+	assert.match(workspace, /panel-render-error/)
+	assert.doesNotMatch(workspace, /__AIT_ADMIN_WORKSPACE_INITIAL_PATH__/)
 })
 
 test('business panels do not own page-stack navigation or page-level guards', () => {

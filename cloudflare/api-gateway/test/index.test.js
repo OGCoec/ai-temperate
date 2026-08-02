@@ -70,6 +70,341 @@ test('root host forwards only ordinary API paths and preserves path plus query',
 	assert.equal(captured.cache, 'no-store')
 })
 
+test('root host forwards the ordinary AI model APIs without changing their paths', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/ai-models?pageNum=1&pageSize=20'),
+		ENV,
+		runtime(async upstream => {
+			captured = upstream
+			return Response.json({ models: [] })
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(
+		captured.url,
+		'https://api.niko000o.site/api/ai-models?pageNum=1&pageSize=20'
+	)
+	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+})
+
+test('root host forwards an ordinary AI model detail path', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/ai-models/AAABi0VWeJ8'),
+		ENV,
+		runtime(async upstream => {
+			captured = upstream
+			return Response.json({ publicId: 'AAABi0VWeJ8' })
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(captured.url, 'https://api.niko000o.site/api/ai-models/AAABi0VWeJ8')
+})
+
+test('root host forwards AI conversation POST SSE without buffering its body', async () => {
+	let captured
+	let capturedBody
+	const response = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/responses', {
+			method: 'POST',
+			body: JSON.stringify({
+				modelPublicId: 'AAABi0VWeJ8',
+				input: { text: 'hello', attachments: [] }
+			}),
+			headers: {
+				'Content-Type': 'application/json',
+				'Idempotency-Key': '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6'
+			}
+		}),
+		ENV,
+		runtime(async upstream => {
+			captured = upstream
+			capturedBody = await upstream.text()
+			return new Response('event: accepted\\ndata: {}\\n\\n', {
+				status: 200,
+				headers: { 'Content-Type': 'text/event-stream' }
+			})
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(captured.method, 'POST')
+	assert.equal(
+		captured.url,
+		'https://api.niko000o.site/api/ai/conversations/responses'
+	)
+	assert.equal(JSON.parse(capturedBody).input.text, 'hello')
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+	assert.match(response.headers.get('Cache-Control'), /no-transform/)
+})
+
+test('sampled AI generation SSE reports edge read and forward summaries without body text', async () => {
+	const entries = []
+	const generationId = 'AZ-vpV3kfag70-0EMMUETQ'
+	const body = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode('event: delta\n'))
+			controller.enqueue(new TextEncoder().encode(
+				'data: {"revision":1,"text":"secret model output"}\n\n'))
+			controller.close()
+		}
+	})
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/generations/${generationId}/events`,
+			{ headers: { Accept: 'text/event-stream' } }),
+		{ ...ENV, SSE_ROUTE_LOG_SAMPLE_RATE: '1' },
+		{
+			...runtime(() => new Response(body, {
+				headers: {
+					'Content-Type': 'text/event-stream',
+					'X-Trace-Id': 'trace-edge-test',
+					'X-AI-Usage-Id': 'AZ-usage-public-id'
+				}
+			})),
+			random: () => 0,
+			log: { info: value => entries.push(value) }
+		}
+	)
+
+	assert.equal(await response.text(),
+		'event: delta\ndata: {"revision":1,"text":"secret model output"}\n\n')
+	await new Promise(resolve => setTimeout(resolve, 0))
+	const summary = entries
+		.map(value => JSON.parse(value))
+		.find(value => value.event === 'sse_edge_transport_summary')
+	assert.equal(summary.route,
+		'/api/ai/conversations/generations/{generationId}/events')
+	assert.equal(summary.generationPublicId, generationId)
+	assert.equal(summary.traceId, 'trace-edge-test')
+	assert.equal(summary.firstDeltaReadAt, NOW)
+	assert.equal(summary.totalChunks, 2)
+	assert.equal(summary.totalBytes > 0, true)
+	assert.doesNotMatch(JSON.stringify(summary), /secret model output/)
+})
+
+test('root host forwards a bounded generation diagnostics summary path', async () => {
+	const generationId = 'AZ-vpV3kfag70-0EMMUETQ'
+	let captured
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/generations/${generationId}/stream-diagnostics`,
+			{
+				method: 'POST',
+				body: JSON.stringify({ usagePublicId: 'AZ-50wCZAQGBuCvbSqIYsA' }),
+				headers: { 'Content-Type': 'application/json' }
+			}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(captured.url,
+		`https://api.niko000o.site/api/ai/conversations/generations/${generationId}/stream-diagnostics`)
+	assert.equal(captured.method, 'POST')
+})
+
+test('root host forwards only exact asynchronous generation query and cancel endpoints', async () => {
+	const generationId = 'AZ-vpV3kfag70-0EMMUETQ'
+	const forwarded = []
+	const fetchImpl = async upstream => {
+		forwarded.push({ url: upstream.url, method: upstream.method })
+		return Response.json({ ok: true })
+	}
+	const active = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/generations'),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const byIdempotency = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/generations/by-idempotency', {
+			headers: { 'Idempotency-Key': '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6' }
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const detail = await handleRequest(
+		request('niko000o.site', `/api/ai/conversations/generations/${generationId}`),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const cancellation = await handleRequest(
+		request('niko000o.site', `/api/ai/conversations/generations/${generationId}/cancel`, {
+			method: 'POST'
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const unknownAction = await handleRequest(
+		request('niko000o.site', `/api/ai/conversations/generations/${generationId}/delete`),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+
+	assert.equal(active.status, 200)
+	assert.equal(byIdempotency.status, 200)
+	assert.equal(detail.status, 200)
+	assert.equal(cancellation.status, 200)
+	assert.equal(unknownAction.status, 403)
+	assert.deepEqual(forwarded, [
+		{
+			url: 'https://api.niko000o.site/api/ai/conversations/generations',
+			method: 'GET'
+		},
+		{
+			url: 'https://api.niko000o.site/api/ai/conversations/generations/by-idempotency',
+			method: 'GET'
+		},
+		{
+			url: `https://api.niko000o.site/api/ai/conversations/generations/${generationId}`,
+			method: 'GET'
+		},
+		{
+			url: `https://api.niko000o.site/api/ai/conversations/generations/${generationId}/cancel`,
+			method: 'POST'
+		}
+	])
+})
+
+test('root host forwards conversation history and attachment preupload without streaming headers', async () => {
+	const forwarded = []
+	const fetchImpl = async upstream => {
+		forwarded.push({
+			url: upstream.url,
+			method: upstream.method
+		})
+		return Response.json({ ok: true })
+	}
+	const history = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations?cursor=&pageSize=20'),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const messages = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/ai/conversations/AZ-vpV3kfag70-0EMMUETQ/messages?pageSize=50'
+		),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const preupload = await handleRequest(
+		request('niko000o.site', '/api/ai/conversation-attachments/preuploads', {
+			method: 'POST',
+			body: JSON.stringify({ files: [] }),
+			headers: { 'Content-Type': 'application/json' }
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+
+	assert.equal(history.status, 200)
+	assert.equal(messages.status, 200)
+	assert.equal(preupload.status, 200)
+	assert.equal(history.headers.get('X-Accel-Buffering'), null)
+	assert.equal(preupload.headers.get('X-Accel-Buffering'), null)
+	assert.deepEqual(forwarded, [
+		{
+			url: 'https://api.niko000o.site/api/ai/conversations?cursor=&pageSize=20',
+			method: 'GET'
+		},
+		{
+			url: 'https://api.niko000o.site/api/ai/conversations/AZ-vpV3kfag70-0EMMUETQ/messages?pageSize=50',
+			method: 'GET'
+		},
+		{
+			url: 'https://api.niko000o.site/api/ai/conversation-attachments/preuploads',
+			method: 'POST'
+		}
+	])
+})
+
+test('administrator host rejects ordinary conversation history and attachment APIs', async () => {
+	const fetchImpl = () => {
+		throw new Error('upstream must not be called')
+	}
+	const history = await handleRequest(
+		request('admin.niko000o.site', '/api/ai/conversations'),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const preupload = await handleRequest(
+		request('admin.niko000o.site', '/api/ai/conversation-attachments/preuploads', {
+			method: 'POST',
+			body: '{}'
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+
+	assert.equal(history.status, 403)
+	assert.equal(preupload.status, 403)
+})
+
+test('root host forwards only canonical AI conversation continuation IDs', async () => {
+	const publicId = 'AZ-vpV3kfag70-0EMMUETQ'
+	let captured
+	const allowed = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/${publicId}/responses`,
+			{
+				method: 'POST',
+				body: '{}',
+				headers: { 'Content-Type': 'application/json' }
+			}
+		),
+		ENV,
+		runtime(async upstream => {
+			captured = upstream
+			return new Response('', {
+				status: 200,
+				headers: { 'Content-Type': 'text/event-stream' }
+			})
+		})
+	)
+	const malformed = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/ai/conversations/not-a-public-id/responses',
+			{ method: 'POST', body: '{}' }
+		),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const admin = await handleRequest(
+		request(
+			'admin.niko000o.site',
+			`/api/ai/conversations/${publicId}/responses`,
+			{ method: 'POST', body: '{}' }
+		),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+
+	assert.equal(allowed.status, 200)
+	assert.equal(
+		captured.url,
+		`https://api.niko000o.site/api/ai/conversations/${publicId}/responses`
+	)
+	assert.equal(malformed.status, 403)
+	assert.equal(admin.status, 403)
+})
+
 test('worker preserves admin request method and streams its body', async () => {
 	let capturedBody
 	let capturedMethod
@@ -128,6 +463,47 @@ test('host and path policy rejects cross-surface and encoded-path bypasses', asy
 			throw new Error('upstream must not be called')
 		})
 	)
+	const forbiddenUserModelApi = await handleRequest(
+		request('admin.niko000o.site', '/api/ai-models/AAABi0VWeJ8'),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const malformedModelDetail = await handleRequest(
+		request('niko000o.site', '/api/ai-models/not-a-public-id'),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const malformedMessages = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/ai/conversations/not-a-public-id/messages'
+		),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const unknownConversationAction = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/ai/conversations/AZ-vpV3kfag70-0EMMUETQ/export'
+		),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const nestedConversationList = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/archive'),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
 	const encoded = await handleRequest(
 		request('niko000o.site', '/api/auth/%2e%2e/admin/auth/state'),
 		ENV,
@@ -138,6 +514,11 @@ test('host and path policy rejects cross-surface and encoded-path bypasses', asy
 
 	assert.equal(forbiddenAdmin.status, 403)
 	assert.equal(forbiddenUser.status, 403)
+	assert.equal(forbiddenUserModelApi.status, 403)
+	assert.equal(malformedModelDetail.status, 403)
+	assert.equal(malformedMessages.status, 403)
+	assert.equal(unknownConversationAction.status, 403)
+	assert.equal(nestedConversationList.status, 403)
 	assert.equal(encoded.status, 403)
 })
 

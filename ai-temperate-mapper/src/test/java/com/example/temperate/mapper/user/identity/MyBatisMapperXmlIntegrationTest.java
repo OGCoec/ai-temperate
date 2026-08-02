@@ -69,11 +69,32 @@ class MyBatisMapperXmlIntegrationTest {
         assertTrue(configuration.hasStatement(namespace + "findByLoginIdentityId"));
 
         var insert = configuration.getMappedStatement(namespace + "insert")
-                .getBoundSql(Map.of("loginIdentityId", 10001L));
+                .getBoundSql(Map.of(
+                        "loginIdentityId", 10001L,
+                        "membershipTier", 0,
+                        "quotaBalanceMinor", 5_000L));
         String insertSql = insert.getSql().toLowerCase(Locale.ROOT);
         assertTrue(insertSql.contains("insert into user_membership_quota"));
+        assertTrue(insertSql.contains("membership_tier"));
+        assertTrue(insertSql.contains("quota_balance_minor"));
+        assertTrue(insertSql.contains("quota_period_started_at"));
+        assertTrue(insertSql.contains("quota_period_ends_at"));
         assertTrue(insert.getParameterMappings().stream()
                 .anyMatch(mapping -> "loginIdentityId".equals(mapping.getProperty())));
+        assertTrue(insert.getParameterMappings().stream()
+                .anyMatch(mapping -> "membershipTier".equals(mapping.getProperty())));
+        assertTrue(insert.getParameterMappings().stream()
+                .anyMatch(mapping -> "quotaBalanceMinor".equals(mapping.getProperty())));
+        assertTrue(insert.getParameterMappings().stream()
+                .anyMatch(mapping -> "quotaPeriodStartedAt".equals(mapping.getProperty())));
+        assertTrue(insert.getParameterMappings().stream()
+                .anyMatch(mapping -> "quotaPeriodEndsAt".equals(mapping.getProperty())));
+
+        var lookup = configuration.getMappedStatement(namespace + "findByLoginIdentityId")
+                .getBoundSql(Map.of("loginIdentityId", 10001L));
+        String lookupSql = lookup.getSql().toLowerCase(Locale.ROOT);
+        assertTrue(lookupSql.contains("quota_period_started_at"));
+        assertTrue(lookupSql.contains("quota_period_ends_at"));
     }
 
     private static Configuration parseMapper(String resource) throws IOException {

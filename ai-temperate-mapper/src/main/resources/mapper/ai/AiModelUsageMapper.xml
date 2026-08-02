@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelUsageMapper">
+
+    <resultMap id="AiModelUsageResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelUsage">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="aiModelId" column="ai_model_id"/>
+        <result property="billingStatus" column="billing_status"/>
+        <result property="promptTokens" column="prompt_tokens"/>
+        <result property="completionTokens" column="completion_tokens"/>
+        <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
+        <result property="reasoningTokens" column="reasoning_tokens"/>
+        <result property="chargedQuotaMinor" column="charged_quota_minor"/>
+        <result property="finishReason" column="finish_reason"/>
+        <result property="failureCode" column="failure_code"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="settledAt" column="settled_at"/>
+    </resultMap>
+
+    <sql id="UsageColumns">
+        id,
+        login_identity_id,
+        ai_model_id,
+        billing_status,
+        prompt_tokens,
+        completion_tokens,
+        cached_prompt_tokens,
+        reasoning_tokens,
+        charged_quota_minor,
+        finish_reason,
+        failure_code,
+        created_at,
+        settled_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModelUsage">
+        INSERT INTO ai_model_usage (
+            id,
+            login_identity_id,
+            ai_model_id,
+            billing_status
+        )
+        VALUES (
+            #{id,jdbcType=BINARY},
+            #{loginIdentityId,jdbcType=BIGINT},
+            #{aiModelId,jdbcType=BIGINT},
+            #{billingStatus,jdbcType=SMALLINT}
+        )
+    </insert>
+
+    <select id="findByIdForUpdate" resultMap="AiModelUsageResultMap">
+        SELECT
+            <include refid="UsageColumns"/>
+        FROM ai_model_usage
+        WHERE id = #{usageId,jdbcType=BINARY}
+        FOR UPDATE
+    </select>
+
+    <select id="findById" resultMap="AiModelUsageResultMap">
+        SELECT
+            <include refid="UsageColumns"/>
+        FROM ai_model_usage
+        WHERE id = #{usageId,jdbcType=BINARY}
+    </select>
+
+    <update id="settle">
+        UPDATE ai_model_usage
+        SET billing_status = #{billingStatus,jdbcType=SMALLINT},
+            prompt_tokens = #{promptTokens,jdbcType=BIGINT},
+            completion_tokens = #{completionTokens,jdbcType=BIGINT},
+            cached_prompt_tokens = #{cachedPromptTokens,jdbcType=BIGINT},
+            reasoning_tokens = #{reasoningTokens,jdbcType=BIGINT},
+            charged_quota_minor = #{chargedQuotaMinor,jdbcType=BIGINT},
+            finish_reason = #{finishReason,jdbcType=VARCHAR},
+            failure_code = #{failureCode,jdbcType=VARCHAR},
+            settled_at = #{settledAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{usageId,jdbcType=BINARY}
+          AND billing_status = #{expectedBillingStatus,jdbcType=SMALLINT}
+    </update>
+
+    <update id="markExpiredReservationsForReconciliation">
+        WITH expired AS (
+            SELECT id
+            FROM ai_model_usage
+            WHERE billing_status = #{reservedStatus,jdbcType=SMALLINT}
+              AND created_at &lt;= #{createdBefore,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            ORDER BY created_at ASC, id ASC
+            LIMIT #{batchSize,jdbcType=INTEGER}
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE ai_model_usage usage
+        SET billing_status = #{reconcileStatus,jdbcType=SMALLINT},
+            failure_code = #{failureCode,jdbcType=VARCHAR},
+            settled_at = #{settledAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        FROM expired
+        WHERE usage.id = expired.id
+          AND usage.billing_status = #{reservedStatus,jdbcType=SMALLINT}
+    </update>
+
+    <select id="findSystemFailureRefundCandidatesForUpdate"
+            resultType="com.example.temperate.model.ai.entity.AiModelUsageRefundCandidate">
+        SELECT
+            usage.id AS usage_id,
+            usage.login_identity_id,
+            detail.reserved_quota_minor
+        FROM ai_model_usage usage
+        JOIN ai_model_usage_detail detail
+          ON detail.usage_id = usage.id
+        WHERE usage.billing_status = #{reconcileStatus,jdbcType=SMALLINT}
+          AND (usage.charged_quota_minor IS NULL
+               OR usage.charged_quota_minor = 0)
+          AND usage.failure_code IN
+          <foreach collection="failureCodes"
+                   item="failureCode"
+                   open="("
+                   separator=","
+                   close=")">
+              #{failureCode,jdbcType=VARCHAR}
+          </foreach>
+          AND detail.conversation_message_id IS NULL
+          AND detail.settlement_delta_minor IS NULL
+          AND detail.reserved_quota_minor &gt; 0
+        ORDER BY usage.created_at ASC, usage.id ASC
+        LIMIT #{batchSize,jdbcType=INTEGER}
+        FOR UPDATE OF usage SKIP LOCKED
+    </select>
+
+    <update id="markHistoricalSystemFailuresRefunded">
+        WITH candidate(usage_id) AS (
+            VALUES
+            <foreach collection="candidates" item="candidate" separator=",">
+                (#{candidate.usageId,jdbcType=BINARY})
+            </foreach>
+        )
+        UPDATE ai_model_usage usage
+        SET billing_status = #{refundedStatus,jdbcType=SMALLINT},
+            charged_quota_minor = 0,
+            finish_reason = 'SYSTEM_FAILURE_REFUNDED',
+            settled_at = #{settledAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        FROM candidate
+        WHERE usage.id = candidate.usage_id
+          AND usage.billing_status = #{reconcileStatus,jdbcType=SMALLINT}
+    </update>
+</mapper>

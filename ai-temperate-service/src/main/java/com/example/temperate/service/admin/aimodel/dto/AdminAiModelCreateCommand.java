@@ -6,7 +6,9 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 承载管理员新增 AI 模型时必须一次提交的不可变字段和显式启用状态。
+ * 承载管理员新增 AI 模型时必须一次提交的不可变字段、原始 Token 限制和显式启用状态。
+ *
+ * <p>K 单位只在 Web 边界换算；Service 始终接收原始 Token，避免其他调用入口绕过容量不变量。</p>
  */
 public record AdminAiModelCreateCommand(
         String modelName,
@@ -17,6 +19,8 @@ public record AdminAiModelCreateCommand(
         BigDecimal inputRatio,
         BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
+        Long contextWindowTokens,
+        Long maxOutputTokens,
         Boolean enabled,
         List<String> capabilities) {
 

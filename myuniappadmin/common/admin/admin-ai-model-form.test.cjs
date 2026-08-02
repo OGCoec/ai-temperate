@@ -15,6 +15,8 @@ test('empty form uses a safe disabled create default outside editable fields', a
 	assert.equal(form.modelName, '')
 	assert.equal(form.vendor, '')
 	assert.equal(form.cachedInputRatio, '1')
+	assert.equal(form.contextWindowK, '')
+	assert.equal(form.maxOutputK, '')
 	assert.deepEqual(form.capabilities, [])
 	assert.equal(Object.hasOwn(form, 'enabled'), false)
 	assert.deepEqual(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code), [
@@ -35,6 +37,8 @@ test('gateway discovery prefill never supplies billing ratios or capabilities', 
 	assert.equal(form.inputRatio, '')
 	assert.equal(form.cachedInputRatio, '')
 	assert.equal(form.outputRatio, '')
+	assert.equal(form.contextWindowK, '')
+	assert.equal(form.maxOutputK, '')
 	assert.deepEqual(form.capabilities, [])
 	assert.equal(Object.hasOwn(form, 'enabled'), false)
 })
@@ -50,6 +54,8 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		inputRatio: '1.25000000',
 		cachedInputRatio: '0.12500000',
 		outputRatio: '2.00000000',
+		contextWindowK: '256',
+		maxOutputK: '32',
 		capabilities: ['RESPONSES', 'IMAGE']
 	})
 
@@ -63,6 +69,8 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		inputRatio: '1.25000000',
 		cachedInputRatio: '0.12500000',
 		outputRatio: '2.00000000',
+		contextWindowK: 256,
+		maxOutputK: 32,
 		capabilities: ['RESPONSES', 'IMAGE']
 	})
 })
@@ -78,6 +86,8 @@ test('validation reports field-specific errors and requires at least one capabil
 		inputRatio: '-1',
 		cachedInputRatio: 'not-a-ratio',
 		outputRatio: 'not-a-ratio',
+		contextWindowK: '256',
+		maxOutputK: '32',
 		capabilities: []
 	})
 
@@ -99,6 +109,10 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		inputRatio: 1,
 		cachedInputRatio: 0.5,
 		outputRatio: 2,
+		contextWindowK: 256,
+		maxOutputK: 32,
+		contextWindowTokens: '256000',
+		maxOutputTokens: '32000',
 		capabilities: ['RESPONSES'],
 		enabled: true
 	})
@@ -121,4 +135,93 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		capabilities: ['RESPONSES', 'IMAGE']
 	})
 	assert.equal(Object.hasOwn(createMergePatch(snapshot, draft), 'enabled'), false)
+})
+
+test('model editing fills K fields from K responses and never derives them from raw Token strings', async () => {
+	const { modelToAiModelForm } = await loadModule()
+
+	assert.deepEqual(
+		{
+			contextWindowK: modelToAiModelForm({
+				contextWindowK: 256,
+				maxOutputK: 32,
+				contextWindowTokens: '999999',
+				maxOutputTokens: '888888'
+			}).contextWindowK,
+			maxOutputK: modelToAiModelForm({
+				contextWindowK: 256,
+				maxOutputK: 32,
+				contextWindowTokens: '999999',
+				maxOutputTokens: '888888'
+			}).maxOutputK
+		},
+		{ contextWindowK: '256', maxOutputK: '32' })
+
+	const unconfigured = modelToAiModelForm({
+		contextWindowTokens: '256000',
+		maxOutputTokens: '32000'
+	})
+	assert.equal(unconfigured.contextWindowK, '')
+	assert.equal(unconfigured.maxOutputK, '')
+})
+
+test('token limit validation accepts bounded positive K integers and sends JSON numbers only', async () => {
+	const { validateAiModelForm } = await loadModule()
+	const base = {
+		modelName: 'gpt-5.6',
+		vendor: 'openai',
+		description: '',
+		iconPublicId: '',
+		tagsText: '',
+		inputRatio: '1',
+		cachedInputRatio: '1',
+		outputRatio: '1',
+		capabilities: ['RESPONSES']
+	}
+
+	const maximum = validateAiModelForm({
+		...base,
+		contextWindowK: '2147483647',
+		maxOutputK: '2147483647'
+	})
+	assert.equal(maximum.valid, true)
+	assert.equal(maximum.command.contextWindowK, 2147483647)
+	assert.equal(maximum.command.maxOutputK, 2147483647)
+	assert.equal(Object.hasOwn(maximum.command, 'contextWindowTokens'), false)
+	assert.equal(Object.hasOwn(maximum.command, 'maxOutputTokens'), false)
+
+	for (const [contextWindowK, maxOutputK, expectedField] of [
+		['', '32', 'contextWindowK'],
+		[' 256 ', '32', 'contextWindowK'],
+		['256.0', '32', 'contextWindowK'],
+		['2.56e2', '32', 'contextWindowK'],
+		['0', '32', 'contextWindowK'],
+		['2147483648', '32', 'contextWindowK'],
+		['256', '257', 'maxOutputK']
+	]) {
+		const result = validateAiModelForm({ ...base, contextWindowK, maxOutputK })
+		assert.equal(result.valid, false)
+		assert.equal(Object.hasOwn(result.errors, expectedField), true)
+	}
+})
+
+test('merge patch includes only changed K fields as JSON numbers', async () => {
+	const { createMergePatch, modelToAiModelForm } = await loadModule()
+	const snapshot = modelToAiModelForm({
+		modelName: 'gpt-5.6',
+		description: '',
+		iconPublicId: null,
+		tags: [],
+		vendor: 'openai',
+		inputRatio: 1,
+		cachedInputRatio: 1,
+		outputRatio: 1,
+		contextWindowK: 256,
+		maxOutputK: 32,
+		capabilities: ['RESPONSES']
+	})
+
+	assert.deepEqual(
+		createMergePatch(snapshot, { ...snapshot, maxOutputK: '64' }),
+		{ maxOutputK: 64 })
 })

@@ -158,6 +158,8 @@ class RegistrationServiceImplTest {
                 identityMapper,
                 profileMapper,
                 membershipQuotaMapper,
+                tier -> new com.example.temperate.service.user.membership.MembershipQuotaPlan(
+                        5_000L, Duration.ofDays(7)),
                 flowStore,
                 new RegistrationInputNormalizer(),
                 new PasswordStrengthPolicy(),
@@ -415,8 +417,12 @@ class RegistrationServiceImplTest {
         UserMembershipQuota membershipQuota =
                 flowStore.persistedMembershipQuotaProbe(membershipQuotaMapper);
         assertThat(membershipQuota.getLoginIdentityId()).isEqualTo(42L);
-        assertThat(membershipQuota.getMembershipTier()).isNull();
-        assertThat(membershipQuota.getQuotaBalanceMinor()).isNull();
+        assertThat(membershipQuota.getMembershipTier())
+                .isEqualTo(com.example.temperate.model.auth.enums.MembershipTier.FREE.ordinal());
+        assertThat(membershipQuota.getQuotaBalanceMinor()).isEqualTo(5_000L);
+        assertThat(membershipQuota.getQuotaPeriodStartedAt()).isNull();
+        assertThat(membershipQuota.getQuotaPeriodEndsAt())
+                .isEqualTo(NOW.atOffset(ZoneOffset.UTC));
         assertThat(flowStore.deleted).isFalse();
 
         when(identityPresenceFilter.recordRegistration(

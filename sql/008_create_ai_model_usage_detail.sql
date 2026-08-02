@@ -3,6 +3,8 @@ BEGIN;
 CREATE TABLE ai_model_usage_detail (
     id BIGINT GENERATED ALWAYS AS IDENTITY,
     usage_id BYTEA NOT NULL,
+    conversation_id BYTEA NOT NULL,
+    conversation_message_id BIGINT,
     idempotency_key_digest BYTEA NOT NULL,
     upstream_request_id VARCHAR(128),
     vendor_snapshot VARCHAR(128) NOT NULL,
@@ -23,6 +25,13 @@ CREATE TABLE ai_model_usage_detail (
         UNIQUE (idempotency_key_digest),
     CONSTRAINT chk_ai_model_usage_detail_usage_id_length
         CHECK (OCTET_LENGTH(usage_id) = 16),
+    CONSTRAINT chk_ai_model_usage_detail_conversation_id_length
+        CHECK (OCTET_LENGTH(conversation_id) = 16),
+    CONSTRAINT chk_ai_model_usage_detail_conversation_message_id
+        CHECK (
+            conversation_message_id IS NULL
+            OR conversation_message_id > 0
+        ),
     CONSTRAINT chk_ai_model_usage_detail_idempotency_digest_length
         CHECK (OCTET_LENGTH(idempotency_key_digest) = 32),
     CONSTRAINT chk_ai_model_usage_detail_upstream_request_id
@@ -52,12 +61,23 @@ CREATE TABLE ai_model_usage_detail (
         CHECK (reserved_quota_minor >= 0)
 );
 
+CREATE INDEX idx_ai_model_usage_detail_conversation_id
+    ON ai_model_usage_detail (conversation_id);
+
+CREATE INDEX idx_ai_model_usage_detail_message_id
+    ON ai_model_usage_detail (conversation_message_id)
+    WHERE conversation_message_id IS NOT NULL;
+
 COMMENT ON TABLE ai_model_usage_detail IS
     '模型用量记录的一对一低频详情，保存幂等证据、上游请求信息、预扣依据和计费倍率快照';
 COMMENT ON COLUMN ai_model_usage_detail.id IS
     '详情表自身 BIGINT 自增主键';
 COMMENT ON COLUMN ai_model_usage_detail.usage_id IS
     '逻辑关联 ai_model_usage.id 的 16 字节 Hybrid ID；唯一约束保证一条用量只有一条详情';
+COMMENT ON COLUMN ai_model_usage_detail.conversation_id IS
+    '逻辑关联 ai_conversation.id 的固定 16 字节会话 ID；预扣时写入，不建立物理外键';
+COMMENT ON COLUMN ai_model_usage_detail.conversation_message_id IS
+    '成功完成后逻辑关联 ai_conversation_message.id；中断、失败或待对账请求保持为空';
 COMMENT ON COLUMN ai_model_usage_detail.idempotency_key_digest IS
     '对业务命名空间、用户 ID 与前端 Idempotency-Key 执行 HMAC-SHA256 后的 32 字节摘要';
 COMMENT ON COLUMN ai_model_usage_detail.upstream_request_id IS
@@ -80,6 +100,11 @@ COMMENT ON COLUMN ai_model_usage_detail.reserved_quota_minor IS
     '模型调用前已经成功预扣的额度最小单位整数值';
 COMMENT ON COLUMN ai_model_usage_detail.settlement_delta_minor IS
     '最终实际额度减去预扣额度；正数补扣、负数退还、NULL 表示尚未结算';
+
+COMMENT ON INDEX idx_ai_model_usage_detail_conversation_id IS
+    '支持按会话定位预扣、完成、中断和待对账的全部模型请求';
+COMMENT ON INDEX idx_ai_model_usage_detail_message_id IS
+    '支持从已经持久化的完整消息反查用量详情，并排除未完成请求的空值';
 
 COMMENT ON CONSTRAINT uk_ai_model_usage_detail_usage_id
     ON ai_model_usage_detail IS

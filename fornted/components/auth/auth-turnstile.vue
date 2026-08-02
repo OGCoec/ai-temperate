@@ -347,23 +347,25 @@
 </script>
 <!-- #endif -->
 
-<style scoped>
-	.turnstile-panel { padding: 18px; border: 1px solid #303733; border-radius: 12px; background: #151816; }
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
+	.turnstile-panel { @include user-frosted-surface; padding: 18px; border-radius: 12px; }
 	.turnstile-copy { margin-bottom: 16px; display: flex; flex-direction: column; gap: 5px; }
 	.turnstile-title { color: #f3f5f4; font-size: 16px; font-weight: 700; }
 	.turnstile-hint { color: #8b9690; font-size: 13px; line-height: 1.5; }
 	.turnstile-status { display: block; margin-bottom: 12px; color: #a9b5af; font-size: 13px; }
 	.turnstile-widget { min-height: 66px; }
 	.turnstile-button {
-		height: 48px;
+		@include user-frosted-control;
+		min-height: 48px;
 		margin: 0;
-		border: 0;
+		border: 1px solid rgba(123, 238, 190, .22);
 		border-radius: 10px;
-		background: #26312c;
+		background: rgba(38, 49, 44, .78);
 		color: #dce5e0;
 		font-size: 15px;
-		line-height: 48px;
-		transition: background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+		line-height: 1.2;
 	}
 	.turnstile-button::after,
 	.turnstile-retry::after { border: 0; }
@@ -371,15 +373,13 @@
 	.turnstile-retry:active { color: #2dbb86; transform: scale(.98); }
 	.turnstile-error { display: block; margin-top: 12px; color: #ff9292; font-size: 13px; line-height: 1.45; }
 	.turnstile-retry {
-		min-height: 44px;
+		@include user-frosted-control;
+		min-height: 48px;
 		margin: 6px 0 0;
 		padding: 0;
-		border: 0;
-		background: transparent;
 		color: #37d39a;
 		font-size: 14px;
-		line-height: 44px;
-		transition: color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+		line-height: 1.2;
 	}
 	.turnstile-button:focus-visible,
 	.turnstile-retry:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(55, 211, 154, .18); }

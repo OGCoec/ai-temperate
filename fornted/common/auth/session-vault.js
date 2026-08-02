@@ -12,6 +12,10 @@ import {
 	mergeSessionCredentials
 } from './session-credentials.js'
 import { clearProfileVault } from '../user/profile-vault.js'
+import { clearRuntimeSessionAuthentication } from './authenticated-session-state.js'
+import { clearAiModelCatalog } from '../aimodel/ai-model-catalog-store.js'
+import { clearAiConversationStore } from '../aichat/ai-conversation-store.js'
+import { clearGenerationManager } from '../aichat/ai-conversation-generation-manager.js'
 
 let principal = null
 let browserLegacyCleared = false
@@ -40,6 +44,10 @@ export function saveSession(response) {
 		if (principal?.publicUserId && response.publicUserId &&
 			principal.publicUserId !== response.publicUserId) {
 			clearProfileVault()
+			clearRuntimeSessionAuthentication()
+			clearAiModelCatalog()
+			clearAiConversationStore()
+			clearGenerationManager()
 		}
 		principal = {
 			publicUserId: response.publicUserId || principal?.publicUserId || '',
@@ -71,7 +79,11 @@ export function loadRefreshToken() {
 
 export function clearSession() {
 	principal = null
+	clearRuntimeSessionAuthentication()
 	clearProfileVault()
+	clearAiModelCatalog()
+	clearAiConversationStore()
+	clearGenerationManager()
 	if (clientPlatform() === 'ANDROID') clearAndroidSessionCredentials()
 	else clearBrowserLegacyOnce()
 }

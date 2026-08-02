@@ -10,6 +10,39 @@ spring:
     # 应用名称用于日志、监控和服务识别。
     name: ai-temperate
 
+  # Spring AI OpenAI SDK 只作为本机 CLIProxyAPI 的协议适配器，不启用内置 ChatMemory。
+  ai:
+    # OpenAI SDK 模型选择固定为 openai-sdk，以便专用会话客户端取得流式 ChatModel。
+    model:
+      # 当前项目只注册 OpenAI SDK 聊天模型，不允许运行时按前端参数切换实现。
+      chat: ${AI_INFERENCE_SPRING_CHAT_MODEL:none}
+    # OpenAI SDK 连接参数全部由服务端环境提供，浏览器不会读取该节点。
+    openai-sdk:
+      # 普通 CLIProxyAPI 代理密钥只从环境变量读取，不配置明文默认值。
+      api-key: ${CLI_PROXY_API_KEY:}
+      # SDK 固定访问本机 8317 的 OpenAI 兼容 v1 根地址。
+      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317/v1}
+      # 单次 SDK 调用的总超时不得超过会话流最大存活时间。
+      timeout: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
+      # 生成请求禁止自动重试，避免重复输出和重复计费。
+      max-retries: 0
+      # 聊天调用默认项只声明所有兼容模型都支持的稳定参数。
+      chat:
+        # 聊天客户端自身同样禁止自动重试。
+        max-retries: 0
+        # 单次聊天流使用与总体调用相同的有界时限。
+        timeout: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
+        # 请求级选项由业务层覆盖模型和最大输出，本节点只固定流式用量与存储语义。
+        options:
+          # 一个发送动作只生成一个候选回答。
+          n: 1
+          # CLIProxyAPI 和上游不得为本项目请求建立服务端持久化会话。
+          store: false
+          # 流式选项用于要求最后一个 SSE 数据片携带最终 Usage。
+          stream-options:
+            # 最终 Usage 是本项目实际结算的权威 Token 来源。
+            include-usage: true
+
   # Spring AOP 代理方式用于兼容不可继承的 final Service 实现类。
   aop:
     # 事务 Service 统一通过业务接口调用，默认使用 JDK 接口代理并允许环境变量覆盖。
@@ -131,8 +164,53 @@ mybatis:
   # Mapper XML 使用 classpath* 扫描所有模块资源，确保 mapper 子模块中的 SQL 映射被加载。
   mapper-locations: classpath*:mapper/**/*.xml
 
-# 认证与安全边界配置。
+# 应用业务、Web 异步响应与安全边界配置。
 app:
+  # Web 层异步响应使用独立有界执行器承载 SSE 等阻塞 Servlet 写出任务。
+  web:
+    # MVC 异步边界显式配置线程和外层超时，禁止退回不适合生产长连接的默认执行器。
+    mvc-async:
+      # 常驻十六个核心线程用于吸收普通并发流式响应。
+      core-pool-size: ${WEB_MVC_ASYNC_CORE_POOL_SIZE:16}
+      # 最多一百六十个线程覆盖一百二十八条 AI 流并为其他异步响应预留余量。
+      max-pool-size: ${WEB_MVC_ASYNC_MAX_POOL_SIZE:160}
+      # 零队列使用直接交接，禁止长连接在内存中隐藏排队。
+      queue-capacity: 0
+      # 空闲核心线程六十秒后允许回收，降低低流量实例的线程占用。
+      keep-alive: ${WEB_MVC_ASYNC_KEEP_ALIVE:60s}
+      # 外层 MVC 时限为十六分钟，必须严格晚于十五分钟模型总期限。
+      timeout: ${WEB_MVC_ASYNC_TIMEOUT:16m}
+
+  # 七档普通用户套餐共享首次使用起滚动七天的额度规则，所有数值均使用最小计费单位。
+  membership-quota:
+    # 套餐额度周期固定为七天，配置偏离该周期时应用拒绝启动。
+    period: ${MEMBERSHIP_QUOTA_PERIOD:P7D}
+    # 各等级额度必须完整覆盖后端枚举，防止新增等级静默获得错误额度。
+    limits:
+      # Free 每周总额度为五十，对应五千个最小计费单位。
+      FREE: ${MEMBERSHIP_QUOTA_FREE_LIMIT_MINOR:5000}
+      # Go 每周总额度为五百，对应五万个最小计费单位。
+      GO: ${MEMBERSHIP_QUOTA_GO_LIMIT_MINOR:50000}
+      # Education 每周总额度为八百，对应八万个最小计费单位。
+      EDU: ${MEMBERSHIP_QUOTA_EDU_LIMIT_MINOR:80000}
+      # Team 每周总额度为一千八百，对应十八万个最小计费单位。
+      TEAM: ${MEMBERSHIP_QUOTA_TEAM_LIMIT_MINOR:180000}
+      # Plus 每周总额度为两千，对应二十万个最小计费单位。
+      PLUS: ${MEMBERSHIP_QUOTA_PLUS_LIMIT_MINOR:200000}
+      # Pro 每周总额度为一万，对应一百万个最小计费单位。
+      PRO: ${MEMBERSHIP_QUOTA_PRO_LIMIT_MINOR:1000000}
+      # MAX 在普通用户前端显示为 Ultra，每周总额度为五万。
+      MAX: ${MEMBERSHIP_QUOTA_MAX_LIMIT_MINOR:5000000}
+
+  # 普通用户资料使用每用户一个 Redis String 加速读取，PostgreSQL 始终是事实来源。
+  user-profile-cache:
+    # 内部用户 ID 使用独立 AES-256-KWP 密钥生成稳定 Key 标识，禁止配置默认明文密钥。
+    id-encryption-key-base64: ${USER_PROFILE_CACHE_ID_AES_KEY_BASE64:}
+    # 用户资料正向缓存随机 TTL 下界固定为五分钟。
+    minimum-ttl: ${USER_PROFILE_CACHE_MINIMUM_TTL:5m}
+    # 用户资料正向缓存随机 TTL 上界固定为十五分钟。
+    maximum-ttl: ${USER_PROFILE_CACHE_MAXIMUM_TTL:15m}
+
   # 启用 AI 模型使用固定聚合 Key 和整体 AES-256-GCM 密文缓存，PostgreSQL 始终是事实来源。
   ai-model-cache:
     # 独立三十二字节规范 Base64 密钥必须由部署环境提供，禁止复用其他安全域密钥。
@@ -143,6 +221,136 @@ app:
     maximum-ttl: ${AI_MODEL_CACHE_MAXIMUM_TTL:15m}
     # 单个聚合快照最多加载五百个启用模型，超限时拒绝生成 BigKey。
     max-models: ${AI_MODEL_CACHE_MAX_MODELS:500}
+
+  # 普通用户 AI 会话上下文、租约、流片合并和通用附件安全边界配置。
+  ai-conversation:
+    # Redis 会话上下文从首次创建或真实重建起固定保存七十二小时。
+    context-ttl: ${AI_CONVERSATION_CONTEXT_TTL:72h}
+    # 单个会话生成租约使用短期限并在 SSE 心跳期间尽力续租。
+    inflight-lease-ttl: ${AI_CONVERSATION_INFLIGHT_LEASE_TTL:45s}
+    # 压缩单飞租约覆盖一次受限内部压缩调用。
+    compaction-lease-ttl: ${AI_CONVERSATION_COMPACTION_LEASE_TTL:5m}
+    # 流式文本最多累计二百五十毫秒后批量写入一次 Redis。
+    stream-flush-interval: ${AI_CONVERSATION_STREAM_FLUSH_INTERVAL:250ms}
+    # 流式文本达到四 KiB 时按 UTF-8 安全边界拆成独立 Hash 字段。
+    stream-flush-bytes: ${AI_CONVERSATION_STREAM_FLUSH_BYTES:4096}
+    # PostgreSQL 会话消息重建和压缩读取每批最多五百条。
+    context-page-size: ${AI_CONVERSATION_CONTEXT_PAGE_SIZE:500}
+    # 单个会话 Hash 达到五千字段前必须重建，防止形成 Redis BigKey。
+    max-hash-fields: ${AI_CONVERSATION_MAX_HASH_FIELDS:5000}
+    # 单个会话 Hash 达到一千字段时开始触发临时上下文压缩。
+    compaction-hash-field-threshold: ${AI_CONVERSATION_COMPACTION_HASH_FIELD_THRESHOLD:1000}
+    # 单用户同时活跃生成上限为四个不同会话。
+    max-concurrent-per-user: ${AI_CONVERSATION_MAX_CONCURRENT_PER_USER:4}
+    # 全部应用实例共享的活跃生成总上限为一百二十八。
+    max-concurrent-global: ${AI_CONVERSATION_MAX_CONCURRENT_GLOBAL:128}
+    # 图片缺少厂商精确计数规则时采用保守固定 Token 估算。
+    image-estimated-tokens: ${AI_CONVERSATION_IMAGE_ESTIMATED_TOKENS:2048}
+    # 预计下一轮达到上下文窗口百分之八十时调度异步压缩。
+    pre-compaction-percent: ${AI_CONVERSATION_PRE_COMPACTION_PERCENT:80}
+    # RESERVED 超时判定在最大流时长之外额外保留两分钟安全缓冲。
+    reservation-safety-buffer: ${AI_CONVERSATION_RESERVATION_SAFETY_BUFFER:2m}
+    # 过期 RESERVED 扫描每分钟运行一次且不执行自动退款。
+    reconciliation-scan-interval: ${AI_CONVERSATION_RECONCILIATION_SCAN_INTERVAL:1m}
+    # 单次最多把五百条过期 RESERVED 标记为待人工对账。
+    reconciliation-batch-size: ${AI_CONVERSATION_RECONCILIATION_BATCH_SIZE:500}
+    # 历史系统失败自动补退默认关闭，核对候选数量和金额后再显式开启。
+    historical-system-failure-auto-refund-enabled: ${AI_CONVERSATION_HISTORICAL_SYSTEM_FAILURE_AUTO_REFUND_ENABLED:false}
+    # 后台异步生成与 RabbitMQ 终态结算默认启用，部署前必须先创建 Generation 两张表并准备消息基础设施。
+    async-generation:
+      # 新链路总开关默认启用；紧急回滚时通过环境变量设为 false 恢复原同步 POST SSE 行为。
+      enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}
+      # 每个生产实例必须使用部署系统注入的唯一标识以定向路由取消命令。
+      instance-id: ${AI_CONVERSATION_INSTANCE_ID:local-single-instance}
+      # SSE 失联允许三十秒重连，期间模型生成不得被观察者断开取消。
+      detach-grace: ${AI_CONVERSATION_DETACH_GRACE:30s}
+      # 一秒 SSE 心跳仅用于快速感知真正断开的浏览器或 App 连接，不触发数据库轮询。
+      observer-heartbeat: ${AI_CONVERSATION_OBSERVER_HEARTBEAT:1s}
+      # 已计费终态保留二十四小时后才允许进行有界批量清理。
+      terminal-retention: ${AI_CONVERSATION_TERMINAL_RETENTION:24h}
+      # 单实例默认使用四个有界 Worker 消费者且每个消费者一次只处理一个生成。
+      worker-consumers: ${AI_CONVERSATION_WORKER_CONSUMERS:4}
+      # 单次模型 Worker 最长运行十五分钟，Broker ACK 超时必须至少再多五分钟。
+      max-worker-duration: ${AI_CONVERSATION_MAX_WORKER_DURATION:15m}
+    # 全生命周期诊断默认关闭，只在受控复现取消、结算或页面刷新延迟时开启。
+    lifecycle-diagnostics:
+      # 生命周期日志总开关关闭时不输出请求、终态、事务或缓存诊断事件。
+      enabled: ${AI_CONVERSATION_LIFECYCLE_DIAGNOSTICS_ENABLED:false}
+      # 稳定采样比例默认是零；问题复现期间可临时设为一并在结束后恢复。
+      sample-rate: ${AI_CONVERSATION_LIFECYCLE_DIAGNOSTICS_SAMPLE_RATE:0}
+    # 流式时序诊断永久保留但默认关闭，关闭时不创建统计窗口或输出诊断日志。
+    stream-diagnostics:
+      # 诊断总开关仅允许在受控排查期间显式开启，修改后需要重启后端。
+      enabled: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_ENABLED:false}
+      # Usage 公共 ID 的稳定采样比例默认是零，避免普通运行产生高基数诊断。
+      sample-rate: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_SAMPLE_RATE:0}
+      # 每个边界最多每秒输出一次时间窗口汇总，防止逐片日志放大。
+      window: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_WINDOW:1s}
+      # 单个窗口累计一百个信号时允许提前输出一次汇总。
+      log-every-chunks: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_LOG_EVERY_CHUNKS:100}
+      # 连续五秒没有信号后才进入集中爆发候选判定。
+      silence-threshold: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_SILENCE_THRESHOLD:5s}
+      # 静默后的二百五十毫秒用于统计集中到达的信号数量。
+      burst-window: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_BURST_WINDOW:250ms}
+      # 候选窗口达到二百个信号时输出一次安全 WARN。
+      burst-chunks: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_BURST_CHUNKS:200}
+    # 服务端可信系统提示不接受前端覆盖。
+    system-prompt: ${AI_CONVERSATION_SYSTEM_PROMPT:你是一个可靠的 AI 助手，请依据已有上下文回答并明确不确定信息。}
+    # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
+    attachments:
+      # 会话附件沿用现有公共读 Bucket，真实 Bucket 名允许按部署环境覆盖。
+      bucket: ${AI_CONVERSATION_ATTACHMENT_OSS_BUCKET:ihaveaplan}
+      # 阿里云 OSS SDK 使用的区域标识必须与 Bucket 所在区域一致。
+      region: ${AI_CONVERSATION_ATTACHMENT_OSS_REGION:us-west-1}
+      # OSS SDK 只连接部署侧配置的 HTTPS Endpoint。
+      endpoint: ${AI_CONVERSATION_ATTACHMENT_OSS_ENDPOINT:https://oss-us-west-1.aliyuncs.com}
+      # 正式附件完整公网 URL 由固定 HTTPS 基础地址与服务端 Object Key 组成。
+      public-base-url: ${AI_CONVERSATION_ATTACHMENT_PUBLIC_BASE_URL:https://ihaveaplan.oss-us-west-1.aliyuncs.com}
+      # 客户端 PUT 预签名默认十分钟有效且只允许写入单个私有临时对象。
+      presigned-put-ttl: ${AI_CONVERSATION_ATTACHMENT_PRESIGNED_PUT_TTL:10m}
+      # 私有临时附件交给单次模型请求的 GET 签名默认十分钟有效且禁止缓存。
+      signed-get-ttl: ${AI_CONVERSATION_ATTACHMENT_SIGNED_GET_TTL:10m}
+      # 单个用户附件和单个模型生成媒体最大一百 MiB。
+      max-file-bytes: ${AI_CONVERSATION_ATTACHMENT_MAX_FILE_BYTES:104857600}
+      # 单条用户输入或模型输出最多保留八个附件。
+      max-files-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_FILES:8}
+      # 单条用户输入或模型输出的附件总大小最多二百 MiB。
+      max-total-bytes-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:209715200}
+      # 单个正式对象复制或上传失败时最多执行三次有界尝试。
+      finalization-attempts: ${AI_CONVERSATION_ATTACHMENT_FINALIZATION_ATTEMPTS:3}
+      # H5 与 Android 客户端直接上传 OSS 时最多并行三个 PUT。
+      client-upload-concurrency: ${AI_CONVERSATION_ATTACHMENT_UPLOAD_CONCURRENCY:3}
+      # 音频每开始一 MiB 使用四千零九十六 Token 进行上下文安全估算。
+      audio-tokens-per-mib: ${AI_CONVERSATION_AUDIO_TOKENS_PER_MIB:4096}
+      # 每个音频附件额外增加二百五十六 Token 固定安全开销。
+      audio-fixed-tokens: ${AI_CONVERSATION_AUDIO_FIXED_TOKENS:256}
+      # 视频每开始一 MiB 使用八千一百九十二 Token 进行上下文安全估算。
+      video-tokens-per-mib: ${AI_CONVERSATION_VIDEO_TOKENS_PER_MIB:8192}
+      # 每个视频附件额外增加二百五十六 Token 固定安全开销。
+      video-fixed-tokens: ${AI_CONVERSATION_VIDEO_FIXED_TOKENS:256}
+      # 下载模型生成 HTTPS 媒体时建立连接最多等待两秒。
+      media-connect-timeout: ${AI_CONVERSATION_MEDIA_CONNECT_TIMEOUT:2s}
+      # 下载模型生成 HTTPS 媒体时读取内容最多等待十秒。
+      media-read-timeout: ${AI_CONVERSATION_MEDIA_READ_TIMEOUT:10s}
+      # 模型媒体下载最多跟随两次并逐跳重新校验的 HTTPS 重定向。
+      media-max-redirects: ${AI_CONVERSATION_MEDIA_MAX_REDIRECTS:2}
+    # 发送动作幂等摘要使用独立安全域密钥，数据库不保存原始 UUID。
+    security:
+      # HMAC-SHA256 密钥必须是至少三十二字节的规范 Base64。
+      idempotency-hmac-key-base64: ${AI_CONVERSATION_IDEMPOTENCY_HMAC_KEY_BASE64}
+
+  # CLIProxyAPI 用户推理开关和服务层超时配置。
+  ai-inference:
+    # 用户模型生成只允许访问服务端固定的本机 CLIProxyAPI。
+    cli-proxy:
+      # 推理默认关闭，部署确认 8317 和计费链路后才显式启用。
+      enabled: ${AI_INFERENCE_CLI_PROXY_ENABLED:false}
+      # 用户推理固定访问服务端配置的 CLIProxyAPI v1 根地址。
+      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317/v1}
+      # 启用推理时普通代理密钥必须非空，关闭时允许为空。
+      api-key: ${CLI_PROXY_API_KEY:}
+      # 单次上游模型流从订阅开始最多持续十五分钟，期间心跳或模型片段都不会重置总时限。
+      max-stream-duration: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
 
   # AI 模型历史搜索词元回填只允许在受控维护启动中显式开启。
   ai-model-token-backfill:

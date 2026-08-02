@@ -1,6 +1,7 @@
 package com.example.temperate.mapper.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import com.example.temperate.model.ai.entity.AiModel;
@@ -98,6 +99,60 @@ final class AdminAiModelPatchIntegrationTest {
     }
 
     @Test
+    void insertQueryAndEditableUpdatePersistRawTokenLimits() {
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            AiModelMapper mapper = session.getMapper(AiModelMapper.class);
+            AiModel inserted = mapper.findById(MODEL_ID);
+
+            assertThat(inserted.getContextWindowTokens()).isEqualTo(256000L);
+            assertThat(inserted.getMaxOutputTokens()).isEqualTo(32000L);
+            assertThat(mapper.findByIds(java.util.List.of(MODEL_ID)).get(0)
+                    .getContextWindowTokens()).isEqualTo(256000L);
+            assertThat(mapper.findPage(null, null, null, null).get(0)
+                    .getMaxOutputTokens()).isEqualTo(32000L);
+            assertThat(mapper.findEnabled(10).get(0)
+                    .getContextWindowTokens()).isEqualTo(256000L);
+
+            AiModel changed = model("gpt-5.6");
+            changed.setContextWindowTokens(512000L);
+            changed.setMaxOutputTokens(64000L);
+            assertThat(mapper.updateEditable(changed, 1L)).isEqualTo(1);
+
+            AiModel stored = mapper.findById(MODEL_ID);
+            assertThat(stored.getContextWindowTokens()).isEqualTo(512000L);
+            assertThat(stored.getMaxOutputTokens()).isEqualTo(64000L);
+        }
+    }
+
+    @Test
+    void databaseEnforcesPairedPositiveBoundedKMultiplesAndOutputRelation()
+            throws SQLException {
+        try (Connection connection = openConnection();
+                Statement statement = connection.createStatement()) {
+            for (String sql : java.util.List.of(
+                    "UPDATE ai_model SET max_output_tokens = NULL WHERE id = " + MODEL_ID,
+                    "UPDATE ai_model SET context_window_tokens = 0 WHERE id = " + MODEL_ID,
+                    "UPDATE ai_model SET context_window_tokens = 2147483647001,"
+                            + " max_output_tokens = 32000 WHERE id = " + MODEL_ID,
+                    "UPDATE ai_model SET context_window_tokens = 256001 WHERE id = " + MODEL_ID,
+                    "UPDATE ai_model SET context_window_tokens = 32000,"
+                            + " max_output_tokens = 64000 WHERE id = " + MODEL_ID)) {
+                assertThatThrownBy(() -> statement.execute(sql))
+                        .isInstanceOf(SQLException.class);
+            }
+
+            assertThat(statement.executeUpdate(
+                    "UPDATE ai_model SET context_window_tokens = NULL,"
+                            + " max_output_tokens = NULL WHERE id = " + MODEL_ID))
+                    .isEqualTo(1);
+            assertThat(statement.executeUpdate(
+                    "UPDATE ai_model SET context_window_tokens = 2147483647000,"
+                            + " max_output_tokens = 2147483647000 WHERE id = " + MODEL_ID))
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
     void mainUpdateAndCapabilityReplacementRollBackTogether() {
         try (SqlSession session = sqlSessionFactory.openSession(false)) {
             AiModelMapper modelMapper = session.getMapper(AiModelMapper.class);
@@ -173,6 +228,8 @@ final class AdminAiModelPatchIntegrationTest {
         model.setInputRatio(BigDecimal.ONE);
         model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(BigDecimal.TWO);
+        model.setContextWindowTokens(256000L);
+        model.setMaxOutputTokens(32000L);
         model.setEnabled(true);
         return model;
     }

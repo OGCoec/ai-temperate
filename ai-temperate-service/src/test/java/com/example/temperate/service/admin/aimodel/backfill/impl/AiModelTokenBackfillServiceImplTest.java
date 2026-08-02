@@ -10,8 +10,7 @@ import com.example.temperate.mapper.ai.AiModelMapper;
 import com.example.temperate.model.ai.entity.AiModel;
 import com.example.temperate.model.ai.entity.AiModelSearchTokenUpdate;
 import com.example.temperate.service.admin.aimodel.backfill.AiModelTokenBackfillBatchResult;
-import com.example.temperate.service.admin.aimodel.text.AiModelTextTokenizer;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,7 +28,7 @@ final class AiModelTokenBackfillServiceImplTest {
     @Mock
     private AiModelMapper modelMapper;
     @Mock
-    private AiModelTextTokenizer tokenizer;
+    private AiModelSearchService searchService;
 
     private AiModelTokenBackfillServiceImpl service;
 
@@ -37,20 +36,21 @@ final class AiModelTokenBackfillServiceImplTest {
     void setUp() {
         service = new AiModelTokenBackfillServiceImpl(
                 modelMapper,
-                tokenizer,
-                new ObjectMapper());
+                searchService);
     }
 
     @Test
     void backfillsOnePageWithOneBatchUpdate() {
-        AiModel first = model(11L, "模型甲", "描述甲");
-        AiModel second = model(19L, "模型乙", null);
+        AiModel first = model(11L, "gpt-5.4-mini", "描述甲");
+        AiModel second = model(19L, "o3", null);
         when(modelMapper.findTokenBackfillPage(0L, 500))
                 .thenReturn(List.of(first, second));
-        when(tokenizer.tokenize("模型甲")).thenReturn(List.of("模型", "甲"));
-        when(tokenizer.tokenize("描述甲")).thenReturn(List.of("描述", "甲"));
-        when(tokenizer.tokenize("模型乙")).thenReturn(List.of("模型", "乙"));
-        when(tokenizer.tokenize(null)).thenReturn(List.of());
+        when(searchService.modelNameTokensJson("gpt-5.4-mini"))
+                .thenReturn("[\"gpt\",\"5.4\",\"mini\"]");
+        when(searchService.descriptionTokensJson("描述甲"))
+                .thenReturn("[\"描述\",\"甲\"]");
+        when(searchService.modelNameTokensJson("o3")).thenReturn("[\"o3\"]");
+        when(searchService.descriptionTokensJson(null)).thenReturn("[]");
         when(modelMapper.updateSearchTokensBatch(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(2);
 
@@ -67,8 +67,32 @@ final class AiModelTokenBackfillServiceImplTest {
         verify(modelMapper).updateSearchTokensBatch(updates.capture());
         assertThat(updates.getValue()).hasSize(2);
         assertThat(updates.getValue().get(0).modelNameTokensJson())
-                .isEqualTo("[\"模型\",\"甲\"]");
+                .isEqualTo("[\"gpt\",\"5.4\",\"mini\"]");
+        assertThat(updates.getValue().get(0).descriptionTokensJson())
+                .isEqualTo("[\"描述\",\"甲\"]");
+        assertThat(updates.getValue().get(1).modelNameTokensJson())
+                .isEqualTo("[\"o3\"]");
         verifyNoMoreInteractions(modelMapper);
+    }
+
+    @Test
+    void normalizesNameSegmentsAndDropsEmptySegmentsDuringBackfill() {
+        AiModel model = model(11L, " GPT--5.4-MINI ", null);
+        when(modelMapper.findTokenBackfillPage(0L, 1)).thenReturn(List.of(model));
+        when(searchService.modelNameTokensJson(" GPT--5.4-MINI "))
+                .thenReturn("[\"gpt\",\"5.4\",\"mini\"]");
+        when(searchService.descriptionTokensJson(null)).thenReturn("[]");
+        when(modelMapper.updateSearchTokensBatch(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(1);
+
+        service.backfillAfter(0L, 1);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiModelSearchTokenUpdate>> updates =
+                ArgumentCaptor.forClass(List.class);
+        verify(modelMapper).updateSearchTokensBatch(updates.capture());
+        assertThat(updates.getValue().get(0).modelNameTokensJson())
+                .isEqualTo("[\"gpt\",\"5.4\",\"mini\"]");
     }
 
     @Test
@@ -77,9 +101,9 @@ final class AiModelTokenBackfillServiceImplTest {
                 .mapToObj(id -> model(id, "m" + id, null))
                 .toList();
         when(modelMapper.findTokenBackfillPage(0L, 500)).thenReturn(fullPage);
-        when(tokenizer.tokenize(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(List.of("token"));
-        when(tokenizer.tokenize(null)).thenReturn(List.of());
+        when(searchService.modelNameTokensJson(org.mockito.ArgumentMatchers.any()))
+                .thenReturn("[\"token\"]");
+        when(searchService.descriptionTokensJson(null)).thenReturn("[]");
         when(modelMapper.updateSearchTokensBatch(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(500);
 

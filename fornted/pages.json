@@ -46,11 +46,33 @@
 			}
 		},
 		{
+			"path": "pages/ai-chat/index",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
+		{
 			"path": "pages/account/profile",
 			"style": {
-				"navigationBarTitleText": "个人",
-				"navigationBarTextStyle": "white",
-				"navigationBarBackgroundColor": "#0b0d0c",
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/ai-models/catalog",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/ai-models/detail",
+			"style": {
+				"navigationStyle": "custom",
 				"backgroundColor": "#0b0d0c"
 			}
 		},

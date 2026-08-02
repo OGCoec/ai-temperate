@@ -12,6 +12,7 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -107,16 +108,44 @@ public class VerificationDeliveryRabbitConfiguration {
                 JsonMapper.builder().findAndAddModules().build());
     }
 
+    /**
+     * 为验证码投递提供独立 RabbitTemplate，使延迟消息的 mandatory 语义不会污染其他业务域的发布链路。
+     *
+     * @param connectionFactory 项目唯一 RabbitMQ 连接工厂
+     * @param messageConverter 验证码投递消息 JSON 转换器
+     * @return 验证码投递专用消息模板
+     */
+    @Bean("verificationDeliveryRabbitTemplate")
+    RabbitTemplate verificationDeliveryRabbitTemplate(
+            ConnectionFactory connectionFactory,
+            @Qualifier("verificationDeliveryMessageConverter")
+                    MessageConverter messageConverter) {
+        RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
+        configureVerificationDeliveryRabbitTemplate(rabbitTemplate, messageConverter);
+        return rabbitTemplate;
+    }
+
     @Bean
     RabbitTemplateCustomizer verificationDeliveryRabbitTemplateCustomizer(
             @Qualifier("verificationDeliveryMessageConverter")
                     MessageConverter messageConverter) {
-        return rabbitTemplate -> {
-            rabbitTemplate.setMessageConverter(messageConverter);
-            // delayed-message 插件无法为未来路由提供可靠 Return 语义，只有不带延迟头的即时消息启用 mandatory。
-            rabbitTemplate.setMandatoryExpressionString(
-                    "messageProperties.headers['x-delay'] == null");
-        };
+        return rabbitTemplate -> configureVerificationDeliveryRabbitTemplate(
+                rabbitTemplate, messageConverter);
+    }
+
+    /**
+     * 统一验证码模板和自动配置默认模板的消息转换、mandatory 语义，避免两条发布链路对延迟消息作出不一致判断。
+     *
+     * @param rabbitTemplate 待配置的消息模板
+     * @param messageConverter 验证码投递消息 JSON 转换器
+     */
+    private static void configureVerificationDeliveryRabbitTemplate(
+            RabbitTemplate rabbitTemplate,
+            MessageConverter messageConverter) {
+        rabbitTemplate.setMessageConverter(messageConverter);
+        // delayed-message 插件无法为未来路由提供可靠 Return 语义，只有不带延迟头的即时消息启用 mandatory。
+        rabbitTemplate.setMandatoryExpressionString(
+                "messageProperties.headers['x-delay'] == null");
     }
 
     @Bean("verificationDeliveryEmailListenerContainerFactory")

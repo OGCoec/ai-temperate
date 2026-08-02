@@ -1,0 +1,6 @@
+{
+  "id": "ait-document-picker",
+  "displayName": "AI Temperate Android Document Picker",
+  "version": "1.0.0",
+  "description": "Android system document picker for arbitrary conversation attachments"
+}

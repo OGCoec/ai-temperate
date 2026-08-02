@@ -1,5 +1,6 @@
 import { requireAuthenticatedPage } from './page-guard.js'
 import { isProtectedRoute, normalizeRoutePath } from './protected-routes.js'
+import { runtimeAuthenticationVersion } from './authenticated-session-state.js'
 
 function currentRouteFromPages() {
 	if (typeof getCurrentPages !== 'function') return ''
@@ -23,7 +24,11 @@ function currentRoute(instance) {
 
 export default {
 	data() {
-		return { authReady: false }
+		return {
+			authReady: false,
+			__aitAuthenticationInFlight: null,
+			__aitAuthenticationVersion: -1
+		}
 	},
 	onLoad() {
 		this.__aitRequireAuthenticatedPage()
@@ -38,12 +43,23 @@ export default {
 				this.authReady = true
 				return true
 			}
-			const allowed = await requireAuthenticatedPage(route)
-			this.authReady = allowed
-			if (allowed && typeof this.onAuthenticatedPageReady === 'function') {
-				this.onAuthenticatedPageReady()
-			}
-			return allowed
+			const version = runtimeAuthenticationVersion()
+			if (this.authReady && this.__aitAuthenticationVersion === version) return true
+			if (this.__aitAuthenticationInFlight) return this.__aitAuthenticationInFlight
+
+			const authentication = requireAuthenticatedPage(route)
+				.then((allowed) => {
+					this.authReady = allowed
+					this.__aitAuthenticationVersion = runtimeAuthenticationVersion()
+					if (allowed && typeof this.onAuthenticatedPageReady === 'function') {
+						this.onAuthenticatedPageReady()
+					}
+					return allowed
+				})
+				.finally(() => { this.__aitAuthenticationInFlight = null })
+
+			this.__aitAuthenticationInFlight = authentication
+			return authentication
 		}
 	}
 }

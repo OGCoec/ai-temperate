@@ -28,15 +28,19 @@
 			<admin-action-button tone="teal" :loading="retrying" @click="retrySession">重新验证</admin-action-button>
 		</view>
 
-		<transition
-			v-else-if="sessionState === 'READY'"
-			name="workspace-content"
-			mode="out-in"
-			@after-enter="handlePanelAfterEnter"
-		>
+		<view v-else-if="sessionState === 'READY' && panelRenderError" class="panel-render-error" role="alert">
+			<text class="panel-render-error-title">当前页面加载失败</text>
+			<text class="panel-render-error-copy">管理员导航仍然可用。你可以重新加载当前页面，或者返回控制台。</text>
+			<view class="panel-render-error-actions">
+				<admin-action-button tone="teal" @click="retryPanel">重新加载当前页面</admin-action-button>
+				<admin-action-button tone="neutral" @click="returnToDashboard">返回控制台</admin-action-button>
+			</view>
+		</view>
+
+		<transition v-else-if="sessionState === 'READY'" name="workspace-content">
 			<component
 				:is="panelComponent"
-				:key="panelKey"
+				:key="panelRenderKey"
 				ref="activePanel"
 				v-bind="panelProps"
 				@request-navigation="navigate"
@@ -66,8 +70,12 @@ import { createAdminWorkspaceHistoryH5 } from '@/common/admin/admin-workspace-hi
 // #endif
 import {
 	buildAdminWorkspaceUrl,
-	normalizeAdminWorkspaceLocation
+	normalizeAdminWorkspaceLocation,
+	parseAdminWorkspaceUrl
 } from '@/common/admin/admin-workspace-route.js'
+import {
+	consumeAdminWorkspaceEntryLocation
+} from '@/common/admin/admin-workspace-entry-state.js'
 import {
 	ensureAdminSession,
 	invalidateAdminSessionValidation,
@@ -112,7 +120,9 @@ export default {
 			activationSerial: 0,
 			workspaceHidden: false,
 			createdModelPublicId: '',
-			pendingModelPrefill: null
+			pendingModelPrefill: null,
+			panelRenderError: null,
+			panelRetryGeneration: 0
 		}
 	},
 	computed: {
@@ -124,6 +134,9 @@ export default {
 				return `${this.location.view}:${this.pendingModelPrefill?.modelId || 'blank'}`
 			}
 			return this.location.view
+		},
+		panelRenderKey() {
+			return `${this.panelKey}:${this.panelRetryGeneration}`
 		},
 		panelProps() {
 			if (this.location.view === 'ai-model-create') {
@@ -166,8 +179,24 @@ export default {
 			return {}
 		}
 	},
+	errorCaptured(error, _instance, info) {
+		this.capturePanelError(error, info)
+		return false
+	},
 	onLoad(options) {
-		this.location = normalizeAdminWorkspaceLocation(options || {})
+		const stagedLocation = consumeAdminWorkspaceEntryLocation()
+		// #ifdef H5
+		// H5 页面路径始终由 UniApp 管理，工作台只从 Fragment 恢复内部面板状态。
+		const initialUrl = `${window.location?.pathname || ''}${window.location?.search || ''}${window.location?.hash || ''}`
+		this.location = stagedLocation
+			? normalizeAdminWorkspaceLocation(stagedLocation)
+			: parseAdminWorkspaceUrl(initialUrl)
+		// #endif
+		// #ifndef H5
+		const nativeLocation = stagedLocation
+			|| (options && Object.keys(options).length ? options : { view: 'dashboard' })
+		this.location = normalizeAdminWorkspaceLocation(nativeLocation)
+		// #endif
 		this.routeNotice = this.location.notice
 	},
 	async mounted() {
@@ -178,17 +207,21 @@ export default {
 			resolvePanel: location => buildAdminWorkspaceUrl(location) === this.activePanelLocationKey
 				? this.$refs.activePanel
 				: null,
-				onChange: state => {
-					this.location = state.location
-					this.drawerOpen = state.drawerOpen
-					if (state.location.view !== 'ai-model-create') {
-						this.pendingModelPrefill = null
-					}
-					if (state.location.notice) this.routeNotice = state.location.notice
+			onChange: state => {
+				const previousLocationKey = buildAdminWorkspaceUrl(this.location)
+				this.location = state.location
+				this.drawerOpen = state.drawerOpen
+				if (buildAdminWorkspaceUrl(state.location) !== previousLocationKey) {
+					this.panelRenderError = null
 				}
+				if (state.location.view !== 'ai-model-create') {
+					this.pendingModelPrefill = null
+				}
+				if (state.location.notice) this.routeNotice = state.location.notice
+				if (this.sessionState === 'READY') void this.schedulePanelActivation(false)
+			}
 		})
 		this.historyAdapter?.start?.(this.location, buildAdminWorkspaceUrl(this.location))
-		if (this.location.corrected) this.historyAdapter?.replace?.(this.location, buildAdminWorkspaceUrl(this.location))
 		await this.verifySession(false)
 	},
 	onShow() {
@@ -197,7 +230,7 @@ export default {
 			void this.verifySession(true)
 		} else if (this.workspaceHidden) {
 			this.workspaceHidden = false
-			void this.activateCurrentPanel(true)
+			void this.schedulePanelActivation(true)
 		}
 	},
 	onHide() {
@@ -256,7 +289,7 @@ export default {
 				}
 				this.sessionState = 'READY'
 				this.workspaceHidden = false
-				await this.activateCurrentPanel(true)
+				await this.schedulePanelActivation(true)
 			} catch (_error) {
 				this.sessionState = 'TRANSIENT_FAILURE'
 			}
@@ -287,26 +320,59 @@ export default {
 					return false
 				}
 				this.pendingModelPrefill = nextPrefill
+				await this.schedulePanelActivation(false)
 				return true
 			} catch (error) {
 				this.pendingModelPrefill = previousPrefill
 				throw error
 			}
 		},
-		async activateCurrentPanel(force = false) {
+		async schedulePanelActivation(force = false) {
 			const serial = ++this.activationSerial
+			const expectedLocationKey = buildAdminWorkspaceUrl(this.location)
 			await this.$nextTick()
 			if (serial !== this.activationSerial || this.sessionState !== 'READY') return
+			if (expectedLocationKey !== buildAdminWorkspaceUrl(this.location) || this.panelRenderError) return
 			const panel = this.$refs.activePanel
 			if (!panel) return
-			const locationKey = buildAdminWorkspaceUrl(this.location)
-			if (!force && this.lastActivatedPanelKey === locationKey) return
-			this.activePanelLocationKey = locationKey
-			this.lastActivatedPanelKey = locationKey
-			await panel.onWorkspaceActivated?.()
+			if (!force && this.lastActivatedPanelKey === expectedLocationKey) return
+			this.activePanelLocationKey = expectedLocationKey
+			this.lastActivatedPanelKey = expectedLocationKey
+			try {
+				await panel.onWorkspaceActivated?.()
+			} catch (error) {
+				this.capturePanelError(error, 'onWorkspaceActivated')
+			}
 		},
-		handlePanelAfterEnter() {
-			void this.activateCurrentPanel(false)
+		capturePanelError(error, info) {
+			const safeMessage = String(error?.message || '未知前端异常')
+				.replace(/https?:\/\/\S+/gi, '[url]')
+				.slice(0, 256)
+			this.panelRenderError = {
+				locationKey: buildAdminWorkspaceUrl(this.location),
+				message: safeMessage
+			}
+			console.error('[admin-workspace-panel]', {
+				view: this.location.view,
+				phase: String(info || 'unknown').slice(0, 96),
+				name: String(error?.name || 'Error').slice(0, 64),
+				message: safeMessage
+			})
+		},
+		retryPanel() {
+			this.panelRenderError = null
+			this.panelRetryGeneration += 1
+			this.activePanelLocationKey = ''
+			this.lastActivatedPanelKey = ''
+			void this.schedulePanelActivation(true)
+		},
+		returnToDashboard() {
+			if (this.location.view === 'dashboard') {
+				this.retryPanel()
+				return
+			}
+			this.panelRenderError = null
+			void this.navigate({ view: 'dashboard' })
 		},
 		openDrawer() { this.controller?.openDrawer() },
 		closeDrawer() { this.controller?.closeDrawer() },
@@ -327,7 +393,8 @@ export default {
 @import '@/common/app-theme.scss';
 
 .workspace-skeleton,
-.workspace-session-error {
+.workspace-session-error,
+.panel-render-error {
 	min-height: 540rpx;
 	padding: 36rpx;
 	box-sizing: border-box;
@@ -341,9 +408,13 @@ export default {
 .skeleton-grid { margin-top: 56rpx; display: grid; grid-template-columns: repeat(2, 1fr); gap: 20rpx; }
 .skeleton-grid view { min-height: 180rpx; border-radius: $app-radius-panel; background: rgba($app-muted, .065); }
 .workspace-skeleton text { display: block; margin-top: 28rpx; color: $app-muted; }
-.workspace-session-error { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+.workspace-session-error,
+.panel-render-error { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
 .session-error-title { font-size: 32rpx; font-weight: 760; }
 .session-error-copy { max-width: 720rpx; margin: 14rpx 0 28rpx; color: $app-muted; line-height: 1.6; }
+.panel-render-error-title { font-size: 32rpx; font-weight: 760; color: $app-action-orange; }
+.panel-render-error-copy { max-width: 720rpx; margin: 14rpx 0 28rpx; color: $app-muted; line-height: 1.6; }
+.panel-render-error-actions { display: flex; flex-wrap: wrap; gap: 14rpx; }
 .workspace-content-enter-active,
 .workspace-content-leave-active { transition: opacity 170ms ease, transform 170ms $app-ease-out; }
 .workspace-content-enter-from { opacity: 0; transform: translate3d(8px, 0, 0); }
@@ -353,7 +424,8 @@ export default {
 
 @media (max-width: 600px) {
 	.workspace-skeleton,
-	.workspace-session-error { min-height: 420rpx; padding: 26rpx; }
+	.workspace-session-error,
+	.panel-render-error { min-height: 420rpx; padding: 26rpx; }
 	.skeleton-grid { grid-template-columns: 1fr; }
 }
 

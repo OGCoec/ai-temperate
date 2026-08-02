@@ -8,6 +8,8 @@ export const AI_MODEL_CAPABILITY_OPTIONS = Object.freeze([
 
 const CAPABILITY_CODES = new Set(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code))
 const RATIO_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,8})?$/
+const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/
+const MAX_MODEL_TOKEN_LIMIT_K = 2147483647
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
 
 export function createEmptyAiModelForm() {
@@ -21,6 +23,8 @@ export function createEmptyAiModelForm() {
 		inputRatio: '1',
 		cachedInputRatio: '1',
 		outputRatio: '1',
+		contextWindowK: '',
+		maxOutputK: '',
 		capabilities: []
 	}
 }
@@ -59,6 +63,8 @@ export function modelToAiModelForm(model) {
 		inputRatio: String(model?.inputRatio ?? ''),
 		cachedInputRatio: String(model?.cachedInputRatio ?? ''),
 		outputRatio: String(model?.outputRatio ?? ''),
+		contextWindowK: model?.contextWindowK == null ? '' : String(model.contextWindowK),
+		maxOutputK: model?.maxOutputK == null ? '' : String(model.maxOutputK),
 		capabilities: orderedCapabilities(model?.capabilities)
 	}
 }
@@ -106,6 +112,20 @@ function normalizeRatio(value, field, errors) {
 	return normalized
 }
 
+function normalizeTokenLimit(value, field, errors) {
+	const normalized = String(value ?? '')
+	if (!POSITIVE_INTEGER_PATTERN.test(normalized)) {
+		errors[field] = '请输入不带小数点的正整数 K 值。'
+		return null
+	}
+	const parsed = Number(normalized)
+	if (!Number.isSafeInteger(parsed) || parsed > MAX_MODEL_TOKEN_LIMIT_K) {
+		errors[field] = `K 值不能超过 ${MAX_MODEL_TOKEN_LIMIT_K}。`
+		return null
+	}
+	return parsed
+}
+
 export function validateAiModelForm(form) {
 	const errors = {}
 	const modelName = normalizeRequired(form?.modelName, 'modelName', 128, errors)
@@ -120,6 +140,14 @@ export function validateAiModelForm(form) {
 	const cachedInputRatio =
 		normalizeRatio(form?.cachedInputRatio, 'cachedInputRatio', errors)
 	const outputRatio = normalizeRatio(form?.outputRatio, 'outputRatio', errors)
+	const contextWindowK = normalizeTokenLimit(
+		form?.contextWindowK,
+		'contextWindowK',
+		errors)
+	const maxOutputK = normalizeTokenLimit(form?.maxOutputK, 'maxOutputK', errors)
+	if (contextWindowK !== null && maxOutputK !== null && maxOutputK > contextWindowK) {
+		errors.maxOutputK = '单次最大输出不能超过最大上下文窗口。'
+	}
 	const rawCapabilities = Array.isArray(form?.capabilities) ? form.capabilities : []
 	const capabilities = orderedCapabilities(rawCapabilities)
 	if (capabilities.length < 1
@@ -139,6 +167,8 @@ export function validateAiModelForm(form) {
 			inputRatio,
 			cachedInputRatio,
 			outputRatio,
+			contextWindowK,
+			maxOutputK,
 			capabilities
 		}
 	}
@@ -158,7 +188,9 @@ export function createMergePatch(snapshot, draft) {
 		'vendor',
 		'inputRatio',
 		'cachedInputRatio',
-		'outputRatio'
+		'outputRatio',
+		'contextWindowK',
+		'maxOutputK'
 	]) {
 		if (initial.command[field] !== current.command[field]) patch[field] = current.command[field]
 	}

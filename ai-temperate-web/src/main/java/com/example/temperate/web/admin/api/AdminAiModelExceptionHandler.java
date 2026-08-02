@@ -49,7 +49,9 @@ public final class AdminAiModelExceptionHandler {
     private static HttpStatus status(AdminAiModelErrorCode code) {
         return switch (code) {
             case AI_MODEL_NOT_FOUND, AI_MODEL_ICON_NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case AI_MODEL_NAME_CONFLICT, AI_MODEL_VERSION_CONFLICT -> HttpStatus.CONFLICT;
+            case AI_MODEL_NAME_CONFLICT,
+                    AI_MODEL_VERSION_CONFLICT,
+                    AI_MODEL_TOKEN_LIMIT_REQUIRED -> HttpStatus.CONFLICT;
             case AI_MODEL_VERSION_REQUIRED -> HttpStatus.PRECONDITION_REQUIRED;
             default -> HttpStatus.BAD_REQUEST;
         };
@@ -68,6 +70,9 @@ public final class AdminAiModelExceptionHandler {
             case AI_MODEL_CAPABILITY_INVALID -> "AI 模型能力代码不受支持。";
             case AI_MODEL_CAPABILITY_DUPLICATED -> "AI 模型能力代码不能重复。";
             case AI_MODEL_BATCH_ID_DUPLICATED -> "批量请求中的 AI 模型 ID 不能重复。";
+            case AI_MODEL_TOKEN_LIMIT_INVALID -> "模型上下文或最大输出 Token 上限无效。";
+            case AI_MODEL_TOKEN_LIMIT_REQUIRED ->
+                    "必须先配置模型上下文与最大输出 Token 上限。";
             default -> "AI 模型请求参数无效。";
         };
     }

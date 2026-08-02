@@ -36,6 +36,11 @@
             <arg column="email" javaType="java.lang.String"/>
             <arg column="phone" javaType="java.lang.String"/>
             <arg column="avatar_url" javaType="java.lang.String"/>
+            <arg column="membership_tier"
+                 javaType="com.example.temperate.model.auth.enums.MembershipTier"/>
+            <arg column="quota_balance_minor" javaType="_long"/>
+            <arg column="quota_period_started_at" javaType="java.time.OffsetDateTime"/>
+            <arg column="quota_period_ends_at" javaType="java.time.OffsetDateTime"/>
         </constructor>
     </resultMap>
 
@@ -142,9 +147,23 @@
             up.display_name,
             uli.email,
             uli.phone,
-            up.avatar_url
+            up.avatar_url,
+            CASE umq.membership_tier
+                WHEN 0 THEN 'FREE'
+                WHEN 1 THEN 'GO'
+                WHEN 2 THEN 'EDU'
+                WHEN 3 THEN 'TEAM'
+                WHEN 4 THEN 'PLUS'
+                WHEN 5 THEN 'PRO'
+                WHEN 6 THEN 'MAX'
+            END AS membership_tier,
+            umq.quota_balance_minor,
+            umq.quota_period_started_at,
+            umq.quota_period_ends_at
         FROM userloginidentity uli
         INNER JOIN user_profile up ON up.login_identity_id = uli.id
+        INNER JOIN user_membership_quota umq
+            ON umq.login_identity_id = uli.id
         WHERE uli.id = #{identityId,jdbcType=BIGINT}
           AND up.account_status = 0
     </select>

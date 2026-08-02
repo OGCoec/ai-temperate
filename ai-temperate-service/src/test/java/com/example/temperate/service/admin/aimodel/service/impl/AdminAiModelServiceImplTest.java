@@ -3,7 +3,6 @@ package com.example.temperate.service.admin.aimodel.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,8 +33,9 @@ import com.example.temperate.service.admin.aimodel.dto.AiModelPatchField;
 import com.example.temperate.service.admin.aimodel.exception.AdminAiModelErrorCode;
 import com.example.temperate.service.admin.aimodel.exception.AdminAiModelException;
 import com.example.temperate.service.admin.aimodel.id.AiModelIdGenerator;
-import com.example.temperate.service.admin.aimodel.text.AiModelTextTokenizer;
 import com.example.temperate.service.admin.aimodel.transaction.AiModelAfterCommitExecutor;
+import com.example.temperate.service.aimodel.search.AiModelSearchCriteria;
+import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -71,7 +71,7 @@ final class AdminAiModelServiceImplTest {
     @Mock
     private AiModelAfterCommitExecutor afterCommitExecutor;
     @Mock
-    private AiModelTextTokenizer textTokenizer;
+    private AiModelSearchService searchService;
 
     private PublicIdCodec publicIdCodec;
     private AdminAiModelServiceImpl service;
@@ -87,13 +87,13 @@ final class AdminAiModelServiceImplTest {
                 snowflakeIdWorker,
                 publicIdCodec,
                 new ObjectMapper(),
-                textTokenizer,
+                searchService,
                 cacheService,
                 afterCommitExecutor);
-        lenient().when(textTokenizer.tokenize(any(String.class)))
-                .thenReturn(List.of("token"));
-        lenient().when(textTokenizer.tokenize(isNull()))
-                .thenReturn(List.of());
+        lenient().when(searchService.modelNameTokensJson(any(String.class)))
+                .thenReturn("[\"gpt\",\"5.5\"]");
+        lenient().when(searchService.descriptionTokensJson(any()))
+                .thenReturn("[\"token\"]");
         AtomicLong capabilityId = new AtomicLong(1000L);
         lenient().when(snowflakeIdWorker.nextId())
                 .thenAnswer(invocation -> capabilityId.incrementAndGet());
@@ -117,10 +117,13 @@ final class AdminAiModelServiceImplTest {
         assertThat(modelCaptor.getValue().getEnabled()).isTrue();
         assertThat(modelCaptor.getValue().getCachedInputRatio())
                 .isEqualByComparingTo("0.50000000");
+        assertThat(modelCaptor.getValue().getContextWindowTokens()).isEqualTo(256000L);
+        assertThat(modelCaptor.getValue().getMaxOutputTokens()).isEqualTo(32000L);
         assertThat(modelCaptor.getValue().getModelNameTokensJson())
-                .isEqualTo("[\"token\"]");
+                .isEqualTo("[\"gpt\",\"5.5\"]");
         assertThat(modelCaptor.getValue().getDescriptionTokensJson())
                 .isEqualTo("[\"token\"]");
+        verify(searchService).descriptionTokensJson("test model");
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiModelCapability>> capabilities =
                 ArgumentCaptor.forClass(List.class);
@@ -191,6 +194,8 @@ final class AdminAiModelServiceImplTest {
                 BigDecimal.ONE,
                 new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
+                256000L,
+                32000L,
                 false,
                 List.of("RESPONSES")));
 
@@ -215,6 +220,8 @@ final class AdminAiModelServiceImplTest {
                 BigDecimal.ONE,
                 new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
+                256000L,
+                32000L,
                 false,
                 List.of("RESPONSES"))))
                 .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
@@ -247,6 +254,54 @@ final class AdminAiModelServiceImplTest {
     }
 
     @Test
+    void rejectsNonDecimalKTokenLimitBeforeDatabaseIo() {
+        assertThatThrownBy(() -> service.create(command(
+                false,
+                List.of("RESPONSES"),
+                256001L,
+                32000L)))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID));
+
+        verifyNoInteractions(modelMapper, capabilityMapper, idGenerator, cacheService);
+    }
+
+    @Test
+    void rejectsOutputLimitAboveContextBeforeAnyWriteOrCacheRegistration() {
+        assertThatThrownBy(() -> service.create(command(
+                true,
+                List.of("RESPONSES"),
+                32000L,
+                64000L)))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID));
+
+        verifyNoInteractions(modelMapper, capabilityMapper, idGenerator, cacheService);
+        verify(afterCommitExecutor, never()).execute(any());
+    }
+
+    @Test
+    void rejectsEnablingUnconfiguredModelBeforeStatusUpdate() {
+        AiModel unconfigured = model(MODEL_ID, false);
+        unconfigured.setContextWindowTokens(null);
+        unconfigured.setMaxOutputTokens(null);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(unconfigured);
+
+        assertThatThrownBy(() ->
+                service.setEnabled(publicIdCodec.encode(MODEL_ID), true))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_REQUIRED));
+
+        verify(modelMapper, never()).updateEnabled(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyBoolean());
+        verify(afterCommitExecutor, never()).execute(any());
+    }
+
+    @Test
     void batchStatusUsesOneBatchUpdateAndRegistersOneRefresh() {
         long secondId = 456L;
         List<String> publicIds = List.of(
@@ -267,6 +322,30 @@ final class AdminAiModelServiceImplTest {
     }
 
     @Test
+    void batchEnableRejectsAllModelsWhenOneTokenLimitIsMissing() {
+        long secondId = 456L;
+        AiModel configured = model(MODEL_ID, false);
+        AiModel unconfigured = model(secondId, false);
+        unconfigured.setContextWindowTokens(null);
+        unconfigured.setMaxOutputTokens(null);
+        List<String> publicIds = List.of(
+                publicIdCodec.encode(MODEL_ID),
+                publicIdCodec.encode(secondId));
+        when(modelMapper.findByIds(List.of(MODEL_ID, secondId)))
+                .thenReturn(List.of(configured, unconfigured));
+
+        assertThatThrownBy(() -> service.setEnabledBatch(publicIds, true))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_REQUIRED));
+
+        verify(modelMapper, never()).updateEnabledBatch(
+                any(),
+                org.mockito.ArgumentMatchers.anyBoolean());
+        verify(afterCommitExecutor, never()).execute(any());
+    }
+
+    @Test
     void singleStatusChangeRegistersOneRefresh() {
         when(modelMapper.findById(MODEL_ID))
                 .thenReturn(model(MODEL_ID, true), model(MODEL_ID, false));
@@ -281,13 +360,61 @@ final class AdminAiModelServiceImplTest {
     }
 
     @Test
+    void stoppingUnconfiguredLegacyModelRemainsAllowedAndReturnsNullLimits() {
+        AiModel before = model(MODEL_ID, true);
+        before.setContextWindowTokens(null);
+        before.setMaxOutputTokens(null);
+        AiModel after = model(MODEL_ID, false);
+        after.setContextWindowTokens(null);
+        after.setMaxOutputTokens(null);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(before, after);
+        when(modelMapper.updateEnabled(MODEL_ID, false)).thenReturn(1);
+        when(capabilityMapper.findByAiModelId(MODEL_ID)).thenReturn(List.of());
+
+        AdminAiModelResult result =
+                service.setEnabled(publicIdCodec.encode(MODEL_ID), false);
+
+        assertThat(result.contextWindowTokens()).isNull();
+        assertThat(result.contextWindowK()).isNull();
+        assertThat(result.maxOutputTokens()).isNull();
+        assertThat(result.maxOutputK()).isNull();
+        verify(modelMapper).updateEnabled(MODEL_ID, false);
+        verify(afterCommitExecutor).execute(any());
+    }
+
+    @Test
     void listsModelsWithPageHelperMetadataAndOneCapabilityBatch() {
         long secondId = 456L;
+        AiModelSearchCriteria criteria = criteria(
+                "gpt%_",
+                List.of("gpt%_"),
+                "[\"gpt%_\"]",
+                List.of("gpt"),
+                "[\"gpt\"]");
         Page<AiModel> page = new Page<>(1, 2, true);
         page.setTotal(3);
-        page.add(model(MODEL_ID, true));
-        page.add(model(secondId, false));
-        when(modelMapper.findPage("gpt\\%\\_", true)).thenReturn(page);
+        AiModel first = model(MODEL_ID, true);
+        first.setModelNameTokensJson("[\"gpt%_\"]");
+        first.setDescriptionTokensJson("[\"gpt\"]");
+        AiModel second = model(secondId, false);
+        second.setModelNameTokensJson("[\"other\"]");
+        second.setDescriptionTokensJson("[\"other\"]");
+        page.add(first);
+        page.add(second);
+        when(searchService.prepare("  GPT%_  ")).thenReturn(criteria);
+        when(modelMapper.findPage(
+                "[\"gpt%_\"]",
+                "[\"gpt\"]",
+                "gpt%_",
+                true)).thenReturn(page);
+        when(searchService.matchedDescriptionTokens("[\"gpt\"]", criteria))
+                .thenReturn(List.of("gpt"));
+        when(searchService.matchedDescriptionTokens("[\"other\"]", criteria))
+                .thenReturn(List.of());
+        when(searchService.matchedModelNameTokens("[\"gpt%_\"]", criteria))
+                .thenReturn(List.of("gpt%_"));
+        when(searchService.matchedModelNameTokens("[\"other\"]", criteria))
+                .thenReturn(List.of());
         when(capabilityMapper.findByAiModelIds(List.of(MODEL_ID, secondId)))
                 .thenReturn(List.of(
                         capability(MODEL_ID, AiModelCapabilityCode.RESPONSES),
@@ -306,20 +433,32 @@ final class AdminAiModelServiceImplTest {
                 .containsExactly(AiModelCapabilityCode.RESPONSES);
         assertThat(result.models().get(1).capabilities())
                 .containsExactly(AiModelCapabilityCode.IMAGE);
+        assertThat(result.models().get(0).descriptionMatchedTokens())
+                .containsExactly("gpt");
+        assertThat(result.models().get(1).descriptionMatchedTokens()).isEmpty();
+        assertThat(result.models().get(0).modelNameMatchedTokens())
+                .containsExactly("gpt%_");
+        assertThat(result.models().get(1).modelNameMatchedTokens()).isEmpty();
         assertThat(result.pageNum()).isEqualTo(1);
         assertThat(result.pageSize()).isEqualTo(2);
         assertThat(result.total()).isEqualTo(3);
         assertThat(result.pages()).isEqualTo(2);
         assertThat(result.hasPrevious()).isFalse();
         assertThat(result.hasNext()).isTrue();
-        verify(modelMapper).findPage("gpt\\%\\_", true);
+        verify(modelMapper).findPage(
+                "[\"gpt%_\"]",
+                "[\"gpt\"]",
+                "gpt%_",
+                true);
         verify(capabilityMapper).findByAiModelIds(List.of(MODEL_ID, secondId));
         assertThat(PageHelper.getLocalPage()).isNull();
     }
 
     @Test
     void clearsPageHelperStateWhenModelQueryFails() {
-        when(modelMapper.findPage(null, null))
+        AiModelSearchCriteria criteria = criteria(null, List.of(), null, List.of(), null);
+        when(searchService.prepare(null)).thenReturn(criteria);
+        when(modelMapper.findPage(null, null, null, null))
                 .thenThrow(new IllegalStateException("query failed"));
 
         assertThatThrownBy(() -> service.list(
@@ -362,6 +501,10 @@ final class AdminAiModelServiceImplTest {
 
         assertThat(result.rowVersion()).isEqualTo(7L);
         assertThat(result.cachedInputRatio()).isEqualByComparingTo("0.50000000");
+        assertThat(result.contextWindowTokens()).isEqualTo(256000L);
+        assertThat(result.contextWindowK()).isEqualTo(256);
+        assertThat(result.maxOutputTokens()).isEqualTo(32000L);
+        assertThat(result.maxOutputK()).isEqualTo(32);
         assertThat(result.capabilities())
                 .containsExactly(AiModelCapabilityCode.RESPONSES);
         assertThat(result.availableCapabilities())
@@ -396,6 +539,8 @@ final class AdminAiModelServiceImplTest {
         ArgumentCaptor<AiModel> updated = ArgumentCaptor.forClass(AiModel.class);
         verify(modelMapper).updateEditable(updated.capture(), org.mockito.ArgumentMatchers.eq(3L));
         assertThat(updated.getValue().getModelName()).isEqualTo("gpt-5.6");
+        assertThat(updated.getValue().getModelNameTokensJson())
+                .isEqualTo("[\"gpt\",\"5.6\"]");
         assertThat(updated.getValue().getDescription()).isNull();
         assertThat(updated.getValue().getCachedInputRatio())
                 .isEqualByComparingTo("0.25000000");
@@ -436,12 +581,106 @@ final class AdminAiModelServiceImplTest {
                         AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
                         AiModelPatchField.absent(),
+                        AiModelPatchField.absent(),
+                        AiModelPatchField.absent(),
                         AiModelPatchField.absent()));
 
         ArgumentCaptor<AiModel> updated = ArgumentCaptor.forClass(AiModel.class);
         verify(modelMapper).updateEditable(updated.capture(), org.mockito.ArgumentMatchers.eq(1L));
         assertThat(updated.getValue().getIconId()).isNull();
         verifyNoInteractions(iconMapper);
+    }
+
+    @Test
+    void patchMergesOneTokenLimitWithPersistedCounterpart() {
+        AiModel before = model(MODEL_ID, false);
+        before.setRowVersion(1L);
+        AiModel after = model(MODEL_ID, false);
+        after.setContextWindowTokens(512000L);
+        after.setRowVersion(2L);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(before, after);
+        when(modelMapper.updateEditable(any(AiModel.class), org.mockito.ArgumentMatchers.eq(1L)))
+                .thenReturn(1);
+        when(capabilityMapper.findByAiModelId(MODEL_ID)).thenReturn(List.of());
+
+        service.patch(
+                publicIdCodec.encode(MODEL_ID),
+                1L,
+                tokenPatch(AiModelPatchField.of(512000L), AiModelPatchField.absent()));
+
+        ArgumentCaptor<AiModel> updated = ArgumentCaptor.forClass(AiModel.class);
+        verify(modelMapper).updateEditable(updated.capture(), org.mockito.ArgumentMatchers.eq(1L));
+        assertThat(updated.getValue().getContextWindowTokens()).isEqualTo(512000L);
+        assertThat(updated.getValue().getMaxOutputTokens()).isEqualTo(32000L);
+    }
+
+    @Test
+    void oldModelMustConfigureBothTokenLimitsInOnePatch() {
+        AiModel before = model(MODEL_ID, false);
+        before.setContextWindowTokens(null);
+        before.setMaxOutputTokens(null);
+        before.setRowVersion(1L);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(before);
+
+        assertThatThrownBy(() -> service.patch(
+                publicIdCodec.encode(MODEL_ID),
+                1L,
+                tokenPatch(AiModelPatchField.of(256000L), AiModelPatchField.absent())))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID));
+
+        verify(modelMapper, never()).updateEditable(any(), org.mockito.ArgumentMatchers.anyLong());
+        verify(capabilityMapper, never()).deleteByAiModelId(
+                org.mockito.ArgumentMatchers.anyLong());
+        verify(afterCommitExecutor, never()).execute(any());
+    }
+
+    @Test
+    void invalidTokenPatchHasNoModelCapabilityOrCacheSideEffects() {
+        AiModel before = model(MODEL_ID, true);
+        before.setRowVersion(1L);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(before);
+
+        assertThatThrownBy(() -> service.patch(
+                publicIdCodec.encode(MODEL_ID),
+                1L,
+                tokenPatch(
+                        AiModelPatchField.of(32000L),
+                        AiModelPatchField.of(64000L))))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID));
+
+        verify(modelMapper, never()).updateEditable(any(), org.mockito.ArgumentMatchers.anyLong());
+        verify(capabilityMapper, never()).deleteByAiModelId(
+                org.mockito.ArgumentMatchers.anyLong());
+        verify(capabilityMapper, never()).insertBatch(any());
+        verify(afterCommitExecutor, never()).execute(any());
+        verifyNoInteractions(cacheService);
+    }
+
+    @Test
+    void tokenPatchOnEnabledModelRegistersExactlyOneAfterCommitRefresh() {
+        AiModel before = model(MODEL_ID, true);
+        before.setRowVersion(1L);
+        AiModel after = model(MODEL_ID, true);
+        after.setContextWindowTokens(512000L);
+        after.setMaxOutputTokens(64000L);
+        after.setRowVersion(2L);
+        when(modelMapper.findById(MODEL_ID)).thenReturn(before, after);
+        when(modelMapper.updateEditable(any(AiModel.class), org.mockito.ArgumentMatchers.eq(1L)))
+                .thenReturn(1);
+        when(capabilityMapper.findByAiModelId(MODEL_ID)).thenReturn(List.of());
+
+        service.patch(
+                publicIdCodec.encode(MODEL_ID),
+                1L,
+                tokenPatch(
+                        AiModelPatchField.of(512000L),
+                        AiModelPatchField.of(64000L)));
+
+        verify(afterCommitExecutor).execute(any());
     }
 
     @Test
@@ -511,6 +750,14 @@ final class AdminAiModelServiceImplTest {
     private static AdminAiModelCreateCommand command(
             boolean enabled,
             List<String> capabilities) {
+        return command(enabled, capabilities, 256000L, 32000L);
+    }
+
+    private static AdminAiModelCreateCommand command(
+            boolean enabled,
+            List<String> capabilities,
+            Long contextWindowTokens,
+            Long maxOutputTokens) {
         return new AdminAiModelCreateCommand(
                 " GPT-5.5 ",
                 "test model",
@@ -520,6 +767,8 @@ final class AdminAiModelServiceImplTest {
                 BigDecimal.ONE,
                 new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
+                contextWindowTokens,
+                maxOutputTokens,
                 enabled,
                 capabilities);
     }
@@ -534,6 +783,8 @@ final class AdminAiModelServiceImplTest {
                 AiModelPatchField.absent(),
                 AiModelPatchField.of(new BigDecimal("0.25000000")),
                 AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
                 AiModelPatchField.of(List.of("RESPONSES", "IMAGE")));
     }
 
@@ -547,6 +798,25 @@ final class AdminAiModelServiceImplTest {
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent());
+    }
+
+    private static AdminAiModelPatchCommand tokenPatch(
+            AiModelPatchField<Long> contextWindowTokens,
+            AiModelPatchField<Long> maxOutputTokens) {
+        return new AdminAiModelPatchCommand(
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                AiModelPatchField.absent(),
+                contextWindowTokens,
+                maxOutputTokens,
                 AiModelPatchField.absent());
     }
 
@@ -562,6 +832,8 @@ final class AdminAiModelServiceImplTest {
         model.setInputRatio(BigDecimal.ONE);
         model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(BigDecimal.TWO);
+        model.setContextWindowTokens(256000L);
+        model.setMaxOutputTokens(32000L);
         model.setEnabled(enabled);
         model.setRowVersion(1L);
         model.setCreatedAt(LocalDate.of(2026, 7, 26));
@@ -576,5 +848,19 @@ final class AdminAiModelServiceImplTest {
         capability.setAiModelId(modelId);
         capability.setCapabilityCode(code);
         return capability;
+    }
+
+    private static AiModelSearchCriteria criteria(
+            String vendorExact,
+            List<String> modelNameTokens,
+            String modelNameTokensJson,
+            List<String> descriptionTokens,
+            String descriptionTokensJson) {
+        return new AiModelSearchCriteria(
+                vendorExact,
+                modelNameTokens,
+                modelNameTokensJson,
+                descriptionTokens,
+                descriptionTokensJson);
     }
 }

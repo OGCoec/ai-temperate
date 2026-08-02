@@ -1,0 +1,6 @@
+{
+  "id": "ait-oss-put",
+  "displayName": "AI Temperate Android OSS PUT",
+  "version": "1.0.0",
+  "description": "Streaming HTTPS PUT transport for presigned conversation attachments"
+}

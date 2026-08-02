@@ -110,6 +110,67 @@ test('model billing exposes cached input ratio independently from Redis caching'
 	assert.match(catalog, /model\.cachedInputRatio/)
 })
 
+test('cached input ratio reserves a wider label track without changing IN or OUT controls', () => {
+	const formView = read('components/admin/ai-model-form.vue')
+
+	assert.match(formView, /class="ratio-control cache-ratio-control"/)
+	assert.match(formView, /\.ratio-control\s*\{[\s\S]*grid-template-columns:\s*82rpx minmax\(0, 1fr\)/)
+	assert.match(formView, /\.cache-ratio-control\s*\{\s*grid-template-columns:\s*112rpx minmax\(0, 1fr\);\s*\}/)
+})
+
+test('model capacity uses accessible K inputs and displays configured or unconfigured limits', () => {
+	const formLogic = read('common/admin/admin-ai-model-form.js')
+	const formView = read('components/admin/ai-model-form.vue')
+	const catalog = read('components/admin/workspace/ai-model-list-panel.vue')
+	const detail = read('components/admin/workspace/ai-model-detail-panel.vue')
+
+	assert.match(formLogic, /contextWindowK:\s*''/)
+	assert.match(formLogic, /maxOutputK:\s*''/)
+	assert.match(formLogic, /Number\.isSafeInteger/)
+	assert.match(formLogic, /2147483647/)
+	assert.match(formView, /inputmode="numeric"/)
+	assert.match(formView, /aria-label="最大上下文窗口"/)
+	assert.match(formView, /aria-label="单次最大输出"/)
+	assert.match(formView, /1 K = 1000 Token/)
+	assert.match(
+		read('components/admin/workspace/ai-model-create-panel.vue'),
+		/:disabled="!tokenLimitsComplete"/)
+	assert.match(detail, /:disabled="!tokenLimitsComplete"/)
+	assert.match(catalog, /modelLimitSummary\(model\)/)
+	assert.match(catalog, /未配置/)
+	assert.match(catalog, /AI_MODEL_TOKEN_LIMIT_REQUIRED/)
+	assert.match(catalog, /启用失败：请先为所有目标模型配置最大上下文窗口和单次最大输出/)
+	assert.match(detail, /tokenLimitDetail\(model\.contextWindowK, model\.contextWindowTokens\)/)
+	assert.match(detail, /tokenLimitDetail\(model\.maxOutputK, model\.maxOutputTokens\)/)
+	assert.match(detail, /AI_MODEL_TOKEN_LIMIT_REQUIRED/)
+})
+
+test('model catalog distills each row into one icon-backed detail target plus batch selection', () => {
+	const catalog = read('components/admin/workspace/ai-model-list-panel.vue')
+
+	assert.match(catalog, /class="model-detail-trigger"/)
+	assert.match(catalog, /type="button"[^>]*:aria-label="`查看 \$\{model\.modelName\} 详情`"/)
+	assert.match(catalog, /@click="openDetail\(model\.publicId\)"/)
+	assert.match(catalog, /@click\.stop="toggleSelection\(model\.publicId\)"/)
+	assert.match(catalog, /v-if="model\.icon && !iconFailures\[model\.publicId\]"/)
+	assert.match(catalog, /:src="model\.icon"/)
+	assert.match(catalog, /@error="markIconFailure\(model\.publicId\)"/)
+	assert.match(catalog, /class="model-icon-fallback"[^>]*aria-hidden="true"[^>]*>AI</)
+	assert.match(catalog, /markIconFailure\(publicId\)/)
+	assert.match(catalog, /this\.iconFailures = \{\}/)
+	assert.match(catalog, /<text class="model-vendor">\{\{\s*model\.vendor\s*\}\}<\/text>/)
+	assert.doesNotMatch(catalog, /\{\{\s*model\.publicId\s*\}\}/)
+	assert.doesNotMatch(catalog, />操作<\/text>/)
+	assert.doesNotMatch(catalog, /class="row-actions"|class="row-menu"|skeleton-actions/)
+	assert.doesNotMatch(
+		catalog,
+		/openRowMenuId|toggleRowMenu|openRowDetail|openRowStatus|confirmSingleStatus|setSingleStatus/)
+	assert.match(catalog, /v-if="selectedIds\.length" class="batch-actions desktop-batch-actions"/)
+	assert.match(catalog, /v-if="selectedIds\.length" class="mobile-batch-bar"/)
+	assert.match(catalog, /adminAiModelApi\.setEnabledBatch/)
+	assert.match(catalog, /width:\s*min\(1440px,\s*100%\)/)
+})
+
 test('icon uploads reuse protected admin headers and pages never call network primitives directly', () => {
 	const http = read('common/admin/admin-http.js')
 	const api = read('common/admin/admin-ai-model-icon-api.js')
@@ -181,6 +242,21 @@ test('model catalog provides adaptive table, cards, filter sheet, skeletons and 
 	assert.match(list, /@media \(min-width: 1024px\)/)
 	assert.match(list, /@media \(min-width: 768px\) and \(max-width: 1023px\)/)
 	assert.match(list, /@media \(max-width: 767px\)/)
+})
+
+test('model catalog renders independent name and description matches as safe orange text segments', () => {
+	const list = read('components/admin/workspace/ai-model-list-panel.vue')
+
+	assert.match(list, /modelNameMatchedTokens/)
+	assert.match(list, /descriptionMatchedTokens/)
+	assert.match(list, /buildTextHighlightSegments/)
+	assert.match(list, /modelNameSegments/)
+	assert.match(list, /class="model-description"/)
+	assert.match(list, /model-text-match/)
+	assert.match(list, /\.model-detail-trigger:hover \.model-name \.model-text-match/)
+	assert.match(list, /-webkit-line-clamp:\s*2/)
+	assert.match(list, /color:\s*\$app-action-orange/)
+	assert.doesNotMatch(list, /v-html/)
 })
 
 test('model page actions keep their approved semantic color roles', () => {

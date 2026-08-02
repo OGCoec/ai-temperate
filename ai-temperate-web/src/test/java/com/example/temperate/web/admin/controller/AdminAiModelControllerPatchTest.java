@@ -14,7 +14,7 @@ import com.example.temperate.service.admin.aimodel.exception.AdminAiModelErrorCo
 import com.example.temperate.service.admin.aimodel.exception.AdminAiModelException;
 import com.example.temperate.service.admin.aimodel.service.AdminAiModelService;
 import com.example.temperate.web.admin.aimodel.AdminAiModelMergePatchMapper;
-import com.example.temperate.web.admin.aimodel.AiModelPublicId;
+import com.example.temperate.web.aimodel.AiModelPublicId;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -92,6 +92,10 @@ final class AdminAiModelControllerPatchTest {
                 BigDecimal.ONE,
                 new BigDecimal("0.50000000"),
                 BigDecimal.TWO,
+                256000L,
+                256,
+                32000L,
+                32,
                 true,
                 List.of(AiModelCapabilityCode.RESPONSES),
                 List.of(AiModelCapabilityCode.values()),

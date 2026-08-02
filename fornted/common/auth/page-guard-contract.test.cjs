@@ -17,10 +17,40 @@ test('page guard verifies protected routes through the backend-backed session fl
 
 	assert.match(source, /restorePersistedSession/)
 	assert.match(source, /loadCurrentUserProfile\(\{\s*force:\s*true\s*\}\)/)
+	assert.match(source, /isRuntimeSessionAuthenticated/)
+	assert.match(source, /markRuntimeSessionAuthenticated/)
 	assert.match(source, /clearSession\(\)/)
 	assert.match(source, /uni\.reLaunch\(\{[\s\S]*url:\s*AUTH_ROUTES\.login/)
 	assert.match(source, /authenticationInFlight/)
 	assert.match(source, /isProtectedRoute/)
+})
+
+test('clearing a session also removes runtime model and conversation state', () => {
+	const source = read('common/auth/session-vault.js')
+
+	assert.match(source, /clearRuntimeSessionAuthentication\(\)/)
+	assert.match(source, /clearAiModelCatalog\(\)/)
+	assert.match(source, /clearAiConversationStore\(\)/)
+	assert.match(source, /clearGenerationManager\(\)/)
+})
+
+test('risk blocking clears runtime-only account state before it replaces the current page', () => {
+	const source = read('common/auth/risk-block-navigation.js')
+
+	assert.match(source, /clearRuntimeSessionAuthentication\(\)/)
+	assert.match(source, /clearAiModelCatalog\(\)/)
+	assert.match(source, /clearAiConversationStore\(\)/)
+	assert.match(source, /clearGenerationManager\(\)/)
+})
+
+test('authenticated page lifecycle reuses the confirmed runtime session and deduplicates load plus show', () => {
+	const source = read('common/auth/auth-page-mixin.js')
+
+	assert.match(source, /runtimeAuthenticationVersion/)
+	assert.match(source, /__aitAuthenticationInFlight/)
+	assert.match(source, /if \(this\.authReady && this\.__aitAuthenticationVersion === version\)/)
+	assert.match(source, /onLoad\(\)/)
+	assert.match(source, /onShow\(\)/)
 })
 
 test('protected authentication flows contain no local preview bypass', () => {
@@ -68,6 +98,7 @@ test('application routes do not register the removed example tab shell', () => {
 	const pages = read('pages.json')
 
 	assert.match(pages, /pages\/account\/profile/)
+	assert.match(pages, /pages\/ai-chat\/index/)
 	assert.equal(pages.includes(`"${nativeTabKey}"`), false)
 	assert.equal(pages.includes(`"${legacyLeftPanelKey}"`), false)
 	assert.equal(pages.includes(`"${legacyTopPanelKey}"`), false)

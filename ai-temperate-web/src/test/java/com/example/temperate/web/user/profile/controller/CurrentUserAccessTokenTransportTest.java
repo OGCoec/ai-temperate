@@ -7,18 +7,22 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.example.temperate.model.user.domain.CurrentUserProfile;
+import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.service.auth.session.access.AccessSessionService;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.user.profile.CurrentUserProfileResult;
 import com.example.temperate.service.user.profile.CurrentUserProfileService;
 import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.time.OffsetDateTime;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -36,13 +40,25 @@ class CurrentUserAccessTokenTransportTest {
         CurrentUserProfileService profileService = mock(CurrentUserProfileService.class);
         when(accessSessionService.authenticate("valid-access-token"))
                 .thenReturn(new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice"));
-        when(profileService.getRequired(10001L)).thenReturn(new CurrentUserProfile(
+        when(profileService.getRequired(10001L)).thenReturn(new CurrentUserProfileResult(
                 "Alice",
                 "alice@example.test",
                 "+14155550123",
-                null));
+                null,
+                MembershipTier.FREE,
+                "5000",
+                "50.0",
+                "5000",
+                "50.0",
+                "0",
+                "0.0",
+                "0.0",
+                null,
+                OffsetDateTime.parse("2026-08-06T12:00:00Z")));
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new CurrentUserController(profileService))
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(
+                        new ObjectMapper().findAndRegisterModules()))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .addInterceptors(new AccessTokenAuthenticationInterceptor(accessSessionService))
                 .build();
@@ -60,7 +76,14 @@ class CurrentUserAccessTokenTransportTest {
                         .cookie(new Cookie("access_token", "valid-access-token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("alice@example.test"))
-                .andExpect(jsonPath("$.avatarUrl").value(nullValue()));
+                .andExpect(jsonPath("$.avatarUrl").value(nullValue()))
+                .andExpect(jsonPath("$.membershipTier").value("FREE"))
+                .andExpect(jsonPath("$.quotaBalanceMinor").value("5000"))
+                .andExpect(jsonPath("$.quotaBalance").value("50.0"))
+                .andExpect(jsonPath("$.quotaTotal").value("50.0"))
+                .andExpect(jsonPath("$.quotaUsed").value("0.0"))
+                .andExpect(jsonPath("$.quotaUsagePercent").value("0.0"))
+                .andExpect(jsonPath("$.userId").doesNotExist());
     }
 
     @Test

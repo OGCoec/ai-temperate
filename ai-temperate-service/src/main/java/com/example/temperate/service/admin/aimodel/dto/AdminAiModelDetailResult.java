@@ -6,7 +6,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * 返回管理员单模型详情、当前能力和可选能力全集。
+ * 返回管理员单模型详情、原始 Token 与 K 展示值、当前能力和可选能力全集。
  *
  * <p>数据库 ID 不向外暴露，{@code rowVersion} 与 HTTP ETag 保持同一乐观锁版本。</p>
  */
@@ -21,6 +21,10 @@ public record AdminAiModelDetailResult(
         BigDecimal inputRatio,
         BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
+        Long contextWindowTokens,
+        Integer contextWindowK,
+        Long maxOutputTokens,
+        Integer maxOutputK,
         boolean enabled,
         List<AiModelCapabilityCode> capabilities,
         List<AiModelCapabilityCode> availableCapabilities,

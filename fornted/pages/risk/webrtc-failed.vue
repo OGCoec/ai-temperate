@@ -221,30 +221,28 @@
 	}
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.gate-page {
+		@include user-safe-viewport;
 		box-sizing: border-box;
-		min-height: 100vh;
 		padding:
 			calc(56rpx + env(safe-area-inset-top))
 			28rpx
 			calc(56rpx + env(safe-area-inset-bottom));
-		background:
-			radial-gradient(circle at 18% 0%, rgba(55, 211, 154, 0.13), transparent 34%),
-			#080c0a;
+		background: #080c0a;
 		color: #eff8f3;
 		-webkit-font-smoothing: antialiased;
 	}
 
 	.gate-card {
+		@include user-frosted-surface;
 		box-sizing: border-box;
 		width: min(100%, 720rpx);
 		margin: 0 auto;
 		padding: 44rpx 36rpx;
-		border: 1px solid #284238;
 		border-radius: 28rpx;
-		background: rgba(13, 20, 16, 0.96);
-		box-shadow: 0 24rpx 80rpx rgba(0, 0, 0, 0.3);
 	}
 
 	.status-header {
@@ -313,11 +311,10 @@
 	}
 
 	.evidence-panel {
+		@include user-frosted-surface;
 		margin-top: 34rpx;
 		padding: 0 24rpx;
-		border: 1px solid #293a32;
 		border-radius: 18rpx;
-		background: #0c120f;
 	}
 
 	.evidence-row {
@@ -387,15 +384,16 @@
 	}
 
 	.retry-button {
+		@include user-frosted-control;
 		min-height: 88rpx;
 		margin-top: 32rpx;
-		border: 0;
+		border: 1px solid rgba(123, 238, 190, .36);
 		border-radius: 16rpx;
-		background: #37d39a;
+		background: rgba(55, 211, 154, .82);
 		color: #06120d;
 		font-size: 28rpx;
 		font-weight: 780;
-		transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), opacity 140ms;
+		line-height: 1.2;
 	}
 
 	.retry-button:active {

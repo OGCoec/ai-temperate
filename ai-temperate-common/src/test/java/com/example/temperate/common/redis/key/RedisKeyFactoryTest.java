@@ -271,7 +271,22 @@ final class RedisKeyFactoryTest {
     void createsFixedAiModelEnabledSnapshotKey() {
         RedisKeyFactory factory = new RedisKeyFactory("prod");
 
-        assertEquals("ait:prod:ai:model:v3:enabled", factory.aiModelEnabledSnapshotKey());
+        assertEquals("ait:prod:ai:model:v4:enabled", factory.aiModelEnabledSnapshotKey());
+    }
+
+    @Test
+    void createsUserProfileKeyOnlyFromEncryptedIdentifier() throws Exception {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        EncryptedRedisId encryptedId =
+                new EncryptedRedisId("I11B5RV16PBmGzFJEwJf3g");
+
+        assertEquals(
+                "ait:prod:user:profile:v1:enc-id:I11B5RV16PBmGzFJEwJf3g",
+                factory.userProfileKey(encryptedId));
+        assertThrows(NoSuchMethodException.class,
+                () -> RedisKeyFactory.class.getMethod("userProfileKey", long.class));
+        assertThrows(NoSuchMethodException.class,
+                () -> RedisKeyFactory.class.getMethod("userProfileKey", String.class));
     }
 
     @Test

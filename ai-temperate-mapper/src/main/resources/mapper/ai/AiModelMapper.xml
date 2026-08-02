@@ -18,6 +18,8 @@
         <result property="inputRatio" column="input_ratio"/>
         <result property="cachedInputRatio" column="cached_input_ratio"/>
         <result property="outputRatio" column="output_ratio"/>
+        <result property="contextWindowTokens" column="context_window_tokens"/>
+        <result property="maxOutputTokens" column="max_output_tokens"/>
         <result property="enabled" column="is_enabled"/>
         <result property="rowVersion" column="row_version"/>
         <result property="createdAt" column="created_at"/>
@@ -48,6 +50,8 @@
         model.input_ratio AS input_ratio,
         model.cached_input_ratio AS cached_input_ratio,
         model.output_ratio AS output_ratio,
+        model.context_window_tokens AS context_window_tokens,
+        model.max_output_tokens AS max_output_tokens,
         model.is_enabled AS is_enabled,
         model.row_version AS row_version,
         model.created_at AS created_at,
@@ -68,6 +72,8 @@
             input_ratio,
             cached_input_ratio,
             output_ratio,
+            context_window_tokens,
+            max_output_tokens,
             is_enabled
         )
         VALUES (
@@ -82,6 +88,8 @@
             #{inputRatio,jdbcType=NUMERIC},
             #{cachedInputRatio,jdbcType=NUMERIC},
             #{outputRatio,jdbcType=NUMERIC},
+            #{contextWindowTokens,jdbcType=BIGINT},
+            #{maxOutputTokens,jdbcType=BIGINT},
             #{enabled,jdbcType=BOOLEAN}
         )
     </insert>
@@ -100,6 +108,8 @@
             input_ratio = #{model.inputRatio,jdbcType=NUMERIC},
             cached_input_ratio = #{model.cachedInputRatio,jdbcType=NUMERIC},
             output_ratio = #{model.outputRatio,jdbcType=NUMERIC},
+            context_window_tokens = #{model.contextWindowTokens,jdbcType=BIGINT},
+            max_output_tokens = #{model.maxOutputTokens,jdbcType=BIGINT},
             row_version = row_version + 1
         WHERE id = #{model.id,jdbcType=BIGINT}
           AND row_version = #{expectedVersion,jdbcType=BIGINT}
@@ -144,11 +154,20 @@
         FROM ai_model model
         LEFT JOIN ai_model_icon icon ON icon.id = model.icon_id
         <where>
-            <if test="keyword != null">
-                AND (
-                    LOWER(model.model_name) LIKE CONCAT(#{keyword,jdbcType=VARCHAR}, '%') ESCAPE '\'
-                    OR LOWER(model.vendor) LIKE CONCAT(#{keyword,jdbcType=VARCHAR}, '%') ESCAPE '\'
-                )
+            <if test="modelNameTokensJson != null or descriptionTokensJson != null or vendorExact != null">
+                <trim prefix="AND (" suffix=")" prefixOverrides="OR">
+                    <if test="modelNameTokensJson != null">
+                        OR model.model_name_tokens @>
+                        CAST(#{modelNameTokensJson,jdbcType=VARCHAR} AS JSONB)
+                    </if>
+                    <if test="descriptionTokensJson != null">
+                        OR model.description_tokens @>
+                        CAST(#{descriptionTokensJson,jdbcType=VARCHAR} AS JSONB)
+                    </if>
+                    <if test="vendorExact != null">
+                        OR LOWER(model.vendor) = #{vendorExact,jdbcType=VARCHAR}
+                    </if>
+                </trim>
             </if>
             <if test="enabled != null">
                 AND model.is_enabled = #{enabled,jdbcType=BOOLEAN}
@@ -194,6 +213,17 @@
         SELECT is_enabled
         FROM ai_model
         WHERE id = #{id,jdbcType=BIGINT}
+    </select>
+
+    <select id="findEnabledIds" resultType="java.lang.Long">
+        SELECT id
+        FROM ai_model
+        WHERE is_enabled = TRUE
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY id
     </select>
 
     <select id="findTokenBackfillPage" resultMap="AiModelResultMap">

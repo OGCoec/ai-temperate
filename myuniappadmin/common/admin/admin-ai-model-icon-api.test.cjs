@@ -48,20 +48,22 @@ test('icon API keeps JSON CRUD and multipart uploads behind shared request helpe
 test('listAll reads bounded pages and preserves server name order', async () => {
 	const { createAdminAiModelIconApi } = await loadModule()
 	const calls = []
-	const api = createAdminAiModelIconApi(async requestPath => {
-		calls.push(requestPath)
+	const api = createAdminAiModelIconApi(async (requestPath, options) => {
+		calls.push({ requestPath, options })
 		return calls.length === 1
 			? { icons: [{ iconName: 'Anthropic' }], hasNext: true }
 			: { icons: [{ iconName: 'OpenAI' }], hasNext: false }
 	})
 
-	const icons = await api.listAll()
+	const scope = { isActive: () => true }
+	const icons = await api.listAll({ scope })
 
 	assert.deepEqual(icons.map(icon => icon.iconName), ['Anthropic', 'OpenAI'])
-	assert.deepEqual(calls, [
+	assert.deepEqual(calls.map(call => call.requestPath), [
 		'/api/admin/ai-model-icons?pageNum=1&pageSize=100',
 		'/api/admin/ai-model-icons?pageNum=2&pageSize=100'
 	])
+	assert.equal(calls.every(call => call.options.scope === scope), true)
 })
 
 test('invalid icon IDs and empty upload paths fail before network access', async () => {

@@ -68,12 +68,13 @@
 	}
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.registration-identity-summary {
+		@include user-frosted-surface;
 		margin: 0 0 22px;
-		border: 1px solid #303733;
 		border-radius: 14px;
-		background: #151816;
 		overflow: hidden;
 	}
 	.identity-row {

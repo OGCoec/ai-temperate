@@ -85,7 +85,11 @@ class AuthenticationMapperContractTest {
         assertThat(xml).doesNotContain(
                 "email_verified_at", "phone_verified_at", "password_changed_at",
                 "password_strength_level", "password_policy_version");
-        assertThat(xml).doesNotContain("membership_tier", "user_membership_quota");
+        String authenticationSql = xmlElement(xml, "sql", "authenticationcontextcolumns")
+                + xmlElement(xml, "select", "findauthenticationbynormalizedemail")
+                + xmlElement(xml, "select", "findauthenticationbynormalizedphone")
+                + xmlElement(xml, "select", "findauthenticationbyid");
+        assertThat(authenticationSql).doesNotContain("membership_tier", "user_membership_quota");
         assertThat(xml).doesNotContain("select *", "${");
     }
 
@@ -138,6 +142,20 @@ class AuthenticationMapperContractTest {
 
     private static String normalized(String text) {
         return text.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private static String xmlElement(String xml, String element, String id) {
+        String opening = "<" + element + " id=\"" + id + "\"";
+        int start = xml.indexOf(opening);
+        if (start < 0) {
+            throw new AssertionError("Missing XML element: " + element + "#" + id);
+        }
+        String closing = "</" + element + ">";
+        int end = xml.indexOf(closing, start);
+        if (end < 0) {
+            throw new AssertionError("Unclosed XML element: " + element + "#" + id);
+        }
+        return xml.substring(start, end + closing.length());
     }
 
     private static void assertNoPhysicalForeignKey(String sql) {

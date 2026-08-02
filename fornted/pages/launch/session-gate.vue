@@ -14,6 +14,7 @@
 	import { AUTH_ROUTES } from '@/common/auth/config.js'
 	import { restorePersistedSession } from '@/common/auth/http-client.js'
 	import { clearSession } from '@/common/auth/session-vault.js'
+	import { markRuntimeSessionAuthenticated } from '@/common/auth/authenticated-session-state.js'
 	import {
 		clearCurrentUserProfile,
 		loadCurrentUserProfile
@@ -52,7 +53,8 @@
 						throw error
 					}
 					await loadCurrentUserProfile({ force: true })
-					this.go(AUTH_ROUTES.profile)
+					markRuntimeSessionAuthenticated()
+					this.go(AUTH_ROUTES.home)
 				} catch (error) {
 					if (TERMINAL_SESSION_ERRORS.has(error?.code)) {
 						clearCurrentUserProfile()
@@ -75,8 +77,10 @@
 </script>
 
 <style lang="scss">
+	@import '@/common/ui/user-material.scss';
+
 	.session-gate {
-		min-height: 100vh;
+		@include user-safe-viewport;
 		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
@@ -88,14 +92,13 @@
 	}
 
 	.session-mark {
+		@include user-frosted-surface;
 		width: 58px;
 		height: 58px;
-		border: 1px solid #303733;
 		border-radius: 18px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: #151816;
 		margin-bottom: 26px;
 	}
 
@@ -129,11 +132,13 @@
 	}
 
 	.session-retry {
+		@include user-frosted-control;
 		min-width: 132px;
 		min-height: 48px;
 		margin-top: 24px;
+		border: 1px solid rgba(123, 238, 190, .36);
 		border-radius: 14px;
-		background: #37d39a;
+		background: rgba(55, 211, 154, .82);
 		color: #0b0d0c;
 		font-size: 16px;
 		font-weight: 700;

@@ -5,9 +5,10 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 表示加密快照内单个已启用 AI 模型的不可变缓存视图。
+ * 表示加密快照内单个已启用 AI 模型的不可变缓存视图和原始 Token 容量限制。
  *
- * <p>内部 Snowflake ID 只存在于加密明文中，Redis Key 不携带模型名称、厂商或标识。</p>
+ * <p>内部 Snowflake ID 和原始 Token 只存在于加密明文中；K 单位属于管理员展示边界，
+ * 不进入缓存。</p>
  */
 public record AiModelCacheEntry(
         long id,
@@ -19,6 +20,8 @@ public record AiModelCacheEntry(
         BigDecimal inputRatio,
         BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
+        long contextWindowTokens,
+        long maxOutputTokens,
         List<AiModelCapabilityCode> capabilities) {
 
     public AiModelCacheEntry {

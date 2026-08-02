@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelUsageDetailMapper">
+
+    <select id="acquireIdempotencyLock" resultType="int">
+        WITH lock_acquired AS (
+            SELECT pg_advisory_xact_lock(#{lockKey,jdbcType=BIGINT})
+        )
+        SELECT 1
+        FROM lock_acquired
+    </select>
+
+    <resultMap id="AiModelUsageDetailResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelUsageDetail">
+        <id property="id" column="id"/>
+        <result property="usageId" column="usage_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="conversationMessageId" column="conversation_message_id"/>
+        <result property="idempotencyKeyDigest" column="idempotency_key_digest"/>
+        <result property="upstreamRequestId" column="upstream_request_id"/>
+        <result property="vendorSnapshot" column="vendor_snapshot"/>
+        <result property="stream" column="is_stream"/>
+        <result property="estimatedPromptTokens" column="estimated_prompt_tokens"/>
+        <result property="maxOutputTokens" column="max_output_tokens"/>
+        <result property="inputRatioSnapshot" column="input_ratio_snapshot"/>
+        <result property="cachedInputRatioSnapshot" column="cached_input_ratio_snapshot"/>
+        <result property="outputRatioSnapshot" column="output_ratio_snapshot"/>
+        <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
+        <result property="settlementDeltaMinor" column="settlement_delta_minor"/>
+    </resultMap>
+
+    <sql id="UsageDetailColumns">
+        id,
+        usage_id,
+        conversation_id,
+        conversation_message_id,
+        idempotency_key_digest,
+        upstream_request_id,
+        vendor_snapshot,
+        is_stream,
+        estimated_prompt_tokens,
+        max_output_tokens,
+        input_ratio_snapshot,
+        cached_input_ratio_snapshot,
+        output_ratio_snapshot,
+        reserved_quota_minor,
+        settlement_delta_minor
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModelUsageDetail"
+            useGeneratedKeys="true"
+            keyProperty="id"
+            keyColumn="id">
+        INSERT INTO ai_model_usage_detail (
+            usage_id,
+            conversation_id,
+            conversation_message_id,
+            idempotency_key_digest,
+            upstream_request_id,
+            vendor_snapshot,
+            is_stream,
+            estimated_prompt_tokens,
+            max_output_tokens,
+            input_ratio_snapshot,
+            cached_input_ratio_snapshot,
+            output_ratio_snapshot,
+            reserved_quota_minor,
+            settlement_delta_minor
+        )
+        VALUES (
+            #{usageId,jdbcType=BINARY},
+            #{conversationId,jdbcType=BINARY},
+            #{conversationMessageId,jdbcType=BIGINT},
+            #{idempotencyKeyDigest,jdbcType=BINARY},
+            #{upstreamRequestId,jdbcType=VARCHAR},
+            #{vendorSnapshot,jdbcType=VARCHAR},
+            #{stream,jdbcType=BOOLEAN},
+            #{estimatedPromptTokens,jdbcType=BIGINT},
+            #{maxOutputTokens,jdbcType=BIGINT},
+            #{inputRatioSnapshot,jdbcType=NUMERIC},
+            #{cachedInputRatioSnapshot,jdbcType=NUMERIC},
+            #{outputRatioSnapshot,jdbcType=NUMERIC},
+            #{reservedQuotaMinor,jdbcType=BIGINT},
+            #{settlementDeltaMinor,jdbcType=BIGINT}
+        )
+    </insert>
+
+    <select id="findByIdempotencyDigest" resultMap="AiModelUsageDetailResultMap">
+        SELECT
+            <include refid="UsageDetailColumns"/>
+        FROM ai_model_usage_detail
+        WHERE idempotency_key_digest = #{idempotencyKeyDigest,jdbcType=BINARY}
+    </select>
+
+    <select id="findByUsageId" resultMap="AiModelUsageDetailResultMap">
+        SELECT
+            <include refid="UsageDetailColumns"/>
+        FROM ai_model_usage_detail
+        WHERE usage_id = #{usageId,jdbcType=BINARY}
+    </select>
+
+    <update id="finalizeDetail">
+        UPDATE ai_model_usage_detail
+        SET conversation_message_id = #{conversationMessageId,jdbcType=BIGINT},
+            upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR},
+            settlement_delta_minor = #{settlementDeltaMinor,jdbcType=BIGINT}
+        WHERE usage_id = #{usageId,jdbcType=BINARY}
+    </update>
+
+    <update id="finalizeHistoricalRefunds">
+        WITH candidate(usage_id, reserved_quota_minor) AS (
+            VALUES
+            <foreach collection="candidates" item="candidate" separator=",">
+                (
+                    #{candidate.usageId,jdbcType=BINARY},
+                    #{candidate.reservedQuotaMinor,jdbcType=BIGINT}
+                )
+            </foreach>
+        )
+        UPDATE ai_model_usage_detail detail
+        SET settlement_delta_minor = -candidate.reserved_quota_minor
+        FROM candidate
+        WHERE detail.usage_id = candidate.usage_id
+          AND detail.conversation_message_id IS NULL
+          AND detail.settlement_delta_minor IS NULL
+    </update>
+</mapper>

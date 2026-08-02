@@ -3,6 +3,7 @@ package com.example.temperate.mapper.user.identity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -142,6 +143,10 @@ class PostgreSqlMapperIntegrationTest {
                 findMembershipQuota(first.getId());
         assertEquals(0, storedMembershipQuota.getMembershipTier());
         assertEquals(5000L, storedMembershipQuota.getQuotaBalanceMinor());
+        assertNull(storedMembershipQuota.getQuotaPeriodStartedAt());
+        assertEquals(
+                OffsetDateTime.parse("2026-07-30T12:00:00Z"),
+                storedMembershipQuota.getQuotaPeriodEndsAt());
 
         assertUniqueViolation(() -> insertMembershipQuota(membershipQuota(first.getId())));
         SQLException negativeBalance = assertThrows(
@@ -464,6 +469,10 @@ class PostgreSqlMapperIntegrationTest {
     private static UserMembershipQuota membershipQuota(long loginIdentityId) {
         UserMembershipQuota membershipQuota = new UserMembershipQuota();
         membershipQuota.setLoginIdentityId(loginIdentityId);
+        membershipQuota.setMembershipTier(0);
+        membershipQuota.setQuotaBalanceMinor(5_000L);
+        membershipQuota.setQuotaPeriodEndsAt(
+                OffsetDateTime.parse("2026-07-30T12:00:00Z"));
         return membershipQuota;
     }
 

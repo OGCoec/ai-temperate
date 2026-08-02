@@ -1,0 +1,92 @@
+@import '../app-theme.scss';
+
+$user-glass-border: rgba(220, 245, 232, .15);
+$user-glass-highlight: rgba(255, 255, 255, .07);
+$user-glass-shadow: rgba(0, 0, 0, .20);
+$user-frosted-surface: rgba(21, 24, 22, .88);
+$user-frosted-control: rgba(28, 34, 30, .72);
+$user-frosted-nav: rgba(16, 20, 18, .78);
+
+@mixin user-safe-viewport {
+	min-height: 100vh;
+	min-height: 100dvh;
+}
+
+@mixin user-frosted-surface {
+	border: 1px solid $user-glass-border;
+	background: $user-frosted-surface;
+	box-shadow: inset 0 1px 0 $user-glass-highlight, 0 10px 28px $user-glass-shadow;
+
+	@supports (backdrop-filter: blur(12px)) {
+		background: rgba(21, 24, 22, .82);
+		backdrop-filter: blur(14px) saturate(118%);
+		-webkit-backdrop-filter: blur(14px) saturate(118%);
+	}
+
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		background: #151816;
+		box-shadow: none;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
+	}
+}
+
+@mixin user-frosted-control {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 48px;
+	border: 1px solid $user-glass-border;
+	background: $user-frosted-control;
+	box-shadow: inset 0 1px 0 $user-glass-highlight, 0 6px 18px rgba(0, 0, 0, .14);
+	text-align: center;
+	touch-action: manipulation;
+	transition: transform 120ms ease-out, opacity 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out;
+
+	@supports (backdrop-filter: blur(12px)) {
+		backdrop-filter: blur(12px) saturate(116%);
+		-webkit-backdrop-filter: blur(12px) saturate(116%);
+	}
+
+	&:active:not([disabled]) {
+		opacity: .88;
+		transform: scale(.985);
+	}
+
+	&[disabled] {
+		opacity: .55;
+		transform: none;
+	}
+
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		background: #1c221e;
+		box-shadow: none;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		transition: opacity 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;
+		&:active:not([disabled]) { transform: none; }
+	}
+}
+
+@mixin user-frosted-navigation {
+	border-color: rgba(220, 245, 232, .13);
+	background: $user-frosted-nav;
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+
+	@supports (backdrop-filter: blur(12px)) {
+		background: rgba(16, 20, 18, .70);
+		backdrop-filter: blur(18px) saturate(120%);
+		-webkit-backdrop-filter: blur(18px) saturate(120%);
+	}
+
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		background: #101412;
+		box-shadow: none;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
+	}
+}

@@ -26,6 +26,8 @@ final class AdminAiModelMergePatchMapperTest {
                   "iconPublicId": null,
                   "inputRatio": 1.25,
                   "cachedInputRatio": 0.125,
+                  "contextWindowK": 256,
+                  "maxOutputK": 32,
                   "capabilities": ["RESPONSES", "IMAGE"]
                 }
                 """));
@@ -38,6 +40,8 @@ final class AdminAiModelMergePatchMapperTest {
         assertThat(command.inputRatio().value()).isEqualByComparingTo(new BigDecimal("1.25"));
         assertThat(command.cachedInputRatio().value())
                 .isEqualByComparingTo(new BigDecimal("0.125"));
+        assertThat(command.contextWindowTokens().value()).isEqualTo(256000L);
+        assertThat(command.maxOutputTokens().value()).isEqualTo(32000L);
         assertThat(command.capabilities().value()).containsExactly("RESPONSES", "IMAGE");
     }
 
@@ -56,6 +60,20 @@ final class AdminAiModelMergePatchMapperTest {
         assertPatchInvalid("{\"inputRatio\":\"1.25\"}");
         assertPatchInvalid("{\"cachedInputRatio\":null}");
         assertPatchInvalid("{\"capabilities\":[\"RESPONSES\",9]}");
+        assertPatchInvalid("{\"contextWindowK\":null}");
+        assertPatchInvalid("{\"contextWindowK\":\"256\"}");
+        assertPatchInvalid("{\"contextWindowK\":256.0}");
+        assertPatchInvalid("{\"contextWindowK\":2.56e2}");
+        assertPatchInvalid("{\"maxOutputK\":true}");
+        assertPatchInvalid("{\"contextWindowTokens\":256000}");
+        assertPatchInvalid("{\"maxOutputTokens\":32000}");
+    }
+
+    @Test
+    void rejectsIntegralTokenLimitOutsideSupportedRangeWithStableCode() throws Exception {
+        assertTokenLimitInvalid("{\"contextWindowK\":0}");
+        assertTokenLimitInvalid("{\"contextWindowK\":-1}");
+        assertTokenLimitInvalid("{\"contextWindowK\":2147483648}");
     }
 
     private void assertPatchInvalid(String json) throws Exception {
@@ -63,5 +81,12 @@ final class AdminAiModelMergePatchMapperTest {
                 .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
                         assertThat(exception.code())
                                 .isEqualTo(AdminAiModelErrorCode.AI_MODEL_PATCH_INVALID));
+    }
+
+    private void assertTokenLimitInvalid(String json) throws Exception {
+        assertThatThrownBy(() -> mapper.parse(objectMapper.readTree(json)))
+                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID));
     }
 }

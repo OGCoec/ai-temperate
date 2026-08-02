@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiConversationMessageMapper">
+
+    <resultMap id="AiConversationMessageResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversationMessage">
+        <id property="id" column="id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="contentText" column="content_text"/>
+        <result property="contentAttachmentsJson" column="content_attachments_json"/>
+        <result property="contentPartsJson" column="content_parts_json"/>
+        <result property="questionTokens" column="question_tokens"/>
+        <result property="responseAttachmentsJson" column="response_attachments_json"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <sql id="MessageColumns">
+        id,
+        conversation_id,
+        content_text,
+        content_attachments::TEXT AS content_attachments_json,
+        content_parts::TEXT AS content_parts_json,
+        question_tokens,
+        response_attachments::TEXT AS response_attachments_json,
+        created_at
+    </sql>
+
+    <select id="reserveMessageId" resultType="long">
+        SELECT nextval(
+            pg_get_serial_sequence('ai_conversation_message', 'id')
+        )
+    </select>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiConversationMessage">
+        INSERT INTO ai_conversation_message (
+            id,
+            conversation_id,
+            content_text,
+            content_attachments,
+            content_parts,
+            question_tokens,
+            response_attachments
+        )
+        OVERRIDING SYSTEM VALUE
+        VALUES (
+            #{id,jdbcType=BIGINT},
+            #{conversationId,jdbcType=BINARY},
+            #{contentText,jdbcType=LONGVARCHAR},
+            CAST(#{contentAttachmentsJson,jdbcType=VARCHAR} AS JSONB),
+            CAST(#{contentPartsJson,jdbcType=VARCHAR} AS JSONB),
+            #{questionTokens,jdbcType=LONGVARCHAR},
+            CAST(#{responseAttachmentsJson,jdbcType=VARCHAR} AS JSONB)
+        )
+    </insert>
+
+    <select id="findByIdAndConversationId"
+            resultMap="AiConversationMessageResultMap">
+        SELECT
+            <include refid="MessageColumns"/>
+        FROM ai_conversation_message
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND conversation_id = #{conversationId,jdbcType=BINARY}
+    </select>
+
+    <select id="findAfterMessageId" resultMap="AiConversationMessageResultMap">
+        SELECT
+            <include refid="MessageColumns"/>
+        FROM ai_conversation_message
+        WHERE conversation_id = #{conversationId,jdbcType=BINARY}
+          AND id &gt; #{afterMessageId,jdbcType=BIGINT}
+        ORDER BY id ASC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <select id="findCompactionRange" resultMap="AiConversationMessageResultMap">
+        SELECT
+            <include refid="MessageColumns"/>
+        FROM ai_conversation_message
+        WHERE conversation_id = #{conversationId,jdbcType=BINARY}
+          AND id &gt; #{afterMessageId,jdbcType=BIGINT}
+          AND id &lt;= #{cutoffMessageId,jdbcType=BIGINT}
+        ORDER BY id ASC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <select id="findLatestPersistedMessageId" resultType="java.lang.Long">
+        SELECT MAX(id)
+        FROM ai_conversation_message
+        WHERE conversation_id = #{conversationId,jdbcType=BINARY}
+    </select>
+
+    <resultMap id="AiConversationMessageHistoryResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversationMessageHistoryRow">
+        <id property="messageId" column="message_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="contentText" column="content_text"/>
+        <result property="contentAttachmentsJson" column="content_attachments_json"/>
+        <result property="questionTokens" column="question_tokens"/>
+        <result property="responseAttachmentsJson" column="response_attachments_json"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="usageId" column="usage_id"/>
+        <result property="aiModelId" column="ai_model_id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="promptTokens" column="prompt_tokens"/>
+        <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
+        <result property="completionTokens" column="completion_tokens"/>
+        <result property="reasoningTokens" column="reasoning_tokens"/>
+        <result property="chargedQuotaMinor" column="charged_quota_minor"/>
+        <result property="finishReason" column="finish_reason"/>
+    </resultMap>
+
+    <select id="findOwnedHistoryPage"
+            resultMap="AiConversationMessageHistoryResultMap">
+        SELECT
+            message.id AS message_id,
+            message.conversation_id,
+            message.content_text,
+            message.content_attachments::TEXT AS content_attachments_json,
+            message.question_tokens,
+            message.response_attachments::TEXT AS response_attachments_json,
+            message.created_at,
+            usage.id AS usage_id,
+            usage.ai_model_id,
+            model.model_name,
+            usage.prompt_tokens,
+            usage.cached_prompt_tokens,
+            usage.completion_tokens,
+            usage.reasoning_tokens,
+            usage.charged_quota_minor,
+            usage.finish_reason
+        FROM ai_conversation_message message
+        INNER JOIN ai_conversation conversation
+            ON conversation.id = message.conversation_id
+        INNER JOIN ai_model_usage_detail detail
+            ON detail.conversation_message_id = message.id
+           AND detail.conversation_id = message.conversation_id
+        INNER JOIN ai_model_usage usage
+            ON usage.id = detail.usage_id
+           AND usage.login_identity_id = conversation.login_identity_id
+        INNER JOIN ai_model model
+            ON model.id = usage.ai_model_id
+        WHERE message.conversation_id = #{conversationId,jdbcType=BINARY}
+          AND conversation.login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND conversation.is_active = TRUE
+          <if test="beforeMessageId != null">
+            AND message.id &lt; #{beforeMessageId,jdbcType=BIGINT}
+          </if>
+        ORDER BY message.id DESC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+</mapper>

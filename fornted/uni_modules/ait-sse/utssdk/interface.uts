@@ -1,0 +1,25 @@
+export type AitSseFailure = {
+  code: string
+  statusCode: number
+  message: string
+}
+
+export type AitSseRequestOptions = {
+  url: string
+  method: string
+  headers: UTSJSONObject
+  body: string
+  onOpen: () => void
+  onChunk: (chunk: string) => void
+  onError: (failure: AitSseFailure) => void
+  onClosed: () => void
+}
+
+export type AitSseConnection = {
+  close: () => void
+}
+
+/**
+ * 打开只允许 HTTPS 的 POST JSON SSE，并允许调用方主动取消底层连接。
+ */
+export function openSseRequest(options: AitSseRequestOptions): AitSseConnection

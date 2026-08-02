@@ -11,6 +11,7 @@ import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.model.user.domain.UserAvatarState;
 import com.example.temperate.service.user.avatar.UserAvatarErrorCode;
 import com.example.temperate.service.user.avatar.UserAvatarException;
+import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,12 +21,16 @@ import org.junit.jupiter.api.Test;
 class UserAvatarPersistenceServiceImplTest {
 
     private UserAvatarMapper avatarMapper;
+    private UserProfileCacheInvalidationExecutor invalidationExecutor;
     private UserAvatarPersistenceServiceImpl service;
 
     @BeforeEach
     void setUp() {
         avatarMapper = mock(UserAvatarMapper.class);
-        service = new UserAvatarPersistenceServiceImpl(avatarMapper);
+        invalidationExecutor = mock(UserProfileCacheInvalidationExecutor.class);
+        service = new UserAvatarPersistenceServiceImpl(
+                avatarMapper,
+                invalidationExecutor);
     }
 
     @Test
@@ -45,6 +50,7 @@ class UserAvatarPersistenceServiceImplTest {
 
         assertThat(result.avatarUrl()).isEqualTo("https://cdn.example.test/new.webp");
         verify(avatarMapper).updateAvatar(10001L, "https://cdn.example.test/new.webp");
+        verify(invalidationExecutor).evictAfterCommit(10001L);
     }
 
     @Test
@@ -62,6 +68,7 @@ class UserAvatarPersistenceServiceImplTest {
         verify(avatarMapper, never()).updateAvatar(
                 10001L,
                 "https://cdn.example.test/new.webp");
+        verify(invalidationExecutor, never()).evictAfterCommit(10001L);
     }
 
     @Test

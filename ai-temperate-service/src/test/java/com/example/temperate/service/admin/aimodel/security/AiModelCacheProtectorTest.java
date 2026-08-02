@@ -18,12 +18,12 @@ import org.junit.jupiter.api.Test;
  */
 final class AiModelCacheProtectorTest {
 
-    private static final String CACHE_KEY = "ait:test:ai:model:v3:enabled";
+    private static final String CACHE_KEY = "ait:test:ai:model:v4:enabled";
     private static final String KEY = Base64.getEncoder().encodeToString(new byte[32]);
 
     @Test
     void protectsWholeSnapshotWithoutLeakingModelText() {
-        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(3);
+        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(5);
 
         AiModelCacheProtector protector = new AiModelCacheProtector(KEY, new ObjectMapper());
         AiModelCacheSnapshot snapshot = snapshot();
@@ -39,6 +39,17 @@ final class AiModelCacheProtectorTest {
                 .doesNotContain("RESPONSES");
         assertThat(protector.unprotect(CACHE_KEY, protectedSnapshot.envelope()))
                 .isEqualTo(snapshot);
+    }
+
+    @Test
+    void rejectsPreviousPlaintextSchemaVersion() {
+        AiModelCacheProtector protector = new AiModelCacheProtector(KEY, new ObjectMapper());
+        AiModelCacheSnapshot previous = new AiModelCacheSnapshot(4, snapshot().models());
+        String envelope = protector.protect(CACHE_KEY, previous).envelope();
+
+        assertThatThrownBy(() -> protector.unprotect(CACHE_KEY, envelope))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("schema version");
     }
 
     @Test
@@ -84,6 +95,8 @@ final class AiModelCacheProtectorTest {
                         BigDecimal.ONE,
                         new BigDecimal("0.50000000"),
                         BigDecimal.TWO,
+                        256000L,
+                        32000L,
                         List.of(
                                 AiModelCapabilityCode.RESPONSES,
                                 AiModelCapabilityCode.IMAGE))));

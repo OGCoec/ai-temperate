@@ -9,21 +9,31 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.temperate.mapper.ai.AiConversationMapper;
+import com.example.temperate.mapper.ai.AiConversationMessageMapper;
 import com.example.temperate.mapper.ai.AiModelCapabilityMapper;
 import com.example.temperate.mapper.ai.AiModelIconMapper;
 import com.example.temperate.mapper.ai.AiModelMapper;
+import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
+import com.example.temperate.mapper.ai.AiModelUsageMapper;
 import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
 import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
+import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleDiagnosticService;
+import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTimingAspect;
+import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureDiagnosticService;
+import com.example.temperate.service.user.aiconversation.diagnostic.impl.NoOpAiConversationLifecycleDiagnosticServiceImpl;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
 import jakarta.servlet.http.Cookie;
 import java.time.Clock;
-import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
@@ -31,6 +41,7 @@ import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.PropertySourcesPropertyResolver;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -63,6 +74,9 @@ class AiTemperateApplicationTest {
     private StringRedisTemplate stringRedisTemplate;
 
     @MockitoBean
+    private RedisMessageListenerContainer redisMessageListenerContainer;
+
+    @MockitoBean
     private UserLoginIdentityMapper userLoginIdentityMapper;
 
     @MockitoBean
@@ -70,6 +84,18 @@ class AiTemperateApplicationTest {
 
     @MockitoBean
     private UserMembershipQuotaMapper userMembershipQuotaMapper;
+
+    @MockitoBean
+    private AiConversationMapper aiConversationMapper;
+
+    @MockitoBean
+    private AiConversationMessageMapper aiConversationMessageMapper;
+
+    @MockitoBean
+    private AiModelUsageMapper aiModelUsageMapper;
+
+    @MockitoBean
+    private AiModelUsageDetailMapper aiModelUsageDetailMapper;
 
     @MockitoBean
     private AiModelMapper aiModelMapper;
@@ -104,6 +130,19 @@ class AiTemperateApplicationTest {
         assertThat(applicationContext.getBeansOfType(PasswordEncoder.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(Clock.class))
                 .containsOnlyKeys("applicationClock");
+        AiConversationStreamFailureDiagnosticService diagnosticService =
+                applicationContext.getBean(AiConversationStreamFailureDiagnosticService.class);
+        assertThat(AopUtils.isAopProxy(diagnosticService)).isTrue();
+        assertThat(applicationContext.getBeansOfType(
+                AiConversationLifecycleDiagnosticService.class))
+                .hasSize(1)
+                .allSatisfy((name, service) -> assertThat(service)
+                        .isInstanceOf(
+                                NoOpAiConversationLifecycleDiagnosticServiceImpl.class));
+        assertThat(applicationContext.getBeansOfType(
+                AiConversationLifecycleTimingAspect.class)).isEmpty();
+        assertThat(applicationContext.getBeansOfType(
+                AiConversationRequestTraceFilter.class)).isEmpty();
     }
 
     @Test

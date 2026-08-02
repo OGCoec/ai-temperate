@@ -1,0 +1,137 @@
+import ByteArrayOutputStream from 'java.io.ByteArrayOutputStream'
+import BufferedReader from 'java.io.BufferedReader'
+import InputStreamReader from 'java.io.InputStreamReader'
+import OutputStreamWriter from 'java.io.OutputStreamWriter'
+import HttpURLConnection from 'java.net.HttpURLConnection'
+import URL from 'java.net.URL'
+import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import Thread from 'java.lang.Thread'
+
+import { AitSseConnection, AitSseFailure, AitSseRequestOptions } from '../interface.uts'
+
+const MAX_ERROR_BODY_BYTES = 16 * 1024
+
+function failure(statusCode: number, body: string): AitSseFailure {
+  let code = `HTTP_${statusCode}`
+  let message = '无法建立模型流式响应。'
+  if (body.length > 0) {
+    try {
+      const payload = JSON.parse(body) as UTSJSONObject
+      code = payload.getString('code', code)
+      message = payload.getString('message', message)
+    } catch (_: Throwable) {
+    }
+  }
+  return { code, statusCode, message }
+}
+
+function boundedError(connection: HttpURLConnection): string {
+  const stream = connection.getErrorStream()
+  if (stream == null) return ''
+  try {
+    const output = new ByteArrayOutputStream()
+    const buffer = ByteArray(4096)
+    let total = 0
+    while (true) {
+      const length = stream.read(buffer)
+      if (length < 0) break
+      total += length
+      if (total > MAX_ERROR_BODY_BYTES) return ''
+      if (length > 0) output.write(buffer, 0, length)
+    }
+    return output.toString('UTF-8')
+  } catch (_: Throwable) {
+    return ''
+  } finally {
+    try { stream.close() } catch (_: Throwable) {}
+  }
+}
+
+/**
+ * 使用 Android 原生连接发送 JSON 请求并增量读取 UTF-8 SSE；关闭时同步中断 Reader 与连接。
+ */
+export function openSseRequest(options: AitSseRequestOptions): AitSseConnection {
+  const closed = new AtomicBoolean(false)
+  const completed = new AtomicBoolean(false)
+  let activeConnection: HttpURLConnection | null = null
+  let activeReader: BufferedReader | null = null
+
+  const notifyFailure = (value: AitSseFailure) => {
+    if (!closed.get() && completed.compareAndSet(false, true)) options.onError(value)
+  }
+
+  const worker = new Thread(() => {
+    try {
+      const target = new URL(options.url)
+      if (target.getProtocol().lowercase() != 'https') {
+        notifyFailure({
+          code: 'AI_CONVERSATION_SSE_HTTPS_REQUIRED',
+          statusCode: 0,
+          message: 'Android 模型流只允许 HTTPS。'
+        })
+        return
+      }
+      const connection = target.openConnection() as HttpURLConnection
+      activeConnection = connection
+      connection.setRequestMethod(options.method)
+      connection.setConnectTimeout(15000)
+      connection.setReadTimeout(60000)
+      connection.setUseCaches(false)
+      connection.setDoInput(true)
+      connection.setDoOutput(true)
+      options.headers.forEach((value: any, name: string) => {
+        connection.setRequestProperty(name, value.toString())
+      })
+      const writer = new OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)
+      writer.write(options.body)
+      writer.flush()
+      writer.close()
+      const status = connection.getResponseCode()
+      if (status < 200 || status >= 300) {
+        notifyFailure(failure(status, boundedError(connection)))
+        return
+      }
+      const contentType = connection.getContentType()
+      if (contentType == null
+          || !contentType.lowercase().contains('text/event-stream')) {
+        notifyFailure({
+          code: 'AI_CONVERSATION_SSE_CONTENT_TYPE_INVALID',
+          statusCode: status,
+          message: '服务端未返回事件流。'
+        })
+        return
+      }
+      options.onOpen()
+      const reader = new BufferedReader(
+        new InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
+      activeReader = reader
+      const chars = CharArray(4096)
+      while (!closed.get()) {
+        const length = reader.read(chars)
+        if (length < 0) break
+        if (length > 0) options.onChunk(chars.concatToString(0, length))
+      }
+    } catch (_: Throwable) {
+      notifyFailure({
+        code: 'AI_CONVERSATION_SSE_ANDROID_IO',
+        statusCode: 0,
+        message: 'Android 模型流已中断。'
+      })
+    } finally {
+      try { activeReader?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+      if (!closed.get() && completed.compareAndSet(false, true)) options.onClosed()
+    }
+  })
+  worker.setName('ait-ai-conversation-sse')
+  worker.start()
+
+  return {
+    close: () => {
+      if (!closed.compareAndSet(false, true)) return
+      try { activeReader?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+      worker.interrupt()
+    }
+  }
+}

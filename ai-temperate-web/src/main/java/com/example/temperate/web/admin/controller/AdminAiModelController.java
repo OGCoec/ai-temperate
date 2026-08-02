@@ -12,8 +12,8 @@ import com.example.temperate.service.admin.aimodel.exception.AdminAiModelErrorCo
 import com.example.temperate.service.admin.aimodel.exception.AdminAiModelException;
 import com.example.temperate.service.admin.aimodel.service.AdminAiModelService;
 import com.example.temperate.web.admin.aimodel.AdminAiModelMergePatchMapper;
-import com.example.temperate.web.admin.aimodel.AiModelPublicId;
 import com.example.temperate.web.admin.aimodel.AiModelVersionTag;
+import com.example.temperate.web.aimodel.AiModelPublicId;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.Operation;
@@ -97,7 +97,8 @@ public class AdminAiModelController {
             int pageSize,
             @RequestParam(required = false) @Size(max = 128)
             @Parameter(
-                    description = "按模型名称或厂商执行不区分大小写的前缀搜索；百分号和下划线按普通字符处理",
+                    description = "按模型名称横杠词元或描述 IK 词元执行完整词元搜索，"
+                            + "也可按完整厂商名执行忽略大小写的精确搜索；不支持任意子串匹配",
                     schema = @Schema(type = "string", maxLength = 128))
             String keyword,
             @RequestParam(required = false)
@@ -242,6 +243,24 @@ public class AdminAiModelController {
             BigDecimal cachedInputRatio,
             @NotNull @DecimalMin("0") @Digits(integer = 12, fraction = 8)
             BigDecimal outputRatio,
+            @Schema(
+                    type = "integer",
+                    format = "int32",
+                    minimum = "1",
+                    maximum = "2147483647",
+                    example = "256",
+                    requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "模型最大上下文窗口，单位 K；一 K 固定等于 1000 Token")
+            JsonNode contextWindowK,
+            @Schema(
+                    type = "integer",
+                    format = "int32",
+                    minimum = "1",
+                    maximum = "2147483647",
+                    example = "32",
+                    requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "单次完整模型响应的最大累计输出，单位 K；一 K 固定等于 1000 Token，不是单个 SSE 分片上限")
+            JsonNode maxOutputK,
             @NotNull Boolean enabled,
             @ArraySchema(schema = @Schema(
                     type = "string",
@@ -266,8 +285,22 @@ public class AdminAiModelController {
                     inputRatio,
                     cachedInputRatio,
                     outputRatio,
+                    tokenLimitTokens(contextWindowK),
+                    tokenLimitTokens(maxOutputK),
                     enabled,
                     capabilities);
+        }
+
+        private static long tokenLimitTokens(JsonNode value) {
+            if (value == null
+                    || !value.isIntegralNumber()
+                    || !value.canConvertToInt()
+                    || value.intValue() < 1) {
+                throw new AdminAiModelException(
+                        AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID,
+                        "AI model token limit must be a supported JSON integer.");
+            }
+            return Math.multiplyExact(value.intValue(), 1000L);
         }
 
         /**

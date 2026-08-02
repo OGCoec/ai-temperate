@@ -36,6 +36,23 @@ import {
 } from './admin-webrtc-verification.js'
 import { serializeStructuredJsonRequestBody } from './admin-request-body.js'
 
+function adminRequestAbortedError(cause = null) {
+	const error = new Error('管理员读取请求已取消。')
+	error.code = 'ADMIN_REQUEST_ABORTED'
+	error.cause = cause
+	return error
+}
+
+export function isAdminRequestAborted(error) {
+	return error?.code === 'ADMIN_REQUEST_ABORTED'
+}
+
+function requireActiveAdminRequestScope(options, cause = null) {
+	if (options.scope && !options.scope.isActive()) {
+		throw adminRequestAbortedError(cause)
+	}
+}
+
 function browserCookie(name) {
 	// #ifdef H5
 	const prefix = `${encodeURIComponent(name)}=`
@@ -127,16 +144,29 @@ export async function prepareAdminEventStream(path, lastRevision = 0) {
 }
 
 export async function adminRequest(path, options = {}, retryState = {}) {
-	await ensureAdminCookieScopeMigration()
-	await ensureAdminPreAuth()
+	const method = String(options.method || 'POST').toUpperCase()
+	if (options.scope && method !== 'GET') {
+		const error = new Error('请求作用域只能用于可安全取消的 GET 请求。')
+		error.code = 'ADMIN_REQUEST_SCOPE_METHOD_INVALID'
+		throw error
+	}
 	const platform = adminClientPlatform()
 	try {
+		requireActiveAdminRequestScope(options)
+		await ensureAdminCookieScopeMigration()
+		requireActiveAdminRequestScope(options)
+		await ensureAdminPreAuth()
+		requireActiveAdminRequestScope(options)
 		await ensureAdminWebRtcVerified()
-		const method = String(options.method || 'POST').toUpperCase()
+		requireActiveAdminRequestScope(options)
 		const includeClientContext = options.includeClientContext !== false
 		const headers = adminHeaders(path, method, options, platform, includeClientContext, true)
 		return await request(path, method, options, headers, platform, includeClientContext)
 	} catch (error) {
+		if (options.scope && !options.scope.isActive() && !isAdminRequestAborted(error)) {
+			throw adminRequestAbortedError(error)
+		}
+		if (isAdminRequestAborted(error)) throw error
 		if (presentAdminRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentAdminWebRtcFailure(error)
 		if (!retryState.webRtc && isWebRtcRetryCode(error.code)) {
@@ -212,7 +242,9 @@ export async function adminUploadFile(path, options = {}, retryState = {}) {
 
 function request(path, method, options, headers, platform, includeClientContext) {
 	return new Promise((resolve, reject) => {
-		uni.request({
+		let task = null
+		let completed = false
+		task = uni.request({
 			url: `${ADMIN_API_BASE_URL}${path}`,
 			method,
 			data: serializeStructuredJsonRequestBody(options.data, headers),
@@ -220,6 +252,10 @@ function request(path, method, options, headers, platform, includeClientContext)
 			timeout: options.timeout || 10000,
 			withCredentials: true,
 			success(response) {
+				if (options.scope && !options.scope.isActive()) {
+					reject(adminRequestAbortedError())
+					return
+				}
 				if (response.statusCode >= 200 && response.statusCode < 300) {
 					if (platform === 'H5' && includeClientContext) {
 						const expectedCookie = expectedAdminCsrfCookieAfterSuccess(path)
@@ -242,12 +278,22 @@ function request(path, method, options, headers, platform, includeClientContext)
 				reject(adminResponseError(path, response.statusCode, response.data))
 			},
 			fail(cause) {
+				if ((options.scope && !options.scope.isActive())
+					|| /abort/i.test(String(cause?.errMsg || ''))) {
+					reject(adminRequestAbortedError(cause))
+					return
+				}
 				const error = new Error('网络连接失败，请检查后重试。')
 				error.code = 'NETWORK_ERROR'
 				error.cause = cause
 				reject(error)
+			},
+			complete() {
+				completed = true
+				options.scope?.release(task)
 			}
 		})
+		if (!completed) options.scope?.track(task)
 	})
 }
 

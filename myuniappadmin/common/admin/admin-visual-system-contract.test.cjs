@@ -96,3 +96,15 @@ test('mail inspection keeps six concurrency presets and an accessible compositor
 	assert.match(progress, /transform:\s*`scaleX\(\$\{progressScale\}\)`/)
 	assert.doesNotMatch(progress, /transition[^;\n]*width/)
 })
+
+test('administrator H5 scroll areas use the dark canvas scrollbar without native arrow buttons', () => {
+	const app = read('App.vue')
+
+	assert.match(app, /\*\s*\{[\s\S]*scrollbar-width:\s*thin/)
+	assert.match(app, /scrollbar-color:\s*rgba\(139,\s*156,\s*154,\s*\.46\)\s*transparent/)
+	assert.match(app, /\*::-webkit-scrollbar\s*\{[\s\S]*width:\s*6px[\s\S]*height:\s*6px/)
+	assert.match(app, /\*::-webkit-scrollbar-track\s*\{[\s\S]*background:\s*transparent/)
+	assert.match(app, /\*::-webkit-scrollbar-thumb\s*\{[\s\S]*border-radius:\s*999px/)
+	assert.match(app, /\*::-webkit-scrollbar-button[\s\S]*width:\s*0[\s\S]*height:\s*0/)
+	assert.match(app, /\*::-webkit-scrollbar-corner\s*\{[\s\S]*background:\s*transparent/)
+})

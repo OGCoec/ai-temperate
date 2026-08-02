@@ -29,6 +29,17 @@ spring:
     # 测试 RabbitMQ 密码是不对应任何 Broker 的假值。
     password: test-rabbitmq-password
 
+  # 测试不注册真实 Spring AI ChatModel，避免上下文测试连接本机 CLIProxyAPI。
+  ai:
+    # 测试模型选择显式关闭聊天自动配置。
+    model:
+      # none 只用于阻止测试上下文创建外部模型客户端。
+      chat: none
+    # 测试仍提供非生产假值以覆盖主配置中的必填环境变量占位符。
+    openai-sdk:
+      # 该值不对应任何真实 CLIProxyAPI 密钥。
+      api-key: test-cli-proxy-api-key
+
 # 测试模型图标配置只参与属性绑定和本地 Mock，不连接任何外部官方站点。
 ai-model-icon:
   # 测试显式启用可信官方 SVG 档位以覆盖 Registry 启动与选择行为。
@@ -54,12 +65,36 @@ ai-model-icon:
       # 通义千问测试主机只用于属性绑定，不发起真实网络请求。
       qwen: qwen.ai
 
-# 测试认证与安全配置。
+# 测试应用业务、Web 异步响应与安全配置。
 app:
+  # 测试 MVC 异步响应只验证有界执行器和超时关系，不建立任何外部连接。
+  web:
+    # 测试使用与生产默认值相同的异步响应边界。
+    mvc-async:
+      # 测试核心线程数固定为十六。
+      core-pool-size: 16
+      # 测试最大线程数固定为一百六十。
+      max-pool-size: 160
+      # 测试同样禁止长连接任务进入等待队列。
+      queue-capacity: 0
+      # 测试空闲线程保留六十秒。
+      keep-alive: 60s
+      # 测试 MVC 外层时限比模型总期限多一分钟。
+      timeout: 16m
+
   # 上下文测试关闭后台身份 Bloom 构建，避免连接任何真实 Redis 或 PostgreSQL。
   identity-presence-bloom:
     # 测试环境仅验证 Bean 与配置绑定，不启动后台全量初始化。
     enabled: false
+
+  # 测试用户资料缓存只验证属性绑定和 Bean 装配，不连接真实 Redis。
+  user-profile-cache:
+    # 固定测试 AES-256-KWP 密钥恰好解码为三十二字节，不对应生产缓存。
+    id-encryption-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 测试资料缓存随机 TTL 下界保持五分钟。
+    minimum-ttl: 5m
+    # 测试资料缓存随机 TTL 上界保持十五分钟。
+    maximum-ttl: 15m
 
   # 测试 AI 模型缓存使用固定非生产密钥和生产允许范围内的 TTL，不连接真实 Redis。
   ai-model-cache:
@@ -71,6 +106,98 @@ app:
     maximum-ttl: 15m
     # 测试聚合快照最多允许五百个模型。
     max-models: 500
+
+  # 测试 AI 会话配置只参与属性绑定和 Bean 装配，不连接真实 Redis 或模型服务。
+  ai-conversation:
+    # 测试保持固定七十二小时绝对缓存期限。
+    context-ttl: 72h
+    # 测试生成租约使用四十五秒。
+    inflight-lease-ttl: 45s
+    # 测试压缩租约使用五分钟。
+    compaction-lease-ttl: 5m
+    # 测试流片最多累计二百五十毫秒。
+    stream-flush-interval: 250ms
+    # 测试 Redis 文本字段按四 KiB 切分。
+    stream-flush-bytes: 4096
+    # 测试数据库批量读取保持五百条。
+    context-page-size: 500
+    # 测试单会话 Hash 字段上限保持五千。
+    max-hash-fields: 5000
+    # 测试在一千字段时触发临时上下文压缩。
+    compaction-hash-field-threshold: 1000
+    # 测试单用户并发上限为四。
+    max-concurrent-per-user: 4
+    # 测试全部应用实例共享的并发上限为一百二十八。
+    max-concurrent-global: 128
+    # 测试图片采用固定保守 Token 估算。
+    image-estimated-tokens: 2048
+    # 测试压缩阈值保持百分之八十。
+    pre-compaction-percent: 80
+    # 测试 RESERVED 超时判定保留两分钟安全缓冲。
+    reservation-safety-buffer: 2m
+    # 测试每分钟扫描一次过期 RESERVED。
+    reconciliation-scan-interval: 1m
+    # 测试单批最多处理五百条待对账记录。
+    reconciliation-batch-size: 500
+    # 测试环境默认关闭历史系统失败自动补退，防止上下文启动时修改外部状态。
+    historical-system-failure-auto-refund-enabled: false
+    # 测试系统提示不包含任何生产业务数据。
+    system-prompt: 你是测试环境中的可靠 AI 助手。
+    # 测试会话附件使用完全虚构的 OSS 边界，不执行任何外部请求。
+    attachments:
+      # 测试 Bucket 名称不对应生产对象存储。
+      bucket: conversation-attachments-test
+      # 测试区域只参与配置绑定。
+      region: us-west-1
+      # 测试 Endpoint 使用保留域名且不会被连接。
+      endpoint: https://oss.example.test
+      # 测试公开地址使用保留域名。
+      public-base-url: https://public-oss.example.test
+      # 测试 PUT 预签名有效十分钟。
+      presigned-put-ttl: 10m
+      # 测试模型读取签名有效十分钟。
+      signed-get-ttl: 10m
+      # 测试单文件限制保持一百 MiB。
+      max-file-bytes: 104857600
+      # 测试每条用户输入或模型输出最多保留八个附件。
+      max-files-per-message: 8
+      # 测试每条用户输入或模型输出的附件总计最多二百 MiB。
+      max-total-bytes-per-message: 209715200
+      # 测试正式对象落盘最多尝试三次。
+      finalization-attempts: 3
+      # 测试客户端并发上传上限为三个。
+      client-upload-concurrency: 3
+      # 测试音频每 MiB 使用四千零九十六 Token 估算。
+      audio-tokens-per-mib: 4096
+      # 测试音频固定安全开销为二百五十六 Token。
+      audio-fixed-tokens: 256
+      # 测试视频每 MiB 使用八千一百九十二 Token 估算。
+      video-tokens-per-mib: 8192
+      # 测试视频固定安全开销为二百五十六 Token。
+      video-fixed-tokens: 256
+      # 测试模型媒体连接最多等待两秒。
+      media-connect-timeout: 2s
+      # 测试模型媒体读取最多等待十秒。
+      media-read-timeout: 10s
+      # 测试模型媒体最多跟随两次重定向。
+      media-max-redirects: 2
+    # 测试幂等摘要使用独立非生产密钥。
+    security:
+      # 固定测试 HMAC 密钥不对应任何生产部署。
+      idempotency-hmac-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
+  # 测试 CLIProxyAPI 推理显式关闭，不进行任何外部网络调用。
+  ai-inference:
+    # 测试推理客户端只验证配置边界。
+    cli-proxy:
+      # 测试上下文不启用用户模型推理。
+      enabled: false
+      # 测试使用不可路由的虚构 CLIProxyAPI 地址。
+      base-url: https://cli-proxy.example.test/v1
+      # 推理关闭时无需提供真实普通代理密钥。
+      api-key: ""
+      # 测试最大流时长从订阅开始固定为十五分钟。
+      max-stream-duration: 15m
 
   # 测试网络风险使用禁用模式和固定非生产密钥，不连接真实供应商。
   network-risk:

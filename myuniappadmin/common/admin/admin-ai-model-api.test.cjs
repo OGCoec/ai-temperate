@@ -19,6 +19,7 @@ test('list sends only fixed server-supported pagination and filter parameters', 
 		return { models: [], pageNum: 2, pageSize: 25 }
 	})
 
+	const scope = { isActive: () => true }
 	await api.list({
 		pageNum: 2,
 		pageSize: 25,
@@ -26,12 +27,13 @@ test('list sends only fixed server-supported pagination and filter parameters', 
 		enabled: false,
 		sortPriority: 'OUTPUT_FIRST',
 		direction: 'DESC'
-	})
+	}, { scope })
 
 	assert.equal(
 		calls[0].requestPath,
 		'/api/admin/ai-models?pageNum=2&pageSize=25&keyword=gpt%20%25&enabled=false&sortPriority=OUTPUT_FIRST&direction=DESC')
 	assert.equal(calls[0].options.method, 'GET')
+	assert.equal(calls[0].options.scope, scope)
 	assert.doesNotMatch(calls[0].requestPath, /orderBy|cursor|nextCursor/)
 })
 
@@ -47,7 +49,8 @@ test('detail and patch preserve strong ETag response metadata', async () => {
 		}
 	})
 
-	const detail = await api.detail('AAABi0VWeJ8')
+	const scope = { isActive: () => true }
+	const detail = await api.detail('AAABi0VWeJ8', { scope })
 	const patched = await api.patch(
 		'AAABi0VWeJ8',
 		'"v4"',
@@ -56,6 +59,8 @@ test('detail and patch preserve strong ETag response metadata', async () => {
 	assert.equal(detail.etag, '"v4"')
 	assert.equal(patched.etag, '"v4"')
 	assert.equal(calls[0].options.returnResponse, true)
+	assert.equal(calls[0].options.scope, scope)
+	assert.equal(calls[1].options.scope, undefined)
 	assert.equal(calls[1].options.method, 'PATCH')
 	assert.equal(calls[1].options.returnResponse, true)
 	assert.equal(calls[1].options.headers['If-Match'], '"v4"')
@@ -87,6 +92,26 @@ test('create and status operations never expose a delete method or route', async
 	assert.equal(calls.some(call => /delete/i.test(call.requestPath)), false)
 })
 
+test('create submits K numbers without exposing raw Token fields', async () => {
+	const { createAdminAiModelApi } = await loadModule()
+	const calls = []
+	const api = createAdminAiModelApi(async (requestPath, options) => {
+		calls.push({ requestPath, options })
+		return {}
+	})
+
+	await api.create({
+		modelName: 'gpt-5.6',
+		contextWindowK: 256,
+		maxOutputK: 32
+	})
+
+	assert.equal(calls[0].options.data.contextWindowK, 256)
+	assert.equal(calls[0].options.data.maxOutputK, 32)
+	assert.equal(Object.hasOwn(calls[0].options.data, 'contextWindowTokens'), false)
+	assert.equal(Object.hasOwn(calls[0].options.data, 'maxOutputTokens'), false)
+})
+
 test('invalid identifiers and list parameters fail before issuing a request', async () => {
 	const { createAdminAiModelApi } = await loadModule()
 	let calls = 0
@@ -98,6 +123,9 @@ test('invalid identifiers and list parameters fail before issuing a request', as
 	await assert.rejects(() => api.detail('123'), error => error.code === 'AI_MODEL_PUBLIC_ID_INVALID')
 	assert.throws(
 		() => api.list({ pageNum: 0, pageSize: 101 }),
+		error => error.code === 'AI_MODEL_LIST_QUERY_INVALID')
+	assert.throws(
+		() => api.list({ keyword: 'a'.repeat(129) }),
 		error => error.code === 'AI_MODEL_LIST_QUERY_INVALID')
 	assert.equal(calls, 0)
 })

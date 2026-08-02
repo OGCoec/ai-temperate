@@ -306,6 +306,53 @@ export async function authorizedRequest(path, options = {}, retried = false) {
 	}
 }
 
+/**
+ * 为无法通过 uni.request 消费的流式请求准备与普通认证请求完全相同的地址和安全请求头。
+ * 调用方只能把结果用于一次受保护的 SSE 请求，不得写入本地存储或日志。
+ */
+export async function prepareAuthorizedStreamingRequest(path, options = {}) {
+	await ensureCookieScopeMigration()
+	await ensurePreAuth()
+	await ensureWebRtcVerified()
+	const method = String(options.method || 'POST').toUpperCase()
+	const headers = clientContextHeaders()
+	Object.assign(headers, options.headers || {})
+	if (clientPlatform() === 'H5' && requiresCsrf(method)) {
+		const csrfToken = browserCsrfToken() || await initializeBrowserCsrf()
+		if (!csrfToken) {
+			const error = new Error('CSRF token is unavailable.')
+			error.code = 'CSRF_INVALID'
+			throw error
+		}
+		applyBrowserCsrfHeader(headers, method, csrfToken)
+	}
+	const session = currentSession()
+	if (clientPlatform() === 'ANDROID' && session.accessToken) {
+		headers.Authorization = `Bearer ${session.accessToken}`
+	}
+	return Object.freeze({
+		url: `${AUTH_API_BASE_URL}${path}`,
+		method,
+		headers: Object.freeze({ ...headers })
+	})
+}
+
+/**
+ * 仅在流式请求尚未收到 accepted 时执行一次既有会话恢复；accepted 之后禁止自动重放，避免重复计费。
+ */
+export async function recoverAuthorizedStreamingSession(error) {
+	const mode = sessionRenewalMode(clientPlatform(), error?.code, false)
+	if (mode === SessionRenewalMode.NONE) {
+		handleTerminalSessionError(error)
+		return false
+	}
+	if (!refreshInFlight) {
+		refreshInFlight = renewSession(mode).finally(() => { refreshInFlight = null })
+	}
+	await refreshInFlight
+	return true
+}
+
 async function renewSession(renewalMode) {
 	const h5 = clientPlatform() === 'H5'
 	if (h5 && renewalMode === SessionRenewalMode.BOOTSTRAP) return refreshSession(true)

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper">
+
+    <resultMap id="PayloadResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversationGenerationPayload">
+        <id property="generationId" column="generation_id"/>
+        <result property="inputText" column="input_text"/>
+        <result property="inputAttachmentsJson" column="input_attachments"/>
+        <result property="reasoningEffort" column="reasoning_effort"/>
+        <result property="assistantText" column="assistant_text"/>
+        <result property="assistantAttachmentsJson" column="assistant_attachments"/>
+        <result property="conversationMessageId" column="conversation_message_id"/>
+        <result property="contextGeneration" column="context_generation"/>
+        <result property="ephemeralOrdinal" column="ephemeral_ordinal"/>
+        <result property="promptTokens" column="prompt_tokens"/>
+        <result property="completionTokens" column="completion_tokens"/>
+        <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
+        <result property="reasoningTokens" column="reasoning_tokens"/>
+        <result property="modelFinishReason" column="model_finish_reason"/>
+        <result property="upstreamRequestId" column="upstream_request_id"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiConversationGenerationPayload">
+        INSERT INTO ai_conversation_generation_payload (
+            generation_id, input_text, input_attachments, reasoning_effort, updated_at
+        ) VALUES (
+            #{generationId,jdbcType=BINARY}, #{inputText,jdbcType=LONGVARCHAR},
+            CAST(#{inputAttachmentsJson,jdbcType=LONGVARCHAR} AS JSONB),
+            #{reasoningEffort,jdbcType=SMALLINT},
+            #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        )
+    </insert>
+
+    <select id="findByGenerationId" resultMap="PayloadResultMap">
+        SELECT generation_id, input_text, input_attachments, reasoning_effort,
+               assistant_text, assistant_attachments, conversation_message_id,
+               context_generation, ephemeral_ordinal, prompt_tokens,
+               completion_tokens, cached_prompt_tokens, reasoning_tokens,
+               model_finish_reason, upstream_request_id, updated_at
+        FROM ai_conversation_generation_payload
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+    </select>
+
+    <select id="findByGenerationIdForUpdate" resultMap="PayloadResultMap">
+        SELECT generation_id, input_text, input_attachments, reasoning_effort,
+               assistant_text, assistant_attachments, conversation_message_id,
+               context_generation, ephemeral_ordinal, prompt_tokens,
+               completion_tokens, cached_prompt_tokens, reasoning_tokens,
+               model_finish_reason, upstream_request_id, updated_at
+        FROM ai_conversation_generation_payload
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+        FOR UPDATE
+    </select>
+
+    <update id="assignConversationMessageId">
+        UPDATE ai_conversation_generation_payload
+        SET conversation_message_id = #{conversationMessageId,jdbcType=BIGINT},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+          AND conversation_message_id IS NULL
+    </update>
+
+    <update id="bindContextCursor">
+        UPDATE ai_conversation_generation_payload
+        SET context_generation = #{contextGeneration,jdbcType=VARCHAR},
+            ephemeral_ordinal = #{ephemeralOrdinal,jdbcType=BIGINT},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+          AND context_generation IS NULL
+          AND ephemeral_ordinal IS NULL
+    </update>
+
+    <delete id="deleteByGenerationIds">
+        DELETE FROM ai_conversation_generation_payload
+        WHERE generation_id IN
+        <foreach collection="generationIds" item="generationId" open="(" separator="," close=")">
+            #{generationId,jdbcType=BINARY}
+        </foreach>
+    </delete>
+
+    <update id="freezeTerminalEvidence">
+        UPDATE ai_conversation_generation_payload
+        SET assistant_text = #{assistantText,jdbcType=LONGVARCHAR},
+            assistant_attachments = CAST(#{assistantAttachmentsJson,jdbcType=LONGVARCHAR} AS JSONB),
+            prompt_tokens = #{promptTokens,jdbcType=BIGINT},
+            completion_tokens = #{completionTokens,jdbcType=BIGINT},
+            cached_prompt_tokens = #{cachedPromptTokens,jdbcType=BIGINT},
+            reasoning_tokens = #{reasoningTokens,jdbcType=BIGINT},
+            model_finish_reason = #{modelFinishReason,jdbcType=VARCHAR},
+            upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+          AND assistant_text IS NULL
+          AND model_finish_reason IS NULL
+    </update>
+</mapper>

@@ -9,8 +9,8 @@ import java.util.List;
  */
 public record AiModelCacheSnapshot(int schemaVersion, List<AiModelCacheEntry> models) {
 
-    // v3 增加缓存输入倍率，避免计费链路把缺少该字段的旧快照当作完整模型配置。
-    public static final int CURRENT_SCHEMA_VERSION = 3;
+    // v5 将 K 的换算语义从 1024 Token 切换为官方十进制 1000 Token，旧快照不得继续参与容量和计费链路。
+    public static final int CURRENT_SCHEMA_VERSION = 5;
 
     public AiModelCacheSnapshot {
         models = models == null ? List.of() : List.copyOf(models);

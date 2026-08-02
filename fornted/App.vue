@@ -64,12 +64,56 @@
 		body {
 			overflow-y: scroll;
 		}
+
+		body.ait-workspace-active {
+			overflow: hidden;
+		}
 	}
 
 	uni-page-body {
 		background-color: #0b0d0c !important;
 		min-height: 100% !important;
 		height: auto !important;
+	}
+
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: rgba(135, 148, 141, .46) transparent;
+	}
+
+	*::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-corner {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		min-height: 32px;
+		border: 1px solid transparent;
+		border-radius: 999px;
+		background: rgba(135, 148, 141, .46);
+		background-clip: padding-box;
+	}
+
+	*::-webkit-scrollbar-thumb:hover {
+		background: rgba(155, 169, 161, .68);
+		background-clip: padding-box;
+	}
+
+	*::-webkit-scrollbar-button,
+	*::-webkit-scrollbar-button:single-button {
+		display: none;
+		width: 0;
+		height: 0;
+		background: transparent;
 	}
 	/* #endif */
 

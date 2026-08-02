@@ -1,0 +1,118 @@
+import BufferedInputStream from 'java.io.BufferedInputStream'
+import File from 'java.io.File'
+import FileInputStream from 'java.io.FileInputStream'
+import HttpURLConnection from 'java.net.HttpURLConnection'
+import URL from 'java.net.URL'
+import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import Thread from 'java.lang.Thread'
+
+import {
+  AitOssPutConnection,
+  AitOssPutFailure,
+  AitOssPutOptions
+} from '../interface.uts'
+
+function failure(code: string, statusCode: number, message: string): AitOssPutFailure {
+  return { code, statusCode, message }
+}
+
+/**
+ * 使用固定长度流式模式上传，避免把最大一百 MiB 附件整体读入 JavaScript 或 JVM 内存。
+ */
+export function putFile(options: AitOssPutOptions): AitOssPutConnection {
+  const closed = new AtomicBoolean(false)
+  const completed = new AtomicBoolean(false)
+  let activeConnection: HttpURLConnection | null = null
+  let activeInput: BufferedInputStream | null = null
+
+  const notifyFailure = (value: AitOssPutFailure) => {
+    if (!closed.get() && completed.compareAndSet(false, true)) options.onError(value)
+  }
+
+  const worker = new Thread(() => {
+    try {
+      const target = new URL(options.url)
+      if (target.getProtocol().lowercase() != 'https') {
+        notifyFailure(failure(
+          'AI_ATTACHMENT_UPLOAD_HTTPS_REQUIRED',
+          0,
+          'Android 附件上传只允许 HTTPS。'))
+        return
+      }
+      const file = new File(options.filePath)
+      if (!file.isFile() || file.length() != options.sizeBytes.toLong()) {
+        notifyFailure(failure(
+          'AI_ATTACHMENT_LOCAL_FILE_CHANGED',
+          0,
+          '附件临时文件已变化，请重新选择。'))
+        return
+      }
+      const connection = target.openConnection() as HttpURLConnection
+      activeConnection = connection
+      connection.setRequestMethod('PUT')
+      connection.setConnectTimeout(15000)
+      connection.setReadTimeout(30000)
+      connection.setUseCaches(false)
+      connection.setInstanceFollowRedirects(false)
+      connection.setDoInput(true)
+      connection.setDoOutput(true)
+      connection.setFixedLengthStreamingMode(options.sizeBytes)
+      options.headers.forEach((value: any, name: string) => {
+        // 固定长度流模式会写入真实 Content-Length，禁止让外部 Header 覆盖本地文件校验结果。
+        if (name.lowercase() == 'content-length') return
+        connection.setRequestProperty(name, value.toString())
+      })
+      const input = new BufferedInputStream(FileInputStream(file))
+      activeInput = input
+      const output = connection.getOutputStream()
+      let uploaded = 0
+      try {
+        const buffer = ByteArray(64 * 1024)
+        while (!closed.get()) {
+          const length = input.read(buffer)
+          if (length < 0) break
+          if (length == 0) continue
+          output.write(buffer, 0, length)
+          uploaded += length
+          options.onProgress(Math.min(99,
+            Math.floor(uploaded.toDouble() * 100.0 / options.sizeBytes.toDouble()).toInt()))
+        }
+        output.flush()
+      } finally {
+        try { output.close() } catch (_: Throwable) {}
+      }
+      if (closed.get()) return
+      const status = connection.getResponseCode()
+      if (status < 200 || status >= 300) {
+        notifyFailure(failure(
+          `OSS_${status}`,
+          status,
+          '附件上传失败。'))
+        return
+      }
+      if (completed.compareAndSet(false, true)) {
+        options.onProgress(100)
+        options.onSuccess()
+      }
+    } catch (_: Throwable) {
+      notifyFailure(failure(
+        'OSS_NETWORK_ERROR',
+        0,
+        '附件上传失败。'))
+    } finally {
+      try { activeInput?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+    }
+  })
+  worker.setName('ait-oss-presigned-put')
+  worker.start()
+
+  return {
+    close: () => {
+      if (!closed.compareAndSet(false, true)) return
+      try { activeInput?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+      worker.interrupt()
+    }
+  }
+}

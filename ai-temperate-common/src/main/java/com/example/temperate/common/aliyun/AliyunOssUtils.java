@@ -60,6 +60,45 @@ public final class AliyunOssUtils {
                 .objectAcl(PRIVATE_ACL)
                 .forbidOverwrite(true)
                 .build();
+        return presignPut(region, endpoint, request, validity);
+    }
+
+    /**
+     * 为已知大小的上传生成私有 PUT 地址，并把大小纳入签名约束。
+     *
+     * <p>会话附件使用此重载；旧头像调用暂时保留不带长度的兼容重载，避免改变既有接口契约。</p>
+     */
+    public PresignedPut generatePresignedPutUrl(
+            String bucket,
+            String region,
+            String endpoint,
+            String objectKey,
+            String contentType,
+            long contentLength,
+            Duration validity) {
+        requirePositive(validity, "validity");
+        if (contentLength <= 0L || contentLength > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "contentLength must be between 1 and Integer.MAX_VALUE");
+        }
+        // OSS v2 SDK 仅接受 Integer；先校验再精确转换，避免 long 强转时静默截断并签入错误长度。
+        int sdkContentLength = Math.toIntExact(contentLength);
+        PutObjectRequest request = PutObjectRequest.newBuilder()
+                .bucket(requireText(bucket, "bucket"))
+                .key(requireObjectKey(objectKey))
+                .contentType(requireText(contentType, "contentType"))
+                .contentLength(sdkContentLength)
+                .objectAcl(PRIVATE_ACL)
+                .forbidOverwrite(true)
+                .build();
+        return presignPut(region, endpoint, request, validity);
+    }
+
+    private PresignedPut presignPut(
+            String region,
+            String endpoint,
+            PutObjectRequest request,
+            Duration validity) {
         OSSClient client = client(region, endpoint);
         try {
             var result = client.presign(
@@ -70,6 +109,33 @@ public final class AliyunOssUtils {
                     requireText(result.method(), "method"),
                     result.expiration().orElseGet(() -> Instant.now().plus(validity)),
                     Map.copyOf(result.signedHeaders().orElse(Map.of())));
+        } finally {
+            closeQuietly(client);
+        }
+    }
+
+    /**
+     * 为私有对象生成短期 GET 地址；上层只能把结果交给当前模型请求，禁止写入数据库、Redis 或日志。
+     */
+    public PresignedGet generatePresignedGetUrl(
+            String bucket,
+            String region,
+            String endpoint,
+            String objectKey,
+            Duration validity) {
+        requirePositive(validity, "validity");
+        GetObjectRequest request = GetObjectRequest.newBuilder()
+                .bucket(requireText(bucket, "bucket"))
+                .key(requireObjectKey(objectKey))
+                .build();
+        OSSClient client = client(region, endpoint);
+        try {
+            var result = client.presign(
+                    request,
+                    PresignOptions.newBuilder().expiration(validity).build());
+            return new PresignedGet(
+                    requireText(result.url(), "presignedUrl"),
+                    result.expiration().orElseGet(() -> Instant.now().plus(validity)));
         } finally {
             closeQuietly(client);
         }
@@ -268,6 +334,12 @@ public final class AliyunOssUtils {
             String method,
             Instant expiresAt,
             Map<String, String> signedHeaders) {
+    }
+
+    /**
+     * 表示只用于当前上游模型请求的私有对象短期读取地址。
+     */
+    public record PresignedGet(String url, Instant expiresAt) {
     }
 
     /**

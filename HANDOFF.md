@@ -49,7 +49,7 @@
 - 单码错误五次后作废；组合验证总失败第十一次封禁两小时。
 - 主用户 UniApp 与 Spring Boot 统一使用 \`SHOPPING_V1\` 五档密码强度；最低接受“中”，且不得超过 72 个 UTF-8 字节。72 字符输入上限之外仍以 UTF-8 字节数作为最终门禁。
 - 注册成功不签发 AT/RT，不自动登录，返回 `nextAction=LOGIN`。
-- 新用户在 `user_membership_quota` 中初始化为 `membershipTier=FREE`，额度数据库值为 `5000`，按固定缩放比例 100 表示实际额度 `50.00`。
+- 新用户在 `user_membership_quota` 中初始化为 `membershipTier=FREE`，额度数据库值为 `5000`，按固定缩放比例 100 表示实际额度 `50.00`；额度周期开始时间为空，结束时间由注册业务写入当前 UTC 时间。
 
 ### 3.3 登录
 
@@ -90,6 +90,10 @@ deviceHash
 ```
 
 RT Hash 不保存 `accountStatus`、`membershipTier` 或 `quotaBalanceMinor`；刷新和 bootstrap 从 `userId` 重新查询 `userloginidentity + user_profile`，不连接 `user_membership_quota`。
+
+个人中心使用独立的每用户 Redis String 缓存展示资料，Key 中的内部 ID 由 AES-256-KWP 生成确定性
+密文标识，Value 是带版本的明文 JSON。该缓存不属于 Refresh Session，不进入认证上下文，也不能作为
+额度预扣或结算依据；详细边界见 `docs/operations/user-profile-cache-and-model-catalog.md`。
 
 用户反向索引：
 

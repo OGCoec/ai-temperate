@@ -15,10 +15,10 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * 将 AI 模型 JSON Merge Patch 转换为带字段存在标记的强类型命令。
+ * 将 AI 模型 JSON Merge Patch 转换为带字段存在标记和原始 Token 的强类型命令。
  *
  * <p>这里只接受固定可编辑字段，拒绝未知字段、不可编辑字段和错误 JSON 类型，防止原始 JSON
- * 或未校验 Map 穿透到 Service 和 Mapper。</p>
+ * 或未校验 Map 穿透到 Service 和 Mapper；K 单位在此边界精确乘以 1000。</p>
  */
 @Component
 public final class AdminAiModelMergePatchMapper {
@@ -32,7 +32,10 @@ public final class AdminAiModelMergePatchMapper {
             "inputRatio",
             "cachedInputRatio",
             "outputRatio",
+            "contextWindowK",
+            "maxOutputK",
             "capabilities");
+    private static final long TOKENS_PER_K = 1000L;
 
     private final ObjectMapper objectMapper;
 
@@ -60,6 +63,8 @@ public final class AdminAiModelMergePatchMapper {
                 decimalField(document, "inputRatio"),
                 decimalField(document, "cachedInputRatio"),
                 decimalField(document, "outputRatio"),
+                tokenLimitField(document, "contextWindowK"),
+                tokenLimitField(document, "maxOutputK"),
                 stringListField(document, "capabilities"));
     }
 
@@ -116,9 +121,32 @@ public final class AdminAiModelMergePatchMapper {
         return AiModelPatchField.of(List.copyOf(values));
     }
 
+    private static AiModelPatchField<Long> tokenLimitField(
+            JsonNode document,
+            String field) {
+        if (!document.has(field)) {
+            return AiModelPatchField.absent();
+        }
+        JsonNode value = document.get(field);
+        if (value == null || !value.isIntegralNumber()) {
+            throw invalidPatch();
+        }
+        if (!value.canConvertToInt() || value.intValue() < 1) {
+            throw invalidTokenLimit();
+        }
+        return AiModelPatchField.of(
+                Math.multiplyExact(value.intValue(), TOKENS_PER_K));
+    }
+
     private static AdminAiModelException invalidPatch() {
         return new AdminAiModelException(
                 AdminAiModelErrorCode.AI_MODEL_PATCH_INVALID,
                 "AI model merge patch is invalid.");
+    }
+
+    private static AdminAiModelException invalidTokenLimit() {
+        return new AdminAiModelException(
+                AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID,
+                "AI model token limit is invalid.");
     }
 }

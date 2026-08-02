@@ -144,6 +144,8 @@ class RegistrationServiceTransactionProxyTest {
                 identityMapper,
                 profileMapper,
                 membershipQuotaMapper,
+                tier -> new com.example.temperate.service.user.membership.MembershipQuotaPlan(
+                        5_000L, Duration.ofDays(7)),
                 flowStore,
                 new RegistrationInputNormalizer(),
                 new PasswordStrengthPolicy(),

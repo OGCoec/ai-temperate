@@ -16,46 +16,91 @@ export const ADMIN_WORKSPACE_VIEWS = Object.freeze([
 const VIEW_SET = new Set(ADMIN_WORKSPACE_VIEWS)
 const IP2LOCATION_MODES = new Set(['registration', 'verify-link'])
 const MODEL_PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
+const MODEL_DETAIL_FRAGMENT = '/ai-models/'
+const INVALID_WORKSPACE_NOTICE = '无法打开指定页面，已返回管理员控制台。'
+const INVALID_MODEL_NOTICE = '模型标识无效，已返回模型目录。'
 
-const LEGACY_VIEW_BY_PATH = Object.freeze({
-	'/pages/ai-models/index': 'ai-models',
-	'/pages/ai-models/create': 'ai-model-create',
-	'/pages/ai-models/detail': 'ai-model-detail',
-	'/pages/ai-model-icons/index': 'ai-model-icons',
-	'/pages/risk/ip2location-keys': 'ip2location-keys',
-	'/pages/mail-inspection/openai/index': 'mail-openai',
-	'/pages/mail-inspection/kiro/index': 'mail-kiro',
-	'/pages/mail-inspection/ip2location/index': 'mail-ip2location'
-})
+const STATIC_LOCATION_BY_FRAGMENT = new Map([
+	['', { view: 'dashboard', mode: '', publicId: '' }],
+	['/ai-models', { view: 'ai-models', mode: '', publicId: '' }],
+	[
+		'/ai-models/discovery',
+		{ view: 'ai-model-discovery', mode: '', publicId: '' }
+	],
+	[
+		'/ai-models/new',
+		{ view: 'ai-model-create', mode: '', publicId: '' }
+	],
+	[
+		'/ai-model-icons',
+		{ view: 'ai-model-icons', mode: '', publicId: '' }
+	],
+	[
+		'/ip2location/keys',
+		{ view: 'ip2location-keys', mode: '', publicId: '' }
+	],
+	[
+		'/mail-inspection/openai',
+		{ view: 'mail-openai', mode: '', publicId: '' }
+	],
+	[
+		'/mail-inspection/kiro',
+		{ view: 'mail-kiro', mode: '', publicId: '' }
+	],
+	[
+		'/mail-inspection/ip2location/registration',
+		{ view: 'mail-ip2location', mode: 'registration', publicId: '' }
+	],
+	[
+		'/mail-inspection/ip2location/verify-link',
+		{ view: 'mail-ip2location', mode: 'verify-link', publicId: '' }
+	]
+])
 
-function decodeQueryPart(value) {
-	try {
-		return decodeURIComponent(String(value || '').replace(/\+/g, ' '))
-	} catch (_error) {
-		return ''
-	}
-}
-
-function parseQuery(rawQuery) {
-	const result = Object.create(null)
-	for (const part of String(rawQuery || '').replace(/^\?/, '').split('&')) {
-		if (!part) continue
-		const separator = part.indexOf('=')
-		const key = decodeQueryPart(separator >= 0 ? part.slice(0, separator) : part)
-		if (!key || Object.prototype.hasOwnProperty.call(result, key)) continue
-		result[key] = decodeQueryPart(separator >= 0 ? part.slice(separator + 1) : '')
-	}
-	return result
-}
-
-function splitRoute(value) {
-	const raw = String(value || '').split('#', 1)[0]
-	const separator = raw.indexOf('?')
-	const path = (separator >= 0 ? raw.slice(0, separator) : raw).replace(/\/+$/, '') || '/'
+function analyzeRoute(value) {
+	const raw = String(value || '')
+	const hashIndex = raw.indexOf('#')
+	const beforeHash = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw
+	const queryIndex = beforeHash.indexOf('?')
+	const rawPath = queryIndex >= 0 ? beforeHash.slice(0, queryIndex) : beforeHash
+	const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
+	const rawFragment = hashIndex >= 0 ? raw.slice(hashIndex + 1) : ''
+	const trailingSlash = rawFragment.length > 1 && rawFragment.endsWith('/')
+	const fragment = trailingSlash ? rawFragment.slice(0, -1) : rawFragment
 	return {
-		path: path.startsWith('/') ? path : `/${path}`,
-		query: parseQuery(separator >= 0 ? raw.slice(separator + 1) : '')
+		path: path || '/',
+		fragment,
+		corrected: queryIndex >= 0 || trailingSlash || rawFragment === '/',
+		unsafe: path !== ADMIN_WORKSPACE_PATH
+			|| /\/{2,}/.test(rawFragment)
+			|| rawFragment.includes('\\')
+			|| rawFragment.includes('%')
+			|| rawFragment.includes('?')
+			|| rawFragment.includes('#')
 	}
+}
+
+function parsedLocation(view, {
+	mode = '',
+	publicId = '',
+	corrected = false,
+	notice = ''
+} = {}) {
+	return { view, mode, publicId, corrected, notice }
+}
+
+function invalidWorkspaceLocation() {
+	return parsedLocation('dashboard', {
+		corrected: true,
+		notice: INVALID_WORKSPACE_NOTICE
+	})
+}
+
+function invalidModelLocation() {
+	return parsedLocation('ai-models', {
+		corrected: true,
+		notice: INVALID_MODEL_NOTICE
+	})
 }
 
 export function isAdminModelPublicId(value) {
@@ -89,7 +134,7 @@ export function normalizeAdminWorkspaceLocation(value = {}) {
 		} else {
 			view = 'ai-models'
 			corrected = true
-			notice = '模型标识无效，已返回模型目录。'
+			notice = INVALID_MODEL_NOTICE
 		}
 	} else if (value.publicId) {
 		corrected = true
@@ -100,28 +145,62 @@ export function normalizeAdminWorkspaceLocation(value = {}) {
 
 export function buildAdminWorkspaceUrl(value = {}) {
 	const location = normalizeAdminWorkspaceLocation(value)
-	const query = [`view=${encodeURIComponent(location.view)}`]
-	if (location.view === 'mail-ip2location') {
-		query.push(`mode=${encodeURIComponent(location.mode)}`)
+	switch (location.view) {
+		case 'ai-models':
+			return `${ADMIN_WORKSPACE_PATH}#/ai-models`
+		case 'ai-model-discovery':
+			return `${ADMIN_WORKSPACE_PATH}#/ai-models/discovery`
+		case 'ai-model-create':
+			return `${ADMIN_WORKSPACE_PATH}#/ai-models/new`
+		case 'ai-model-detail':
+			return `${ADMIN_WORKSPACE_PATH}#${MODEL_DETAIL_FRAGMENT}${location.publicId}`
+		case 'ai-model-icons':
+			return `${ADMIN_WORKSPACE_PATH}#/ai-model-icons`
+		case 'ip2location-keys':
+			return `${ADMIN_WORKSPACE_PATH}#/ip2location/keys`
+		case 'mail-openai':
+			return `${ADMIN_WORKSPACE_PATH}#/mail-inspection/openai`
+		case 'mail-kiro':
+			return `${ADMIN_WORKSPACE_PATH}#/mail-inspection/kiro`
+		case 'mail-ip2location':
+			return `${ADMIN_WORKSPACE_PATH}#/mail-inspection/ip2location/${location.mode}`
+		default:
+			return ADMIN_WORKSPACE_PATH
 	}
-	if (location.view === 'ai-model-detail') {
-		query.push(`publicId=${encodeURIComponent(location.publicId)}`)
-	}
-	return `${ADMIN_WORKSPACE_PATH}?${query.join('&')}`
 }
 
 export function parseAdminWorkspaceUrl(value) {
-	const { query } = splitRoute(value)
-	return normalizeAdminWorkspaceLocation(query)
+	const route = analyzeRoute(value)
+	const staticLocation = STATIC_LOCATION_BY_FRAGMENT.get(route.fragment)
+	if (!route.unsafe && staticLocation) {
+		return parsedLocation(staticLocation.view, {
+			mode: staticLocation.mode,
+			publicId: staticLocation.publicId,
+			corrected: route.corrected
+		})
+	}
+
+	if (!route.unsafe && route.fragment.startsWith(MODEL_DETAIL_FRAGMENT)) {
+		const publicId = route.fragment.slice(MODEL_DETAIL_FRAGMENT.length)
+		if (!route.unsafe && isAdminModelPublicId(publicId)) {
+			return parsedLocation('ai-model-detail', {
+				publicId,
+				corrected: route.corrected
+			})
+		}
+		return invalidModelLocation()
+	}
+	return invalidWorkspaceLocation()
 }
 
-export function legacyAdminRouteToWorkspaceUrl(value) {
-	const { path, query } = splitRoute(value)
-	const view = LEGACY_VIEW_BY_PATH[path]
-	if (!view) return buildAdminWorkspaceUrl({ view: ADMIN_WORKSPACE_DEFAULT_VIEW })
-	return buildAdminWorkspaceUrl({ view, mode: query.mode, publicId: query.publicId })
+export function legacyAdminRouteToWorkspaceUrl(_value) {
+	return ADMIN_WORKSPACE_PATH
 }
 
 export function isAdminWorkspaceUrl(value) {
-	return splitRoute(value).path === ADMIN_WORKSPACE_PATH
+	const route = analyzeRoute(value)
+	if (route.unsafe || route.corrected) return false
+	if (STATIC_LOCATION_BY_FRAGMENT.has(route.fragment)) return true
+	if (!route.fragment.startsWith(MODEL_DETAIL_FRAGMENT)) return false
+	return isAdminModelPublicId(route.fragment.slice(MODEL_DETAIL_FRAGMENT.length))
 }

@@ -1,4 +1,5 @@
 @import '../app-theme.scss';
+@import '../ui/user-material.scss';
 
 $auth-input: $app-raised;
 $auth-input-hover: #1b1f1c;
@@ -25,14 +26,13 @@ $auth-danger-border: rgba(239, 119, 119, .62);
 .phone-row,
 .password-row,
 .password-input-wrap {
+	@include user-frosted-surface;
 	width: 100%;
 	min-height: 58px;
 	padding: 0 18px;
 	display: flex;
 	align-items: center;
-	border: 1px solid $auth-border;
 	border-radius: 10px;
-	background: $auth-input;
 	box-sizing: border-box;
 	transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
@@ -99,14 +99,12 @@ $auth-danger-border: rgba(239, 119, 119, .62);
 
 .password-toggle,
 .auth-icon-button {
+	@include user-frosted-control;
 	width: 50px;
 	height: 50px;
 	min-width: 50px;
 	margin: 0;
 	padding: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
 	border: 0;
 	border-radius: 9px;
 	background: transparent;
@@ -140,4 +138,3 @@ $auth-danger-border: rgba(239, 119, 119, .62);
 		transition: none !important;
 	}
 }
-

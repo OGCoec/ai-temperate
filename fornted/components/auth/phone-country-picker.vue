@@ -249,7 +249,9 @@
 	}
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.country-field { margin-bottom: 20px; }
 	.country-trigger,
 	.country-option,
@@ -259,13 +261,12 @@
 	.sheet-close,
 	.flag-fallback { display: flex; align-items: center; }
 	.country-trigger {
+		@include user-frosted-control;
 		width: 100%;
 		min-height: 50px;
 		margin: 0;
 		padding: 0 14px;
-		border: 1px solid #303733;
 		border-radius: 10px;
-		background: #171a18;
 		justify-content: space-between;
 		line-height: 1;
 		box-sizing: border-box;
@@ -298,24 +299,23 @@
 	.country-iso { color: #8b9690; font-size: 13px; font-weight: 600; line-height: 1.35; }
 	.country-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 	.country-sheet {
+		@include user-frosted-surface;
 		height: 72vh;
 		max-height: 620px;
 		padding: 18px 16px 0;
 		border-radius: 18px 18px 0 0;
-		background: #151816;
 		box-sizing: border-box;
 	}
 	.sheet-header { min-height: 44px; justify-content: space-between; }
 	.sheet-title { color: #f3f5f4; font-size: 18px; font-weight: 700; }
 	.sheet-close {
+		@include user-frosted-control;
 		width: 44px;
 		height: 44px;
 		margin: 0;
 		padding: 0;
 		justify-content: center;
-		border: 0;
 		border-radius: 22px;
-		background: transparent;
 		line-height: 1;
 		transition: background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 	}

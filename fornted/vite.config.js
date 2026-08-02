@@ -23,10 +23,21 @@ export default defineConfig(() => {
 			'libphonenumber-js': fileURLToPath(new URL('node_modules/libphonenumber-js', import.meta.url))
 		}
 	}
+	const define = {
+		__AI_CONVERSATION_STREAM_DIAGNOSTICS_ENABLED__: JSON.stringify(
+			process.env.AI_CONVERSATION_STREAM_DIAGNOSTICS_ENABLED === 'true'
+		),
+		__AI_CONVERSATION_LIFECYCLE_DIAGNOSTICS_ENABLED__: JSON.stringify(
+			process.env.AI_CONVERSATION_LIFECYCLE_DIAGNOSTICS_ENABLED === 'true'
+		),
+		__AI_CONVERSATION_ASYNC_GENERATION_ENABLED__: JSON.stringify(
+			process.env.AI_CONVERSATION_ASYNC_GENERATION_ENABLED !== 'false'
+		)
+	}
 	const platform = process.env.UNI_PLATFORM
 	const isH5Development = ['h5', 'web'].includes(platform) && process.env.NODE_ENV !== 'production'
 	if (!isH5Development) {
-		return { plugins, resolve }
+		return { plugins, resolve, define }
 	}
 
 	if (process.env.LOCAL_HTTPS_ENABLED !== 'true') {
@@ -45,10 +56,16 @@ export default defineConfig(() => {
 	return {
 		plugins,
 		resolve,
+		define,
 		server: {
 			host: '127.0.0.1',
 			port: 3000,
 			strictPort: true,
+			headers: {
+				'Cache-Control': 'no-store, no-cache, must-revalidate',
+				'Pragma': 'no-cache',
+				'Expires': '0'
+			},
 			fs: {
 				allow: [fileURLToPath(new URL('..', import.meta.url))]
 			},

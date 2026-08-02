@@ -1,4 +1,4 @@
--- 检查无法关联会话主记录的消息记录；正常结果必须为空集。
+-- 检查无法关联会话主记录的消息；正常结果必须为空集。
 SELECT
     message.id AS ai_conversation_message_id,
     message.conversation_id

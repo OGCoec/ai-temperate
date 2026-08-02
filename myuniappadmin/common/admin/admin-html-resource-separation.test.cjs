@@ -25,8 +25,17 @@ test('administrator H5 entry keeps viewport behavior in an external script', () 
 	assert.doesNotMatch(scriptSource, /'unsafe-inline'/)
 	assert.match(index, /\/static\/bootstrap\/initial-shell\.css/)
 	assert.match(index, /\/static\/bootstrap\/viewport-bootstrap\.js/)
+	assert.match(index, /\/static\/bootstrap\/admin-workspace-route-bootstrap\.js/)
+	assert.ok(
+		index.indexOf('/static/bootstrap/admin-workspace-route-bootstrap.js')
+			< index.indexOf('/main.js')
+	)
 	assert.equal(fs.existsSync(path.join(root, 'static/bootstrap/initial-shell.css')), true)
 	assert.equal(fs.existsSync(path.join(root, 'static/bootstrap/viewport-bootstrap.js')), true)
+	assert.equal(
+		fs.existsSync(path.join(root, 'static/bootstrap/admin-workspace-route-bootstrap.js')),
+		true
+	)
 })
 
 test('administrator WebRTC probe keeps its style and behavior in sibling resources', () => {

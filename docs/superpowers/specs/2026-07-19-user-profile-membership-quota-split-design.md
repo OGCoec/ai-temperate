@@ -43,10 +43,11 @@
 - `login_identity_id`
 - `membership_tier`
 - `quota_balance_minor BIGINT NOT NULL DEFAULT 5000`
-- `created_at`
-- `updated_at`
+- `quota_period_started_at TIMESTAMPTZ`
+- `quota_period_ends_at TIMESTAMPTZ`
 
 `quota_balance_minor` 使用非负检查约束。当前固定缩放比例为 100，例如数据库值 `1234` 表示 `12.34` 额度。新注册用户的数据库默认值为 `5000`，表示实际额度 `50.00`。
+新用户注册时 `quota_period_started_at` 为空，`quota_period_ends_at` 由注册业务使用统一 UTC 时钟写入当前时间；周期结束时间是后续额度消费判断旧周期是否失效的依据。
 
 ## Mapper 与查询边界
 
@@ -54,7 +55,7 @@
 
 新增 `UserMembershipQuotaMapper.xml`，负责：
 
-- 注册时只写入 `login_identity_id`，会员等级 `FREE` 和数据库值 `5000`（实际 `50.00`）的额度由数据库默认值统一生成。
+- 注册时写入 `login_identity_id` 和额度周期边界，会员等级 `FREE` 和数据库值 `5000`（实际 `50.00`）的额度由数据库默认值统一生成。
 - 按 `login_identity_id` 查询会员额度。
 
 后续模型调用扣费应在独立额度 Service 中增加带余额下限条件的原子 SQL；本次拆表不实现扣费 Mapper 方法、Service 或 HTTP API。
@@ -108,7 +109,7 @@ phone
 deviceHash
 ```
 
-Refresh Token 刷新时先校验 Redis 会话，再使用 `userId` 查询数据库中的当前账号状态。该查询只需要 `userloginidentity` 与 `user_profile`，不需要连接 005。Redis 中不保存 `membershipTier` 或 `quotaBalanceMinor`，避免会员变更和额度扣减后出现过期快照。
+Refresh Token 刷新时先校验 Redis 会话，再使用 `userId` 查询数据库中的当前账号状态。该查询只需要 `userloginidentity` 与 `user_profile`，不需要连接 005。Refresh Session Hash 不保存 `membershipTier` 或 `quotaBalanceMinor`；个人中心独立资料缓存可以保存短期展示快照，但必须在额度或会员变更提交后失效，且不得参与认证或权威扣费。
 
 ## 一致性与安全边界
 

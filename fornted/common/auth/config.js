@@ -16,8 +16,10 @@ export const AUTH_ROUTES = Object.freeze({
 	login: '/pages/auth/login',
 	register: '/pages/auth/register',
 	passwordReset: '/pages/auth/password-reset',
-	home: '/pages/account/profile',
-	profile: '/pages/account/profile'
+	home: '/pages/ai-chat/index',
+	chat: '/pages/ai-chat/index',
+	profile: '/pages/account/profile',
+	models: '/pages/ai-models/catalog'
 })
 
 export function clientPlatform() {

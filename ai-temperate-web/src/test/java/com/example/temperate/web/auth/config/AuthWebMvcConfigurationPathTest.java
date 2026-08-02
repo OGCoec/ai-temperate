@@ -9,9 +9,12 @@ import com.example.temperate.web.auth.interceptor.RegistrationFlowInterceptor;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.Ordered;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.util.ServletRequestPathUtils;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.handler.MappedInterceptor;
 
@@ -21,19 +24,57 @@ import org.springframework.web.servlet.handler.MappedInterceptor;
 class AuthWebMvcConfigurationPathTest {
 
     private AccessTokenAuthenticationInterceptor accessTokenInterceptor;
+    private RegistrationFlowInterceptor registrationFlowInterceptor;
+    private BrowserSessionSecurityInterceptor browserSessionSecurityInterceptor;
+    private List<InterceptorRegistration> registrations;
     private List<Object> registeredInterceptors;
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         accessTokenInterceptor = mock(AccessTokenAuthenticationInterceptor.class);
+        registrationFlowInterceptor = mock(RegistrationFlowInterceptor.class);
+        browserSessionSecurityInterceptor = mock(BrowserSessionSecurityInterceptor.class);
         AuthWebMvcConfiguration configuration = new AuthWebMvcConfiguration(
                 accessTokenInterceptor,
-                mock(RegistrationFlowInterceptor.class),
-                mock(BrowserSessionSecurityInterceptor.class));
+                registrationFlowInterceptor,
+                browserSessionSecurityInterceptor);
         InterceptorRegistry registry = new InterceptorRegistry();
         configuration.addInterceptors(registry);
+        registrations = (List<InterceptorRegistration>) ReflectionTestUtils.getField(
+                registry, "registrations");
         registeredInterceptors = ReflectionTestUtils.invokeMethod(
                 registry, "getInterceptors");
+    }
+
+    @Test
+    void ordinaryAuthenticationInterceptorsHaveExplicitStableOrders() {
+        assertThat(ordersOf(registrationFlowInterceptor))
+                .containsExactly(Ordered.HIGHEST_PRECEDENCE + 20);
+        assertThat(ordersOf(browserSessionSecurityInterceptor))
+                .containsExactly(Ordered.HIGHEST_PRECEDENCE + 21);
+        assertThat(ordersOf(accessTokenInterceptor))
+                .containsExactly(
+                        Ordered.HIGHEST_PRECEDENCE + 22,
+                        Ordered.HIGHEST_PRECEDENCE + 22);
+    }
+
+    @Test
+    void overlappingLogoutAllRunsBrowserSecurityBeforeAccessTokenAuthentication() {
+        assertThat(matchingInterceptors("/api/auth/session/logout-all"))
+                .containsExactly(
+                        browserSessionSecurityInterceptor,
+                        accessTokenInterceptor);
+    }
+
+    @Test
+    void registrationLogoutAndOrdinaryApiKeepTheirDedicatedInterceptors() {
+        assertThat(matchingInterceptors("/api/auth/register/status"))
+                .containsExactly(registrationFlowInterceptor);
+        assertThat(matchingInterceptors("/api/auth/session/logout"))
+                .containsExactly(browserSessionSecurityInterceptor);
+        assertThat(matchingInterceptors("/api/users/me"))
+                .containsExactly(accessTokenInterceptor);
     }
 
     @Test
@@ -45,6 +86,20 @@ class AuthWebMvcConfigurationPathTest {
     @Test
     void ordinaryProtectedApiStillUsesAccessTokenAuthentication() {
         assertThat(matchesAccessTokenInterceptor("/api/users/me"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor("/api/ai-models"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor("/api/ai-models/AAABi0VWeJ8"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor("/api/ai/conversations"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor("/api/ai/conversations/responses"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor(
+                        "/api/ai/conversations/AZ-vpV3kfag70-0EMMUETQ/messages"))
+                .isTrue();
+        assertThat(matchesAccessTokenInterceptor(
+                        "/api/ai/conversation-attachments/preuploads"))
                 .isTrue();
     }
 
@@ -69,13 +124,38 @@ class AuthWebMvcConfigurationPathTest {
     }
 
     private boolean matchesAccessTokenInterceptor(String path) {
+        return matchingInterceptors(path).stream()
+                .anyMatch(interceptor -> sameInterceptor(
+                        interceptor, accessTokenInterceptor));
+    }
+
+    private List<HandlerInterceptor> matchingInterceptors(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+        ServletRequestPathUtils.parseAndCache(request);
         return registeredInterceptors.stream()
                 .filter(MappedInterceptor.class::isInstance)
                 .map(MappedInterceptor.class::cast)
-                .filter(mapped -> sameInterceptor(
-                        mapped.getInterceptor(), accessTokenInterceptor))
-                .anyMatch(mapped -> mapped.matches(request));
+                .filter(mapped -> mapped.matches(request))
+                .map(MappedInterceptor::getInterceptor)
+                .toList();
+    }
+
+    private List<Integer> ordersOf(HandlerInterceptor expected) {
+        return registrations.stream()
+                .filter(candidate -> sameInterceptor(
+                        interceptorOf(candidate), expected))
+                .map(AuthWebMvcConfigurationPathTest::registeredOrder)
+                .toList();
+    }
+
+    private static HandlerInterceptor interceptorOf(
+            InterceptorRegistration registration) {
+        return ReflectionTestUtils.invokeMethod(registration, "getInterceptor");
+    }
+
+    private static int registeredOrder(InterceptorRegistration registration) {
+        Integer order = ReflectionTestUtils.invokeMethod(registration, "getOrder");
+        return order == null ? Integer.MAX_VALUE : order;
     }
 
     private static boolean sameInterceptor(

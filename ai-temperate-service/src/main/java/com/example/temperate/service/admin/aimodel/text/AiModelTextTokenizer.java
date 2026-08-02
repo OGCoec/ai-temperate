@@ -3,9 +3,10 @@ package com.example.temperate.service.admin.aimodel.text;
 import java.util.List;
 
 /**
- * 定义 AI 模型名称和描述生成确定性搜索词元的能力。
+ * 定义 AI 模型描述生成确定性搜索词元的能力。
  *
- * <p>实现必须无状态、线程安全，并对相同输入稳定返回小写、去重且有序的结果。</p>
+ * <p>实现必须无状态、线程安全，并对相同描述稳定返回小写、去重且有序的结果；
+ * 模型名称由写入流程按横杠直接切分，不经过该接口。</p>
  */
 public interface AiModelTextTokenizer {
 

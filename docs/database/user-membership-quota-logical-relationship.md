@@ -11,6 +11,8 @@ user_membership_quota.login_identity_id 逻辑关联 userloginidentity.id，业�
 注册 Service 必须先在同一个 PostgreSQL 本地事务中成功写入 userloginidentity 和 user_profile，
 再写入 user_membership_quota。三次插入的影响行数都必须等于 1，任一步失败时回滚整个事务。
 新注册用户由数据库默认值获得 FREE 会员等级和 5000 最小单位额度，对外解释为 50.00 额度。
+注册业务使用统一 UTC 时钟把 quota_period_ends_at 初始化为当前时间，并保持 quota_period_started_at 为空；
+该状态表示额度尚未开始消耗，后续首次模型调用通过已经到期的结束时间开启正式周期。
 
 ## 删除顺序
 

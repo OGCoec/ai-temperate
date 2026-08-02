@@ -96,9 +96,11 @@ class SecurityConfigurationTest {
 
         assertThat(configuration).isNotNull();
         assertThat(configuration.getAllowedHeaders())
-                .contains("X-Turnstile-Attempt-Id");
+                .contains(
+                        "X-Turnstile-Attempt-Id",
+                        "X-AI-Client-Request-Id");
         assertThat(configuration.getExposedHeaders())
-                .contains("X-Trace-Id", "CF-Ray", "cf-mitigated");
+                .contains("X-Trace-Id", "X-AI-Generation-Id", "CF-Ray", "cf-mitigated");
     }
 
     private static AuthSecurityProperties propertiesWithCookieDomain(String domain) {

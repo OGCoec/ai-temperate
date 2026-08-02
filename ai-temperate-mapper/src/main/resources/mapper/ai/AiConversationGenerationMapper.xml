@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiConversationGenerationMapper">
+
+    <resultMap id="GenerationResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversationGeneration">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="usageId" column="usage_id"/>
+        <result property="idempotencyKeyDigest" column="idempotency_key_digest"/>
+        <result property="modelId" column="model_id"/>
+        <result property="generationStatus" column="generation_status"/>
+        <result property="observerStatus" column="observer_status"/>
+        <result property="observerEpoch" column="observer_epoch"/>
+        <result property="ownerInstanceId" column="owner_instance_id"/>
+        <result property="cancelSource" column="cancel_source"/>
+        <result property="terminalType" column="terminal_type"/>
+        <result property="terminalReason" column="terminal_reason"/>
+        <result property="terminalVersion" column="terminal_version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="detachedAt" column="detached_at"/>
+        <result property="cancelRequestedAt" column="cancel_requested_at"/>
+        <result property="terminalAt" column="terminal_at"/>
+        <result property="settledAt" column="settled_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="GenerationColumns">
+        id, login_identity_id, conversation_id, usage_id,
+        idempotency_key_digest, model_id, generation_status,
+        observer_status, observer_epoch, owner_instance_id,
+        cancel_source, terminal_type, terminal_reason, terminal_version,
+        created_at, started_at, detached_at, cancel_requested_at,
+        terminal_at, settled_at, updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiConversationGeneration">
+        INSERT INTO ai_conversation_generation (
+            id, login_identity_id, conversation_id, usage_id,
+            idempotency_key_digest, model_id, generation_status,
+            observer_status, observer_epoch, detached_at, created_at, updated_at
+        ) VALUES (
+            #{id,jdbcType=BINARY}, #{loginIdentityId,jdbcType=BIGINT},
+            #{conversationId,jdbcType=BINARY}, #{usageId,jdbcType=BINARY},
+            #{idempotencyKeyDigest,jdbcType=BINARY}, #{modelId,jdbcType=BIGINT},
+            #{generationStatus,jdbcType=SMALLINT}, #{observerStatus,jdbcType=SMALLINT},
+            #{observerEpoch,jdbcType=BIGINT}, #{detachedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        )
+    </insert>
+
+    <select id="findById" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE id = #{generationId,jdbcType=BINARY}
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE id = #{generationId,jdbcType=BINARY}
+        FOR UPDATE
+    </select>
+
+    <select id="findOwned" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="findOwnedByIdempotencyDigest" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE idempotency_key_digest = #{idempotencyKeyDigest,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="findActiveOwned" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND generation_status IN
+          <foreach collection="activeStatuses" item="status" open="(" separator="," close=")">
+              #{status,jdbcType=SMALLINT}
+          </foreach>
+        ORDER BY created_at ASC, id ASC
+        LIMIT #{batchSize,jdbcType=INTEGER}
+    </select>
+
+    <select id="findRecoveryCandidates" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE (
+            generation_status IN (
+                #{queuedStatus,jdbcType=SMALLINT},
+                #{cancelRequestedStatus,jdbcType=SMALLINT},
+                #{terminalPendingStatus,jdbcType=SMALLINT}
+            )
+            AND updated_at &lt;= #{publishCutoff,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        ) OR (
+            generation_status = #{runningStatus,jdbcType=SMALLINT}
+            AND updated_at &lt;= #{runningCutoff,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        ) OR (
+            generation_status IN (
+                #{queuedStatus,jdbcType=SMALLINT},
+                #{runningStatus,jdbcType=SMALLINT}
+            )
+            AND observer_status = #{detachedStatus,jdbcType=SMALLINT}
+            AND detached_at &lt;= #{detachedCutoff,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        )
+        ORDER BY updated_at ASC, id ASC
+        LIMIT #{batchSize,jdbcType=INTEGER}
+    </select>
+
+    <select id="findTerminalCleanupCandidates" resultMap="GenerationResultMap">
+        SELECT <include refid="GenerationColumns"/>
+        FROM ai_conversation_generation
+        WHERE generation_status IN
+        <foreach collection="terminalStatuses" item="status" open="(" separator="," close=")">
+            #{status,jdbcType=SMALLINT}
+        </foreach>
+          AND updated_at &lt;= #{cutoff,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        ORDER BY updated_at ASC, id ASC
+        LIMIT #{batchSize,jdbcType=INTEGER}
+        FOR UPDATE SKIP LOCKED
+    </select>
+
+    <delete id="deleteTerminalByIds">
+        DELETE FROM ai_conversation_generation
+        WHERE id IN
+        <foreach collection="generationIds" item="generationId" open="(" separator="," close=")">
+            #{generationId,jdbcType=BINARY}
+        </foreach>
+          AND generation_status IN
+        <foreach collection="terminalStatuses" item="status" open="(" separator="," close=")">
+            #{status,jdbcType=SMALLINT}
+        </foreach>
+    </delete>
+
+    <update id="claimQueued">
+        UPDATE ai_conversation_generation
+        SET generation_status = #{runningStatus,jdbcType=SMALLINT},
+            owner_instance_id = #{ownerInstanceId,jdbcType=VARCHAR},
+            started_at = COALESCE(started_at, #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}),
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND generation_status = #{queuedStatus,jdbcType=SMALLINT}
+    </update>
+
+    <update id="attachObserver">
+        UPDATE ai_conversation_generation
+        SET observer_status = #{attachedStatus,jdbcType=SMALLINT},
+            observer_epoch = observer_epoch + 1,
+            detached_at = NULL,
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </update>
+
+    <update id="detachObserver">
+        UPDATE ai_conversation_generation
+        SET observer_status = #{detachedStatus,jdbcType=SMALLINT},
+            detached_at = COALESCE(detached_at, #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}),
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND observer_epoch = #{expectedEpoch,jdbcType=BIGINT}
+          AND observer_status = #{attachedStatus,jdbcType=SMALLINT}
+    </update>
+
+    <update id="requestCancellation">
+        UPDATE ai_conversation_generation
+        SET generation_status = #{cancelRequestedStatus,jdbcType=SMALLINT},
+            cancel_source = #{cancelSource,jdbcType=VARCHAR},
+            cancel_requested_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND generation_status IN
+          <foreach collection="expectedStatuses" item="status" open="(" separator="," close=")">
+              #{status,jdbcType=SMALLINT}
+          </foreach>
+          AND cancel_source IS NULL
+    </update>
+
+    <update id="freezeTerminal">
+        UPDATE ai_conversation_generation
+        SET generation_status = #{terminalPendingStatus,jdbcType=SMALLINT},
+            terminal_type = #{terminalType,jdbcType=VARCHAR},
+            terminal_reason = #{terminalReason,jdbcType=VARCHAR},
+            terminal_version = terminal_version + 1,
+            terminal_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND terminal_version = #{expectedTerminalVersion,jdbcType=INTEGER}
+          AND terminal_type IS NULL
+          AND generation_status IN
+          <foreach collection="expectedStatuses" item="status" open="(" separator="," close=")">
+              #{status,jdbcType=SMALLINT}
+          </foreach>
+    </update>
+
+    <update id="completeBilling">
+        UPDATE ai_conversation_generation
+        SET generation_status = #{finalStatus,jdbcType=SMALLINT},
+            settled_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND generation_status = #{terminalPendingStatus,jdbcType=SMALLINT}
+          AND terminal_version = #{expectedTerminalVersion,jdbcType=INTEGER}
+    </update>
+
+    <update id="markReconcileRequired">
+        UPDATE ai_conversation_generation
+        SET generation_status = #{reconcileStatus,jdbcType=SMALLINT},
+            terminal_reason = COALESCE(terminal_reason, #{terminalReason,jdbcType=VARCHAR}),
+            settled_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{generationId,jdbcType=BINARY}
+          AND generation_status IN
+          <foreach collection="expectedStatuses" item="status" open="(" separator="," close=")">
+              #{status,jdbcType=SMALLINT}
+          </foreach>
+    </update>
+</mapper>

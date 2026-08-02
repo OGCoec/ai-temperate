@@ -3,6 +3,10 @@ import { restorePersistedSession } from './http-client.js'
 import { isProtectedRoute, normalizeRoutePath } from './protected-routes.js'
 import { clearSession } from './session-vault.js'
 import { loadCurrentUserProfile } from '../user/current-user-profile.js'
+import {
+	isRuntimeSessionAuthenticated,
+	markRuntimeSessionAuthenticated
+} from './authenticated-session-state.js'
 
 let authenticationInFlight = null
 let loginRedirectInFlight = false
@@ -17,6 +21,7 @@ async function confirmAuthenticatedSession() {
 	const restored = await restorePersistedSession()
 	if (!restored) throw sessionNotFoundError()
 	await loadCurrentUserProfile({ force: true })
+	markRuntimeSessionAuthenticated()
 	return true
 }
 
@@ -32,6 +37,7 @@ function redirectToLogin() {
 export async function requireAuthenticatedPage(url) {
 	const route = normalizeRoutePath(url)
 	if (!isProtectedRoute(route)) return true
+	if (isRuntimeSessionAuthenticated()) return true
 	try {
 		if (!authenticationInFlight) {
 			authenticationInFlight = confirmAuthenticatedSession()

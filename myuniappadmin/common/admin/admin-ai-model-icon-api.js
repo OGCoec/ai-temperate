@@ -39,17 +39,19 @@ export function createAdminAiModelIconApi(
 	upload = adminUploadFile
 ) {
 	return {
-		list(pageNum = 1, pageSize = 100) {
+		list(pageNum = 1, pageSize = 100, requestOptions = {}) {
 			const page = requirePage(pageNum, pageSize)
 			return request(`${BASE_PATH}?pageNum=${page.pageNum}&pageSize=${page.pageSize}`, {
-				method: 'GET'
+				method: 'GET',
+				scope: requestOptions.scope
 			})
 		},
 
-		async listAll() {
+		async listAll(requestOptions = {}) {
 			const icons = []
 			for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum += 1) {
-				const page = await this.list(pageNum, 100)
+				if (requestOptions.scope && !requestOptions.scope.isActive()) return icons
+				const page = await this.list(pageNum, 100, requestOptions)
 				icons.push(...(Array.isArray(page?.icons) ? page.icons : []))
 				if (!page?.hasNext) return icons
 			}

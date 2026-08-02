@@ -60,4 +60,46 @@
 	body {
 		margin: 0;
 	}
+
+	/* #ifdef H5 */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: rgba(139, 156, 154, .46) transparent;
+	}
+
+	*::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-corner {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		min-height: 32px;
+		border: 1px solid transparent;
+		border-radius: 999px;
+		background: rgba(139, 156, 154, .46);
+		background-clip: padding-box;
+	}
+
+	*::-webkit-scrollbar-thumb:hover {
+		background: rgba(160, 180, 177, .68);
+		background-clip: padding-box;
+	}
+
+	*::-webkit-scrollbar-button,
+	*::-webkit-scrollbar-button:single-button {
+		display: none;
+		width: 0;
+		height: 0;
+		background: transparent;
+	}
+	/* #endif */
 </style>

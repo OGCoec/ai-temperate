@@ -90,7 +90,7 @@
 				</view>
 				<view class="ratio-field">
 					<text class="field-label">缓存输入倍率</text>
-					<view class="ratio-control">
+					<view class="ratio-control cache-ratio-control">
 						<text aria-hidden="true">CACHE</text>
 						<input
 							type="text"
@@ -125,6 +125,58 @@
 					<text v-if="errors.outputRatio" id="model-output-ratio-error" class="field-error" role="alert">{{ errors.outputRatio }}</text>
 				</view>
 			</view>
+		</view>
+
+		<view class="form-section">
+			<view class="section-heading">
+				<view>
+					<text class="section-title">上下文与生成限制</text>
+					<text class="section-copy">1 K = 1000 Token。上下文窗口包含历史消息、当前输入和为输出预留的空间。</text>
+				</view>
+			</view>
+			<view class="limit-grid">
+				<view class="limit-field">
+					<text class="field-label">最大上下文窗口</text>
+					<view class="limit-control">
+						<input
+							type="text"
+							inputmode="numeric"
+							maxlength="10"
+							:value="modelValue.contextWindowK"
+							:disabled="readonly || busy"
+							:aria-invalid="Boolean(errors.contextWindowK)"
+							:aria-describedby="errors.contextWindowK ? 'model-context-window-error model-token-limit-help' : 'model-token-limit-help'"
+							aria-label="最大上下文窗口"
+							placeholder="256"
+							@input="updateField('contextWindowK', $event.detail.value)"
+						/>
+						<text aria-hidden="true">K</text>
+					</view>
+					<text v-if="errors.contextWindowK" id="model-context-window-error" class="field-error" role="alert">{{ errors.contextWindowK }}</text>
+				</view>
+				<view class="limit-field">
+					<text class="field-label">单次最大输出</text>
+					<view class="limit-control">
+						<input
+							type="text"
+							inputmode="numeric"
+							maxlength="10"
+							:value="modelValue.maxOutputK"
+							:disabled="readonly || busy"
+							:aria-invalid="Boolean(errors.maxOutputK)"
+							:aria-describedby="errors.maxOutputK ? 'model-max-output-error model-token-limit-help' : 'model-token-limit-help'"
+							aria-label="单次最大输出"
+							placeholder="32"
+							@input="updateField('maxOutputK', $event.detail.value)"
+						/>
+						<text aria-hidden="true">K</text>
+					</view>
+					<text v-if="errors.maxOutputK" id="model-max-output-error" class="field-error" role="alert">{{ errors.maxOutputK }}</text>
+				</view>
+			</view>
+			<text id="model-token-limit-help" class="field-help">
+				单次最大输出是整条响应的累计上限，不是某一个 SSE 分片的大小。
+			</text>
 		</view>
 
 		<view class="form-section">
@@ -359,10 +411,11 @@ export default {
 .section-copy { display: block; margin-top: 6rpx; color: $app-muted; font-size: 24rpx; line-height: 1.5; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; }
 .ratio-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20rpx; }
-.field-block, .ratio-field { min-width: 0; margin-top: 20rpx; }
-.field-grid .field-block, .ratio-grid .ratio-field { margin-top: 0; }
+.limit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20rpx; }
+.field-block, .ratio-field, .limit-field { min-width: 0; margin-top: 20rpx; }
+.field-grid .field-block, .ratio-grid .ratio-field, .limit-grid .limit-field { margin-top: 0; }
 .field-label { display: block; margin-bottom: 10rpx; color: #c9d5d8; font-size: 24rpx; font-weight: 690; }
-.field-control, .ratio-control {
+.field-control, .ratio-control, .limit-control {
 	width: 100%;
 	min-height: 88rpx;
 	box-sizing: border-box;
@@ -373,9 +426,9 @@ export default {
 	font-size: 24rpx;
 }
 .field-control { padding: 0 20rpx; }
-.field-control:focus, .ratio-control:focus-within { border-color: $app-focus; box-shadow: 0 0 0 4rpx rgba(139, 231, 228, .1); }
+.field-control:focus, .ratio-control:focus-within, .limit-control:focus-within { border-color: $app-focus; box-shadow: 0 0 0 4rpx rgba(139, 231, 228, .1); }
 .field-control[disabled] { color: #b7c4c8; background: rgba(20, 29, 34, .5); opacity: 1; }
-.ratio-control input[disabled] { color: #b7c4c8; opacity: 1; }
+.ratio-control input[disabled], .limit-control input[disabled] { color: #b7c4c8; opacity: 1; }
 .field-textarea { min-height: 210rpx; padding-top: 18rpx; line-height: 1.55; }
 .compact-textarea { min-height: 128rpx; padding-top: 18rpx; line-height: 1.5; }
 .field-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 8rpx; color: $app-muted; font-size: 24rpx; }
@@ -471,8 +524,12 @@ export default {
 .icon-name { color: $app-text; font-size: 24rpx; font-weight: 720; }
 .icon-description { margin-top: 4rpx; color: $app-muted; font-size: 24rpx; }
 .ratio-control { display: grid; grid-template-columns: 82rpx minmax(0, 1fr); align-items: center; padding: 0 18rpx; }
+.cache-ratio-control { grid-template-columns: 112rpx minmax(0, 1fr); }
 .ratio-control > text { color: $app-green; font-size: 24rpx; font-weight: 820; letter-spacing: .08em; }
 .ratio-control input { width: 100%; color: inherit; font-size: 28rpx; font-variant-numeric: tabular-nums; }
+.limit-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14rpx; padding: 0 18rpx; }
+.limit-control input { width: 100%; color: inherit; font-size: 28rpx; font-variant-numeric: tabular-nums; }
+.limit-control > text { color: $app-green; font-size: 24rpx; font-weight: 820; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; }
 .capability-option {
 	min-height: 104rpx;
@@ -504,17 +561,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 @media (min-width: 960px) {
 	.model-form { grid-template-columns: 1.15fr .85fr; align-items: start; }
 	.form-section:first-child, .form-section:last-child { grid-column: 1; }
-	.form-section:nth-child(2), .form-section:nth-child(3) { grid-column: 2; }
+	.form-section:nth-child(2), .form-section:nth-child(3), .form-section:nth-child(4) { grid-column: 2; }
 	.form-section:nth-child(2) { grid-row: 1; }
-	.form-section:nth-child(3) { grid-row: 2 / span 2; }
-	.ratio-grid { grid-template-columns: 1fr; }
+	.form-section:nth-child(3) { grid-row: 2; }
+	.form-section:nth-child(4) { grid-row: 3; }
+	.ratio-grid, .limit-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
 	.form-section { padding: 24rpx 20rpx; }
-	.field-grid, .ratio-grid, .capability-grid { grid-template-columns: 1fr; }
+	.field-grid, .ratio-grid, .limit-grid, .capability-grid { grid-template-columns: 1fr; }
 	.icon-options { grid-template-columns: 1fr; }
-	.field-control, .ratio-control, .capability-option { min-height: 96rpx; }
+	.field-control, .ratio-control, .limit-control, .capability-option { min-height: 96rpx; }
 }
 
 @media (prefers-reduced-motion: reduce) {

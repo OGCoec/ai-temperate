@@ -13,7 +13,7 @@ test('H5 history uses push and replace state and reports popstate without writin
 	const calls = []
 	let popstate
 	const fakeWindow = {
-		location: { pathname: '/pages/admin/workspace', search: '?view=dashboard' },
+		location: { pathname: '/pages/admin/workspace', search: '?token=must-not-survive', hash: '#/ai-models' },
 		history: {
 			pushState: (state, title, url) => calls.push(['push', state, url]),
 			replaceState: (state, title, url) => calls.push(['replace', state, url])
@@ -25,12 +25,37 @@ test('H5 history uses push and replace state and reports popstate without writin
 	const adapter = createAdminWorkspaceHistoryH5({ windowObject: fakeWindow, onPop: value => seen.push(value) })
 
 	adapter.start()
-	adapter.push({ view: 'ai-models' }, '/pages/admin/workspace?view=ai-models')
-	adapter.replace({ view: 'mail-openai' }, '/pages/admin/workspace?view=mail-openai')
+	adapter.push(
+		{ view: 'ai-models', token: 'must-not-survive' },
+		'/pages/admin/workspace#/ai-models')
+	adapter.replace({ view: 'mail-openai' }, '/pages/admin/workspace#/mail-inspection/openai')
 	popstate({ state: { __adminWorkspace: true, adminWorkspaceLocation: { view: 'dashboard' } } })
 	assert.equal(calls.filter(item => item[0] === 'push').length, 1)
 	assert.equal(calls.filter(item => item[0] === 'replace').length, 2)
+	assert.equal(calls[0][2], '/pages/admin/workspace#/ai-models')
+	assert.equal(calls[1][2], '/pages/admin/workspace#/ai-models')
+	assert.equal(calls[2][2], '/pages/admin/workspace#/mail-inspection/openai')
+	assert.doesNotMatch(JSON.stringify(calls), /must-not-survive/)
 	assert.deepEqual(seen, [{ view: 'dashboard' }])
+})
+
+test('H5 history rejects unregistered workspace pathnames', async () => {
+	const { createAdminWorkspaceHistoryH5 } = await load('admin-workspace-history-h5.js')
+	const fakeWindow = {
+		location: { pathname: '/pages/admin/workspace', search: '', hash: '' },
+		history: { pushState() {}, replaceState() {} },
+		addEventListener() {},
+		removeEventListener() {}
+	}
+	const adapter = createAdminWorkspaceHistoryH5({ windowObject: fakeWindow })
+	assert.throws(
+		() => adapter.push({ view: 'ai-models' }, '/pages/admin/workspace/ai-models'),
+		/registered workspace pathname/
+	)
+	assert.throws(
+		() => adapter.push({ view: 'unknown' }, '/pages/admin/workspace#/unknown'),
+		/published workspace fragment/
+	)
 })
 
 test('Android workspace history pops internal views before releasing system back', async () => {

@@ -99,9 +99,11 @@
 	}
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.probe-page {
-		min-height: 100vh;
+		@include user-safe-viewport;
 		background: #0b0d0c;
 	}
 </style>

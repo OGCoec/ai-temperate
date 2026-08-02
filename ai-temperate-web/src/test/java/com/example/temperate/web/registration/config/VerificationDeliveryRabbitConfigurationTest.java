@@ -1,6 +1,7 @@
 package com.example.temperate.web.registration.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryRabbitNames;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 /**
@@ -35,6 +37,22 @@ class VerificationDeliveryRabbitConfigurationTest {
         Message delayed = new Message(new byte[0], properties);
 
         assertThat(rabbitTemplate.isMandatoryFor(delayed)).isFalse();
+    }
+
+    @Test
+    void dedicatedTemplateUsesMandatoryOnlyForImmediateMessages() {
+        VerificationDeliveryRabbitConfiguration configuration =
+                new VerificationDeliveryRabbitConfiguration();
+        RabbitTemplate rabbitTemplate = configuration.verificationDeliveryRabbitTemplate(
+                mock(ConnectionFactory.class),
+                configuration.verificationDeliveryMessageConverter());
+        Message immediate = new Message(new byte[0], new MessageProperties());
+        MessageProperties delayedProperties = new MessageProperties();
+        delayedProperties.setHeader("x-delay", 10_000L);
+
+        assertThat(rabbitTemplate.isMandatoryFor(immediate)).isTrue();
+        assertThat(rabbitTemplate.isMandatoryFor(
+                new Message(new byte[0], delayedProperties))).isFalse();
     }
 
     @Test

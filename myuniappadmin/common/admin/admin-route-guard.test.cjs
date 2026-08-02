@@ -18,7 +18,17 @@ test('administrator route policy protects every business page and leaves securit
 
 	assert.equal(ADMIN_ENTRY_ROUTE, '/pages/index/index')
 	for (const route of [
-		'/pages/admin/workspace?view=dashboard',
+		'/pages/admin/workspace',
+		'/pages/admin/workspace#/ai-models',
+		'/pages/admin/workspace#/ai-models/new',
+		'/pages/admin/workspace#/ai-models/discovery',
+		'/pages/admin/workspace#/ai-models/AAAAAAAAAAA',
+		'/pages/admin/workspace#/ai-model-icons',
+		'/pages/admin/workspace#/ip2location/keys',
+		'/pages/admin/workspace#/mail-inspection/openai',
+		'/pages/admin/workspace#/mail-inspection/kiro',
+		'/pages/admin/workspace#/mail-inspection/ip2location/registration',
+		'/pages/admin/workspace#/mail-inspection/ip2location/verify-link',
 		'/pages/risk/ip2location-keys',
 		'/pages/ai-models/index',
 		'/pages/ai-models/create',
@@ -44,6 +54,8 @@ test('administrator route policy protects every business page and leaves securit
 		normalizeAdminPageRoute('pages/ai-models/detail?publicId=AAAAAAAAAAA#top'),
 		'/pages/ai-models/detail'
 	)
+	assert.equal(isAdminProtectedRoute('/pages/admin/workspace-invalid'), false)
+	assert.equal(isAdminProtectedRoute('/pages/admin/workspace/ai-models'), false)
 	assert.equal(isAdminProtectedRoute('/pages/risk/ip2location-keys/'), true)
 })
 

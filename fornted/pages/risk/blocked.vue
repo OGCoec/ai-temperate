@@ -104,31 +104,29 @@
 	}
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.gate-page {
+		@include user-safe-viewport;
 		box-sizing: border-box;
 		display: grid;
-		min-height: 100vh;
-		min-height: 100dvh;
 		padding:
 			calc(28rpx + env(safe-area-inset-top))
 			20rpx
 			calc(28rpx + env(safe-area-inset-bottom));
 		place-items: center;
 		overflow: hidden;
-		background:
-			radial-gradient(circle at 50% -18%, rgba(239, 165, 35, 0.24), transparent 42%),
-			#f1f0ec;
-		color: #261d14;
+		background: #090c0a;
+		color: #eff8f3;
 		-webkit-font-smoothing: antialiased;
 	}
 
 	.gate-shell {
+		@include user-frosted-surface;
 		width: min(100%, 980px);
 		border-radius: 24rpx;
 		overflow: hidden;
-		background: #fffefb;
-		box-shadow: 0 24rpx 64rpx rgba(73, 48, 20, 0.14);
 	}
 
 	.status-rail {
@@ -137,7 +135,7 @@
 		align-items: center;
 		gap: 16rpx;
 		padding: 18rpx 28rpx;
-		background: #9f4105;
+		background: #6f3211;
 		color: #fff;
 	}
 
@@ -146,7 +144,7 @@
 		height: 14rpx;
 		border: 3rpx solid rgba(255, 255, 255, 0.62);
 		border-radius: 50%;
-		background: #fff4cc;
+		background: #f2ba55;
 	}
 
 	.status-copy,
@@ -181,7 +179,7 @@
 
 	.gate-message {
 		padding: 54rpx 42rpx 48rpx;
-		background: #fffefb;
+		background: transparent;
 	}
 
 	.shield-mark {
@@ -190,8 +188,8 @@
 		height: 106rpx;
 		place-items: center;
 		border-radius: 50%;
-		background: #fff0ca;
-		color: #9f4105;
+		background: rgba(242, 186, 85, .16);
+		color: #f2ba55;
 	}
 
 	.shield-mark text {
@@ -202,7 +200,7 @@
 
 	.gate-label {
 		margin-top: 36rpx;
-		color: #783007;
+		color: #f4bf62;
 		font-size: 24rpx;
 		font-weight: 760;
 	}
@@ -218,7 +216,7 @@
 
 	.gate-copy {
 		margin-top: 24rpx;
-		color: #625548;
+		color: #afbeb6;
 		font-size: 28rpx;
 		line-height: 1.75;
 		text-wrap: pretty;
@@ -230,8 +228,8 @@
 		gap: 16rpx;
 		margin-top: 42rpx;
 		padding-top: 28rpx;
-		border-top: 1px solid #ead9ba;
-		color: #65481f;
+		border-top: 1px solid rgba(240, 186, 93, .22);
+		color: #d8c393;
 	}
 
 	.assurance-mark {
@@ -241,8 +239,8 @@
 		flex: 0 0 auto;
 		place-items: center;
 		border-radius: 50%;
-		background: #efa523;
-		color: #fff;
+		background: #d99530;
+		color: #15120d;
 		font-size: 20rpx;
 		font-weight: 800;
 	}
@@ -255,8 +253,8 @@
 
 	.recovery-panel {
 		padding: 44rpx 42rpx 48rpx;
-		border-top: 1px solid #ead9ba;
-		background: #fff6e5;
+		border-top: 1px solid rgba(240, 186, 93, .22);
+		background: rgba(240, 186, 93, .06);
 	}
 
 	.recovery-title {
@@ -267,7 +265,7 @@
 
 	.recovery-intro {
 		margin-top: 14rpx;
-		color: #625548;
+		color: #aebbb4;
 		font-size: 24rpx;
 		line-height: 1.65;
 	}
@@ -281,11 +279,11 @@
 		align-items: flex-start;
 		gap: 18rpx;
 		padding: 22rpx 0;
-		color: #55483b;
+		color: #ccd7d1;
 	}
 
 	.recovery-row + .recovery-row {
-		border-top: 1px solid #ead9ba;
+		border-top: 1px solid rgba(240, 186, 93, .18);
 	}
 
 	.recovery-row text {
@@ -300,8 +298,8 @@
 		flex: 0 0 auto;
 		place-items: center;
 		border-radius: 50%;
-		background: #f3d59d;
-		color: #783007;
+		background: rgba(242, 186, 85, .16);
+		color: #f2ba55;
 		font-size: 20rpx !important;
 		font-weight: 800;
 		line-height: 1 !important;
@@ -314,8 +312,8 @@
 		margin-top: 34rpx;
 		padding: 24rpx;
 		border-radius: 18rpx;
-		background: #f7e4c2;
-		color: #5b3b18;
+		background: rgba(240, 186, 93, .10);
+		color: #ded3b6;
 	}
 
 	.stopped-mark {
@@ -324,7 +322,7 @@
 		flex: 0 0 auto;
 		margin-top: 9rpx;
 		border-radius: 50%;
-		background: #c85a08;
+		background: #e0a23c;
 	}
 
 	.stopped-title {
@@ -335,7 +333,7 @@
 
 	.stopped-copy {
 		margin-top: 6rpx;
-		color: #6b553b;
+		color: #aebbb4;
 		font-size: 21rpx;
 		line-height: 1.6;
 	}
@@ -417,7 +415,7 @@
 		.recovery-panel {
 			padding: 54px 46px;
 			border-top: 0;
-			border-left: 1px solid #ead9ba;
+			border-left: 1px solid rgba(240, 186, 93, .22);
 		}
 
 		.recovery-title {

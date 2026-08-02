@@ -6,7 +6,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 AI 模型 IK 词元统一小写、去重、稳定排序以及空文本边界。
+ * 验证 AI 模型描述的 IK 词元统一小写、去重、稳定排序以及空文本边界。
  */
 final class AiModelTextTokenizerTest {
 

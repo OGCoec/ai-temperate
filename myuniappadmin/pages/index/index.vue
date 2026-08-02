@@ -244,6 +244,10 @@
 	} from '@/common/admin/admin-route-guard-runtime.js'
 	import { takeAdminSessionExpiryNotice } from '@/common/admin/admin-session-expiry-navigation.js'
 	import { buildAdminWorkspaceUrl } from '@/common/admin/admin-workspace-route.js'
+	import {
+		clearAdminWorkspaceEntryLocation,
+		stageAdminWorkspaceEntryLocation
+	} from '@/common/admin/admin-workspace-entry-state.js'
 	import { requestAdminHcaptchaToken } from '@/common/admin/admin-hcaptcha.js'
 	import { clearAdminFlow } from '@/common/admin/admin-secure-vault.js'
 	import {
@@ -340,7 +344,18 @@
 		},
 		methods: {
 			openWorkspace(location) {
-				return guardedAdminRedirect(buildAdminWorkspaceUrl(location))
+				const route = stageAdminWorkspaceEntryLocation(location)
+				return Promise.resolve(guardedAdminRedirect(route, {
+					fail: clearAdminWorkspaceEntryLocation
+				}))
+					.then(allowed => {
+						if (!allowed) clearAdminWorkspaceEntryLocation()
+						return allowed
+					})
+					.catch(error => {
+						clearAdminWorkspaceEntryLocation()
+						throw error
+					})
 			},
 			navigateToIp2LocationKeys() {
 				return this.openWorkspace({ view: 'ip2location-keys' })

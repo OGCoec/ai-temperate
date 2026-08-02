@@ -35,8 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 读取并验证 AES-GCM 加密快照，或从 PostgreSQL 批量重建全部启用 AI 模型的 Redis 快照。
  *
- * <p>模型与能力分别通过一次有界 SQL 读取，随后只对固定聚合 Key 执行失效和写入；无启用模型时只
- * UNLINK。超过硬性容量上限时拒绝写入，防止产生 Redis BigKey。</p>
+ * <p>模型与能力分别通过一次有界 SQL 读取，随后只对固定聚合 Key 执行失效和写入；无启用模型时也
+ * 写入空快照。超过硬性容量上限时拒绝写入，防止产生 Redis BigKey。</p>
  */
 @Service
 public final class AiModelCacheServiceImpl implements AiModelCacheService {
@@ -45,6 +45,8 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
     private static final int TARGET_BYTES = 8 * 1024;
     private static final int WARNING_BYTES = 10 * 1024;
     private static final int ABSOLUTE_BYTES = 64 * 1024;
+    private static final long TOKENS_PER_K = 1000L;
+    private static final long MAX_TOKEN_LIMIT = 2_147_483_647_000L;
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
 
@@ -60,6 +62,7 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
     private final Counter rejectedCounter;
     private final Counter corruptCounter;
     private final Counter readFailureCounter;
+    private final Counter loadWriteFailureCounter;
 
     public AiModelCacheServiceImpl(
             AiModelMapper modelMapper,
@@ -83,6 +86,7 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
         this.rejectedCounter = registry.counter("ai.model.cache.size.rejected");
         this.corruptCounter = registry.counter("ai.model.cache.read.corrupt");
         this.readFailureCounter = registry.counter("ai.model.cache.read.failure");
+        this.loadWriteFailureCounter = registry.counter("ai.model.cache.load.write.failure");
     }
 
     @Override
@@ -116,19 +120,41 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
     }
 
     @Override
+    public AiModelCacheSnapshot getOrLoadEnabledSnapshot() {
+        Optional<AiModelCacheSnapshot> cached = findEnabledSnapshot();
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
+        AiModelCacheSnapshot loaded = loadSnapshotFromDatabase();
+        try {
+            writeSnapshot(loaded);
+        } catch (RuntimeException exception) {
+            // 回源结果已经来自 PostgreSQL；Redis 回填失败不能把正常的只读模型目录降级为接口失败。
+            loadWriteFailureCounter.increment();
+            LOGGER.warn(
+                    "event=ai_model_cache_load_write_failed cause={}",
+                    exception.getClass().getSimpleName());
+        }
+        return loaded;
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public void refreshEnabledSnapshot() {
+        writeSnapshot(loadSnapshotFromDatabase());
+    }
+
+    private AiModelCacheSnapshot loadSnapshotFromDatabase() {
         List<AiModel> models = modelMapper.findEnabled(properties.maxModels() + 1);
         if (models.size() > properties.maxModels()) {
             rejectedCounter.increment();
             throw new IllegalStateException("Enabled AI model snapshot exceeds the configured model limit.");
         }
-
-        String cacheKey = keyFactory.aiModelEnabledSnapshotKey();
         if (models.isEmpty()) {
-            redisTemplate.unlink(cacheKey);
-            refreshCounter.increment();
-            return;
+            return new AiModelCacheSnapshot(
+                    AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION,
+                    List.of());
         }
 
         List<Long> modelIds = models.stream().map(AiModel::getId).toList();
@@ -137,14 +163,20 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
         List<AiModelCacheEntry> entries = models.stream()
                 .map(model -> toEntry(model, capabilities.getOrDefault(model.getId(), List.of())))
                 .toList();
-        AiModelCacheSnapshot snapshot = new AiModelCacheSnapshot(
+        return new AiModelCacheSnapshot(
                 AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION,
                 entries);
+    }
+
+    private void writeSnapshot(AiModelCacheSnapshot snapshot) {
+        String cacheKey = keyFactory.aiModelEnabledSnapshotKey();
         ProtectedAiModelCacheSnapshot protectedSnapshot = protector.protect(cacheKey, snapshot);
         int storedBytes = protectedSnapshot.envelope().getBytes(StandardCharsets.UTF_8).length;
-        enforceSize(Math.max(protectedSnapshot.plaintextBytes(), storedBytes), models.size());
+        enforceSize(
+                Math.max(protectedSnapshot.plaintextBytes(), storedBytes),
+                snapshot.models().size());
 
-        // 先失效旧快照再写入数据库最新状态；写入失败时缓存为空，调用方必须回源 PostgreSQL。
+        // 空集合也写入版本化密文，避免“当前确实无启用模型”被误判为缓存未命中而持续穿透数据库。
         redisTemplate.unlink(cacheKey);
         redisTemplate.opsForValue().set(
                 cacheKey,
@@ -156,6 +188,13 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
     private AiModelCacheEntry toEntry(
             AiModel model,
             List<AiModelCapabilityCode> capabilities) {
+        Long contextWindowTokens = model.getContextWindowTokens();
+        Long maxOutputTokens = model.getMaxOutputTokens();
+        if (!validConfiguredTokenLimits(contextWindowTokens, maxOutputTokens)) {
+            // 启用快照是后续模型调用的权威配置，缺失或非规范容量必须 Fail Closed。
+            throw new IllegalStateException(
+                    "Enabled AI model token limits are invalid.");
+        }
         return new AiModelCacheEntry(
                 model.getId(),
                 model.getModelName(),
@@ -166,7 +205,24 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
                 model.getInputRatio(),
                 model.getCachedInputRatio(),
                 model.getOutputRatio(),
+                contextWindowTokens,
+                maxOutputTokens,
                 capabilities);
+    }
+
+    private static boolean validConfiguredTokenLimits(
+            Long contextWindowTokens,
+            Long maxOutputTokens) {
+        return validTokenLimit(contextWindowTokens)
+                && validTokenLimit(maxOutputTokens)
+                && maxOutputTokens <= contextWindowTokens;
+    }
+
+    private static boolean validTokenLimit(Long value) {
+        return value != null
+                && value > 0
+                && value <= MAX_TOKEN_LIMIT
+                && value % TOKENS_PER_K == 0;
     }
 
     private List<String> readTags(String tagsJson) {

@@ -5,10 +5,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.example.temperate.model.user.domain.CurrentUserProfile;
+import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.user.profile.CurrentUserProfileResult;
 import com.example.temperate.service.user.profile.CurrentUserProfileService;
 import com.example.temperate.web.user.profile.api.CurrentUserResponse;
+import java.time.OffsetDateTime;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
@@ -19,13 +21,23 @@ import org.springframework.http.ResponseEntity;
 class CurrentUserControllerTest {
 
     @Test
-    void returnsOnlyDisplayNameEmailAndPhoneWithoutCaching() {
+    void returnsProfileMembershipAndProjectedQuotaWithoutCaching() {
         CurrentUserProfileService service = mock(CurrentUserProfileService.class);
-        when(service.getRequired(10001L)).thenReturn(new CurrentUserProfile(
+        when(service.getRequired(10001L)).thenReturn(new CurrentUserProfileResult(
                 "Alice",
                 "alice@example.test",
                 "+14155550123",
-                "https://cdn.example.test/avatar.webp"));
+                "https://cdn.example.test/avatar.webp",
+                MembershipTier.FREE,
+                "5000",
+                "50.0",
+                "5000",
+                "50.0",
+                "0",
+                "0.0",
+                "0.0",
+                null,
+                OffsetDateTime.parse("2026-08-06T12:00:00Z")));
         CurrentUserController controller = new CurrentUserController(service);
         SessionPrincipal principal = new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice");
 
@@ -39,7 +51,17 @@ class CurrentUserControllerTest {
                 "Alice",
                 "alice@example.test",
                 "+14155550123",
-                "https://cdn.example.test/avatar.webp"));
+                "https://cdn.example.test/avatar.webp",
+                MembershipTier.FREE,
+                "5000",
+                "50.0",
+                "5000",
+                "50.0",
+                "0",
+                "0.0",
+                "0.0",
+                null,
+                OffsetDateTime.parse("2026-08-06T12:00:00Z")));
         verify(service).getRequired(10001L);
     }
 }

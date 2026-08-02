@@ -1,0 +1,24 @@
+export type AitOssPutFailure = {
+  code: string
+  statusCode: number
+  message: string
+}
+
+export type AitOssPutOptions = {
+  url: string
+  headers: UTSJSONObject
+  filePath: string
+  sizeBytes: number
+  onProgress: (progress: number) => void
+  onSuccess: () => void
+  onError: (failure: AitOssPutFailure) => void
+}
+
+export type AitOssPutConnection = {
+  close: () => void
+}
+
+/**
+ * 从 Android 应用临时文件向预签名 HTTPS 地址执行流式 PUT，并允许主动取消。
+ */
+export function putFile(options: AitOssPutOptions): AitOssPutConnection

@@ -10,7 +10,9 @@
 - 仅因 `PasswordEncoder.upgradeEncoding` 升级哈希时使用旧哈希 CAS 更新，不修改 `password_version`；数据库更新时间触发器仍会刷新 `updated_at`。
 - 邮箱和手机号所有权验证属于注册流程状态，不在登录身份表中保存独立的验证时间字段。
 - 认证状态以 `user_profile.account_status` 为准：`0=ACTIVE`、`1=FROZEN`、`2=DISABLED`（数据库历史名称 `DEACTIVATED` 在认证域映射为 `DISABLED`）。
-- 会员等级和额度存放在 `user_membership_quota`，不进入认证上下文，也不参与登录、忘记密码、Access Token 或 Refresh Token 的账号可用性判断。
+- 会员等级、额度和额度周期边界存放在 `user_membership_quota`，不进入认证上下文，也不参与登录、忘记密码、Access Token 或 Refresh Token 的账号可用性判断。
+- 个人中心可以在认证完成后按内部用户 ID 读取独立短期资料缓存；该缓存不扩展 `SessionPrincipal`，
+  不参与 Token 验证，并且不能作为额度预扣或最终结算的数据来源。
 - 用户资料缺失或出现未知状态时认证必须安全拒绝。
 
 ## 逻辑关系补偿

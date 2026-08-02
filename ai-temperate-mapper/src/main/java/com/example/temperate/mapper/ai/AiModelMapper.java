@@ -28,7 +28,9 @@ public interface AiModelMapper {
             @Param("modelNames") List<String> modelNames);
 
     List<AiModel> findPage(
-            @Param("keyword") String keyword,
+            @Param("modelNameTokensJson") String modelNameTokensJson,
+            @Param("descriptionTokensJson") String descriptionTokensJson,
+            @Param("vendorExact") String vendorExact,
             @Param("enabled") Boolean enabled);
 
     List<AiModel> findEnabled(@Param("limit") int limit);
@@ -44,6 +46,8 @@ public interface AiModelMapper {
             @Param("enabled") boolean enabled);
 
     Boolean findEnabledById(@Param("id") long id);
+
+    List<Long> findEnabledIds(@Param("ids") List<Long> ids);
 
     List<AiModel> findTokenBackfillPage(
             @Param("afterId") long afterId,

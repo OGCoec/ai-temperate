@@ -96,7 +96,9 @@ public class SecurityConfiguration {
         configuration.setAllowedHeaders(List.of(
                 "Authorization",
                 "Content-Type",
+                "Idempotency-Key",
                 "X-Device-Installation-Id",
+                "X-AI-Client-Request-Id",
                 PLATFORM_HEADER,
                 "X-Register-Token",
                 "X-Register-CSRF",
@@ -111,6 +113,7 @@ public class SecurityConfiguration {
         configuration.setExposedHeaders(List.of(
                 "Retry-After",
                 AuthRequestTraceFilter.TRACE_HEADER,
+                "X-AI-Generation-Id",
                 "CF-Ray",
                 "cf-mitigated"));
         configuration.setMaxAge(600L);

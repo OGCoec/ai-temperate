@@ -22,6 +22,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
@@ -39,6 +40,27 @@ class RabbitVerificationDeliveryPublisherTest {
     private static final Instant NOW = Instant.parse("2026-07-19T12:00:00Z");
     private static final HmacIdentifier HMAC =
             HmacIdentifier.fromProtectedValue("A".repeat(43));
+
+    @Test
+    void selectsDedicatedTemplateFromSpringInjectedMap() {
+        RabbitTemplate verificationTemplate = mock(RabbitTemplate.class);
+
+        RabbitTemplate selected = RabbitVerificationDeliveryPublisher
+                .requiredVerificationDeliveryRabbitTemplate(Map.of(
+                        "adminMailInspectionRabbitTemplate", mock(RabbitTemplate.class),
+                        "verificationDeliveryRabbitTemplate", verificationTemplate,
+                        "aiConversationGenerationRabbitTemplate", mock(RabbitTemplate.class)));
+
+        assertThat(selected).isSameAs(verificationTemplate);
+    }
+
+    @Test
+    void rejectsMapWithoutDedicatedTemplate() {
+        assertThatThrownBy(() -> RabbitVerificationDeliveryPublisher
+                .requiredVerificationDeliveryRabbitTemplate(Map.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Missing RabbitTemplate: verificationDeliveryRabbitTemplate");
+    }
 
     @Test
     void initialPublishLogsNonRetryRequestAndConfirmedBrokerAck() {

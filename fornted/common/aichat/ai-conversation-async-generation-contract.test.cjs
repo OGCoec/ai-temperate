@@ -1,0 +1,71 @@
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const test = require('node:test')
+
+function source(relativePath) {
+	return fs.readFileSync(path.resolve(__dirname, relativePath), 'utf8')
+}
+
+test('frontend async generation defaults to enabled and supports explicit rollback', () => {
+	const vite = source('../../vite.config.js')
+
+	assert.match(
+		vite,
+		/process\.env\.AI_CONVERSATION_ASYNC_GENERATION_ENABLED !== 'false'/
+	)
+})
+
+test('page hiding and component switching do not issue explicit cancellation in async mode', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+
+	assert.match(panel, /handlePageHide\(\)[\s\S]*if \(!asyncGenerationEnabled\(\)\)/)
+	assert.match(panel, /releaseCurrentGenerationView\(\)/)
+	assert.doesNotMatch(panel, /if \(asyncGenerationEnabled\(\)\) this\.stop\('PAGE_HIDDEN'\)/)
+})
+
+test('explicit stop persists cancellation even when the generation id arrives later', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+	const calls = panel.match(/cancelGeneration\(/g) || []
+
+	assert.equal(calls.length, 1)
+	assert.match(panel, /cancelGenerationWithRetry\(generationPublicId\)/)
+	assert.match(panel, /return await aiConversationApi\.cancelGeneration\(generationPublicId\)/)
+	assert.match(panel, /cancelRequestedBeforeGenerationId = true/)
+	assert.match(panel, /onGenerationId:[\s\S]*requestGenerationCancellation\(generationPublicId\)/)
+	assert.match(panel, /if \(!asyncGenerationEnabled\(\)\) this\.activeStream\?\.close/)
+})
+
+test('cancel request failure keeps the global observer for authoritative terminal state', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+	const start = panel.indexOf('async requestGenerationCancellation')
+	const end = panel.indexOf('\n\t\t\tasync stop', start)
+	const cancellationMethod = panel.slice(start, end)
+	const stopStart = panel.indexOf('async stop')
+	const stopEnd = panel.indexOf('\n\t\t\tscrollBottom', stopStart)
+	const stopMethod = panel.slice(stopStart, stopEnd)
+
+	assert.doesNotMatch(cancellationMethod, /detachGenerationObserver\(generationPublicId\)/)
+	assert.match(cancellationMethod, /cancelGeneration\(generationPublicId\)/)
+	assert.doesNotMatch(stopMethod, /activeGenerationSubscription\?\.\(\)/)
+})
+
+test('global manager can retain many observers and notify a newly opened conversation view', () => {
+	const manager = source('ai-conversation-generation-manager.js')
+
+	assert.match(manager, /const observers = new Map\(\)/)
+	assert.match(manager, /const listeners = new Map\(\)/)
+	assert.match(manager, /export function subscribeGeneration/)
+	assert.match(manager, /previous && previous !== observer/)
+})
+
+test('transport reconnects with GET and never turns an SSE error into a refund command', () => {
+	const stream = source('ai-conversation-stream.js')
+
+	assert.match(stream, /method: 'GET'/)
+	assert.match(stream, /CLIENT_DETACHED/)
+	assert.match(stream, /Date\.now\(\) \+ 25_000/)
+	assert.match(stream, /reconnectGeneration/)
+	assert.doesNotMatch(stream, /REFUND_FULL|REFUND_REQUESTED/)
+	assert.match(stream, /handlers\.onGenerationId\?\.\(event\.data\.generationPublicId\)/)
+})

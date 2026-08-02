@@ -85,6 +85,12 @@ class PersistenceSqlContractTest {
         assertTrue(membershipSchema.contains("membership_tier smallint not null default 0"));
         assertTrue(membershipSchema.contains(
                 "quota_balance_minor bigint not null default 5000"));
+        assertTrue(membershipSchema.contains("quota_period_started_at timestamptz"));
+        assertTrue(membershipSchema.contains("quota_period_ends_at timestamptz"));
+        assertFalse(membershipSchema.contains("created_at"));
+        assertFalse(membershipSchema.contains("updated_at"));
+        assertFalse(membershipSchema.contains("set_user_membership_quota_updated_at"));
+        assertFalse(membershipSchema.contains("trg_user_membership_quota_set_updated_at"));
         assertTrue(membershipSchema.contains("unique (login_identity_id)"));
         assertTrue(membershipSchema.contains("check (membership_tier between 0 and 6)"));
         assertTrue(membershipSchema.contains("check (quota_balance_minor >= 0)"));
@@ -163,6 +169,14 @@ class PersistenceSqlContractTest {
         assertFalse(identityMapper.contains("phone_verified_at"));
         assertFalse(identityMapper.contains("password_changed_at"));
         assertTrue(identityMapper.contains("where id = #{id"));
+        assertTrue(identityMapper.contains("id=\"findcurrentuserprofilebyid\""));
+        assertTrue(identityMapper.contains(
+                "inner join user_membership_quota umq "
+                        + "on umq.login_identity_id = uli.id"));
+        assertTrue(identityMapper.contains("umq.membership_tier"));
+        assertTrue(identityMapper.contains("umq.quota_balance_minor"));
+        assertTrue(identityMapper.contains("umq.quota_period_started_at"));
+        assertTrue(identityMapper.contains("umq.quota_period_ends_at"));
 
         assertTrue(profileMapper.contains("id=\"insert\""));
         assertTrue(profileMapper.contains("insert into user_profile"));

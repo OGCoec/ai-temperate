@@ -63,6 +63,16 @@
 						<text class="record-value numeric">{{ model.capabilities?.length || 0 }}</text>
 					</view>
 				</view>
+				<view class="capacity-strip" aria-label="模型上下文与生成限制">
+					<view>
+						<text class="record-label">最大上下文窗口</text>
+						<text class="record-value numeric">{{ tokenLimitDetail(model.contextWindowK, model.contextWindowTokens) }}</text>
+					</view>
+					<view>
+						<text class="record-label">单次最大输出</text>
+						<text class="record-value numeric">{{ tokenLimitDetail(model.maxOutputK, model.maxOutputTokens) }}</text>
+					</view>
+				</view>
 
 				<ai-model-form
 					ref="modelForm"
@@ -78,7 +88,7 @@
 				<view class="status-panel">
 					<view>
 						<text class="status-title">运行状态独立管理</text>
-						<text class="status-copy">状态不会写入字段 Merge Patch。每次启停都会递增版本，并在需要时刷新可用模型快照。</text>
+						<text class="status-copy">状态不会写入字段 Merge Patch。启用前必须完整配置上下文与输出限制；每次启停都会递增版本，并在需要时刷新可用模型快照。</text>
 					</view>
 					<admin-action-button
 						v-if="model.enabled"
@@ -104,7 +114,7 @@
 				</view>
 				<view v-if="editing" class="dock-actions">
 					<admin-action-button tone="neutral" :disabled="saving" @click="cancelEdit">取消编辑</admin-action-button>
-					<admin-action-button tone="amber" :loading="saving" @click="save">保存更改</admin-action-button>
+					<admin-action-button tone="amber" :disabled="!tokenLimitsComplete" :loading="saving" @click="save">保存更改</admin-action-button>
 				</view>
 				<view v-else class="dock-actions">
 					<admin-action-button tone="teal" :disabled="statusWriting" @click="loadDetail">刷新详情</admin-action-button>
@@ -122,6 +132,8 @@ import AdminPageHeader from '@/components/admin/admin-page-header.vue'
 import AiModelForm from '@/components/admin/ai-model-form.vue'
 import { adminAiModelApi } from '@/common/admin/admin-ai-model-api.js'
 import { adminAiModelIconApi } from '@/common/admin/admin-ai-model-icon-api.js'
+import { isAdminRequestAborted } from '@/common/admin/admin-http.js'
+import { createAdminRequestScope } from '@/common/admin/admin-request-scope.js'
 import {
 	aiModelFormChanged,
 	cloneAiModelForm,
@@ -133,6 +145,13 @@ import {
 
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
 
+function statusFailureMessage(error) {
+	if (error?.code === 'AI_MODEL_TOKEN_LIMIT_REQUIRED') {
+		return '启用失败：请先配置最大上下文窗口和单次最大输出。'
+	}
+	return error?.message || '模型状态修改失败。'
+}
+
 export default {
 	name: 'AiModelDetailPanel',
 	components: { AdminActionButton, AdminFeedbackBanner, AdminPageHeader, AiModelForm },
@@ -140,6 +159,12 @@ export default {
 	props: {
 		workspacePublicId: { type: String, required: true },
 		created: { type: Boolean, default: false }
+	},
+	computed: {
+		tokenLimitsComplete() {
+			return String(this.draft?.contextWindowK ?? '').trim().length > 0
+				&& String(this.draft?.maxOutputK ?? '').trim().length > 0
+		}
 	},
 	data() {
 		const empty = createEmptyAiModelForm()
@@ -151,6 +176,8 @@ export default {
 			draft: cloneAiModelForm(empty),
 			errors: {},
 			loading: false,
+			requestScope: null,
+			requestGeneration: 0,
 			saving: false,
 			statusWriting: false,
 			iconOptions: [],
@@ -163,10 +190,15 @@ export default {
 			exitAllowed: false
 		}
 	},
+	beforeUnmount() {
+		this.cancelReadRequests()
+	},
 	methods: {
 		onWorkspaceActivated() {
 			const publicId = String(this.workspacePublicId || '').trim()
 			if (!PUBLIC_ID_PATTERN.test(publicId)) return
+			this.cancelReadRequests()
+			this.ensureReadScope()
 			const changed = this.publicId !== publicId
 			this.publicId = publicId
 			if (changed || !this.model) {
@@ -175,7 +207,22 @@ export default {
 			}
 			return this.loadIcons()
 		},
-		onWorkspaceDeactivated() {},
+		onWorkspaceDeactivated() {
+			this.cancelReadRequests()
+		},
+		ensureReadScope() {
+			if (this.requestScope?.isActive()) return this.requestScope
+			this.requestScope = createAdminRequestScope()
+			this.requestGeneration += 1
+			return this.requestScope
+		},
+		cancelReadRequests() {
+			this.requestGeneration += 1
+			this.requestScope?.abortAll()
+			this.requestScope = null
+			this.loading = false
+			this.iconLoading = false
+		},
 		beforeWorkspaceLeave() {
 			if (this.exitAllowed) return true
 			if (this.saving || this.statusWriting) return false
@@ -193,13 +240,18 @@ export default {
 		},
 		async loadIcons() {
 			if (this.iconLoading) return
+			const scope = this.ensureReadScope()
+			const generation = this.requestGeneration
 			this.iconLoading = true
 			try {
-				this.iconOptions = await adminAiModelIconApi.listAll()
+				const options = await adminAiModelIconApi.listAll({ scope })
+				if (!scope.isActive() || generation !== this.requestGeneration) return
+				this.iconOptions = options
 			} catch (error) {
+				if (isAdminRequestAborted(error) || generation !== this.requestGeneration) return
 				this.serverError = error?.message || '模型图标资源暂时无法加载。'
 			} finally {
-				this.iconLoading = false
+				if (generation === this.requestGeneration) this.iconLoading = false
 			}
 		},
 		manageIcons() {
@@ -218,14 +270,19 @@ export default {
 		},
 		async loadDetail() {
 			if (!this.publicId || this.loading) return
+			const scope = this.ensureReadScope()
+			const generation = this.requestGeneration
 			this.loading = true
 			this.loadError = ''
 			try {
-				this.applyServerDetail(await adminAiModelApi.detail(this.publicId))
+				const result = await adminAiModelApi.detail(this.publicId, { scope })
+				if (!scope.isActive() || generation !== this.requestGeneration) return
+				this.applyServerDetail(result)
 			} catch (error) {
+				if (isAdminRequestAborted(error) || generation !== this.requestGeneration) return
 				this.loadError = error?.message || '模型详情接口暂时不可用。'
 			} finally {
-				this.loading = false
+				if (generation === this.requestGeneration) this.loading = false
 			}
 		},
 		startEdit() {
@@ -253,6 +310,10 @@ export default {
 					this.conflict = false
 				}
 			})
+		},
+		tokenLimitDetail(kValue, tokenValue) {
+			if (kValue == null || tokenValue == null) return '未配置'
+			return `${kValue} K · ${tokenValue} Token`
 		},
 		async save() {
 			if (!this.editing || this.saving) return
@@ -317,7 +378,7 @@ export default {
 				await adminAiModelApi.setEnabled(this.publicId, enabled)
 				await this.loadDetail()
 			} catch (error) {
-				this.serverError = error?.message || '模型状态修改失败。'
+				this.serverError = statusFailureMessage(error)
 			} finally {
 				this.statusWriting = false
 			}
@@ -360,6 +421,9 @@ export default {
 .record-strip { min-height: 100rpx; margin: 10rpx 0 24rpx; @include admin-solid-panel; display: grid; grid-template-columns: repeat(4, 1fr); overflow: hidden; }
 .record-strip > view { padding: 18rpx 24rpx; border-right: 1px solid $app-border; display: flex; flex-direction: column; justify-content: center; }
 .record-strip > view:last-child { border-right: 0; }
+.capacity-strip { min-height: 100rpx; margin: -10rpx 0 24rpx; @include admin-solid-panel; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; }
+.capacity-strip > view { padding: 18rpx 24rpx; border-right: 1px solid $app-border; display: flex; flex-direction: column; justify-content: center; }
+.capacity-strip > view:last-child { border-right: 0; }
 .record-label { color: $app-muted; font-size: 24rpx; }
 .record-value { margin-top: 6rpx; color: $app-text; font-size: 24rpx; font-weight: 700; }
 .status-panel { margin-top: 24rpx; padding: 24rpx 28rpx; @include admin-solid-panel; display: grid; grid-template-columns: 1fr auto; gap: 28rpx; align-items: center; }
@@ -401,6 +465,9 @@ button:focus-visible { outline: 2px solid $app-focus; outline-offset: 2px; }
 	.conflict-panel { align-items: stretch; flex-direction: column; }
 	.conflict-panel .admin-action-button { width: 100%; min-width: 0; }
 	.record-strip { margin: 18rpx 22rpx; grid-template-columns: 1fr 1fr; }
+	.capacity-strip { margin: 18rpx 22rpx; grid-template-columns: 1fr; }
+	.capacity-strip > view { border-right: 0; }
+	.capacity-strip > view:first-child { border-bottom: 1px solid $app-border; }
 	.record-strip > view:nth-child(2) { border-right: 0; }
 	.record-strip > view:nth-child(-n + 2) { border-bottom: 1px solid $app-border; }
 	.status-panel { margin: 22rpx; padding: 22rpx; grid-template-columns: 1fr; }
@@ -426,6 +493,7 @@ button:focus-visible { outline: 2px solid $app-focus; outline-offset: 2px; }
 
 @media (prefers-contrast: more) {
 	.record-strip,
+	.capacity-strip,
 	.status-panel,
 	.action-dock {
 		border: 2px solid $app-text;

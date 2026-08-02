@@ -1,0 +1,23 @@
+export type AitPickedDocument = {
+  fileName: string
+  contentType: string
+  sizeBytes: number
+  path: string
+}
+
+export type AitDocumentPickerFailure = {
+  code: string
+  message: string
+}
+
+export type AitDocumentPickerOptions = {
+  count: number
+  onSuccess: (files: AitPickedDocument[]) => void
+  onCancel: () => void
+  onError: (failure: AitDocumentPickerFailure) => void
+}
+
+/**
+ * 打开 Android 系统文档选择器，把任意类型的选中内容复制到应用临时目录后返回。
+ */
+export function chooseDocuments(options: AitDocumentPickerOptions): void

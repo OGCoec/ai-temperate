@@ -11,9 +11,10 @@ import org.wltea.analyzer.core.IKSegmenter;
 import org.wltea.analyzer.core.Lexeme;
 
 /**
- * 使用 IK Analyzer 为 AI 模型展示文本生成稳定搜索词元。
+ * 使用 IK Analyzer 为 AI 模型描述生成稳定搜索词元。
  *
- * <p>每次调用创建独立分词器，避免单例 Bean 保存请求级游标；TreeSet 同时保证小写去重和确定性顺序。</p>
+ * <p>每次调用创建独立分词器，避免单例 Bean 保存请求级游标；TreeSet 同时保证小写去重和确定性顺序。
+ * 模型名称属于结构化标识，由模型写入流程按横杠切分。</p>
  */
 @Component
 public final class IkAiModelTextTokenizer implements AiModelTextTokenizer {

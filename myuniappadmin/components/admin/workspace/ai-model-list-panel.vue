@@ -28,14 +28,14 @@
 
 			<view class="query-panel desktop-query-panel" aria-label="模型查询条件">
 				<view class="search-field">
-					<text class="control-label">名称或厂商前缀</text>
+					<text class="control-label">名称/描述词元或完整厂商名</text>
 					<view class="search-control">
 						<input
 							v-model="queryDraft.keyword"
 							type="text"
 							maxlength="128"
-							aria-label="搜索模型名称或厂商"
-							placeholder="例如 gpt 或 openai"
+							aria-label="按模型名称词元、描述词元或完整厂商名搜索"
+							placeholder="例如 mini、5.4 或 openai"
 							@confirm="applyQuery"
 						/>
 					</view>
@@ -92,8 +92,8 @@
 							v-model="queryDraft.keyword"
 							type="text"
 							maxlength="128"
-							aria-label="搜索模型名称或厂商"
-							placeholder="搜索模型或厂商"
+							aria-label="按模型名称词元、描述词元或完整厂商名搜索"
+							placeholder="mini、5.4 或 openai"
 							@confirm="applyQuery"
 						/>
 					</view>
@@ -141,7 +141,6 @@
 						<view class="skeleton-block skeleton-ratio" />
 						<view class="skeleton-block skeleton-capability" />
 						<view class="skeleton-block skeleton-status" />
-						<view class="skeleton-block skeleton-actions" />
 					</view>
 				</view>
 				<view v-else-if="loadError" class="center-state error-state" role="alert">
@@ -156,7 +155,7 @@
 				</view>
 				<view v-else class="model-list" role="list" aria-label="AI 模型列表">
 					<view class="list-head" aria-hidden="true">
-						<text>选择</text><text>模型</text><text>输入倍率</text><text>缓存输入</text><text>输出倍率</text><text>能力</text><text>状态</text><text>操作</text>
+						<text>选择</text><text>模型</text><text>输入倍率</text><text>缓存输入</text><text>输出倍率</text><text>能力</text><text>状态</text>
 					</view>
 					<view
 						v-for="model in page.models"
@@ -174,59 +173,70 @@
 						>
 							<view class="selection-dot" aria-hidden="true" />
 						</button>
-						<button class="model-identity" type="button" :aria-label="`查看 ${model.modelName} 详情`" @click="openDetail(model.publicId)">
-							<text class="model-name">{{ model.modelName }}</text>
-							<text class="model-vendor">{{ model.vendor }} · {{ model.publicId }}</text>
-						</button>
-						<view class="ratio-cell">
-							<text class="mobile-label">输入</text>
-							<text class="ratio-value numeric">{{ model.inputRatio }}</text>
-						</view>
-						<view class="ratio-cell">
-							<text class="mobile-label">缓存</text>
-							<text class="ratio-value numeric">{{ model.cachedInputRatio }}</text>
-						</view>
-						<view class="ratio-cell">
-							<text class="mobile-label">输出</text>
-							<text class="ratio-value numeric">{{ model.outputRatio }}</text>
-						</view>
-						<view class="capability-cell">
-							<text
-								v-for="capability in model.capabilities"
-								:key="capability"
-								class="capability-chip"
-							>{{ capabilityLabel(capability) }}</text>
-							<text v-if="capabilityOverflow(model, 2)" class="capability-chip capability-more tablet-capability-more">+{{ capabilityOverflow(model, 2) }}</text>
-							<text v-if="capabilityOverflow(model, 3)" class="capability-chip capability-more mobile-capability-more">+{{ capabilityOverflow(model, 3) }}</text>
-						</view>
-						<view class="status-cell">
-							<view class="status-dot" :class="{ enabled: model.enabled }" aria-hidden="true" />
-							<text>{{ model.enabled ? '已启用' : '已停用' }}</text>
-						</view>
-						<view class="row-actions">
-							<admin-action-button
-								tone="neutral"
-								size="compact"
-								:disabled="writing"
-								:aria-expanded="openRowMenuId === model.publicId ? 'true' : 'false'"
-								:aria-controls="`model-row-menu-${model.publicId}`"
-								@click="toggleRowMenu(model.publicId)"
-							>更多</admin-action-button>
-							<view
-								v-if="openRowMenuId === model.publicId"
-								:id="`model-row-menu-${model.publicId}`"
-								class="row-menu"
-								role="menu"
-							>
-								<button type="button" role="menuitem" @click="openRowDetail(model.publicId)">查看详情</button>
-								<button
-									type="button"
-									role="menuitem"
-									:class="{ warning: model.enabled }"
-									@click="openRowStatus(model)"
-								>{{ model.enabled ? '停用模型' : '启用模型' }}</button>
+						<button
+							class="model-detail-trigger"
+							type="button"
+							:aria-label="`查看 ${model.modelName} 详情`"
+							@click="openDetail(model.publicId)"
+						>
+							<view class="model-identity">
+								<view class="model-icon-shell">
+									<image
+										v-if="model.icon && !iconFailures[model.publicId]"
+										class="model-icon"
+										:src="model.icon"
+										mode="aspectFit"
+										alt=""
+										aria-hidden="true"
+										@error="markIconFailure(model.publicId)"
+									/>
+									<text v-else class="model-icon-fallback" aria-hidden="true">AI</text>
+								</view>
+								<view class="model-summary">
+									<text class="model-name">
+										<text
+											v-for="(segment, segmentIndex) in model.modelNameSegments"
+											:key="`${model.publicId}-name-${segmentIndex}`"
+											:class="{ 'model-text-match': segment.matched }"
+										>{{ segment.text }}</text>
+									</text>
+									<text class="model-vendor">{{ model.vendor }}</text>
+									<text class="model-limit">{{ modelLimitSummary(model) }}</text>
+									<text class="model-description">
+										<text
+										v-for="(segment, segmentIndex) in model.descriptionSegments"
+										:key="`${model.publicId}-description-${segmentIndex}`"
+										:class="{ 'model-text-match': segment.matched }"
+										>{{ segment.text }}</text>
+									</text>
+								</view>
 							</view>
-						</view>
+							<view class="ratio-cell">
+								<text class="mobile-label">输入</text>
+								<text class="ratio-value numeric">{{ model.inputRatio }}</text>
+							</view>
+							<view class="ratio-cell">
+								<text class="mobile-label">缓存</text>
+								<text class="ratio-value numeric">{{ model.cachedInputRatio }}</text>
+							</view>
+							<view class="ratio-cell">
+								<text class="mobile-label">输出</text>
+								<text class="ratio-value numeric">{{ model.outputRatio }}</text>
+							</view>
+							<view class="capability-cell">
+								<text
+									v-for="capability in model.capabilities"
+									:key="capability"
+									class="capability-chip"
+								>{{ capabilityLabel(capability) }}</text>
+								<text v-if="capabilityOverflow(model, 2)" class="capability-chip capability-more tablet-capability-more">+{{ capabilityOverflow(model, 2) }}</text>
+								<text v-if="capabilityOverflow(model, 3)" class="capability-chip capability-more mobile-capability-more">+{{ capabilityOverflow(model, 3) }}</text>
+							</view>
+							<view class="status-cell">
+								<view class="status-dot" :class="{ enabled: model.enabled }" aria-hidden="true" />
+								<text>{{ model.enabled ? '已启用' : '已停用' }}</text>
+							</view>
+						</button>
 					</view>
 				</view>
 			</view>
@@ -321,6 +331,9 @@ import AdminActionButton from '@/components/admin/admin-action-button.vue'
 import AdminFeedbackBanner from '@/components/admin/admin-feedback-banner.vue'
 import AdminPageHeader from '@/components/admin/admin-page-header.vue'
 import { adminAiModelApi } from '@/common/admin/admin-ai-model-api.js'
+import { isAdminRequestAborted } from '@/common/admin/admin-http.js'
+import { createAdminRequestScope } from '@/common/admin/admin-request-scope.js'
+import { buildTextHighlightSegments } from '@/common/admin/ai-model-description-highlight.js'
 import { adminPrefersReducedMotion } from '@/common/admin/admin-motion.js'
 import { AI_MODEL_CAPABILITY_OPTIONS } from '@/common/admin/admin-ai-model-form.js'
 
@@ -347,6 +360,13 @@ function initialQuery() {
 	}
 }
 
+function statusFailureMessage(error, fallback) {
+	if (error?.code === 'AI_MODEL_TOKEN_LIMIT_REQUIRED') {
+		return '启用失败：请先为所有目标模型配置最大上下文窗口和单次最大输出。'
+	}
+	return error?.message || fallback
+}
+
 export default {
 	name: 'AiModelListPanel',
 	components: { AdminActionButton, AdminFeedbackBanner, AdminPageHeader },
@@ -358,12 +378,14 @@ export default {
 			page: emptyPage(),
 			selectedIds: [],
 			loading: false,
+			requestScope: null,
+			requestGeneration: 0,
 			writing: false,
 			loadError: '',
 			loadedOnce: false,
 			banner: { type: '', message: '' },
 			filtersOpen: false,
-			openRowMenuId: '',
+			iconFailures: {},
 			filterDraftSnapshot: null,
 			statusOptions: [
 				{ label: '全部', value: '' },
@@ -380,6 +402,9 @@ export default {
 			]
 		}
 	},
+	beforeUnmount() {
+		this.cancelReadRequests()
+	},
 	computed: {
 		activeFilterLabels() {
 			const status = this.statusOptions.find(option => option.value === this.query.enabled)?.label || '全部'
@@ -390,23 +415,33 @@ export default {
 	},
 	methods: {
 		onWorkspaceActivated() {
+			this.cancelReadRequests()
+			this.ensureReadScope()
 			return this.loadModels()
 		},
 		onWorkspaceDeactivated() {
-			this.openRowMenuId = ''
+			this.cancelReadRequests()
 			if (this.filtersOpen) this.closeFilters(true)
+		},
+		ensureReadScope() {
+			if (this.requestScope?.isActive()) return this.requestScope
+			this.requestScope = createAdminRequestScope()
+			this.requestGeneration += 1
+			return this.requestScope
+		},
+		cancelReadRequests() {
+			this.requestGeneration += 1
+			this.requestScope?.abortAll()
+			this.requestScope = null
+			this.loading = false
 		},
 		beforeWorkspaceLeave() {
 			return !this.writing
 		},
 		hasWorkspaceOverlay() {
-			return Boolean(this.openRowMenuId) || this.filtersOpen
+			return this.filtersOpen
 		},
 		closeWorkspaceOverlay() {
-			if (this.openRowMenuId) {
-				this.openRowMenuId = ''
-				return true
-			}
 			if (!this.filtersOpen) return false
 			this.closeFilters(true)
 			return true
@@ -419,18 +454,6 @@ export default {
 		},
 		openDetail(publicId) {
 			this.$emit('request-navigation', { view: 'ai-model-detail', publicId })
-		},
-		toggleRowMenu(publicId) {
-			if (this.writing) return
-			this.openRowMenuId = this.openRowMenuId === publicId ? '' : publicId
-		},
-		openRowDetail(publicId) {
-			this.openRowMenuId = ''
-			return this.openDetail(publicId)
-		},
-		openRowStatus(model) {
-			this.openRowMenuId = ''
-			this.confirmSingleStatus(model)
 		},
 		clearBanner() {
 			this.banner = { type: '', message: '' }
@@ -477,7 +500,9 @@ export default {
 		},
 		async loadModels() {
 			if (this.loading) return
-			this.openRowMenuId = ''
+			const scope = this.ensureReadScope()
+			const generation = this.requestGeneration
+			this.iconFailures = {}
 			this.loading = true
 			this.loadError = ''
 			try {
@@ -487,19 +512,35 @@ export default {
 				const response = await adminAiModelApi.list({
 					...this.query,
 					enabled
-				})
+				}, { scope })
+				if (!scope.isActive() || generation !== this.requestGeneration) return
 				if (!response || !Array.isArray(response.models)) {
 					throw new Error('模型列表响应无效。')
 				}
-				this.page = response
+				this.page = {
+					...response,
+					models: response.models.map(model => ({
+						...model,
+						modelNameSegments: buildTextHighlightSegments(
+							model.modelName,
+							model.modelNameMatchedTokens
+						),
+						descriptionSegments: buildTextHighlightSegments(
+							model.description,
+							model.descriptionMatchedTokens,
+							'暂无模型说明。'
+						)
+					}))
+				}
 				this.query.pageNum = response.pageNum
 				this.queryDraft.pageNum = response.pageNum
 				this.selectedIds = []
 				this.loadedOnce = true
 			} catch (error) {
+				if (isAdminRequestAborted(error) || generation !== this.requestGeneration) return
 				this.loadError = error?.message || '模型目录接口暂时不可用。'
 			} finally {
-				this.loading = false
+				if (generation === this.requestGeneration) this.loading = false
 			}
 		},
 		changePage(pageNum) {
@@ -523,41 +564,20 @@ export default {
 				? this.selectedIds.filter(id => id !== publicId)
 				: [...this.selectedIds, publicId]
 		},
+		markIconFailure(publicId) {
+			this.iconFailures = { ...this.iconFailures, [publicId]: true }
+		},
 		capabilityLabel(code) {
 			return AI_MODEL_CAPABILITY_OPTIONS.find(item => item.code === code)?.label || code
 		},
 		capabilityOverflow(model, visibleCount) {
 			return Math.max((model.capabilities?.length || 0) - visibleCount, 0)
 		},
-		confirmSingleStatus(model) {
-			const target = !model.enabled
-			uni.showModal({
-				title: target ? '启用模型' : '停用模型',
-				content: target
-					? `启用 ${model.modelName} 后，它将进入可用模型快照。`
-					: `停用 ${model.modelName} 后，主记录仍会保留，但不再进入可用模型快照。`,
-				confirmText: target ? '启用' : '停用',
-				confirmColor: target ? '#a8dc4a' : '#e89a4a',
-				success: result => {
-					if (result.confirm) this.setSingleStatus(model.publicId, target)
-				}
-			})
-		},
-		async setSingleStatus(publicId, enabled) {
-			if (this.writing) return
-			this.writing = true
-			try {
-				await adminAiModelApi.setEnabled(publicId, enabled)
-				this.banner = {
-					type: 'success',
-					message: enabled ? '模型已启用并刷新可用快照。' : '模型已停用，主记录继续保留。'
-				}
-				await this.loadModels()
-			} catch (error) {
-				this.banner = { type: 'error', message: error?.message || '模型状态修改失败。' }
-			} finally {
-				this.writing = false
+		modelLimitSummary(model) {
+			if (model?.contextWindowK == null || model?.maxOutputK == null) {
+				return '上下文未配置 · 输出未配置'
 			}
+			return `上下文 ${model.contextWindowK} K · 输出 ${model.maxOutputK} K`
 		},
 		confirmBatchStatus(enabled) {
 			if (!this.selectedIds.length || this.writing) return
@@ -583,7 +603,10 @@ export default {
 				this.selectedIds = []
 				await this.loadModels()
 			} catch (error) {
-				this.banner = { type: 'error', message: error?.message || '批量状态修改失败，选择已保留。' }
+				this.banner = {
+					type: 'error',
+					message: statusFailureMessage(error, '批量状态修改失败，选择已保留。')
+				}
 			} finally {
 				this.writing = false
 			}
@@ -606,7 +629,7 @@ export default {
 }
 
 .catalog-shell {
-	width: min(1640px, 100%);
+	width: min(1440px, 100%);
 	margin: 0 auto;
 }
 
@@ -840,10 +863,9 @@ export default {
 }
 
 .list-head,
-.model-row,
 .skeleton-row {
 	display: grid;
-	grid-template-columns: 68rpx minmax(230rpx, 1.25fr) repeat(3, minmax(105rpx, .5fr)) minmax(220rpx, 1fr) 126rpx 190rpx;
+	grid-template-columns: 68rpx minmax(230rpx, 1.25fr) repeat(3, minmax(105rpx, .5fr)) minmax(220rpx, 1fr) 126rpx;
 	gap: 14rpx;
 	align-items: center;
 }
@@ -862,6 +884,9 @@ export default {
 	min-height: 118rpx;
 	padding: 12rpx 20rpx;
 	border-bottom: 1px solid rgba(145, 162, 168, .12);
+	display: grid;
+	grid-template-columns: 68rpx minmax(0, 1fr);
+	align-items: center;
 	transition: background-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -875,7 +900,7 @@ export default {
 }
 
 .select-control {
-	width: 64rpx;
+	width: 68rpx;
 	min-height: 88rpx;
 	margin: 0;
 	border: 0;
@@ -897,22 +922,91 @@ export default {
 	box-shadow: inset 0 0 0 6rpx #0b1115;
 }
 
+.model-detail-trigger {
+	min-width: 0;
+	min-height: 94rpx;
+	margin: 0;
+	padding: 0 0 0 14rpx;
+	box-sizing: border-box;
+	border: 0;
+	border-radius: $app-radius-control;
+	display: grid;
+	grid-template-columns: minmax(230rpx, 1.25fr) repeat(3, minmax(105rpx, .5fr)) minmax(220rpx, 1fr) 126rpx;
+	gap: 14rpx;
+	align-items: center;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	line-height: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
 .model-identity {
 	min-width: 0;
-	margin: 0;
 	padding: 12rpx 0;
-	border: 0;
+	display: grid;
+	grid-template-columns: 64rpx minmax(0, 1fr);
+	gap: 14rpx;
+	align-items: center;
+}
+
+.model-icon-shell,
+.model-icon,
+.model-icon-fallback {
+	width: 64rpx;
+	height: 64rpx;
+}
+
+.model-icon-shell {
+	border: 1px solid rgba($app-teal, .16);
+	border-radius: 14rpx;
+	display: grid;
+	place-items: center;
+	overflow: hidden;
+	background: rgba($app-raised, .72);
+}
+
+.model-icon {
 	display: block;
-	background: transparent;
-	text-align: left;
+}
+
+.model-icon-fallback {
+	display: grid;
+	place-items: center;
+	color: #b9dce1;
+	font-size: 22rpx;
+	font-weight: 800;
+	letter-spacing: .04em;
+}
+
+.model-summary {
+	min-width: 0;
 }
 
 .model-name,
-.model-vendor {
+.model-vendor,
+.model-limit {
 	display: block;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.model-description {
+	display: -webkit-box;
+	margin-top: 8rpx;
+	overflow: hidden;
+	color: $app-muted;
+	font-size: 22rpx;
+	line-height: 1.45;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+}
+
+.model-text-match {
+	color: $app-action-orange;
+	font-weight: 760;
 }
 
 .model-name {
@@ -926,6 +1020,13 @@ export default {
 	color: $app-muted;
 	font-size: 24rpx;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.model-limit {
+	margin-top: 6rpx;
+	color: #a9c4c6;
+	font-size: 22rpx;
+	font-variant-numeric: tabular-nums;
 }
 
 .ratio-value {
@@ -975,54 +1076,6 @@ export default {
 .status-dot.enabled {
 	background: $app-action-lime;
 	box-shadow: 0 0 0 6rpx rgba($app-action-lime, .08);
-}
-
-.row-actions {
-	position: relative;
-	display: grid;
-	gap: 8rpx;
-}
-
-.row-actions .admin-action-button {
-	min-width: 0;
-	padding-left: 12rpx;
-	padding-right: 12rpx;
-}
-
-.row-menu {
-	min-width: 184rpx;
-	padding: 8rpx;
-	border: 1px solid rgba($app-teal, .22);
-	border-radius: $app-radius-control;
-	display: grid;
-	gap: 4rpx;
-	@include admin-glass-chrome(true);
-}
-
-.row-menu button {
-	min-height: 64rpx;
-	margin: 0;
-	padding: 0 14rpx;
-	border: 0;
-	border-radius: 8rpx;
-	display: flex;
-	align-items: center;
-	background: transparent;
-	color: $app-text;
-	font-size: 24rpx;
-	text-align: left;
-}
-
-.row-menu button::after {
-	border: 0;
-}
-
-.row-menu button.warning {
-	color: $app-action-orange;
-}
-
-.row-menu button:focus-visible {
-	@include admin-focus-ring;
 }
 
 .pagination {
@@ -1101,11 +1154,6 @@ export default {
 	width: 72%;
 }
 
-.skeleton-actions {
-	width: 100%;
-	min-height: 60rpx;
-}
-
 .mobile-batch-bar,
 .filter-drawer-layer {
 	display: none;
@@ -1160,9 +1208,18 @@ input:focus-visible {
 	}
 
 	.list-head,
-	.model-row,
 	.skeleton-row {
-		grid-template-columns: 58rpx minmax(190rpx, 1.2fr) 86rpx 86rpx 86rpx minmax(140rpx, .8fr) 110rpx 172rpx;
+		grid-template-columns: 58rpx minmax(190rpx, 1.2fr) 86rpx 86rpx 86rpx minmax(140rpx, .8fr) 110rpx;
+		gap: 10rpx;
+	}
+
+	.model-row {
+		grid-template-columns: 58rpx minmax(0, 1fr);
+	}
+
+	.model-detail-trigger {
+		padding-left: 10rpx;
+		grid-template-columns: minmax(190rpx, 1.2fr) 86rpx 86rpx 86rpx minmax(140rpx, .8fr) 110rpx;
 		gap: 10rpx;
 	}
 
@@ -1287,7 +1344,6 @@ input:focus-visible {
 		gap: 16rpx;
 	}
 
-	.model-row,
 	.skeleton-row {
 		min-height: 0;
 		padding: 22rpx;
@@ -1295,6 +1351,16 @@ input:focus-visible {
 		border-radius: $app-radius-panel;
 		grid-template-columns: 58rpx minmax(0, 1fr) minmax(0, 1fr);
 		gap: 16rpx;
+		background: $app-surface;
+	}
+
+	.model-row {
+		position: relative;
+		min-height: 0;
+		padding: 22rpx;
+		border: 1px solid $app-border;
+		border-radius: $app-radius-panel;
+		display: block;
 		background: $app-surface;
 	}
 
@@ -1308,13 +1374,24 @@ input:focus-visible {
 	}
 
 	.select-control {
-		grid-row: 1;
-		grid-column: 1;
+		position: absolute;
+		z-index: 2;
+		top: 22rpx;
+		left: 22rpx;
 		width: 58rpx;
 	}
 
+	.model-detail-trigger {
+		width: 100%;
+		min-height: 0;
+		padding-left: 0;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 16rpx;
+	}
+
 	.model-identity {
-		grid-column: 2 / -1;
+		grid-column: 1 / -1;
+		padding: 12rpx 0 12rpx 74rpx;
 	}
 
 	.ratio-cell {
@@ -1322,18 +1399,6 @@ input:focus-visible {
 		border: 1px solid rgba($app-teal, .12);
 		border-radius: 10rpx;
 		background: #0b1115;
-	}
-
-	.ratio-cell:nth-child(3) {
-		grid-column: 1;
-	}
-
-	.ratio-cell:nth-child(4) {
-		grid-column: 2;
-	}
-
-	.ratio-cell:nth-child(5) {
-		grid-column: 3;
 	}
 
 	.mobile-label {
@@ -1356,12 +1421,8 @@ input:focus-visible {
 	}
 
 	.status-cell {
-		grid-column: 1 / 2;
-		min-height: 88rpx;
-	}
-
-	.row-actions {
-		grid-column: 2 / -1;
+		grid-column: 1 / -1;
+		min-height: 72rpx;
 	}
 
 	.pagination {
@@ -1404,8 +1465,7 @@ input:focus-visible {
 	}
 
 	.skeleton-capability,
-	.skeleton-status,
-	.skeleton-actions {
+	.skeleton-status {
 		grid-column: 1 / -1;
 	}
 
@@ -1514,8 +1574,12 @@ input:focus-visible {
 		background: rgba($app-teal, .035);
 	}
 
-	.model-identity:hover .model-name {
+	.model-detail-trigger:hover .model-name {
 		color: #dfffff;
+	}
+
+	.model-detail-trigger:hover .model-name .model-text-match {
+		color: $app-action-orange;
 	}
 
 	.segmented button:hover:not(.active) {
@@ -1523,9 +1587,6 @@ input:focus-visible {
 		color: $app-text;
 	}
 
-	.row-menu button:hover {
-		background: rgba($app-muted, .1);
-	}
 }
 
 .catalog-shell > .admin-feedback-banner {
@@ -1586,8 +1647,7 @@ input:focus-visible {
 @media (prefers-reduced-transparency: reduce) {
 	.query-panel,
 	.filter-drawer,
-	.mobile-batch-bar,
-	.row-menu {
+	.mobile-batch-bar {
 		background: $app-surface-elevated;
 		-webkit-backdrop-filter: none;
 		backdrop-filter: none;
@@ -1598,8 +1658,7 @@ input:focus-visible {
 	.query-panel,
 	.result-strip,
 	.catalog-panel,
-	.filter-drawer,
-	.row-menu {
+	.filter-drawer {
 		border: 2px solid $app-text;
 		background: $app-canvas;
 	}

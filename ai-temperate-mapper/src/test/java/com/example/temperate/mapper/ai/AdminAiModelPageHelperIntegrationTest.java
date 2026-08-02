@@ -108,28 +108,86 @@ final class AdminAiModelPageHelperIntegrationTest {
     }
 
     @Test
-    void filtersByLiteralPrefixAndEnabledStatusBeforePagination() {
-        PageInfo<AiModel> enabledGpt = page(
+    void filtersByCompleteGinTokensAndExactVendorBeforePagination() {
+        PageInfo<AiModel> enabledMini = page(
                 1,
                 50,
                 "input_ratio ASC, output_ratio ASC, model_name ASC",
-                "gpt",
+                "[\"mini\"]",
+                "[\"mini\"]",
+                "mini",
                 true);
-        PageInfo<AiModel> literalWildcard = page(
+        PageInfo<AiModel> allNameTokens = page(
                 1,
                 50,
                 "input_ratio ASC, output_ratio ASC, model_name ASC",
-                "gpt\\%\\_",
+                "[\"gpt\",\"mini\"]",
+                null,
+                "gpt-mini",
+                true);
+        PageInfo<AiModel> versionToken = page(
+                1,
+                50,
+                "input_ratio ASC, output_ratio ASC, model_name ASC",
+                "[\"5.4\"]",
+                "[\"5.4\"]",
+                "5.4",
+                true);
+        PageInfo<AiModel> partialNameToken = page(
+                1,
+                50,
+                "input_ratio ASC, output_ratio ASC, model_name ASC",
+                "[\"min\"]",
+                "[\"min\"]",
+                "min",
+                true);
+        PageInfo<AiModel> exactVendor = page(
+                1,
+                50,
+                "input_ratio ASC, output_ratio ASC, model_name ASC",
+                null,
+                null,
+                "OPENAI".toLowerCase(),
+                true);
+        PageInfo<AiModel> vendorPrefix = page(
+                1,
+                50,
+                "input_ratio ASC, output_ratio ASC, model_name ASC",
+                null,
+                null,
+                "open",
                 true);
 
-        assertThat(enabledGpt.getList())
+        assertThat(enabledMini.getList())
                 .extracting(AiModel::getModelName)
-                .containsExactly("gpt-alpha", "gpt%_literal");
-        assertThat(enabledGpt.getTotal()).isEqualTo(2);
-        assertThat(literalWildcard.getList())
+                .containsExactly("gpt-5.4-mini");
+        assertThat(allNameTokens.getList())
                 .extracting(AiModel::getModelName)
-                .containsExactly("gpt%_literal");
-        assertThat(literalWildcard.getTotal()).isEqualTo(1);
+                .containsExactly("gpt-5.4-mini");
+        assertThat(versionToken.getList())
+                .extracting(AiModel::getModelName)
+                .containsExactly("gpt-5.4-mini");
+        assertThat(partialNameToken.getList()).isEmpty();
+        assertThat(exactVendor.getList())
+                .extracting(AiModel::getModelName)
+                .containsExactly("gpt-alpha", "gpt-5.4-mini");
+        assertThat(vendorPrefix.getList()).isEmpty();
+    }
+
+    @Test
+    void descriptionGinTokensReturnRowsIndependentlyFromModelName() {
+        PageInfo<AiModel> result = page(
+                1,
+                50,
+                "input_ratio ASC, output_ratio ASC, model_name ASC",
+                null,
+                "[\"reasoning\",\"fast\"]",
+                "reasoning fast",
+                true);
+
+        assertThat(result.getList())
+                .extracting(AiModel::getModelName)
+                .containsExactly("alpha");
     }
 
     @Test
@@ -149,25 +207,44 @@ final class AdminAiModelPageHelperIntegrationTest {
                 "idx_ai_model_output_input_name");
     }
 
+    @Test
+    void existingGinIndexesSupportBothTokenColumns() throws SQLException {
+        assertTokenIndexPlan(
+                "model_name_tokens",
+                "[\"mini\"]",
+                "idx_ai_model_model_name_tokens_gin");
+        assertTokenIndexPlan(
+                "description_tokens",
+                "[\"reasoning\"]",
+                "idx_ai_model_description_tokens_gin");
+        assertExactVendorIndexPlan();
+    }
+
     private static PageInfo<AiModel> page(
             int pageNum,
             int pageSize,
             String orderBy) {
-        return page(pageNum, pageSize, orderBy, "fixture-vendor", null);
+        return page(pageNum, pageSize, orderBy, null, null, "fixture-vendor", null);
     }
 
     private static PageInfo<AiModel> page(
             int pageNum,
             int pageSize,
             String orderBy,
-            String keyword,
+            String modelNameTokensJson,
+            String descriptionTokensJson,
+            String vendorExact,
             Boolean enabled) {
         try (SqlSession session = sqlSessionFactory.openSession()) {
             AiModelMapper mapper = session.getMapper(AiModelMapper.class);
             Page<AiModel> page = PageHelper.startPage(pageNum, pageSize, true);
             try {
                 page.setOrderBy(orderBy);
-                return PageInfo.of(mapper.findPage(keyword, enabled));
+                return PageInfo.of(mapper.findPage(
+                        modelNameTokensJson,
+                        descriptionTokensJson,
+                        vendorExact,
+                        enabled));
             } finally {
                 PageHelper.clearPage();
             }
@@ -203,6 +280,41 @@ final class AdminAiModelPageHelperIntegrationTest {
         assertThat(String.join("\n", plan)).contains(expectedIndex);
     }
 
+    private static void assertTokenIndexPlan(
+            String column,
+            String tokensJson,
+            String expectedIndex) throws SQLException {
+        List<String> plan = new ArrayList<>();
+        try (Connection connection = openConnection();
+                Statement statement = connection.createStatement()) {
+            statement.execute("SET enable_seqscan = off");
+            try (ResultSet result = statement.executeQuery(
+                    "EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM ai_model WHERE "
+                            + column + " @> '" + tokensJson + "'::JSONB")) {
+                while (result.next()) {
+                    plan.add(result.getString(1));
+                }
+            }
+        }
+        assertThat(String.join("\n", plan)).contains(expectedIndex);
+    }
+
+    private static void assertExactVendorIndexPlan() throws SQLException {
+        List<String> plan = new ArrayList<>();
+        try (Connection connection = openConnection();
+                Statement statement = connection.createStatement()) {
+            statement.execute("SET enable_seqscan = off");
+            try (ResultSet result = statement.executeQuery(
+                    "EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM ai_model "
+                            + "WHERE LOWER(vendor) = 'openai'")) {
+                while (result.next()) {
+                    plan.add(result.getString(1));
+                }
+            }
+        }
+        assertThat(String.join("\n", plan)).contains("idx_ai_model_vendor_prefix_ci");
+    }
+
     private static void insertFixtures() {
         try (SqlSession session = sqlSessionFactory.openSession(true)) {
             AiModelMapper mapper = session.getMapper(AiModelMapper.class);
@@ -220,6 +332,11 @@ final class AdminAiModelPageHelperIntegrationTest {
                     106L, "gpt-disabled", "openai", "5", "5", false))).isEqualTo(1);
             assertThat(mapper.insert(model(
                     107L, "gpt%_literal", "literal-vendor", "6", "6", true))).isEqualTo(1);
+            AiModel mini = model(
+                    108L, "gpt-5.4-mini", "openai", "7", "7", true);
+            mini.setModelNameTokensJson("[\"gpt\",\"5.4\",\"mini\"]");
+            mini.setDescriptionTokensJson("[\"gpt\",\"mini\"]");
+            assertThat(mapper.insert(mini)).isEqualTo(1);
         }
     }
 
@@ -235,14 +352,25 @@ final class AdminAiModelPageHelperIntegrationTest {
         model.setModelName(modelName);
         model.setDescription("PageHelper integration fixture");
         model.setTagsJson("[]");
-        model.setModelNameTokensJson("[]");
-        model.setDescriptionTokensJson("[]");
+        model.setModelNameTokensJson(modelNameTokensJson(modelName));
+        model.setDescriptionTokensJson(
+                "alpha".equals(modelName)
+                        ? "[\"fast\",\"reasoning\"]"
+                        : "[\"fixture\",\"integration\",\"pagehelper\"]");
         model.setVendor(vendor);
         model.setInputRatio(new BigDecimal(inputRatio));
         model.setCachedInputRatio(new BigDecimal("0.50000000"));
         model.setOutputRatio(new BigDecimal(outputRatio));
         model.setEnabled(enabled);
         return model;
+    }
+
+    private static String modelNameTokensJson(String modelName) {
+        return switch (modelName) {
+            case "gpt-alpha" -> "[\"gpt\",\"alpha\"]";
+            case "gpt-disabled" -> "[\"gpt\",\"disabled\"]";
+            default -> "[\"" + modelName + "\"]";
+        };
     }
 
     private static void applyAiModelMigration() throws IOException, SQLException {

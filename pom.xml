@@ -51,10 +51,18 @@
         <twelvemonkeys.version>3.14.0</twelvemonkeys.version>
         <avif-imageio-native-reader.version>0.1.0</avif-imageio-native-reader.version>
         <ph-css.version>8.2.1</ph-css.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>com.example</groupId>
                 <artifactId>ai-temperate-common</artifactId>

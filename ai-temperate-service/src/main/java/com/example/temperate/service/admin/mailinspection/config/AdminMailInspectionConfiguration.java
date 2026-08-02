@@ -15,8 +15,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -42,18 +40,6 @@ public class AdminMailInspectionConfiguration {
     @Bean
     HybridBase64UrlCodec hybridBase64UrlCodec() {
         return new HybridBase64UrlCodec();
-    }
-
-    /**
-     * 为邮件任务 Pub/Sub 唤醒创建共享监听容器；该容器不保存事件历史，权威数据仍只从 Redis Key 读取。
-     */
-    @Bean
-    RedisMessageListenerContainer mailInspectionRedisMessageListenerContainer(
-            RedisConnectionFactory connectionFactory) {
-        RedisMessageListenerContainer container =
-                new RedisMessageListenerContainer();
-        container.setConnectionFactory(connectionFactory);
-        return container;
     }
 
     @Bean(name = "adminMailInspectionConnectionProvider", destroyMethod = "dispose")

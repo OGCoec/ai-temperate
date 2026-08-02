@@ -59,7 +59,7 @@ function detailResult(response) {
 
 export function createAdminAiModelApi(request = adminRequest) {
 	return {
-		list(query = {}) {
+		list(query = {}, requestOptions = {}) {
 			const normalized = requireListQuery(query)
 			const parts = []
 			appendQuery(parts, 'pageNum', normalized.pageNum)
@@ -68,13 +68,17 @@ export function createAdminAiModelApi(request = adminRequest) {
 			appendQuery(parts, 'enabled', normalized.enabled)
 			appendQuery(parts, 'sortPriority', normalized.sortPriority)
 			appendQuery(parts, 'direction', normalized.direction)
-			return request(`${BASE_PATH}?${parts.join('&')}`, { method: 'GET' })
+			return request(`${BASE_PATH}?${parts.join('&')}`, {
+				method: 'GET',
+				scope: requestOptions.scope
+			})
 		},
 
-		async detail(publicId) {
+		async detail(publicId, requestOptions = {}) {
 			const response = await request(`${BASE_PATH}/${requirePublicId(publicId)}`, {
 				method: 'GET',
-				returnResponse: true
+				returnResponse: true,
+				scope: requestOptions.scope
 			})
 			return detailResult(response)
 		},

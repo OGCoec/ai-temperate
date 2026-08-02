@@ -78,6 +78,8 @@
 </script>
 
 <style lang="scss" scoped>
+	@import '@/common/ui/user-material.scss';
+
 	.phone-delivery-method {
 		margin: 4px 0 18px;
 	}
@@ -97,15 +99,11 @@
 	}
 
 	.delivery-option {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 42px;
+		@include user-frosted-control;
+		min-height: 48px;
 		margin: 0;
 		padding: 0 12px;
-		border: 1px solid rgba(139, 150, 144, 0.34);
 		border-radius: 10px;
-		background: rgba(17, 24, 21, 0.78);
 		color: #aeb9b3;
 		font-size: 13px;
 		font-weight: 600;

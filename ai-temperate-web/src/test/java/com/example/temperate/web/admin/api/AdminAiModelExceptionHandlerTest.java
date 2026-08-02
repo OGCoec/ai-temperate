@@ -40,4 +40,40 @@ final class AdminAiModelExceptionHandlerTest {
                 HttpStatus.NOT_FOUND,
                 exception);
     }
+
+    @Test
+    void missingTokenLimitMapsToConflict() {
+        AdminExceptionLogger exceptionLogger = mock(AdminExceptionLogger.class);
+        AdminAiModelExceptionHandler handler = new AdminAiModelExceptionHandler(
+                Clock.fixed(Instant.parse("2026-07-27T12:00:00Z"), ZoneOffset.UTC),
+                exceptionLogger);
+        AdminAiModelException exception = new AdminAiModelException(
+                AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_REQUIRED,
+                "internal detail");
+
+        var response = handler.handle(exception);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code())
+                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_REQUIRED.name());
+        assertThat(response.getBody().message())
+                .isEqualTo("必须先配置模型上下文与最大输出 Token 上限。");
+    }
+
+    @Test
+    void invalidTokenLimitMapsToBadRequest() {
+        AdminAiModelExceptionHandler handler = new AdminAiModelExceptionHandler(
+                Clock.fixed(Instant.parse("2026-07-27T12:00:00Z"), ZoneOffset.UTC),
+                mock(AdminExceptionLogger.class));
+
+        var response = handler.handle(new AdminAiModelException(
+                AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID,
+                "internal detail"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code())
+                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_TOKEN_LIMIT_INVALID.name());
+    }
 }

@@ -59,7 +59,6 @@ export function createAdminWorkspaceController({
 		if (options.replace) historyAdapter?.replace?.(location)
 		else historyAdapter?.push?.(location)
 		publish()
-		await callPanel(resolvePanel(location), 'onWorkspaceActivated', previous)
 		return true
 	}
 
@@ -91,7 +90,6 @@ export function createAdminWorkspaceController({
 		location = nextLocation
 		drawerOpen = false
 		publish()
-		await callPanel(resolvePanel(location), 'onWorkspaceActivated', previous)
 		return true
 	}
 
@@ -120,7 +118,6 @@ export function createAdminWorkspaceController({
 			location = normalizeAdminWorkspaceLocation({ view: 'ai-models' })
 			historyAdapter?.replace?.(location)
 			publish()
-			await callPanel(resolvePanel(location), 'onWorkspaceActivated')
 			return true
 		}
 
@@ -132,7 +129,6 @@ export function createAdminWorkspaceController({
 			location = normalizeAdminWorkspaceLocation(previous)
 			historyAdapter?.replace?.(location)
 			publish()
-			await callPanel(resolvePanel(location), 'onWorkspaceActivated')
 			return true
 		}
 

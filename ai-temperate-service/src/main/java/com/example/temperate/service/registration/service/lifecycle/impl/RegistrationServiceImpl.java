@@ -5,6 +5,7 @@ import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
+import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.entity.UserProfile;
@@ -55,9 +56,12 @@ import com.example.temperate.service.registration.verification.generator.Verific
 import com.example.temperate.service.registration.verification.service.resolver.VerificationDeliveryMethodPolicy;
 import com.example.temperate.service.registration.verification.service.registry.SixDigitVerificationCodeServiceRegistry;
 import com.example.temperate.service.registration.verification.service.resolver.VerificationProviderResolver;
+import com.example.temperate.service.user.membership.MembershipQuotaPlan;
+import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +99,7 @@ public class RegistrationServiceImpl implements RegistrationService {
     private final UserLoginIdentityMapper identityMapper;
     private final UserProfileMapper profileMapper;
     private final UserMembershipQuotaMapper membershipQuotaMapper;
+    private final MembershipQuotaPlanService quotaPlanService;
     private final RegistrationFlowStore flowStore;
     private final RegistrationInputNormalizer inputNormalizer;
     private final PasswordStrengthPolicy passwordPolicy;
@@ -118,6 +123,7 @@ public class RegistrationServiceImpl implements RegistrationService {
             UserLoginIdentityMapper identityMapper,
             UserProfileMapper profileMapper,
             UserMembershipQuotaMapper membershipQuotaMapper,
+            MembershipQuotaPlanService quotaPlanService,
             RegistrationFlowStore flowStore,
             RegistrationInputNormalizer inputNormalizer,
             PasswordStrengthPolicy passwordPolicy,
@@ -139,6 +145,7 @@ public class RegistrationServiceImpl implements RegistrationService {
         this.identityMapper = Objects.requireNonNull(identityMapper);
         this.profileMapper = Objects.requireNonNull(profileMapper);
         this.membershipQuotaMapper = Objects.requireNonNull(membershipQuotaMapper);
+        this.quotaPlanService = Objects.requireNonNull(quotaPlanService);
         this.flowStore = Objects.requireNonNull(flowStore);
         this.inputNormalizer = Objects.requireNonNull(inputNormalizer);
         this.passwordPolicy = Objects.requireNonNull(passwordPolicy);
@@ -532,9 +539,16 @@ public class RegistrationServiceImpl implements RegistrationService {
                 throw persistenceFailure();
             }
 
-            // 会员等级和额度由 005 表的数据库默认值统一初始化，避免注册代码与持久化默认规则发生漂移。
+            // 新用户显式写入配置中的 FREE 额度，数据库默认值仅用于非应用写入场景的安全兜底。
+            MembershipQuotaPlan freePlan =
+                    quotaPlanService.getRequired(MembershipTier.FREE);
             UserMembershipQuota membershipQuota = new UserMembershipQuota();
             membershipQuota.setLoginIdentityId(internalId);
+            membershipQuota.setMembershipTier(MembershipTier.FREE.ordinal());
+            membershipQuota.setQuotaBalanceMinor(freePlan.totalMinor());
+            membershipQuota.setQuotaPeriodStartedAt(null);
+            membershipQuota.setQuotaPeriodEndsAt(
+                    clock.instant().atOffset(ZoneOffset.UTC));
             if (membershipQuotaMapper.insert(membershipQuota) != 1) {
                 throw persistenceFailure();
             }

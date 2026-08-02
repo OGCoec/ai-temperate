@@ -6,6 +6,7 @@ import com.example.temperate.service.user.avatar.AvatarActivation;
 import com.example.temperate.service.user.avatar.UserAvatarErrorCode;
 import com.example.temperate.service.user.avatar.UserAvatarException;
 import com.example.temperate.service.user.avatar.UserAvatarPersistenceService;
+import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,9 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 public final class UserAvatarPersistenceServiceImpl implements UserAvatarPersistenceService {
 
     private final UserAvatarMapper avatarMapper;
+    private final UserProfileCacheInvalidationExecutor invalidationExecutor;
 
-    public UserAvatarPersistenceServiceImpl(UserAvatarMapper avatarMapper) {
+    public UserAvatarPersistenceServiceImpl(
+            UserAvatarMapper avatarMapper,
+            UserProfileCacheInvalidationExecutor invalidationExecutor) {
         this.avatarMapper = avatarMapper;
+        this.invalidationExecutor = invalidationExecutor;
     }
 
     @Override
@@ -62,6 +67,8 @@ public final class UserAvatarPersistenceServiceImpl implements UserAvatarPersist
                     "头像资料更新未影响预期的一行数据。");
         }
 
+        // 数据库提交成功后再删除资料缓存，避免回滚事务把仍然有效的旧快照提前清除。
+        invalidationExecutor.evictAfterCommit(userId);
         return new AvatarActivation(
                 userId,
                 avatarUrl);

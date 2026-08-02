@@ -55,9 +55,17 @@ HBuilderX
 fornted\unpackage\dist\build\h5
 ```
 
-发布目录必须包含 `index.html`、业务静态资源以及由 `fornted/public` 复制得到的 `_headers` 和 `_redirects`。`_redirects` 负责把直接访问的前端路由回写到 `index.html`。禁止把 `fornted` 源码目录、`.vue` 源文件、`node_modules`、本地证书或环境变量文件上传到 Pages。
+发布目录必须包含 `index.html`、业务静态资源以及由 `fornted/public` 复制得到的 `_headers` 和 `_redirects`。`_redirects` 负责把直接访问的前端路由回写到 `index.html`；`_headers` 必须让 `/index.html` 与 `/pages/*` 都保持浏览器和 CDN 不缓存，只允许带内容哈希的 `/assets/*` 长期缓存。禁止把 `fornted` 源码目录、`.vue` 源文件、`node_modules`、本地证书或环境变量文件上传到 Pages。
 
-构建属于第二阶段验证操作。执行前必须获得用户确认，且只使用 HBuilderX 生产发行，不连接生产数据库、Redis 或 RabbitMQ。
+构建属于第二阶段验证操作。执行前必须获得用户确认，且只使用 HBuilderX 生产发行，不连接生产数据库、Redis 或 RabbitMQ。构建完成后、上传 Pages 前必须在 `fornted` 目录执行以下发布前检查：
+
+```powershell
+npm run verify:esm-contracts
+npm run test:models
+npm run verify:h5-release -- --dir unpackage\dist\build\h5
+```
+
+`verify:esm-contracts` 用于提前发现 `user-model-catalog.vue` 导入的本地命名导出在目标模块中不存在等源码契约错误；`verify:h5-release` 用于阻止把 Vite 开发模块、`.vue` 源文件、`node_modules` 或缺少缓存规则的 H5 目录上传到 Pages。这些命令只读取本地源码和发行目录，不连接生产数据库、Redis、RabbitMQ 或生产 OSS。
 
 ## 第二阶段：创建 Pages 预览部署
 
@@ -76,6 +84,7 @@ ai-temperate-frontend
 3. 直接打开 `/pages/auth/login` 后刷新仍能返回应用页面。
 4. `index.html` 不长期缓存；带内容哈希的 `/assets/*` 可以长期缓存。
 5. Console 没有动态模块加载、Mixed Content、证书或 Service Worker 旧版本错误。
+6. DevTools Network 中根域名页面不出现 `.vue?type=script`、`304` 的源码模块响应或 HMR WebSocket；如果出现，说明当前域名仍回源到 Vite/Tunnel，不能继续生产切换。
 
 `*.pages.dev` 只用于静态资源与路由回退预览，不直连生产 API。新的 CSP 和 API Base URL
 刻意不为预览域开放跨域认证；完整登录必须等自定义域名与对应 Worker Route 生效后再验收，
@@ -102,6 +111,14 @@ niko000o.site
 ```
 
 切换前记录旧根域名 Tunnel DNS 路由和当前 Tunnel ID。Pages 自定义域名生效后，确认根域名只指向 Pages，不再同时指向旧 Tunnel。
+
+如果线上出现 `does not provide an export named 'buildTextHighlightSegments'` 之类浏览器模块错误，先按以下顺序处理，禁止只重启 HBuilderX：
+
+1. 确认 `niko000o.site` 当前 DNS/Route 是否仍指向旧 `frontend` Tunnel；如果仍指向 Vite 开发服务，先切回已验收 Pages 部署或明确作为回滚状态处理。
+2. 重新生成同一 Git 版本的 H5 生产包，执行 `verify:esm-contracts`、`test:models` 和 `verify:h5-release`。
+3. 通过 Pages Direct Upload 发布完整目录，不单独替换某一个 `.js` 或 `.vue` 文件。
+4. 若 Cloudflare 或浏览器已缓存旧源码路径，清理 `https://niko000o.site/index.html`、`https://niko000o.site/pages/ai-chat/index`、`https://niko000o.site/common/aimodel/description-highlight.js` 和 `https://niko000o.site/components/user/workspace/user-model-catalog.vue`；生产 Pages 验收通过后这些源码路径不应再被请求。
+5. 使用新的无痕会话验收，Network 里只允许出现生产静态资源和 `/api/**` 请求，不允许出现 Vite 开发模块。
 
 生产验收：
 

@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -43,6 +44,8 @@ public final class RabbitVerificationDeliveryPublisher implements VerificationDe
     private static final Logger LOGGER =
             LoggerFactory.getLogger(RabbitVerificationDeliveryPublisher.class);
     private static final int MESSAGE_ID_LENGTH = 38;
+    private static final String VERIFICATION_DELIVERY_RABBIT_TEMPLATE_BEAN_NAME =
+            "verificationDeliveryRabbitTemplate";
 
     private final RabbitTemplate rabbitTemplate;
     private final VerificationDeliveryPayloadProtector payloadProtector;
@@ -53,13 +56,13 @@ public final class RabbitVerificationDeliveryPublisher implements VerificationDe
 
     @Autowired
     public RabbitVerificationDeliveryPublisher(
-            RabbitTemplate rabbitTemplate,
+            Map<String, RabbitTemplate> rabbitTemplates,
             VerificationDeliveryPayloadProtector payloadProtector,
             MeterRegistry meterRegistry,
             @Value("${app.registration.delivery.rabbit.confirm-timeout:5s}")
                     Duration confirmTimeout) {
         this(
-                rabbitTemplate,
+                requiredVerificationDeliveryRabbitTemplate(rabbitTemplates),
                 payloadProtector,
                 VerificationDeliveryRetryPolicy.defaultPolicy(),
                 meterRegistry,
@@ -84,6 +87,25 @@ public final class RabbitVerificationDeliveryPublisher implements VerificationDe
             throw new IllegalArgumentException("confirmTimeout must be positive");
         }
         this.confirmTimeout = confirmTimeout;
+    }
+
+    /**
+     * 从 Spring 聚合注入的模板中固定选择验证码投递模板；此发布器不允许退化到邮件检查或 AI 的专用模板。
+     *
+     * @param rabbitTemplates Spring 按 Bean 名称聚合的所有消息模板
+     * @return 验证码投递专用消息模板
+     */
+    static RabbitTemplate requiredVerificationDeliveryRabbitTemplate(
+            Map<String, RabbitTemplate> rabbitTemplates) {
+        Objects.requireNonNull(rabbitTemplates, "rabbitTemplates must not be null");
+        RabbitTemplate rabbitTemplate = rabbitTemplates.get(
+                VERIFICATION_DELIVERY_RABBIT_TEMPLATE_BEAN_NAME);
+        if (rabbitTemplate == null) {
+            throw new IllegalStateException(
+                    "Missing RabbitTemplate: "
+                            + VERIFICATION_DELIVERY_RABBIT_TEMPLATE_BEAN_NAME);
+        }
+        return rabbitTemplate;
     }
 
     @Override

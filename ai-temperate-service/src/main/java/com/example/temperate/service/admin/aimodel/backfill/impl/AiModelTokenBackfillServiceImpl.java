@@ -5,9 +5,7 @@ import com.example.temperate.model.ai.entity.AiModel;
 import com.example.temperate.model.ai.entity.AiModelSearchTokenUpdate;
 import com.example.temperate.service.admin.aimodel.backfill.AiModelTokenBackfillBatchResult;
 import com.example.temperate.service.admin.aimodel.backfill.AiModelTokenBackfillService;
-import com.example.temperate.service.admin.aimodel.text.AiModelTextTokenizer;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -26,16 +24,13 @@ public final class AiModelTokenBackfillServiceImpl implements AiModelTokenBackfi
     private static final int MAX_BATCH_SIZE = 500;
 
     private final AiModelMapper modelMapper;
-    private final AiModelTextTokenizer tokenizer;
-    private final ObjectMapper objectMapper;
+    private final AiModelSearchService searchService;
 
     public AiModelTokenBackfillServiceImpl(
             AiModelMapper modelMapper,
-            AiModelTextTokenizer tokenizer,
-            ObjectMapper objectMapper) {
+            AiModelSearchService searchService) {
         this.modelMapper = Objects.requireNonNull(modelMapper);
-        this.tokenizer = Objects.requireNonNull(tokenizer);
-        this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.searchService = Objects.requireNonNull(searchService);
     }
 
     @Override
@@ -53,8 +48,8 @@ public final class AiModelTokenBackfillServiceImpl implements AiModelTokenBackfi
         for (AiModel model : models) {
             updates.add(new AiModelSearchTokenUpdate(
                     model.getId(),
-                    writeTokens(tokenizer.tokenize(model.getModelName())),
-                    writeTokens(tokenizer.tokenize(model.getDescription()))));
+                    searchService.modelNameTokensJson(model.getModelName()),
+                    searchService.descriptionTokensJson(model.getDescription())));
         }
         int updated = modelMapper.updateSearchTokensBatch(updates);
         if (updated != updates.size()) {
@@ -68,11 +63,4 @@ public final class AiModelTokenBackfillServiceImpl implements AiModelTokenBackfi
                 models.size() == batchSize);
     }
 
-    private String writeTokens(List<String> tokens) {
-        try {
-            return objectMapper.writeValueAsString(tokens);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("AI model tokens serialization failed.", exception);
-        }
-    }
 }

@@ -1,0 +1,164 @@
+import Activity from 'android.app.Activity'
+import Intent from 'android.content.Intent'
+import Uri from 'android.net.Uri'
+import OpenableColumns from 'android.provider.OpenableColumns'
+import File from 'java.io.File'
+import FileOutputStream from 'java.io.FileOutputStream'
+import Thread from 'java.lang.Thread'
+import UUID from 'java.util.UUID'
+
+import {
+  AitDocumentPickerFailure,
+  AitDocumentPickerOptions,
+  AitPickedDocument
+} from '../interface.uts'
+
+const REQUEST_CODE = 17341
+const MAX_FILE_BYTES = 100 * 1024 * 1024
+let active = false
+
+function fail(code: string, message: string): AitDocumentPickerFailure {
+  return { code, message }
+}
+
+function copyUri(uri: Uri): AitPickedDocument {
+  const activity = UTSAndroid.getUniActivity()!
+  const resolver = activity.getContentResolver()
+  let fileName = 'attachment.bin'
+  let declaredSize: Long = -1L
+  const cursor = resolver.query(uri, null, null, null, null)
+  if (cursor != null) {
+    try {
+      if (cursor.moveToFirst()) {
+        const nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        const sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+        if (nameIndex >= 0) {
+          const candidate = cursor.getString(nameIndex)
+          if (candidate != null && candidate.trim().length > 0) fileName = candidate
+        }
+        if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+          declaredSize = cursor.getLong(sizeIndex)
+        }
+      }
+    } finally {
+      cursor.close()
+    }
+  }
+  if (declaredSize > MAX_FILE_BYTES.toLong()) {
+    throw IllegalArgumentException('AI_ATTACHMENT_TOO_LARGE')
+  }
+  const directory = new File(activity.getCacheDir(), 'ait-conversation-picks')
+  if (!directory.exists() && !directory.mkdirs()) {
+    throw IllegalStateException('AI_ATTACHMENT_TEMP_DIRECTORY_FAILED')
+  }
+  const destination = new File(directory, UUID.randomUUID().toString())
+  const input = resolver.openInputStream(uri)
+      ?: throw IllegalArgumentException('AI_ATTACHMENT_READ_FAILED')
+  const output = new FileOutputStream(destination)
+  let total = 0
+  try {
+    const buffer = ByteArray(64 * 1024)
+    while (true) {
+      const length = input.read(buffer)
+      if (length < 0) break
+      if (length == 0) continue
+      total += length
+      if (total > MAX_FILE_BYTES) {
+        throw IllegalArgumentException('AI_ATTACHMENT_TOO_LARGE')
+      }
+      output.write(buffer, 0, length)
+    }
+    output.flush()
+  } finally {
+    try { input.close() } catch (_: Throwable) {}
+    try { output.close() } catch (_: Throwable) {}
+  }
+  if (total <= 0) {
+    destination.delete()
+    throw IllegalArgumentException('AI_ATTACHMENT_EMPTY')
+  }
+  const contentType = resolver.getType(uri) ?: 'application/octet-stream'
+  return {
+    fileName,
+    contentType,
+    sizeBytes: total,
+    path: destination.getAbsolutePath()
+  }
+}
+
+/**
+ * 通过 ACTION_OPEN_DOCUMENT 获取任意文件；结果立即复制到应用缓存，避免依赖短生命周期 content URI。
+ */
+export function chooseDocuments(options: AitDocumentPickerOptions): void {
+  if (active) {
+    options.onError(fail(
+      'AI_ATTACHMENT_PICKER_BUSY',
+      '已有附件选择操作正在进行。'))
+    return
+  }
+  const activity = UTSAndroid.getUniActivity()
+  if (activity == null) {
+    options.onError(fail(
+      'AI_ATTACHMENT_PICKER_UNAVAILABLE',
+      '当前 Android 页面无法打开系统文件选择器。'))
+    return
+  }
+  const count = Math.max(1, Math.min(8, options.count)).toInt()
+  active = true
+  let callback: ((requestCode: Int, resultCode: Int, data?: Intent) => void) | null = null
+  callback = (requestCode: Int, resultCode: Int, data?: Intent) => {
+    if (requestCode != REQUEST_CODE) return
+    if (callback != null) UTSAndroid.offAppActivityResult(callback!)
+    callback = null
+    if (resultCode != Activity.RESULT_OK || data == null) {
+      active = false
+      options.onCancel()
+      return
+    }
+    const selected = Array<Uri>()
+    const clipData = data.getClipData()
+    if (clipData != null) {
+      const limit = Math.min(count, clipData.getItemCount())
+      for (index in 0 until limit) selected.add(clipData.getItemAt(index).getUri())
+    } else {
+      const uri = data.getData()
+      if (uri != null) selected.add(uri)
+    }
+    if (selected.isEmpty()) {
+      active = false
+      options.onCancel()
+      return
+    }
+    const worker = new Thread(() => {
+      try {
+        const files = Array<AitPickedDocument>()
+        selected.forEach((uri: Uri) => files.add(copyUri(uri)))
+        active = false
+        options.onSuccess(files)
+      } catch (error: Throwable) {
+        active = false
+        const code = error.getMessage() ?: 'AI_ATTACHMENT_PICK_FAILED'
+        options.onError(fail(code, code == 'AI_ATTACHMENT_TOO_LARGE'
+          ? '单个附件不能超过 100 MB。'
+          : '无法读取所选附件。'))
+      }
+    })
+    worker.setName('ait-document-picker-copy')
+    worker.start()
+  }
+  UTSAndroid.onAppActivityResult(callback!)
+  try {
+    const intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+    intent.addCategory(Intent.CATEGORY_OPENABLE)
+    intent.setType('*/*')
+    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, count > 1)
+    activity.startActivityForResult(intent, REQUEST_CODE)
+  } catch (_: Throwable) {
+    UTSAndroid.offAppActivityResult(callback!)
+    callback = null
+    active = false
+    options.onError(fail(
+      'AI_ATTACHMENT_PICKER_UNAVAILABLE',
+      '无法打开 Android 系统文件选择器。'))
+  }
+}
