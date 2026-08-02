@@ -11,8 +11,8 @@ function requiredEnvironment(name) {
 }
 
 function chatCompletionsUrl(baseUrl) {
-	const normalized = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
-	return new URL('chat/completions', normalized).toString()
+	// 诊断工具与普通 OpenAI Starter 共用不含 /v1 的基础地址，端点路径在此固定追加。
+	return new URL('/v1/chat/completions', baseUrl).toString()
 }
 
 function safeExceptionType(error) {

@@ -7,7 +7,7 @@ import java.util.concurrent.Executor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.ai.openaisdk.OpenAiSdkChatModel;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -86,18 +86,18 @@ public class AiConversationConfiguration {
      * 推理关闭时不要求创建模型客户端；显式启用后则在接收请求前验证 Spring AI 边界完整。
      *
      * @param properties 推理配置
-     * @param chatModelProvider Spring AI OpenAI SDK 模型提供器
+     * @param chatModelProvider Spring AI 普通 OpenAI 模型提供器
      * @return 启动末期校验器
      */
     @Bean
     SmartInitializingSingleton aiInferenceStartupValidator(
             AiInferenceProperties properties,
-            ObjectProvider<OpenAiSdkChatModel> chatModelProvider) {
+            ObjectProvider<OpenAiChatModel> chatModelProvider) {
         return () -> {
             if (properties.enabled()
                     && chatModelProvider.getIfAvailable() == null) {
                 throw new IllegalStateException(
-                        "Enabled AI inference requires an OpenAI SDK ChatModel bean.");
+                        "Enabled AI inference requires an OpenAiChatModel bean.");
             }
         };
     }

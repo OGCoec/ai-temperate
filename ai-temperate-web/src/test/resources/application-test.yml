@@ -31,12 +31,28 @@ spring:
 
   # 测试不注册真实 Spring AI ChatModel，避免上下文测试连接本机 CLIProxyAPI。
   ai:
-    # 测试模型选择显式关闭聊天自动配置。
+    # 测试模型选择显式关闭全部 OpenAI 自动配置，避免任何测试连接本机 CLIProxyAPI。
     model:
       # none 只用于阻止测试上下文创建外部模型客户端。
       chat: none
-    # 测试仍提供非生产假值以覆盖主配置中的必填环境变量占位符。
-    openai-sdk:
+      # 测试不创建 OpenAI Embedding 模型。
+      embedding: none
+      # 测试不创建 OpenAI Image 模型。
+      image: none
+      # 测试音频模型选择分别关闭语音合成与转录自动配置。
+      audio:
+        # 测试不创建 OpenAI Speech 模型。
+        speech: none
+        # 测试不创建 OpenAI Transcription 模型。
+        transcription: none
+      # 测试不创建 OpenAI Moderation 模型。
+      moderation: none
+    # 测试重试配置保持单次调用语义，即使将来单独启用模型也不会自动重复请求。
+    retry:
+      # 一次尝试包含首次请求本身，因此不会执行额外重试。
+      max-attempts: 1
+    # 测试仍提供普通 OpenAI Starter 的非生产假值以覆盖主配置中的密钥占位符。
+    openai:
       # 该值不对应任何真实 CLIProxyAPI 密钥。
       api-key: test-cli-proxy-api-key
 

@@ -6,7 +6,7 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证推理关闭态允许空密钥，启用态只要求完整上游连接配置且不会在字符串表示中泄露密钥。
+ * 验证推理关闭态允许空密钥，启用态要求不含版本路径的完整上游连接配置且不会泄露密钥。
  */
 final class AiInferencePropertiesTest {
 
@@ -14,7 +14,7 @@ final class AiInferencePropertiesTest {
     void disabledInferenceAllowsEmptyCredentials() {
         AiInferenceProperties properties = new AiInferenceProperties(
                 false,
-                "http://127.0.0.1:8317/v1",
+                "http://127.0.0.1:8317",
                 "",
                 Duration.ofMinutes(15));
 
@@ -27,7 +27,7 @@ final class AiInferencePropertiesTest {
     void enabledInferenceRequiresOnlyConnectionCredentialsAndRedactsKey() {
         AiInferenceProperties properties = new AiInferenceProperties(
                 true,
-                "http://127.0.0.1:8317/v1",
+                "http://127.0.0.1:8317",
                 "test-secret-value",
                 Duration.ofMinutes(15));
 
@@ -42,7 +42,7 @@ final class AiInferencePropertiesTest {
     void enabledInferenceRejectsMissingApiKeyOrInvalidBaseUrl() {
         AiInferenceProperties missingKey = new AiInferenceProperties(
                 true,
-                "http://127.0.0.1:8317/v1",
+                "http://127.0.0.1:8317",
                 "",
                 Duration.ofMinutes(15));
         AiInferenceProperties invalidBaseUrl = new AiInferenceProperties(
@@ -53,5 +53,24 @@ final class AiInferencePropertiesTest {
 
         assertThat(missingKey.isUpstreamConfiguredWhenEnabled()).isFalse();
         assertThat(invalidBaseUrl.isUpstreamConfiguredWhenEnabled()).isFalse();
+    }
+
+    @Test
+    void enabledInferenceRejectsLegacyVersionedBaseUrl() {
+        AiInferenceProperties legacyBaseUrl = new AiInferenceProperties(
+                true,
+                "http://127.0.0.1:8317/v1",
+                "test-secret-value",
+                Duration.ofMinutes(15));
+        AiInferenceProperties legacyBaseUrlWithSlash =
+                new AiInferenceProperties(
+                        true,
+                        "http://127.0.0.1:8317/v1/",
+                        "test-secret-value",
+                        Duration.ofMinutes(15));
+
+        assertThat(legacyBaseUrl.isUpstreamConfiguredWhenEnabled()).isFalse();
+        assertThat(legacyBaseUrlWithSlash.isUpstreamConfiguredWhenEnabled())
+                .isFalse();
     }
 }

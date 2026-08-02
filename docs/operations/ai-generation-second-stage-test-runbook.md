@@ -34,8 +34,13 @@ node scripts/diagnostics/ai-generation/fake-openai-server.mjs
 AI_CONVERSATION_ASYNC_GENERATION_ENABLED=true
 AI_CONVERSATION_INSTANCE_ID=instance-a 或 instance-b
 AI_CONVERSATION_DETACH_GRACE=300ms（自动化）或 30s（发布验收）
-AI_INFERENCE_CLI_PROXY_BASE_URL=http://127.0.0.1:18317/v1
+AI_INFERENCE_CLI_PROXY_ENABLED=true
+AI_INFERENCE_SPRING_CHAT_MODEL=openai
+AI_INFERENCE_CLI_PROXY_BASE_URL=http://127.0.0.1:18317
+CLI_PROXY_API_KEY=<仅用于隔离假上游的测试密钥>
 ```
+
+上述推理开关、模型选择和测试密钥缺一不可，否则应用会保持 `chat=none`，无法创建本次需要验证的普通 `OpenAiChatModel`。测试密钥不得复用生产 Secret。
 
 ## 自动化门禁
 

@@ -10,28 +10,38 @@ spring:
     # 应用名称用于日志、监控和服务识别。
     name: ai-temperate
 
-  # Spring AI OpenAI SDK 只作为本机 CLIProxyAPI 的协议适配器，不启用内置 ChatMemory。
+  # Spring AI 普通 OpenAI Starter 只作为本机 CLIProxyAPI 的协议适配器，不启用内置 ChatMemory。
   ai:
-    # OpenAI SDK 模型选择固定为 openai-sdk，以便专用会话客户端取得流式 ChatModel。
+    # 模型选择只启用普通 OpenAI Chat，其他自动配置全部显式关闭。
     model:
-      # 当前项目只注册 OpenAI SDK 聊天模型，不允许运行时按前端参数切换实现。
+      # 部署开启推理时必须设置为 openai，默认 none 避免未配置密钥时创建外部客户端。
       chat: ${AI_INFERENCE_SPRING_CHAT_MODEL:none}
-    # OpenAI SDK 连接参数全部由服务端环境提供，浏览器不会读取该节点。
-    openai-sdk:
-      # 普通 CLIProxyAPI 代理密钥只从环境变量读取，不配置明文默认值。
+      # 本项目不使用 OpenAI Embedding，禁止 Starter 创建额外模型 Bean。
+      embedding: none
+      # 本项目不使用 OpenAI Image，禁止 Starter 创建额外模型 Bean。
+      image: none
+      # 音频模型选择分别关闭语音合成和转录，避免无意连接外部服务。
+      audio:
+        # 本项目不使用 OpenAI Speech 模型。
+        speech: none
+        # 本项目不使用 OpenAI Transcription 模型。
+        transcription: none
+      # 本项目不使用 OpenAI Moderation，禁止 Starter 创建额外模型 Bean。
+      moderation: none
+    # Spring AI 重试只保留首次调用，避免流式生成被自动重复并造成重复输出或计费。
+    retry:
+      # 一次尝试包含首次请求本身，因此不会执行额外重试。
+      max-attempts: 1
+    # 普通 OpenAI Starter 的连接参数全部由服务端环境提供，浏览器不会读取该节点。
+    openai:
+      # CLIProxyAPI 代理密钥只从环境变量读取，不配置明文默认值。
       api-key: ${CLI_PROXY_API_KEY:}
-      # SDK 固定访问本机 8317 的 OpenAI 兼容 v1 根地址。
-      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317/v1}
-      # 单次 SDK 调用的总超时不得超过会话流最大存活时间。
-      timeout: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
-      # 生成请求禁止自动重试，避免重复输出和重复计费。
-      max-retries: 0
+      # 基础地址不包含 v1，具体 Chat Completions 路径由下方配置统一追加。
+      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317}
       # 聊天调用默认项只声明所有兼容模型都支持的稳定参数。
       chat:
-        # 聊天客户端自身同样禁止自动重试。
-        max-retries: 0
-        # 单次聊天流使用与总体调用相同的有界时限。
-        timeout: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
+        # 普通 Starter 固定调用 CLIProxyAPI 的 OpenAI 兼容 Chat Completions 路径。
+        completions-path: /v1/chat/completions
         # 请求级选项由业务层覆盖模型和最大输出，本节点只固定流式用量与存储语义。
         options:
           # 一个发送动作只生成一个候选回答。
@@ -345,8 +355,8 @@ app:
     cli-proxy:
       # 推理默认关闭，部署确认 8317 和计费链路后才显式启用。
       enabled: ${AI_INFERENCE_CLI_PROXY_ENABLED:false}
-      # 用户推理固定访问服务端配置的 CLIProxyAPI v1 根地址。
-      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317/v1}
+      # 用户推理固定访问服务端配置的 CLIProxyAPI 基础地址，版本路径由 Spring AI Chat 配置追加。
+      base-url: ${AI_INFERENCE_CLI_PROXY_BASE_URL:http://127.0.0.1:8317}
       # 启用推理时普通代理密钥必须非空，关闭时允许为空。
       api-key: ${CLI_PROXY_API_KEY:}
       # 单次上游模型流从订阅开始最多持续十五分钟，期间心跳或模型片段都不会重置总时限。

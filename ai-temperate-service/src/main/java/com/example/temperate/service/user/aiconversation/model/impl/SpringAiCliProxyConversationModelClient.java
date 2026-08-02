@@ -2,6 +2,7 @@ package com.example.temperate.service.user.aiconversation.model.impl;
 
 import com.example.temperate.service.user.aiconversation.config.AiInferenceProperties;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentState;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
@@ -24,7 +25,6 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMod
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelMediaLoader;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
-import java.lang.reflect.Method;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -37,11 +37,13 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
-import org.springframework.ai.openaisdk.OpenAiSdkChatModel;
-import org.springframework.ai.openaisdk.OpenAiSdkChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeType;
@@ -51,16 +53,16 @@ import reactor.core.scheduler.Schedulers;
 import reactor.util.concurrent.Queues;
 
 /**
- * 使用 Spring AI OpenAI SDK Starter 将项目 Prompt 适配为 CLIProxyAPI 的单次流式 Chat Completions 调用。
+ * 使用 Spring AI 普通 OpenAI Starter 将项目 Prompt 适配为 CLIProxyAPI 的单次流式 Chat Completions 调用。
  *
- * <p>该客户端不自动重试、不读取 Redis、不执行计费；cached/reasoning Token 从原生 usage 尽力提取，
- * 缺少最终 usage 时由上层进入待对账路径。</p>
+ * <p>该客户端精确依赖不会全量收集响应的 {@link OpenAiChatModel}，不自动重试、不读取 Redis、
+ * 不执行计费；cached/reasoning Token 从普通 OpenAI 原生 usage 提取，缺少最终 usage 时由上层进入待对账路径。</p>
  */
 @Service
 public final class SpringAiCliProxyConversationModelClient
         implements AiConversationModelClient {
 
-    private final ObjectProvider<OpenAiSdkChatModel> chatModelProvider;
+    private final ObjectProvider<OpenAiChatModel> chatModelProvider;
     private final AiInferenceProperties properties;
     private final AiConversationAttachmentService attachmentService;
     private final AiConversationAttachmentProperties attachmentProperties;
@@ -70,7 +72,7 @@ public final class SpringAiCliProxyConversationModelClient
             timingDiagnosticService;
 
     public SpringAiCliProxyConversationModelClient(
-            ObjectProvider<OpenAiSdkChatModel> chatModelProvider,
+            ObjectProvider<OpenAiChatModel> chatModelProvider,
             AiInferenceProperties properties,
             AiConversationAttachmentService attachmentService,
             AiConversationAttachmentProperties attachmentProperties,
@@ -174,8 +176,8 @@ public final class SpringAiCliProxyConversationModelClient
                 .content();
     }
 
-    private OpenAiSdkChatModel requiredChatModel() {
-        OpenAiSdkChatModel model = chatModelProvider.getIfAvailable();
+    private OpenAiChatModel requiredChatModel() {
+        OpenAiChatModel model = chatModelProvider.getIfAvailable();
         if (model == null) {
             throw new AiConversationException(
                     AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
@@ -185,11 +187,11 @@ public final class SpringAiCliProxyConversationModelClient
         return model;
     }
 
-    private static OpenAiSdkChatOptions streamOptions(
+    private static OpenAiChatOptions streamOptions(
             AiConversationModelRequest request) {
         int maxCompletionTokens =
                 maxCompletionTokens(request.maxOutputTokens());
-        return OpenAiSdkChatOptions.builder()
+        return OpenAiChatOptions.builder()
                 .model(request.modelName())
                 .maxCompletionTokens(maxCompletionTokens)
                 .reasoningEffort(request.reasoningEffort().upstreamValue())
@@ -199,10 +201,10 @@ public final class SpringAiCliProxyConversationModelClient
                 .build();
     }
 
-    private static OpenAiSdkChatOptions compactionOptions(
+    private static OpenAiChatOptions compactionOptions(
             String modelName, long maxOutputTokens) {
         int maxCompletionTokens = maxCompletionTokens(maxOutputTokens);
-        return OpenAiSdkChatOptions.builder()
+        return OpenAiChatOptions.builder()
                 .model(modelName)
                 .maxCompletionTokens(maxCompletionTokens)
                 .N(1)
@@ -251,15 +253,28 @@ public final class SpringAiCliProxyConversationModelClient
             boolean ignoreExpiredTemporaryAttachments) {
         List<Media> media = new ArrayList<>();
         content.attachments().forEach(attachment -> {
-            // 通用附件可以进入数据库与历史，但只有三类粗粒度多模态能力会进入上游 Prompt。
-            if (attachment.state() != AiConversationAttachmentState.AVAILABLE
-                    || !modelMediaCategory(attachment.category())) {
+            if (attachment.state() != AiConversationAttachmentState.AVAILABLE) {
+                return;
+            }
+            if (attachment.category() == AiConversationAttachmentCategory.AUDIO
+                    || attachment.category()
+                    == AiConversationAttachmentCategory.VIDEO) {
+                if (ignoreExpiredTemporaryAttachments) {
+                    // 普通 OpenAI 1.1.8 不能把历史音视频 URL 可靠编码进 Chat Completions；
+                    // 历史轮次保留文字，避免把音视频错误伪装成 image_url。
+                    return;
+                }
+                throw new AiConversationException(
+                        AiConversationErrorCode
+                                .AI_ATTACHMENT_CAPABILITY_UNSUPPORTED,
+                        "当前模型流式客户端暂不支持音频或视频附件",
+                        false);
+            }
+            if (attachment.category() != AiConversationAttachmentCategory.IMAGE) {
                 return;
             }
             try {
-                media.add(new Media(
-                        MimeType.valueOf(attachment.contentType()),
-                        URI.create(attachmentService.resolveModelUrl(attachment))));
+                media.add(modelInputMedia(attachment));
             } catch (AiConversationException exception) {
                 if (!ignoreExpiredTemporaryAttachments
                         || !attachment.url().startsWith("ait-temp:")) {
@@ -280,29 +295,22 @@ public final class SpringAiCliProxyConversationModelClient
     }
 
     private AssistantMessage assistantMessage(AiConversationContent content) {
-        List<Media> media = content.attachments().stream()
-                // 存储失败占位只服务历史审计，不能被重新解释为可供模型读取的媒体。
-                .filter(attachment -> attachment.state()
-                        == AiConversationAttachmentState.AVAILABLE)
-                .filter(attachment -> modelMediaCategory(attachment.category()))
-                .map(attachment -> new Media(
-                        MimeType.valueOf(attachment.contentType()),
-                        URI.create(attachmentService.resolveModelUrl(attachment))))
-                .toList();
-        if (media.isEmpty()) {
-            return new AssistantMessage(content.text());
-        }
-        return AssistantMessage.builder()
-                .content(content.text())
-                .media(media)
-                .build();
+        // 普通 OpenAI 1.1.8 会把 Assistant 媒体解释为音频输出引用，而不是历史输入附件；
+        // 因此历史 Assistant 只回放已持久化文字，生成媒体仍由本地历史记录负责展示。
+        return new AssistantMessage(content.text());
     }
 
-    private static boolean modelMediaCategory(
-            AiConversationAttachmentCategory category) {
-        return category == AiConversationAttachmentCategory.IMAGE
-                || category == AiConversationAttachmentCategory.AUDIO
-                || category == AiConversationAttachmentCategory.VIDEO;
+    /**
+     * 把已经通过附件服务授权的模型 URL 转成普通 OpenAI 模型支持的图片媒体数据。
+     *
+     * <p>Spring AI 1.1.8 的公开构造器接收 URI，并在 {@link Media} 内部保存为 URL 字符串；
+     * 这层只执行 URI 语法校验，不负责重新签名或下载附件。</p>
+     */
+    private Media modelInputMedia(AiConversationAttachment attachment) {
+        String modelUrl = attachmentService.resolveModelUrl(attachment);
+        return new Media(
+                MimeType.valueOf(attachment.contentType()),
+                URI.create(modelUrl));
     }
 
     private AiConversationModelChunk mapResponse(
@@ -427,17 +435,29 @@ public final class SpringAiCliProxyConversationModelClient
                 || response.getMetadata().getUsage() == null) {
             return Optional.empty();
         }
-        Object usage = response.getMetadata().getUsage();
-        long prompt = number(invoke(usage, "getPromptTokens"));
-        long completion = number(invoke(usage, "getCompletionTokens"));
+        Usage usage = response.getMetadata().getUsage();
+        long prompt = number(usage.getPromptTokens());
+        long completion = number(usage.getCompletionTokens());
         if (prompt == 0L && completion == 0L) {
             return Optional.empty();
         }
-        Object nativeUsage = optionalValue(invoke(usage, "getNativeUsage"));
-        long cached = nestedOptionalLong(
-                nativeUsage, "promptTokensDetails", "cachedTokens");
-        long reasoning = nestedOptionalLong(
-                nativeUsage, "completionTokensDetails", "reasoningTokens");
+        long cached = 0L;
+        long reasoning = 0L;
+        Object nativeUsage = usage.getNativeUsage();
+        if (nativeUsage instanceof OpenAiApi.Usage openAiUsage) {
+            // 普通 OpenAI Starter 的原生 Usage 使用单数 completionTokenDetails；
+            // 这里保持强类型读取，避免 SDK 旧字段名被静默反射为零而破坏结算明细。
+            OpenAiApi.Usage.PromptTokensDetails promptDetails =
+                    openAiUsage.promptTokensDetails();
+            OpenAiApi.Usage.CompletionTokenDetails completionDetails =
+                    openAiUsage.completionTokenDetails();
+            cached = promptDetails == null
+                    ? 0L
+                    : number(promptDetails.cachedTokens());
+            reasoning = completionDetails == null
+                    ? 0L
+                    : number(completionDetails.reasoningTokens());
+        }
         return Optional.of(new AiConversationUsage(
                 prompt,
                 Math.min(prompt, cached),
@@ -472,30 +492,6 @@ public final class SpringAiCliProxyConversationModelClient
                 true,
                 reason,
                 failure);
-    }
-
-    private static Object invoke(Object target, String methodName) {
-        if (target == null) {
-            return null;
-        }
-        try {
-            Method method = target.getClass().getMethod(methodName);
-            return method.invoke(target);
-        } catch (ReflectiveOperationException exception) {
-            return null;
-        }
-    }
-
-    private static Object optionalValue(Object value) {
-        return value instanceof Optional<?> optional
-                ? optional.orElse(null)
-                : value;
-    }
-
-    private static long nestedOptionalLong(
-            Object root, String detailsMethod, String tokenMethod) {
-        Object details = optionalValue(invoke(root, detailsMethod));
-        return number(optionalValue(invoke(details, tokenMethod)));
     }
 
     private static long number(Object value) {

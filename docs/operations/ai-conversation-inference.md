@@ -6,13 +6,15 @@
 
 ```text
 AI_INFERENCE_CLI_PROXY_ENABLED=true
-AI_INFERENCE_SPRING_CHAT_MODEL=openai-sdk
-AI_INFERENCE_CLI_PROXY_BASE_URL=http://127.0.0.1:8317/v1
+AI_INFERENCE_SPRING_CHAT_MODEL=openai
+AI_INFERENCE_CLI_PROXY_BASE_URL=http://127.0.0.1:8317
 CLI_PROXY_API_KEY=<由 Secret 管理服务注入>
 AI_INFERENCE_MAX_STREAM_DURATION=15m
 ```
 
 `CLI_PROXY_API_KEY` 禁止写入仓库、日志、数据库或浏览器响应。CLIProxyAPI 应只监听本机或受控内网地址。
+
+基础地址禁止包含 `/v1`；普通 OpenAI Starter 会使用固定的 `/v1/chat/completions` 路径发起请求，避免拼接出重复版本路径。
 
 `AI_CONVERSATION_COMPACTION_MODEL` 已取消。旧部署环境即使仍保留该变量，应用也不会读取；完成发布后应从部署清单中删除，避免误导运维人员。
 

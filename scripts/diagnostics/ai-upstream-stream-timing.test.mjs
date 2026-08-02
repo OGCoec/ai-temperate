@@ -49,4 +49,5 @@ test('timing script never prints credentials or request payloads', () => {
 	assert.doesNotMatch(source, /JSON\.stringify\(requestBody\)/)
 	assert.match(source, /stream:\s*true/)
 	assert.match(source, /include_usage:\s*true/)
+	assert.match(source, /new URL\('\/v1\/chat\/completions', baseUrl\)/)
 })
