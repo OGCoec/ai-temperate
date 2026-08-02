@@ -18,7 +18,7 @@
 AI_CONVERSATION_ASYNC_GENERATION_ENABLED=true
 AI_CONVERSATION_INSTANCE_ID=<deployment-unique-instance-id>
 AI_CONVERSATION_DETACH_GRACE=30s
-AI_CONVERSATION_OBSERVER_HEARTBEAT=1s
+AI_CONVERSATION_OBSERVER_HEARTBEAT=15s
 AI_CONVERSATION_TERMINAL_RETENTION=24h
 AI_CONVERSATION_WORKER_CONSUMERS=4
 AI_CONVERSATION_MAX_WORKER_DURATION=15m
@@ -75,7 +75,7 @@ ai.conversation.reconcile.required
 
 ## 当前验证状态
 
-本地生产源码编译成功；前端聊天测试五十六项通过，Generation 数据库与 Rabbit 配置契约、核心 Service 和 Web Controller 测试通过。PostgreSQL 15 Testcontainers 迁移测试五项、Redis 7.4 双客户端 A/B Pub/Sub 测试三项、Worker 假模型终态测试五项均通过。
+以上历史 Generation 验证记录不代表本次直接 MVC SSE 改造已经验证。本次改造按项目第一阶段规则暂未执行 Maven、Node、上下文测试、Redis、RabbitMQ 或真实 8317 复现；进入第二阶段前不得把代码交付当作构建成功或流式问题已修复。
 
 HBuilderX 5.15 H5 构建成功；把 `public/_headers` 与 `public/_redirects` 显式复制到 `unpackage/dist/build/web` 后，发布产物校验通过。当前 HBuilderX 发布命令不会自动复制这两个文件，部署流水线必须补充复制步骤。前端发布契约仍有一个与 Generation 无关的既有 ESM 导出失败，完整安全配置测试也仍有一个既有 CSRF Cookie `SameSite` 断言失败。
 

@@ -24,6 +24,7 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationS
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementResult;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementService;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionService;
+import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyPermit;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
@@ -33,6 +34,7 @@ import com.example.temperate.service.user.aiconversation.context.AiConversationC
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextWriteOutcome;
 import com.example.temperate.service.user.aiconversation.context.AiConversationEphemeralStart;
+import com.example.temperate.service.user.aiconversation.context.AiConversationInterruptionSource;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureClassification;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleDiagnosticService;
@@ -56,6 +58,9 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMod
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseActiveRegistry;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationHandle;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseControlStore;
 import com.example.temperate.service.user.aiconversation.response.AiConversationCompletedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDeltaData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationErrorData;
@@ -67,12 +72,12 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
-import com.example.temperate.service.user.aiconversation.response.AiConversationStreamBatcher;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingAction;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingDecision;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingPolicy;
 import com.example.temperate.service.user.aiconversation.security.AiConversationIdempotencyHasher;
 import com.example.temperate.service.user.aiconversation.text.AiConversationTextTokenizer;
+import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -91,7 +96,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.stereotype.Service;
@@ -100,12 +104,13 @@ import org.slf4j.MDC;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import org.reactivestreams.Subscription;
 
 /**
  * 编排一次用户发送动作，从幂等预扣到单次 8317 SSE，再到成功入库、系统失败退款或客户端取消结算。
  *
  * <p>数据库事务被隔离在 Billing、Settlement 和压缩持久化 Service 中；本实现持有的所有流式状态
- * 都是方法内局部对象，不会泄漏到单例 Bean。SSE delta 只进入内存和 Redis 分块，绝不逐片写 PostgreSQL。</p>
+ * 都是方法内局部对象，不会泄漏到单例 Bean。SSE delta 立即写向下游，Redis 只在终态保存完整草稿。</p>
  */
 @Service
 public final class AiConversationResponseServiceImpl
@@ -140,6 +145,9 @@ public final class AiConversationResponseServiceImpl
     private final AiConversationModelClient modelClient;
     private final AiConversationTextTokenizer tokenizer;
     private final AiConversationIdempotencyHasher idempotencyHasher;
+    private final AiConversationDirectResponseActiveRegistry activeRegistry;
+    private final AiConversationDirectResponseControlStore directControlStore;
+    private final AiConversationAsyncGenerationProperties asyncGenerationProperties;
     private final AiModelUsageMapper usageMapper;
     private final HybridBase64UrlCodec hybridIdCodec;
     private final PublicIdCodec publicIdCodec;
@@ -172,6 +180,9 @@ public final class AiConversationResponseServiceImpl
             AiConversationModelClient modelClient,
             AiConversationTextTokenizer tokenizer,
             AiConversationIdempotencyHasher idempotencyHasher,
+            AiConversationDirectResponseActiveRegistry activeRegistry,
+            AiConversationDirectResponseControlStore directControlStore,
+            AiConversationAsyncGenerationProperties asyncGenerationProperties,
             AiModelUsageMapper usageMapper,
             HybridBase64UrlCodec hybridIdCodec,
             PublicIdCodec publicIdCodec,
@@ -205,6 +216,10 @@ public final class AiConversationResponseServiceImpl
         this.modelClient = Objects.requireNonNull(modelClient);
         this.tokenizer = Objects.requireNonNull(tokenizer);
         this.idempotencyHasher = Objects.requireNonNull(idempotencyHasher);
+        this.activeRegistry = Objects.requireNonNull(activeRegistry);
+        this.directControlStore = Objects.requireNonNull(directControlStore);
+        this.asyncGenerationProperties = Objects.requireNonNull(
+                asyncGenerationProperties);
         this.usageMapper = Objects.requireNonNull(usageMapper);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
@@ -458,7 +473,34 @@ public final class AiConversationResponseServiceImpl
                 usagePublicId,
                 command.modelPublicId(),
                 traceContext);
+        HmacIdentifier directRequestIdentifier = idempotencyHasher.identifier(
+                command.userId(), command.idempotencyKey());
+        state.directRequestIdentifier = directRequestIdentifier;
+        AtomicReference<Subscription> responseSubscription =
+                new AtomicReference<>();
+        AiConversationDirectResponseCancellationHandle cancellationHandle =
+                interruptionSource -> {
+                    state.interruptionSource.set(interruptionSource);
+                    Subscription subscription = responseSubscription.get();
+                    if (subscription != null) {
+                        subscription.cancel();
+                    }
+                };
+        state.cancellationHandle = cancellationHandle;
         Flux<AiConversationModelChunk> upstream = Flux.defer(() -> {
+                    // 先注册本机句柄和 Redis Owner，再订阅模型；显式 Stop 的意图会在下方订阅闸门再次检查。
+                    activeRegistry.register(
+                            directRequestIdentifier.value(), cancellationHandle);
+                    directControlStore.registerOwner(
+                            directRequestIdentifier,
+                            asyncGenerationProperties.instanceId(),
+                            asyncGenerationProperties.maxWorkerDuration()
+                                    .plus(Duration.ofMinutes(1)));
+                    if (directControlStore.userStopRequested(
+                            directRequestIdentifier)) {
+                        state.interruptionSource.set(
+                                AiConversationInterruptionSource.USER_STOP);
+                    }
                     lifecycle.markConnecting();
                     lifecycleDiagnosticService.record(
                             traceContext, "UPSTREAM_SUBSCRIBE_STARTED");
@@ -502,16 +544,9 @@ public final class AiConversationResponseServiceImpl
                                         state.answer.length()));
                     }
                 });
-        Flux<AiConversationModelChunk> batched = AiConversationStreamBatcher
-                .forwardWhileBatching(
-                        upstream,
-                        properties.streamFlushBytes(),
-                        properties.streamFlushInterval(),
-                        batch -> persistRedisBatch(
-                                batch, state, conversationPublicId));
         Flux<AiConversationStreamEvent> streamed = timingDiagnosticService
                 .observeBoundary(
-                        batched,
+                        upstream,
                         AiConversationStreamTimingBoundary.AFTER_STREAM_BATCHER,
                         chunk -> chunk.text().length())
                 .concatMapIterable(chunk -> processChunk(chunk, state));
@@ -586,6 +621,8 @@ public final class AiConversationResponseServiceImpl
                                         state.answer.length()));
                         AiConversationRequestState stateBefore = lifecycle.state();
                         if (lifecycle.tryBeginInterruptedFinalization()) {
+                            AiConversationInterruptionSource interruptionSource =
+                                    resolvedInterruptionSource(state);
                             lifecycleDiagnosticService.record(
                                     traceContext,
                                     "TERMINAL_OWNERSHIP_CLAIMED",
@@ -594,7 +631,9 @@ public final class AiConversationResponseServiceImpl
                                             lifecycle.state(),
                                             signal));
                             markInterruptedCacheBestEffort(
-                                    conversationPublicId, state);
+                                    conversationPublicId,
+                                    state,
+                                    interruptionSource);
                             AiConversationInterruptionCommand interruption =
                                     interruptionCommand(
                                             command, reservation, state);
@@ -631,13 +670,14 @@ public final class AiConversationResponseServiceImpl
                         releaseAfterGeneration(
                                 lease, concurrencyPermit, state);
                     }
+                    cleanupDirectResponseControl(state);
                 });
         Flux<AiConversationStreamEvent> ready = timingDiagnosticService
                 .observeBoundary(
                         terminalized,
                         AiConversationStreamTimingBoundary.SSE_EVENT_READY,
                         AiConversationResponseServiceImpl::eventTextCharacters);
-        return timingDiagnosticService.withSession(
+        Flux<AiConversationStreamEvent> session = timingDiagnosticService.withSession(
                 ready,
                 new AiConversationStreamTimingContext(
                         state.traceId,
@@ -646,6 +686,17 @@ public final class AiConversationResponseServiceImpl
                         command.modelPublicId(),
                         AiConversationStreamTimingPath.DIRECT_RESPONSE,
                         state.startedNanos));
+        return session.doOnSubscribe(subscription -> {
+            responseSubscription.set(subscription);
+            // 取消整条响应订阅才能触发外层 doFinally(CANCEL)，不能只截断模型上游后留下永不终止的 SSE。
+            if (state.interruptionSource.get()
+                            == AiConversationInterruptionSource.USER_STOP
+                    || userStopRequestedBestEffort(directRequestIdentifier)) {
+                state.interruptionSource.set(
+                        AiConversationInterruptionSource.USER_STOP);
+                subscription.cancel();
+            }
+        });
     }
 
     private static int eventTextCharacters(AiConversationStreamEvent event) {
@@ -717,46 +768,6 @@ public final class AiConversationResponseServiceImpl
             state.lifecycle.tryBeginSuccessFinalization();
         }
         return events;
-    }
-
-    private void persistRedisBatch(
-            List<AiConversationModelChunk> batch,
-            StreamState state,
-            String conversationPublicId) {
-        StringBuilder redisBatch = new StringBuilder();
-        for (AiConversationModelChunk chunk : batch) {
-            redisBatch.append(chunk.text());
-        }
-        if (!redisBatch.isEmpty() && state.cacheWritable) {
-            List<String> chunks = utf8Chunks(
-                    redisBatch.toString(), properties.streamFlushBytes());
-            int first = state.redisChunk.getAndAdd(chunks.size());
-            int redisBytes = redisBatch.toString()
-                    .getBytes(StandardCharsets.UTF_8).length;
-            try {
-                AiConversationContextWriteOutcome outcome =
-                        contextStore.appendAssistantChunks(
-                        conversationPublicId,
-                        state.cacheGeneration.get(),
-                        state.ephemeralOrdinal,
-                        first,
-                        chunks);
-                if (outcome
-                        == AiConversationContextWriteOutcome.GENERATION_MISMATCH) {
-                    outcome = retryAfterGenerationMismatch(
-                            conversationPublicId, state);
-                }
-                metrics.redisBatch(redisBytes,
-                        outcome == AiConversationContextWriteOutcome.APPLIED
-                                ? "success" : "failed");
-                state.cacheWritable = outcome
-                        == AiConversationContextWriteOutcome.APPLIED;
-            } catch (RuntimeException ignoredFailure) {
-                // Redis 故障期间继续在有界内存累计，成功结束仍以 PostgreSQL 最终事务为准。
-                state.cacheWritable = false;
-                metrics.redisBatch(redisBytes, "failed");
-            }
-        }
     }
 
     private Mono<AiConversationStreamEvent> finalizingEvent(
@@ -1071,7 +1082,10 @@ public final class AiConversationResponseServiceImpl
                 () -> finalizeInterruptedSynchronously(
                         interruption, state.lifecycle));
         // Redis 草稿只是可恢复派生数据，失败不能阻止已经取得所有权的额度退款事务。
-        markInterruptedCacheBestEffort(conversationPublicId, state);
+        markInterruptedCacheBestEffort(
+                conversationPublicId,
+                state,
+                AiConversationInterruptionSource.SYSTEM_FAILURE);
         AiConversationRequestState terminalState = state.lifecycle.state();
         String outcome = switch (terminalState) {
             case RECONCILE_REQUIRED -> "reconcile";
@@ -1228,29 +1242,35 @@ public final class AiConversationResponseServiceImpl
 
     private void markInterruptedCache(
             String conversationPublicId,
-            StreamState state) {
-        // 即使某个流片写入失败也要尝试把此前已成功写入的草稿改为 INTERRUPTED。
-        AiConversationContextWriteOutcome outcome =
-                contextStore.markEphemeralInterrupted(
+            StreamState state,
+            AiConversationInterruptionSource interruptionSource) {
+        List<String> completeAnswerChunks = utf8Chunks(
+                state.answer.toString(), properties.streamFlushBytes());
+        // 正文和中断来源必须由一个 Lua 原子操作提交，不能留下只有半份草稿的可见状态。
+        AiConversationContextWriteOutcome outcome = contextStore.saveInterruptedTurn(
                         conversationPublicId,
                         state.cacheGeneration.get(),
-                        state.ephemeralOrdinal);
+                        state.ephemeralOrdinal,
+                        completeAnswerChunks,
+                        interruptionSource);
         if (outcome == AiConversationContextWriteOutcome.GENERATION_MISMATCH) {
-            // 压缩或并发重建可能刚好切换 generation；先把本轮完整草稿重放到胜出快照，再标记中断。
+            // 压缩或并发重建可能刚好切换 generation；在胜出快照重新建立临时轮次后再完整提交。
             AiConversationContextWriteOutcome restored =
-                    retryAfterGenerationMismatch(conversationPublicId, state);
+                    restartEphemeralAfterGenerationMismatch(
+                            conversationPublicId, state);
             if (restored == AiConversationContextWriteOutcome.APPLIED) {
-                outcome = contextStore.markEphemeralInterrupted(
+                outcome = contextStore.saveInterruptedTurn(
                         conversationPublicId,
                         state.cacheGeneration.get(),
-                        state.ephemeralOrdinal);
+                        state.ephemeralOrdinal,
+                        completeAnswerChunks,
+                        interruptionSource);
             } else {
                 outcome = restored;
             }
         }
-        if (outcome != AiConversationContextWriteOutcome.APPLIED) {
-            state.cacheWritable = false;
-        } else {
+        if (outcome == AiConversationContextWriteOutcome.APPLIED
+                && interruptionSource == AiConversationInterruptionSource.USER_STOP) {
             compactionService.scheduleEphemeral(
                     conversationPublicId, state.cacheGeneration.get());
         }
@@ -1258,16 +1278,46 @@ public final class AiConversationResponseServiceImpl
 
     private void markInterruptedCacheBestEffort(
             String conversationPublicId,
-            StreamState state) {
+            StreamState state,
+            AiConversationInterruptionSource interruptionSource) {
         try {
-            markInterruptedCache(conversationPublicId, state);
+            markInterruptedCache(
+                    conversationPublicId, state, interruptionSource);
         } catch (RuntimeException ignoredFailure) {
             // PostgreSQL 计费终态优先于 Redis 草稿；缓存失败由绝对 TTL 和历史重建收敛。
-            state.cacheWritable = false;
         }
     }
 
-    private AiConversationContextWriteOutcome retryAfterGenerationMismatch(
+    private AiConversationInterruptionSource resolvedInterruptionSource(
+            StreamState state) {
+        AiConversationInterruptionSource source =
+                state.interruptionSource.get();
+        if (source == AiConversationInterruptionSource.TRANSPORT_DISCONNECT
+                && state.directRequestIdentifier != null) {
+            try {
+                if (directControlStore.userStopRequested(
+                        state.directRequestIdentifier)) {
+                    source = AiConversationInterruptionSource.USER_STOP;
+                    state.interruptionSource.set(source);
+                }
+            } catch (RuntimeException ignoredFailure) {
+                // Redis 控制键不可读时保守归类为传输断开，避免无凭据地把技术中断纳入上下文。
+            }
+        }
+        return source;
+    }
+
+    private boolean userStopRequestedBestEffort(
+            HmacIdentifier requestIdentifier) {
+        try {
+            return directControlStore.userStopRequested(requestIdentifier);
+        } catch (RuntimeException ignoredFailure) {
+            // Redis 控制键不可读时继续建立响应；后续 Rabbit 控制或浏览器断开仍会有限收敛。
+            return false;
+        }
+    }
+
+    private AiConversationContextWriteOutcome restartEphemeralAfterGenerationMismatch(
             String conversationPublicId,
             StreamState state) {
         return contextStore.find(conversationPublicId)
@@ -1284,21 +1334,7 @@ public final class AiConversationResponseServiceImpl
                     }
                     state.cacheGeneration.set(snapshot.generation());
                     state.ephemeralOrdinal = restarted.ordinal();
-                    // generation 切换后必须从本次有界内存回答的开头重放，不能只写当前批而丢失此前 delta。
-                    List<String> completeAnswerChunks = utf8Chunks(
-                            state.answer.toString(),
-                            properties.streamFlushBytes());
-                    AiConversationContextWriteOutcome outcome =
-                            contextStore.appendAssistantChunks(
-                            conversationPublicId,
-                            snapshot.generation(),
-                            restarted.ordinal(),
-                            0,
-                            completeAnswerChunks);
-                    if (outcome == AiConversationContextWriteOutcome.APPLIED) {
-                        state.redisChunk.set(completeAnswerChunks.size());
-                    }
-                    return outcome;
+                    return AiConversationContextWriteOutcome.APPLIED;
                 })
                 .orElse(AiConversationContextWriteOutcome.UNAVAILABLE);
     }
@@ -1476,6 +1512,27 @@ public final class AiConversationResponseServiceImpl
             // 会话租约释放失败由绝对 TTL 收敛。
         }
         releaseConcurrency(concurrencyPermit);
+    }
+
+    private void cleanupDirectResponseControl(StreamState state) {
+        if (state.directRequestIdentifier == null) {
+            return;
+        }
+        try {
+            activeRegistry.remove(
+                    state.directRequestIdentifier.value(),
+                    state.cancellationHandle);
+        } catch (RuntimeException ignoredFailure) {
+            // 本机注册表只影响取消路由，流终态已由生命周期 CAS 决定。
+        }
+        try {
+            directControlStore.clearOwner(
+                    state.directRequestIdentifier,
+                    asyncGenerationProperties.instanceId());
+            directControlStore.clearUserStop(state.directRequestIdentifier);
+        } catch (RuntimeException ignoredFailure) {
+            // Redis 控制键由短 TTL 兜底，不能覆盖已经完成的计费和会话释放。
+        }
     }
 
     private void recordRequestOutcome(StreamState state, String outcome) {
@@ -2076,9 +2133,12 @@ public final class AiConversationResponseServiceImpl
         private long generatedMediaBytes;
         private boolean generatedMediaRejected;
         private int answerBytes;
-        private volatile boolean cacheWritable = true;
         private final AtomicLong sequence = new AtomicLong();
-        private final AtomicInteger redisChunk = new AtomicInteger();
+        private final AtomicReference<AiConversationInterruptionSource>
+                interruptionSource = new AtomicReference<>(
+                        AiConversationInterruptionSource.TRANSPORT_DISCONNECT);
+        private HmacIdentifier directRequestIdentifier;
+        private AiConversationDirectResponseCancellationHandle cancellationHandle;
         private final AtomicReference<AiConversationUsage> candidateUsage =
                 new AtomicReference<>();
         private final AtomicBoolean terminalFinishObserved = new AtomicBoolean();

@@ -121,7 +121,7 @@ test('stop and abort phases are idempotent', async () => {
 		entry.phase === 'CLIENT_ABORT_CALLED').length, 1)
 })
 
-test('frontend sources wire all lifecycle cancellation reasons and trace header', () => {
+test('frontend sources wire explicit cancellation reasons without cancelling on page hide', () => {
 	const streamSource = fs.readFileSync(
 		path.join(__dirname, 'ai-conversation-stream.js'), 'utf8')
 	const panelSource = fs.readFileSync(
@@ -131,9 +131,10 @@ test('frontend sources wire all lifecycle cancellation reasons and trace header'
 
 	assert.equal(streamSource.includes("'X-AI-Client-Request-Id'"), true)
 	for (const reason of [
-		'USER_STOP', 'PAGE_HIDDEN', 'PAGE_UNLOAD', 'COMPONENT_UNMOUNT'
+		'USER_STOP', 'PAGE_UNLOAD', 'COMPONENT_UNMOUNT'
 	]) {
 		assert.equal(panelSource.includes(reason), true)
 	}
+	assert.equal(panelSource.includes("close?.('PAGE_HIDDEN'"), false)
 	assert.equal(panelSource.includes("finish?.('CANCEL')"), true)
 })

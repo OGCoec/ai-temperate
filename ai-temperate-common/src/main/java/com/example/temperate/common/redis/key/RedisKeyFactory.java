@@ -344,6 +344,32 @@ public final class RedisKeyFactory {
     }
 
     /**
+     * 生成直接 SSE 活动请求的实例所有权 Key，原始幂等 UUID 和用户 ID 均不会进入 Key。
+     */
+    public String aiConversationDirectResponseOwnerKey(
+            HmacIdentifier requestIdentifier) {
+        return create(
+                "ai",
+                "response",
+                "v1",
+                IdentifierType.AI_DIRECT_RESPONSE_OWNER,
+                requireHmacIdentifier(requestIdentifier));
+    }
+
+    /**
+     * 生成直接 SSE 显式 Stop 意图 Key，用于跨实例取消与订阅建立前竞态收敛。
+     */
+    public String aiConversationDirectResponseCancelKey(
+            HmacIdentifier requestIdentifier) {
+        return create(
+                "ai",
+                "response",
+                "v1",
+                IdentifierType.AI_DIRECT_RESPONSE_CANCEL,
+                requireHmacIdentifier(requestIdentifier));
+    }
+
+    /**
      * 生成异步 Generation 的分块输出快照 Hash Key，公共 Generation ID 不包含内部数据库标识。
      */
     public String aiConversationGenerationSnapshotKey(
@@ -763,6 +789,8 @@ public final class RedisKeyFactory {
         AI_CONVERSATION_INFLIGHT("inflight"),
         AI_CONVERSATION_COMPACTION("compact"),
         AI_CONVERSATION_USER_CONCURRENCY("concurrency-user"),
+        AI_DIRECT_RESPONSE_OWNER("owner"),
+        AI_DIRECT_RESPONSE_CANCEL("cancel"),
         AI_GENERATION_SNAPSHOT("snapshot"),
         AI_GENERATION_BROWSER_DIAGNOSTIC("browser-diagnostic"),
         MAIL_JOB("job");

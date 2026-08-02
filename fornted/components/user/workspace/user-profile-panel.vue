@@ -162,6 +162,7 @@
 <script>
 	import { AUTH_ROUTES } from '@/common/auth/config.js'
 	import { logoutAllSessions, logoutSession } from '@/common/auth/http-client.js'
+	import { clearAiConversationStoppedDrafts } from '@/common/aichat/ai-conversation-stopped-draft.js'
 	import {
 		getCurrentUserProfile,
 		loadCurrentUserProfile,
@@ -375,6 +376,7 @@
 				} catch (error) {
 					// 服务端不可达时本地会话仍会在 logoutSession 的 finally 中清除。
 				} finally {
+					clearAiConversationStoppedDrafts()
 					this.loggingOut = false
 					uni.reLaunch({ url: AUTH_ROUTES.login })
 				}
@@ -398,6 +400,7 @@
 				this.loggingOutAll = true
 				try {
 					await logoutAllSessions()
+					clearAiConversationStoppedDrafts()
 					uni.reLaunch({ url: AUTH_ROUTES.login })
 				} catch (error) {
 					uni.showToast({

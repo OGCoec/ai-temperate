@@ -73,4 +73,17 @@ final class AiConversationRedisKeyFactoryTest {
                 .contains(protectedUser.value())
                 .hasSizeLessThanOrEqualTo(128);
     }
+
+    @Test
+    void directResponseControlKeysUseOnlyProtectedIdempotencyIdentifier() {
+        HmacIdentifier protectedRequest = HmacIdentifier.fromProtectedValue(
+                "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        assertThat(factory.aiConversationDirectResponseOwnerKey(protectedRequest))
+                .isEqualTo("ait:test:ai:response:v1:owner:" + protectedRequest.value())
+                .hasSizeLessThanOrEqualTo(RedisKeyFactory.TARGET_MAX_BYTES);
+        assertThat(factory.aiConversationDirectResponseCancelKey(protectedRequest))
+                .isEqualTo("ait:test:ai:response:v1:cancel:" + protectedRequest.value())
+                .hasSizeLessThanOrEqualTo(RedisKeyFactory.TARGET_MAX_BYTES);
+    }
 }

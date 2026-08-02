@@ -33,7 +33,8 @@ final class AiConversationResponseFlowContractTest {
                 .contains("CompletableFuture.supplyAsync")
                 .contains("finalizerExecutor")
                 .contains("Mono.fromFuture(future, true)")
-                .contains("Mono.fromCallable(() -> completeAndRelease(")
+                .contains("Mono.fromCallable(() -> lifecycleDiagnosticService.withContext(")
+                .contains("return completeAndRelease(")
                 .contains("generatedMediaRejected")
                 .contains("chunk.generatedMediaTruncated()")
                 .contains("state.candidateUsage.set(chunk.usage())")
@@ -65,14 +66,20 @@ final class AiConversationResponseFlowContractTest {
     }
 
     @Test
-    void upstreamChunksReachSseBeforeRedisBatchPersistence() throws IOException {
+    void directResponseMapsEveryUpstreamChunkWithoutRedisBatching() throws IOException {
         String source = read(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/response/impl/AiConversationResponseServiceImpl.java");
 
         assertThat(source)
-                .contains("forwardWhileBatching(")
-                .contains("batch -> persistRedisBatch(")
-                .doesNotContain("concatMapIterable(batch -> processBatch(");
+                .contains("observeBoundary(\n                        upstream,")
+                .contains(".concatMapIterable(chunk -> processChunk(chunk, state))")
+                .contains("HEARTBEAT_INTERVAL = Duration.ofSeconds(15)")
+                .contains("contextStore.saveInterruptedTurn(")
+                .contains("AtomicReference<Subscription> responseSubscription")
+                .contains("responseSubscription.set(subscription)")
+                .doesNotContain("AiConversationStreamBatcher")
+                .doesNotContain("persistRedisBatch(")
+                .doesNotContain("appendAssistantChunks(");
     }
 
     @Test

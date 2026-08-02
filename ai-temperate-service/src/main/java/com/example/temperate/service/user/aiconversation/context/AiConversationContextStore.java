@@ -34,6 +34,13 @@ public interface AiConversationContextStore {
             String generation,
             long ephemeralOrdinal);
 
+    AiConversationContextWriteOutcome saveInterruptedTurn(
+            String conversationPublicId,
+            String generation,
+            long ephemeralOrdinal,
+            List<String> assistantChunks,
+            AiConversationInterruptionSource interruptionSource);
+
     AiConversationContextWriteOutcome commitPersistedTurn(
             String conversationPublicId,
             String generation,

@@ -22,7 +22,9 @@ AI_INFERENCE_MAX_STREAM_DURATION=15m
 
 ## SSE 与 Redis 写入边界
 
-上游模型片段到达后立即转换为下游 `delta`，不再等待 Redis 聚合窗口。相同文本在请求级内存中按 `AI_CONVERSATION_STREAM_FLUSH_INTERVAL`（默认 250ms）或 `AI_CONVERSATION_STREAM_FLUSH_BYTES`（默认 4096 bytes）批量写入 Redis；成功、失败和取消终态都会刷新剩余批次。
+普通用户默认使用直接 MVC SSE：上游模型片段到达后立即转换为下游 `delta`，不经过 Redis Pub/Sub、Observer 或 250ms 聚合窗口。生成期间只在请求级有界内存中暂存回答，避免每个 chunk 触发 Redis、数据库或消息队列 I/O。
+
+正常完成时先提交 PostgreSQL 正式消息和结算事务，再把完整回答以 UTF-8 安全分片提交到 Redis 上下文；用户 Stop 时只把已有回答和 `USER_STOP` 来源原子写入 Redis 临时草稿，不插入正式历史消息。传输断开和系统失败草稿仍可用于诊断或恢复，但不会进入下一次模型上下文。`AI_CONVERSATION_STREAM_FLUSH_INTERVAL`（默认 250ms）和 `AI_CONVERSATION_STREAM_FLUSH_BYTES` 仅供显式启用的异步 Generation 回滚链路使用。
 
 流式期间不逐片写 PostgreSQL。PostgreSQL 只处理请求开始时的预扣，以及成功、退款、客户端取消估算或待对账终态。前端的平滑逐字展示只调整渲染节奏，不修改真实 SSE、Usage 或持久化文本。
 

@@ -224,6 +224,13 @@ export const aiConversationApi = Object.freeze({
 			hasMore: result.hasMore === true
 		})
 	},
+	async cancelResponse(idempotencyKey) {
+		const key = requiredText(idempotencyKey, 'idempotencyKey')
+		return authorizedRequest('/api/ai/conversations/responses/cancel', {
+			method: 'POST',
+			headers: { 'Idempotency-Key': key }
+		})
+	},
 	async createPreuploads(files) {
 		if (!Array.isArray(files) || files.length < 1 || files.length > 8) {
 			throw error('AI_ATTACHMENT_INPUT_INVALID', '请选择 1 至 8 个文件。')

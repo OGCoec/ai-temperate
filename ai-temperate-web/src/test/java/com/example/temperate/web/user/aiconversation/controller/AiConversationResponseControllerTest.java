@@ -3,6 +3,7 @@ package com.example.temperate.web.user.aiconversation.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,6 +17,8 @@ import com.example.temperate.service.auth.session.authentication.domain.SessionP
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationService;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationStatus;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationCompletedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
@@ -32,9 +35,11 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.core.MethodParameter;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -174,6 +179,42 @@ final class AiConversationResponseControllerTest {
         verify(service).respond(commandCaptor.capture());
         assertThat(commandCaptor.getValue().reasoningEffort())
                 .isEqualTo(AiConversationReasoningEffort.MEDIUM);
+    }
+
+    @Test
+    void cancelEndpointUsesOriginalKeyAndReturnsAcceptedForActiveStream() {
+        AiConversationResponseService responseService =
+                mock(AiConversationResponseService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationService>
+                generationProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationObserverService>
+                observerProvider = mock(ObjectProvider.class);
+        AiConversationDirectResponseCancellationService cancellationService =
+                mock(AiConversationDirectResponseCancellationService.class);
+        when(cancellationService.requestUserStop(
+                eq(7L), any(UUID.class), any(String.class)))
+                .thenReturn(AiConversationDirectResponseCancellationStatus.CANCEL_REQUESTED);
+        AiConversationResponseController controller =
+                new AiConversationResponseController(
+                        responseService,
+                        generationProvider,
+                        observerProvider,
+                        mock(com.example.temperate.common.codec.id.HybridBase64UrlCodec.class),
+                        cancellationService);
+
+        ResponseEntity<?> response = controller.cancel(
+                PRINCIPAL,
+                "4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(202);
+        assertThat(response.getBody().toString())
+                .contains("CANCEL_REQUESTED");
+        verify(cancellationService).requestUserStop(
+                eq(7L),
+                eq(UUID.fromString("4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6")),
+                any(String.class));
     }
 
     @Test

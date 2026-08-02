@@ -141,6 +141,33 @@ test('root host forwards AI conversation POST SSE without buffering its body', a
 	assert.match(response.headers.get('Cache-Control'), /no-transform/)
 })
 
+test('root host forwards the exact direct response cancellation endpoint', async () => {
+	let captured
+	const idempotencyKey = '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6'
+	const response = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/responses/cancel', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Idempotency-Key': idempotencyKey
+			}
+		}),
+		ENV,
+		runtime(async upstream => {
+			captured = upstream
+			return Response.json({ status: 'CANCEL_REQUESTED' }, { status: 202 })
+		})
+	)
+
+	assert.equal(response.status, 202)
+	assert.equal(captured.method, 'POST')
+	assert.equal(
+		captured.url,
+		'https://api.niko000o.site/api/ai/conversations/responses/cancel'
+	)
+	assert.equal(captured.headers.get('Idempotency-Key'), idempotencyKey)
+})
+
 test('sampled AI generation SSE reports edge read and forward summaries without body text', async () => {
 	const entries = []
 	const generationId = 'AZ-vpV3kfag70-0EMMUETQ'

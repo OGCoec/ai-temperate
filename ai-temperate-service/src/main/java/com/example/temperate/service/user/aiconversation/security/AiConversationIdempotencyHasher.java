@@ -35,6 +35,15 @@ public final class AiConversationIdempotencyHasher {
                 hmac.identify(PURPOSE, payload.array()).value());
     }
 
+    /**
+     * 返回可用于内存注册表和 Redis Key 的受保护请求标识，不传播原始 UUID 或用户 ID。
+     */
+    public HmacIdentifier identifier(long userId, UUID idempotencyKey) {
+        return HmacIdentifier.fromProtectedValue(
+                Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(digest(userId, idempotencyKey)));
+    }
+
     public HmacIdentifier concurrencyUserIdentifier(long userId) {
         if (userId <= 0L) {
             throw new IllegalArgumentException(

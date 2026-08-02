@@ -35,7 +35,7 @@ import org.springframework.stereotype.Service;
 /**
  * 在固定消息截止点上生成平台付费的持久化摘要，并以数据库 CAS 后置换 Redis 的旧持久化尾部。
  *
- * <p>持久压缩只读取 PostgreSQL 完整消息，临时压缩只读取 Redis 中已标记 INTERRUPTED 的轮次；
+ * <p>持久压缩只读取 PostgreSQL 完整消息，临时压缩只读取 Redis 中由用户明确停止的 INTERRUPTED 轮次；
  * 队列满或单飞租约冲突只放弃本轮派生任务，下次请求仍会重新检测，不影响 PostgreSQL 权威历史。</p>
  */
 @Service
@@ -278,6 +278,8 @@ public final class AiConversationCompactionServiceImpl
             List<AiConversationTurn> interrupted = snapshot.turns().stream()
                     .filter(turn -> turn.state()
                             == AiConversationTurnState.INTERRUPTED)
+                    // 技术断线和系统失败草稿只用于诊断，不能通过摘要重新进入后续模型上下文。
+                    .filter(AiConversationTurn::includedInPrompt)
                     // 单轮最多压缩 100 个临时轮次，保证删除字段数和模型输入都有明确上限。
                     .limit(100)
                     .toList();

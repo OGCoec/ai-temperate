@@ -126,3 +126,20 @@ test('rejects inconsistent attachment storage states', async () => {
 	)
 	delete globalThis.__aiConversationRequest
 })
+
+test('cancelResponse reuses the original idempotency key and does not send model content', async () => {
+	let call = null
+	const module = await loadApi(async (...args) => {
+		call = args
+		return { status: 'CANCEL_REQUESTED' }
+	})
+	const key = '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6'
+	const response = await module.aiConversationApi.cancelResponse(key)
+	assert.deepEqual(response, { status: 'CANCEL_REQUESTED' })
+	assert.equal(call[0], '/api/ai/conversations/responses/cancel')
+	assert.deepEqual(call[1], {
+		method: 'POST',
+		headers: { 'Idempotency-Key': key }
+	})
+	delete globalThis.__aiConversationRequest
+})

@@ -41,7 +41,12 @@
 						</view>
 						<view class="message-block assistant-message">
 							<view class="assistant-label"><text>AI</text><text v-if="message.stopped" class="stopped-label">已停止</text></view>
-							<text v-if="message.responseText" class="message-text">{{ message.responseText }}</text>
+							<user-markdown-message
+								v-if="message.responseText"
+								:text="message.responseText"
+								:streaming="Boolean(message.streaming)"
+								:message-key="message.localId || message.messagePublicId || ''"
+							/>
 							<text v-else-if="message.streaming" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
 							<view v-if="message.responseAttachments?.length" class="attachment-grid">
@@ -135,6 +140,12 @@
 		updateGeneration
 	} from '@/common/aichat/ai-conversation-generation-manager.js'
 	import { createAiConversationTextDrain } from '@/common/aichat/ai-conversation-text-drain.js'
+	import { createAiMarkdownRenderState } from '@/common/aichat/ai-markdown-render-state.js'
+	import {
+		findAiConversationStoppedDraft,
+		removeAiConversationStoppedDraft,
+		saveAiConversationStoppedDraft
+	} from '@/common/aichat/ai-conversation-stopped-draft.js'
 	import { createAiConversationStreamDiagnostics } from '@/common/aichat/ai-conversation-stream-diagnostics.js'
 	import { reportAiConversationStreamDiagnostics } from '@/common/aichat/ai-conversation-stream-diagnostics-reporter.js'
 	import { createAiConversationLifecycleDiagnostics } from '@/common/aichat/ai-conversation-lifecycle-diagnostics.js'
@@ -147,6 +158,7 @@
 		validateAttachmentSelection
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
+	import UserMarkdownMessage from './user-markdown-message.vue'
 	import {
 		appendLocalMessage,
 		clearAiConversationHistoryStale,
@@ -209,8 +221,22 @@
 		throw lastError || new Error('Cancellation request failed.')
 	}
 
+	async function cancelDirectResponseWithRetry(idempotencyKey) {
+		let lastError = null
+		for (const delay of CANCEL_RETRY_DELAYS) {
+			if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
+			try {
+				return await aiConversationApi.cancelResponse(idempotencyKey)
+			} catch (error) {
+				lastError = error
+				if (!retryableCancellationError(error)) break
+			}
+		}
+		throw lastError || new Error('Cancellation request failed.')
+	}
+
 	export default {
-		components: { UserChatAttachmentList },
+		components: { UserChatAttachmentList, UserMarkdownMessage },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -223,16 +249,19 @@
 				localPreviewUrls: new Map(),
 				generating: false,
 				activeStream: null,
+				transportCancelRequested: false,
 				activeGenerationPublicId: '',
 				activeGenerationSubscription: null,
 				cancelRequestedBeforeGenerationId: false,
 				generationCancelDispatching: false,
 				generationCancelSentFor: '',
 				textDrain: null,
+				markdownRenderState: null,
 				streamDiagnostics: null,
 				lifecycleDiagnostics: null,
 				terminalPresentationPending: false,
 				activeLocalId: '',
+				activeIdempotencyKey: '',
 				composerError: '',
 				scrollTarget: '',
 				historyResyncing: false,
@@ -251,6 +280,7 @@
 				})
 			}
 			this.textDrain?.close?.()
+			this.markdownRenderState?.close?.()
 			this.streamDiagnostics?.finish?.('UNMOUNT')
 			this.lifecycleDiagnostics?.finish?.('UNMOUNT')
 			this.cancelPendingUploads()
@@ -294,6 +324,7 @@
 				this.applyStore(readAiConversationStore())
 				if (!this.models.length && !this.modelsLoading) this.loadModels()
 				if (asyncGenerationEnabled()) this.restoreActiveGenerations()
+				else this.restoreStoppedDraftForCurrentConversation()
 			},
 			applyStore(value) {
 				Object.assign(this, value)
@@ -357,6 +388,7 @@
 				this.releaseAllLocalPreviews()
 				this.applyStore(selectConversation(publicId))
 				await this.reloadCurrentMessages()
+				if (!asyncGenerationEnabled()) this.restoreStoppedDraftForCurrentConversation()
 				if (asyncGenerationEnabled()) await this.resumeGenerationForConversation(publicId)
 			},
 			async reloadCurrentMessages() {
@@ -562,8 +594,10 @@
 				this.pendingAttachments = []
 				this.generating = true
 				this.textDrain?.close?.()
+				this.markdownRenderState?.close?.()
 				this.terminalPresentationPending = false
 				this.cancelRequestedBeforeGenerationId = false
+				this.transportCancelRequested = false
 				this.generationCancelDispatching = false
 				this.generationCancelSentFor = ''
 				// 字节边界诊断只观测 H5；生命周期诊断则在各平台统一服从独立构建开关。
@@ -589,6 +623,13 @@
 						this.scrollBottom()
 					}
 				})
+				this.markdownRenderState = createAiMarkdownRenderState({
+					onSnapshot: text => {
+						this.applyStore(patchLocalMessage(localId, { responseText: text }))
+						this.scrollBottom()
+					},
+					onDelta: chunk => this.textDrain?.push?.(chunk)
+				})
 				this.scrollBottom()
 				const command = {
 					conversationPublicId: this.currentConversationPublicId,
@@ -601,6 +642,7 @@
 						input: { text, attachments: attachmentRefs }
 					}
 				}
+				this.activeIdempotencyKey = command.idempotencyKey
 				if (asyncGenerationEnabled()) registerPendingGeneration({
 					idempotencyKey: command.idempotencyKey,
 					conversationPublicId: command.conversationPublicId,
@@ -619,6 +661,14 @@
 						},
 						onEvent: event => this.onStreamEvent(localId, event)
 					})
+					if (this.transportCancelRequested) {
+						this.activeStream?.close?.('USER_STOP', {
+							hasVisibleOutput: Boolean(this.messages.find(message =>
+								message.localId === localId)?.responseText),
+							emittedTextCharacters: String(this.messages.find(message =>
+								message.localId === localId)?.responseText || '').length
+						})
+					}
 					await this.activeStream.completed
 				} catch (error) {
 					if (this.generating && this.activeLocalId === localId) {
@@ -643,15 +693,30 @@
 				if (asyncGenerationEnabled() && localId !== this.activeLocalId) return
 				if (event.type === 'accepted') {
 					this.applyStore(setAcceptedConversation(event.data.conversationPublicId))
+					if (!asyncGenerationEnabled()
+						&& this.transportCancelRequested
+						&& this.activeIdempotencyKey) {
+						const current = this.messages.find(message =>
+							message.localId === localId)
+						saveAiConversationStoppedDraft({
+							conversationPublicId: event.data.conversationPublicId,
+							localId,
+							idempotencyKey: this.activeIdempotencyKey,
+							inputText: current?.contentText || '',
+							responseText: current?.responseText || '',
+							stoppedAt: new Date().toISOString()
+						})
+					}
 					if (event.data.generationPublicId) {
 						this.activeGenerationPublicId = event.data.generationPublicId
 						this.bindCurrentGenerationView(event.data.generationPublicId, localId)
 					}
 				} else if (event.type === 'snapshot') {
-					this.applyStore(patchLocalMessage(localId, {
-						responseText: String(event.data?.text || ''),
-						streaming: true
-					}))
+					this.markdownRenderState?.applySnapshot?.({
+						revision: Number(event.data?.revision || 0),
+						text: String(event.data?.text || '')
+					})
+					this.applyStore(patchLocalMessage(localId, { streaming: true }))
 					if (this.activeGenerationPublicId) updateGeneration(
 						this.activeGenerationPublicId, {
 							revision: Number(event.data?.revision || 0),
@@ -664,7 +729,11 @@
 						saving: true
 					}))
 				} else if (event.type === 'delta' && !asyncGenerationEnabled()) {
-					this.textDrain?.push?.(event.data.text || '')
+					this.markdownRenderState?.applyDelta?.({
+						sequence: event.data?.sequence,
+						eventId: event.data?.eventId || event.data?.id,
+						text: event.data?.text || ''
+					})
 				} else if (event.type === 'completed' && event.data?.generationPublicId) {
 					const generationPublicId = event.data.generationPublicId
 					markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
@@ -685,6 +754,10 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
 				} else if (event.type === 'completed') {
+					this.markdownRenderState?.complete?.({
+						finalText: event.data?.text
+					})
+					removeAiConversationStoppedDraft(this.activeIdempotencyKey)
 					this.finishTextPresentation(() => {
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: event.data.messagePublicId,
@@ -727,6 +800,8 @@
 						this.terminalPresentationPending = false
 						this.generating = false
 						this.textDrain = null
+						this.markdownRenderState?.close?.()
+						this.markdownRenderState = null
 					}
 				}
 				if (drain) drain.finish(finish)
@@ -749,16 +824,59 @@
 					this.generationCancelDispatching = false
 				}
 			},
-			async stop(reason = 'USER_STOP') {
+			async stop() {
 				if (!this.generating) return
-				const cancelReason = typeof reason === 'string'
-					? reason : 'USER_STOP'
+				// 最终 completed 已经到达时只剩最多五百毫秒视觉排空，不能再把已落库消息降级成本地 Stop 草稿。
+				if (this.terminalPresentationPending) return
 				if (this.currentConversationPublicId) {
 					this.applyStore(markAiConversationHistoryStale())
 				}
 				const cancelledLocalId = this.activeLocalId
 				const current = this.messages.find(message =>
 					message.localId === cancelledLocalId)
+				if (!asyncGenerationEnabled()) {
+					// 先冻结视觉层和当前可见文本，再等待取消确认，避免重试期间继续向 UI 追加内容。
+					this.textDrain?.close?.()
+					this.textDrain = null
+					this.transportCancelRequested = true
+					this.terminalPresentationPending = false
+					saveAiConversationStoppedDraft({
+						conversationPublicId: this.currentConversationPublicId,
+						localId: cancelledLocalId,
+						idempotencyKey: this.activeIdempotencyKey,
+						inputText: current?.contentText || '',
+						responseText: current?.responseText || '',
+						stoppedAt: new Date().toISOString()
+					})
+					this.applyStore(patchLocalMessage(cancelledLocalId, {
+						streaming: false,
+						saving: true,
+						stopped: true
+					}))
+					try {
+						if (this.activeIdempotencyKey) {
+							await cancelDirectResponseWithRetry(this.activeIdempotencyKey)
+						}
+					} catch (_) {
+						this.composerError = '取消请求暂未确认，连接已关闭，后端将按断线兜底处理。'
+					} finally {
+						this.activeStream?.close?.('USER_STOP', {
+							hasVisibleOutput: Boolean(current?.responseText),
+							emittedTextCharacters: String(current?.responseText || '').length
+						})
+						this.activeStream = null
+					}
+					this.streamDiagnostics?.finish?.('CANCEL')
+					this.applyStore(patchLocalMessage(cancelledLocalId, {
+						streaming: false,
+						saving: false,
+						stopped: true
+					}))
+					this.generating = false
+					this.$nextTick(() =>
+						this.lifecycleDiagnostics?.finish?.('CANCEL'))
+					return
+				}
 				if (asyncGenerationEnabled()) {
 					// Stop 是明确业务取消；响应头尚未返回时保留意图，拿到 Generation ID 后立即补发一次。
 					this.cancelRequestedBeforeGenerationId = true
@@ -768,14 +886,10 @@
 					}))
 					await this.requestGenerationCancellation(this.activeGenerationPublicId)
 				}
-				if (!asyncGenerationEnabled()) this.activeStream?.close?.(cancelReason, {
-					hasVisibleOutput: Boolean(current?.responseText),
-					emittedTextCharacters: String(current?.responseText || '').length
-				})
 				// 新链路保留全局 Observer 接收唯一终态，只解除当前组件订阅并停止本地文本渲染。
 				if (asyncGenerationEnabled()) {
-					// 淇濈暀褰撳墠 Generation 鐨勬湰鍦拌闃咃紝鐢ㄤ簬鏀跺埌鍚庡彴鐨勮鍗曠粓鎬佺‘璁わ紱
-					// Stop 鍙殏鍋滄湰鍦扮敤鎴风晫闈氦浜掞紝涓嶆妸 Observer 鏂紑褰撴垚妯″瀷鍙栨秷銆? 
+					// 保留当前 Generation 的全局 Observer，用于接收后台唯一终态确认。
+					// Stop 只暂停当前页面交互，不能把 Observer 断开误当成模型取消。
 					this.activeStream = null
 				}
 				this.textDrain?.close?.()
@@ -808,11 +922,30 @@
 				this.resyncStaleHistory()
 			},
 			handlePageHide() {
+				// 页面切换只改变可见性，不代表用户取消生成；保留 SSE 和本地增量队列，返回页面后继续接收/展示。
+				if (this.generating) return
 				if (!asyncGenerationEnabled()) {
-					if (this.generating) this.stop('PAGE_HIDDEN')
 					this.applyStore(discardTransientMessages())
 					this.releaseAllLocalPreviews()
 				}
+			},
+			restoreStoppedDraftForCurrentConversation() {
+				if (asyncGenerationEnabled()) return
+				const stopped = findAiConversationStoppedDraft(
+					this.currentConversationPublicId)
+				if (!stopped || this.messages.some(message =>
+					message.localId === stopped.localId)) return
+				this.applyStore(appendLocalMessage({
+					localId: stopped.localId,
+					contentText: stopped.inputText,
+					contentAttachments: [],
+					responseText: stopped.responseText,
+					responseAttachments: [],
+					streaming: false,
+					saving: false,
+					stopped: true,
+					error: ''
+				}))
 			},
 			handlePageUnload() {
 				if (this.activeStream && this.currentConversationPublicId) {

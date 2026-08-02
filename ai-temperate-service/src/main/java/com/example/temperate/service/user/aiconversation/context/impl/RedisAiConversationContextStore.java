@@ -9,6 +9,7 @@ import com.example.temperate.service.user.aiconversation.context.AiConversationC
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextWriteOutcome;
 import com.example.temperate.service.user.aiconversation.context.AiConversationEphemeralStart;
+import com.example.temperate.service.user.aiconversation.context.AiConversationInterruptionSource;
 import com.example.temperate.service.user.aiconversation.context.AiConversationTurn;
 import com.example.temperate.service.user.aiconversation.context.AiConversationTurnState;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
@@ -70,6 +71,8 @@ public final class RedisAiConversationContextStore
             script("lua/ai-conversation/start_ephemeral.lua");
     private static final DefaultRedisScript<Long> MARK_INTERRUPTED_SCRIPT =
             script("lua/ai-conversation/mark_ephemeral_interrupted.lua");
+    private static final DefaultRedisScript<Long> SAVE_INTERRUPTED_SCRIPT =
+            script("lua/ai-conversation/save_ephemeral_interrupted.lua");
     private static final DefaultRedisScript<Long> COMMIT_SCRIPT =
             script("lua/ai-conversation/commit_turn.lua");
     private static final DefaultRedisScript<Long> REPLACE_COMPACTION_SCRIPT =
@@ -332,6 +335,46 @@ public final class RedisAiConversationContextStore
     }
 
     @Override
+    public AiConversationContextWriteOutcome saveInterruptedTurn(
+            String conversationPublicId,
+            String generation,
+            long ephemeralOrdinal,
+            List<String> assistantChunks,
+            AiConversationInterruptionSource interruptionSource) {
+        Objects.requireNonNull(interruptionSource);
+        List<String> chunks = assistantChunks == null
+                ? List.of() : List.copyOf(assistantChunks);
+        int commandBytes = chunks.stream()
+                .mapToInt(chunk -> Objects.requireNonNull(chunk)
+                        .getBytes(StandardCharsets.UTF_8).length)
+                .sum();
+        if (commandBytes > MAX_COMMAND_BYTES
+                || chunks.size() + 2 > properties.maxHashFields()) {
+            return AiConversationContextWriteOutcome.UNAVAILABLE;
+        }
+        List<String> arguments = new ArrayList<>(5 + chunks.size());
+        arguments.add(generation);
+        arguments.add(Long.toString(ephemeralOrdinal));
+        arguments.add(interruptionSource.name());
+        arguments.add(Integer.toString(chunks.size()));
+        arguments.add(Integer.toString(properties.maxHashFields()));
+        arguments.addAll(chunks);
+        try {
+            Long result = redisTemplate.execute(
+                    SAVE_INTERRUPTED_SCRIPT,
+                    List.of(key(conversationPublicId)),
+                    arguments.toArray(String[]::new));
+            return Long.valueOf(1L).equals(result)
+                    ? AiConversationContextWriteOutcome.APPLIED
+                    : Long.valueOf(0L).equals(result)
+                            ? AiConversationContextWriteOutcome.GENERATION_MISMATCH
+                            : AiConversationContextWriteOutcome.UNAVAILABLE;
+        } catch (RuntimeException failure) {
+            return AiConversationContextWriteOutcome.UNAVAILABLE;
+        }
+    }
+
+    @Override
     public AiConversationContextWriteOutcome commitPersistedTurn(
             String conversationPublicId,
             String generation,
@@ -580,7 +623,10 @@ public final class RedisAiConversationContextStore
                                 turn.state().name(),
                                 turn.ordinal(),
                                 turn.reference(),
-                                snapshot.createdAt())));
+                                snapshot.createdAt(),
+                                turn.interruptionSource() == null
+                                        ? null : turn.interruptionSource().name(),
+                                0)));
             }
         }
         return fields;
@@ -685,7 +731,8 @@ public final class RedisAiConversationContextStore
                     meta.ordinal(),
                     user,
                     assistant,
-                    AiConversationTurnState.valueOf(meta.state()));
+                    AiConversationTurnState.valueOf(meta.state()),
+                    interruptionSource(meta.interruptionSource()));
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException(
                     "AI conversation turn cache is invalid.", exception);
@@ -716,6 +763,12 @@ public final class RedisAiConversationContextStore
                 .sorted(Map.Entry.comparingByKey())
                 .map(Map.Entry::getValue)
                 .reduce("", String::concat);
+    }
+
+    private static AiConversationInterruptionSource interruptionSource(
+            String value) {
+        return value == null || value.isBlank()
+                ? null : AiConversationInterruptionSource.valueOf(value);
     }
 
     private void putChunked(
@@ -887,7 +940,9 @@ public final class RedisAiConversationContextStore
             String state,
             long ordinal,
             String usagePublicId,
-            OffsetDateTime createdAt) {
+            OffsetDateTime createdAt,
+            String interruptionSource,
+            Integer assistantChunkCount) {
     }
 
     private static final class TurnParts {

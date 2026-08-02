@@ -7,12 +7,12 @@ function source(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, relativePath), 'utf8')
 }
 
-test('frontend async generation defaults to enabled and supports explicit rollback', () => {
+test('frontend defaults to direct MVC SSE and supports explicit async rollback', () => {
 	const vite = source('../../vite.config.js')
 
 	assert.match(
 		vite,
-		/process\.env\.AI_CONVERSATION_ASYNC_GENERATION_ENABLED !== 'false'/
+		/process\.env\.AI_CONVERSATION_ASYNC_GENERATION_ENABLED === 'true'/
 	)
 })
 
@@ -33,7 +33,10 @@ test('explicit stop persists cancellation even when the generation id arrives la
 	assert.match(panel, /return await aiConversationApi\.cancelGeneration\(generationPublicId\)/)
 	assert.match(panel, /cancelRequestedBeforeGenerationId = true/)
 	assert.match(panel, /onGenerationId:[\s\S]*requestGenerationCancellation\(generationPublicId\)/)
-	assert.match(panel, /if \(!asyncGenerationEnabled\(\)\) this\.activeStream\?\.close/)
+	assert.match(panel, /saveAiConversationStoppedDraft\(/)
+	assert.match(panel, /cancelDirectResponseWithRetry\(this\.activeIdempotencyKey\)/)
+	assert.match(panel, /aiConversationApi\.cancelResponse\(idempotencyKey\)/)
+	assert.match(panel, /this\.activeStream\?\.close\?\.\('USER_STOP'/)
 })
 
 test('cancel request failure keeps the global observer for authoritative terminal state', () => {
@@ -46,7 +49,7 @@ test('cancel request failure keeps the global observer for authoritative termina
 	const stopMethod = panel.slice(stopStart, stopEnd)
 
 	assert.doesNotMatch(cancellationMethod, /detachGenerationObserver\(generationPublicId\)/)
-	assert.match(cancellationMethod, /cancelGeneration\(generationPublicId\)/)
+	assert.match(cancellationMethod, /cancelGenerationWithRetry\(generationPublicId\)/)
 	assert.doesNotMatch(stopMethod, /activeGenerationSubscription\?\.\(\)/)
 })
 

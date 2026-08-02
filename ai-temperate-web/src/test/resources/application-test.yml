@@ -131,9 +131,9 @@ app:
     inflight-lease-ttl: 45s
     # 测试压缩租约使用五分钟。
     compaction-lease-ttl: 5m
-    # 测试流片最多累计二百五十毫秒。
+    # 测试保留异步 Generation 回滚链路的二百五十毫秒批次，直接 MVC SSE 不使用该定时器。
     stream-flush-interval: 250ms
-    # 测试 Redis 文本字段按四 KiB 切分。
+    # 测试 Redis 终态草稿和异步回滚链路文本字段按四 KiB 切分。
     stream-flush-bytes: 4096
     # 测试数据库批量读取保持五百条。
     context-page-size: 500
@@ -157,6 +157,10 @@ app:
     reconciliation-batch-size: 500
     # 测试环境默认关闭历史系统失败自动补退，防止上下文启动时修改外部状态。
     historical-system-failure-auto-refund-enabled: false
+    # 测试不创建 RabbitMQ 连接工厂，因此关闭跨实例直接 SSE Stop 控制拓扑。
+    direct-response-cancellation:
+      # 单元和上下文测试只验证本机 Registry 与 Redis 契约，不连接任何 Broker。
+      rabbit-enabled: false
     # 测试系统提示不包含任何生产业务数据。
     system-prompt: 你是测试环境中的可靠 AI 助手。
     # 测试会话附件使用完全虚构的 OSS 边界，不执行任何外部请求。

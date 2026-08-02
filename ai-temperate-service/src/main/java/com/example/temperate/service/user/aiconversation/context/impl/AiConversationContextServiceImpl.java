@@ -101,18 +101,21 @@ public final class AiConversationContextServiceImpl
             AiConversationContent currentInput) {
         AiConversationContextSnapshot snapshot = loadSnapshot(
                 conversationId, conversationPublicId);
+        List<AiConversationTurn> promptTurns = snapshot.turns().stream()
+                .filter(AiConversationTurn::includedInPrompt)
+                .toList();
         long estimated = tokenEstimator.estimate(
                 properties.systemPrompt(),
                 snapshot.durableCompactionJson(),
                 snapshot.ephemeralCompactionJson(),
-                snapshot.turns(),
+                promptTurns,
                 currentInput);
         verifyBudget(model, estimated);
         return new AiConversationPromptSnapshot(
                 properties.systemPrompt(),
                 snapshot.durableCompactionJson(),
                 snapshot.ephemeralCompactionJson(),
-                snapshot.turns(),
+                promptTurns,
                 currentInput,
                 snapshot.generation(),
                 estimated,

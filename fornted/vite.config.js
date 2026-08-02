@@ -31,7 +31,7 @@ export default defineConfig(() => {
 			process.env.AI_CONVERSATION_LIFECYCLE_DIAGNOSTICS_ENABLED === 'true'
 		),
 		__AI_CONVERSATION_ASYNC_GENERATION_ENABLED__: JSON.stringify(
-			process.env.AI_CONVERSATION_ASYNC_GENERATION_ENABLED !== 'false'
+			process.env.AI_CONVERSATION_ASYNC_GENERATION_ENABLED === 'true'
 		)
 	}
 	const platform = process.env.UNI_PLATFORM

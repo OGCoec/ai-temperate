@@ -49,7 +49,7 @@ final class AiConversationRedisContractTest {
                 .contains("HDEL")
                 .contains("deleteCount")
                 .contains("writeCount")
-                .doesNotContain("KEYS")
+                .contains("KEYS[1]")
                 .doesNotContain("SCAN")
                 .doesNotContain("PEXPIRE");
         assertThat(store)
@@ -76,17 +76,20 @@ final class AiConversationRedisContractTest {
                 .contains("return 3")
                 .contains("PEXPIREAT");
         assertThat(renew).contains("ZSCORE").contains("ZADD");
-        assertThat(release).contains("ZREM").doesNotContain("KEYS");
+        assertThat(release).contains("ZREM").contains("KEYS[1]").contains("KEYS[2]");
     }
 
     @Test
     void interruptedStateIsPersistedWithoutExtendingContextTtl() throws IOException {
         String interrupted = read(
-                "ai-temperate-service/src/main/resources/lua/ai-conversation/mark_ephemeral_interrupted.lua");
+                "ai-temperate-service/src/main/resources/lua/ai-conversation/save_ephemeral_interrupted.lua");
 
         assertThat(interrupted)
                 .contains("generation")
                 .contains("INTERRUPTED")
+                .contains("interruptionSource")
+                .contains("assistantChunkCount")
+                .contains("maximumFields")
                 .doesNotContain("EXPIRE")
                 .doesNotContain("PEXPIRE");
     }
@@ -140,18 +143,17 @@ final class AiConversationRedisContractTest {
     }
 
     @Test
-    void generationMismatchReplaysTheWholeBoundedAnswer() throws IOException {
+    void generationMismatchSavesTheWholeBoundedAnswerAtTerminal() throws IOException {
         String response = read(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/response/impl/AiConversationResponseServiceImpl.java");
         String context = read(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/context/impl/AiConversationContextServiceImpl.java");
 
         assertThat(response)
-                .contains("retryAfterGenerationMismatch")
+                .contains("restartEphemeralAfterGenerationMismatch")
                 .contains("state.answer.toString()")
-                .contains("state.redisChunk.set(completeAnswerChunks.size())")
-                .contains("markEphemeralInterrupted")
-                .contains("restored == AiConversationContextWriteOutcome.APPLIED")
+                .contains("saveInterruptedTurn")
+                .contains("AiConversationInterruptionSource")
                 .contains("commitPersistedCache")
                 .contains("contextStore.invalidate(conversationPublicId)");
         assertThat(context)

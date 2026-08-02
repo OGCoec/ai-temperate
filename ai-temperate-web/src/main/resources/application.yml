@@ -240,9 +240,9 @@ app:
     inflight-lease-ttl: ${AI_CONVERSATION_INFLIGHT_LEASE_TTL:45s}
     # 压缩单飞租约覆盖一次受限内部压缩调用。
     compaction-lease-ttl: ${AI_CONVERSATION_COMPACTION_LEASE_TTL:5m}
-    # 流式文本最多累计二百五十毫秒后批量写入一次 Redis。
+    # 二百五十毫秒批次仅供关闭默认开关后的异步 Generation 回滚链路使用，直接 MVC SSE 不经过该定时器。
     stream-flush-interval: ${AI_CONVERSATION_STREAM_FLUSH_INTERVAL:250ms}
-    # 流式文本达到四 KiB 时按 UTF-8 安全边界拆成独立 Hash 字段。
+    # Redis 终态草稿和异步回滚链路按四 KiB UTF-8 安全边界拆成独立 Hash 字段。
     stream-flush-bytes: ${AI_CONVERSATION_STREAM_FLUSH_BYTES:4096}
     # PostgreSQL 会话消息重建和压缩读取每批最多五百条。
     context-page-size: ${AI_CONVERSATION_CONTEXT_PAGE_SIZE:500}
@@ -266,16 +266,20 @@ app:
     reconciliation-batch-size: ${AI_CONVERSATION_RECONCILIATION_BATCH_SIZE:500}
     # 历史系统失败自动补退默认关闭，核对候选数量和金额后再显式开启。
     historical-system-failure-auto-refund-enabled: ${AI_CONVERSATION_HISTORICAL_SYSTEM_FAILURE_AUTO_REFUND_ENABLED:false}
-    # 后台异步生成与 RabbitMQ 终态结算默认启用，部署前必须先创建 Generation 两张表并准备消息基础设施。
+    # 直接 MVC SSE 的显式 Stop 协调配置不承载模型正文。
+    direct-response-cancellation:
+      # 多实例生产默认启用 RabbitMQ Owner 路由；仅测试或单实例诊断可显式关闭并依赖 Redis 意图与浏览器 Abort。
+      rabbit-enabled: ${AI_CONVERSATION_DIRECT_RESPONSE_RABBIT_ENABLED:true}
+    # 后台异步 Generation 保留为回滚路径，普通用户默认使用直接 MVC POST SSE。
     async-generation:
-      # 新链路总开关默认启用；紧急回滚时通过环境变量设为 false 恢复原同步 POST SSE 行为。
-      enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}
+      # 新链路总开关默认关闭；需要回滚到异步 Generation 时显式设为 true。
+      enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:false}
       # 每个生产实例必须使用部署系统注入的唯一标识以定向路由取消命令。
       instance-id: ${AI_CONVERSATION_INSTANCE_ID:local-single-instance}
       # SSE 失联允许三十秒重连，期间模型生成不得被观察者断开取消。
       detach-grace: ${AI_CONVERSATION_DETACH_GRACE:30s}
-      # 一秒 SSE 心跳仅用于快速感知真正断开的浏览器或 App 连接，不触发数据库轮询。
-      observer-heartbeat: ${AI_CONVERSATION_OBSERVER_HEARTBEAT:1s}
+      # 十五秒 SSE 心跳用于感知真正断开的浏览器或 App 连接，不触发数据库轮询。
+      observer-heartbeat: ${AI_CONVERSATION_OBSERVER_HEARTBEAT:15s}
       # 已计费终态保留二十四小时后才允许进行有界批量清理。
       terminal-retention: ${AI_CONVERSATION_TERMINAL_RETENTION:24h}
       # 单实例默认使用四个有界 Worker 消费者且每个消费者一次只处理一个生成。

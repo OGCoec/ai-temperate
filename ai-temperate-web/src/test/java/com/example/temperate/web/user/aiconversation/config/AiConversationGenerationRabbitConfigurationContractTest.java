@@ -22,14 +22,35 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 class AiConversationGenerationRabbitConfigurationContractTest {
 
     @Test
-    void asyncGenerationIsEnabledByDefaultUnlessEnvironmentOverridesIt() throws IOException {
+    void directMvcSseIsDefaultUnlessEnvironmentEnablesAsyncGeneration() throws IOException {
         String yaml = Files.readString(findProjectRoot().resolve(
                 "ai-temperate-web/src/main/resources/application.yml"),
                 StandardCharsets.UTF_8);
+        String testYaml = Files.readString(findProjectRoot().resolve(
+                "ai-temperate-web/src/test/resources/application-test.yml"),
+                StandardCharsets.UTF_8);
 
         assertThat(yaml)
-                .contains("enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}")
-                .doesNotContain("enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:false}");
+                .contains("enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:false}")
+                .contains("rabbit-enabled: ${AI_CONVERSATION_DIRECT_RESPONSE_RABBIT_ENABLED:true}")
+                .doesNotContain("enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}");
+        assertThat(testYaml).contains("rabbit-enabled: false");
+    }
+
+    @Test
+    void directResponseCancellationUsesPerInstanceQuorumControlQueues() {
+        AiConversationDirectResponseRabbitConfiguration configuration =
+                new AiConversationDirectResponseRabbitConfiguration();
+        Queue first = configuration.aiConversationDirectResponseControlQueue(
+                properties("instance-a"));
+        Queue second = configuration.aiConversationDirectResponseControlQueue(
+                properties("instance-b"));
+
+        assertThat(first.isDurable()).isTrue();
+        assertThat(first.getArguments())
+                .containsEntry("x-queue-type", "quorum")
+                .containsKey("x-dead-letter-exchange");
+        assertThat(first.getName()).isNotEqualTo(second.getName());
     }
 
     @Test

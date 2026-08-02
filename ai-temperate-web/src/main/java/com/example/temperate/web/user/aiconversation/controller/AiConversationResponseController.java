@@ -13,12 +13,15 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationObserverService;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationObserverSession;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationService;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationStatus;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.web.aiconversation.AiConversationPublicId;
 import com.example.temperate.web.user.aiconversation.api.AiConversationResponseRequest;
+import com.example.temperate.web.user.aiconversation.api.AiConversationDirectResponseCancelResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -29,6 +32,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
@@ -63,17 +67,20 @@ public final class AiConversationResponseController {
     private final ObjectProvider<AiConversationGenerationService> generationServiceProvider;
     private final ObjectProvider<AiConversationGenerationObserverService> observerServiceProvider;
     private final HybridBase64UrlCodec hybridIdCodec;
+    private final AiConversationDirectResponseCancellationService cancellationService;
 
     @Autowired
     public AiConversationResponseController(
             AiConversationResponseService responseService,
             ObjectProvider<AiConversationGenerationService> generationServiceProvider,
             ObjectProvider<AiConversationGenerationObserverService> observerServiceProvider,
-            HybridBase64UrlCodec hybridIdCodec) {
+            HybridBase64UrlCodec hybridIdCodec,
+            AiConversationDirectResponseCancellationService cancellationService) {
         this.responseService = Objects.requireNonNull(responseService);
         this.generationServiceProvider = Objects.requireNonNull(generationServiceProvider);
         this.observerServiceProvider = Objects.requireNonNull(observerServiceProvider);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
+        this.cancellationService = Objects.requireNonNull(cancellationService);
     }
 
     /**
@@ -84,6 +91,7 @@ public final class AiConversationResponseController {
         this.generationServiceProvider = null;
         this.observerServiceProvider = null;
         this.hybridIdCodec = null;
+        this.cancellationService = null;
     }
 
     @PostMapping(
@@ -150,20 +158,47 @@ public final class AiConversationResponseController {
                 request);
     }
 
+    @PostMapping(
+            path = "/responses/cancel",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "幂等停止当前直接流",
+            description = "使用原始发送请求的 UUIDv4 幂等键请求停止；接口只返回有限状态，"
+                    + "模型正文和用户身份不会进入响应。")
+    public ResponseEntity<AiConversationDirectResponseCancelResponse> cancel(
+            @AuthenticationPrincipal SessionPrincipal principal,
+            @RequestHeader(IDEMPOTENCY_HEADER)
+            @Parameter(
+                    name = IDEMPOTENCY_HEADER,
+                    in = ParameterIn.HEADER,
+                    required = true,
+                    description = "必须复用原始发送请求的 UUIDv4 幂等键",
+                    schema = @Schema(
+                            type = "string",
+                            format = "uuid",
+                            example = "4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6"))
+            String idempotencyKey) {
+        UUID idempotencyUuid = parseIdempotencyKey(idempotencyKey);
+        AiConversationDirectResponseCancellationStatus status =
+                cancellationService.requestUserStop(
+                        principal.userId(),
+                        idempotencyUuid,
+                        currentTraceId());
+        ResponseEntity.BodyBuilder builder = status
+                        == AiConversationDirectResponseCancellationStatus
+                                .CANCEL_REQUESTED
+                ? ResponseEntity.status(HttpStatus.ACCEPTED)
+                : ResponseEntity.ok();
+        return builder.body(new AiConversationDirectResponseCancelResponse(
+                status.name()));
+    }
+
     private ResponseEntity<Flux<ServerSentEvent<Object>>> response(
             SessionPrincipal principal,
             AiConversationPublicId conversationPublicId,
             String idempotencyKey,
             AiConversationResponseRequest request) {
-        UUID idempotencyUuid;
-        try {
-            idempotencyUuid = UUID.fromString(idempotencyKey);
-        } catch (IllegalArgumentException exception) {
-            throw invalidIdempotencyKey();
-        }
-        if (idempotencyUuid.version() != 4 || idempotencyUuid.variant() != 2) {
-            throw invalidIdempotencyKey();
-        }
+        UUID idempotencyUuid = parseIdempotencyKey(idempotencyKey);
         AiConversationResponseCommand command = new AiConversationResponseCommand(
                         principal.userId(),
                         principal.publicId(),
@@ -244,6 +279,29 @@ public final class AiConversationResponseController {
                 AiConversationErrorCode.AI_REQUEST_INVALID,
                 "Idempotency-Key must be a UUIDv4.",
                 false);
+    }
+
+    private static UUID parseIdempotencyKey(String idempotencyKey) {
+        try {
+            if (idempotencyKey == null) {
+                throw invalidIdempotencyKey();
+            }
+            UUID idempotencyUuid = UUID.fromString(idempotencyKey);
+            if (idempotencyUuid.version() != 4
+                    || idempotencyUuid.variant() != 2) {
+                throw invalidIdempotencyKey();
+            }
+            return idempotencyUuid;
+        } catch (IllegalArgumentException exception) {
+            throw invalidIdempotencyKey();
+        }
+    }
+
+    private static String currentTraceId() {
+        String traceId = org.slf4j.MDC.get("traceId");
+        return traceId != null && traceId.matches("[A-Za-z0-9_-]{1,128}")
+                ? traceId
+                : "unavailable";
     }
 
     private static ServerSentEvent<Object> sse(
