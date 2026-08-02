@@ -31,3 +31,11 @@ test('web search requires the feature flag plus RESPONSES and WEB_SEARCH', () =>
 		capabilities: ['CHAT_COMPLETIONS']
 	}), 'OFF')
 })
+
+test('ordinary frontend builds expose web search unless explicitly disabled', () => {
+	const vite = fs.readFileSync(path.join(__dirname, '..', '..', 'vite.config.js'),
+		'utf8')
+
+	assert.match(vite,
+		/process\.env\.AI_CONVERSATION_WEB_SEARCH_ENABLED !== 'false'/)
+})

@@ -141,19 +141,21 @@
 								<uni-icons type="down" size="14" color="#9ba6a0" />
 							</view>
 						</picker>
-						<picker
+						<button
 							v-if="webSearchAvailable"
-							:range="webSearchOptions"
-							range-key="label"
-							:value="selectedWebSearchModeIndex"
+							class="web-search-toggle"
+							:class="{ 'is-active': webSearchRequired }"
+							type="button"
+							role="switch"
+							:aria-checked="String(webSearchRequired)"
 							:disabled="generating"
-							@change="selectWebSearchMode"
+							@click="toggleWebSearch"
 						>
-							<view class="web-search-picker">
-								<text>{{ selectedWebSearchModeLabel }}</text>
-								<uni-icons type="down" size="14" color="#9ba6a0" />
+							<text>联网搜索</text>
+							<view class="web-search-track" aria-hidden="true">
+								<view class="web-search-thumb"></view>
 							</view>
-						</picker>
+						</button>
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
 				</view>
@@ -199,7 +201,6 @@
 	} from '@/common/aichat/ai-conversation-research-session.js'
 	import {
 		AI_CONVERSATION_WEB_SEARCH_MODES,
-		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
 		aiConversationWebSearchEnabled,
 		modelSupportsAiConversationWebSearch,
 		normalizeAiConversationWebSearchMode
@@ -363,17 +364,12 @@
 				return this.reasoningEffortOptions.find(option =>
 					option.value === this.selectedReasoningEffortLevel)?.label || 'Medium'
 			},
-			webSearchOptions() { return AI_CONVERSATION_WEB_SEARCH_OPTIONS },
 			webSearchAvailable() {
 				return modelSupportsAiConversationWebSearch(this.selectedModel)
 			},
-			selectedWebSearchModeIndex() {
-				return Math.max(0, AI_CONVERSATION_WEB_SEARCH_OPTIONS.findIndex(option =>
-					option.value === this.selectedWebSearchMode))
-			},
-			selectedWebSearchModeLabel() {
-				return AI_CONVERSATION_WEB_SEARCH_OPTIONS.find(option =>
-					option.value === this.selectedWebSearchMode)?.label || '联网 · 关闭'
+			webSearchRequired() {
+				return this.selectedWebSearchMode
+					=== AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
 			},
 			sendGate() {
 				return deriveSendGate({
@@ -537,12 +533,11 @@
 				this.selectedReasoningEffortLevel = level
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 			},
-			selectWebSearchMode(event) {
-				const option = AI_CONVERSATION_WEB_SEARCH_OPTIONS[
-					Number(event.detail.value)]
-				if (!option) return
-				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
-					option.value, this.selectedModel)
+			toggleWebSearch() {
+				if (this.generating || !this.webSearchAvailable) return
+				this.selectedWebSearchMode = this.webSearchRequired
+					? AI_CONVERSATION_WEB_SEARCH_MODES.OFF
+					: AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
 			},
 			async chooseAttachments() {
 				if (this.attachmentPickerBusy) return
@@ -1299,7 +1294,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .research-source { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .research-source, .web-search-toggle { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -1350,10 +1345,18 @@
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
 	.composer-meta { justify-content: space-between; gap: 12px; margin-top: 7px; padding: 0 4px; }
 	.composer-controls { min-width: 0; gap: 4px; }
-	.model-picker, .reasoning-effort-picker, .web-search-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
+	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.reasoning-effort-picker { color: #8fdcbe; }
-	.web-search-picker { color: #9bc8ec; }
+	.web-search-toggle { min-height: 36px; margin: 0; padding: 0 8px 0 10px; display: flex; align-items: center; gap: 7px; border-radius: 10px; color: #9bc8ec; font-size: 12px; line-height: 1; }
+	.web-search-toggle::after { border: 0; }
+	.web-search-toggle:focus-visible { outline: 2px solid rgba(55, 211, 154, .7); outline-offset: 2px; }
+	.web-search-toggle[disabled] { opacity: .48; }
+	.web-search-track { width: 32px; height: 18px; flex: 0 0 32px; position: relative; border-radius: 999px; background: #3b4540; transition: background-color 160ms ease; }
+	.web-search-thumb { width: 14px; height: 14px; position: absolute; top: 2px; left: 2px; border-radius: 50%; background: #d5ddd9; transform: translateX(0); transition: transform 160ms ease, background-color 160ms ease; }
+	.web-search-toggle.is-active { color: #8fdcbe; }
+	.web-search-toggle.is-active .web-search-track { background: rgba(55, 211, 154, .45); }
+	.web-search-toggle.is-active .web-search-thumb { background: #75dfb7; transform: translateX(14px); }
 	.composer-note { color: #64706a; font-size: 10px; text-align: right; }
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #8ba198; font-size: 11px; }
 	.composer-error { display: block; padding: 5px 6px 0; }

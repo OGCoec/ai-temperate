@@ -34,7 +34,7 @@ export default defineConfig(() => {
 			process.env.AI_CONVERSATION_ASYNC_GENERATION_ENABLED === 'true'
 		),
 		__AI_CONVERSATION_WEB_SEARCH_ENABLED__: JSON.stringify(
-			process.env.AI_CONVERSATION_WEB_SEARCH_ENABLED === 'true'
+			process.env.AI_CONVERSATION_WEB_SEARCH_ENABLED !== 'false'
 		)
 	}
 	const platform = process.env.UNI_PLATFORM
