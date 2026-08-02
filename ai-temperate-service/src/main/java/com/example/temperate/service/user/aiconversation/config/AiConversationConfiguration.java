@@ -22,6 +22,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
         AiConversationLifecycleDiagnosticsProperties.class,
         AiConversationStreamDiagnosticsProperties.class,
         AiConversationAsyncGenerationProperties.class,
+        AiConversationWebSearchProperties.class,
         AiConversationAttachmentProperties.class,
         AiConversationSecurityProperties.class,
         AiInferenceProperties.class
