@@ -8,7 +8,23 @@ public record AiConversationAcceptedData(
         String usagePublicId,
         String modelPublicId,
         boolean newConversation,
-        String generationPublicId) {
+        String generationPublicId,
+        long sequence) {
+
+    public AiConversationAcceptedData(
+            String conversationPublicId,
+            String usagePublicId,
+            String modelPublicId,
+            boolean newConversation,
+            String generationPublicId) {
+        this(
+                conversationPublicId,
+                usagePublicId,
+                modelPublicId,
+                newConversation,
+                generationPublicId,
+                0L);
+    }
 
     public AiConversationAcceptedData(
             String conversationPublicId,
@@ -20,6 +36,7 @@ public record AiConversationAcceptedData(
                 usagePublicId,
                 modelPublicId,
                 newConversation,
-                null);
+                null,
+                0L);
     }
 }

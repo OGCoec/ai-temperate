@@ -53,11 +53,17 @@ import com.example.temperate.service.user.aiconversation.lease.AiConversationLea
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseService;
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseType;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelChunk;
-import com.example.temperate.service.user.aiconversation.model.AiConversationModelClient;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityPhase;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityStatus;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategyRegistry;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationActivityData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseActiveRegistry;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationHandle;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseControlStore;
@@ -71,6 +77,8 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
+import com.example.temperate.service.user.aiconversation.response.AiConversationReasoningSummaryData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationSourceData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingAction;
@@ -86,6 +94,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -119,6 +128,7 @@ public final class AiConversationResponseServiceImpl
 
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
     private static final int MAX_ASSISTANT_BYTES = 4 * 1024 * 1024;
+    private static final int MAX_RESEARCH_SOURCES = 200;
     private static final int MAX_INTERRUPTION_FINALIZATION_ATTEMPTS = 3;
     private static final TypeReference<List<AiConversationAttachment>> ATTACHMENT_LIST =
             new TypeReference<>() { };
@@ -143,7 +153,7 @@ public final class AiConversationResponseServiceImpl
     private final AiConversationConcurrencyService concurrencyService;
     private final AiConversationLeaseService leaseService;
     private final AiConversationCompactionService compactionService;
-    private final AiConversationModelClient modelClient;
+    private final AiConversationStreamingStrategyRegistry streamingStrategies;
     private final AiConversationTextTokenizer tokenizer;
     private final AiConversationIdempotencyHasher idempotencyHasher;
     private final AiConversationDirectResponseActiveRegistry activeRegistry;
@@ -178,7 +188,7 @@ public final class AiConversationResponseServiceImpl
             AiConversationConcurrencyService concurrencyService,
             AiConversationLeaseService leaseService,
             AiConversationCompactionService compactionService,
-            AiConversationModelClient modelClient,
+            AiConversationStreamingStrategyRegistry streamingStrategies,
             AiConversationTextTokenizer tokenizer,
             AiConversationIdempotencyHasher idempotencyHasher,
             AiConversationDirectResponseActiveRegistry activeRegistry,
@@ -214,7 +224,7 @@ public final class AiConversationResponseServiceImpl
         this.concurrencyService = Objects.requireNonNull(concurrencyService);
         this.leaseService = Objects.requireNonNull(leaseService);
         this.compactionService = Objects.requireNonNull(compactionService);
-        this.modelClient = Objects.requireNonNull(modelClient);
+        this.streamingStrategies = Objects.requireNonNull(streamingStrategies);
         this.tokenizer = Objects.requireNonNull(tokenizer);
         this.idempotencyHasher = Objects.requireNonNull(idempotencyHasher);
         this.activeRegistry = Objects.requireNonNull(activeRegistry);
@@ -490,7 +500,7 @@ public final class AiConversationResponseServiceImpl
                     }
                 };
         state.cancellationHandle = cancellationHandle;
-        Flux<AiConversationModelChunk> upstream = Flux.defer(() -> {
+        Flux<AiConversationModelEvent> upstream = Flux.defer(() -> {
                     // 先注册本机句柄和 Redis Owner，再订阅模型；显式 Stop 的意图会在下方订阅闸门再次检查。
                     activeRegistry.register(
                             directRequestIdentifier.value(), cancellationHandle);
@@ -507,14 +517,25 @@ public final class AiConversationResponseServiceImpl
                     lifecycle.markConnecting();
                     lifecycleDiagnosticService.record(
                             traceContext, "UPSTREAM_SUBSCRIBE_STARTED");
-                    return lifecycleDiagnosticService.withContext(
-                            traceContext,
-                            () -> modelClient.stream(
+                    AiConversationStreamingProtocol protocol =
+                            command.webSearchMode()
+                                            == AiConversationWebSearchMode.OFF
+                                    ? AiConversationStreamingProtocol
+                                            .CHAT_COMPLETIONS
+                                    : AiConversationStreamingProtocol
+                                            .RESPONSES_WEB_SEARCH;
+                    AiConversationStreamingRequest streamingRequest =
+                            new AiConversationStreamingRequest(
                                     new AiConversationModelRequest(
                                             model.modelName(),
                                             model.maxOutputTokens(),
                                             command.reasoningEffort(),
-                                            prompt)))
+                                            prompt),
+                                    command.webSearchMode());
+                    return lifecycleDiagnosticService.withContext(
+                            traceContext,
+                            () -> streamingStrategies.required(protocol)
+                                    .stream(streamingRequest))
                             .doOnNext(ignored -> {
                                 if (state.firstByteRecorded.compareAndSet(
                                         false, true)) {
@@ -551,9 +572,17 @@ public final class AiConversationResponseServiceImpl
                 .observeBoundary(
                         upstream,
                         AiConversationStreamTimingBoundary.AFTER_STREAM_BATCHER,
-                        chunk -> chunk.text().length())
-                .concatMapIterable(chunk -> processChunk(chunk, state));
-        Flux<AiConversationStreamEvent> completed = streamed.concatWith(
+                        AiConversationResponseServiceImpl
+                                ::modelEventTextCharacters)
+                .concatMapIterable(event -> processModelEvent(event, state));
+        Flux<AiConversationStreamEvent> visible = Flux.concat(
+                Mono.fromSupplier(() -> localActivity(
+                        state,
+                        "processing-local",
+                        AiConversationActivityPhase.PROCESSING,
+                        AiConversationActivityStatus.STARTED)),
+                streamed);
+        Flux<AiConversationStreamEvent> completed = visible.concatWith(
                 Flux.concat(
                         Mono.defer(() -> finalizingEvent(state)),
                         Mono.defer(() -> successFinalization(
@@ -712,6 +741,102 @@ public final class AiConversationResponseServiceImpl
         return delta.text().length();
     }
 
+    private static int modelEventTextCharacters(
+            AiConversationModelEvent event) {
+        if (event instanceof AiConversationModelEvent.Chunk chunk) {
+            return chunk.value().text().length();
+        }
+        if (event instanceof AiConversationModelEvent.ReasoningSummaryDelta
+                summary) {
+            return summary.textDelta().length();
+        }
+        return 0;
+    }
+
+    private List<AiConversationStreamEvent> processModelEvent(
+            AiConversationModelEvent event,
+            StreamState state) {
+        if (event instanceof AiConversationModelEvent.Chunk chunk) {
+            return processChunk(chunk.value(), state);
+        }
+        if (event instanceof AiConversationModelEvent.Activity activity) {
+            return List.of(AiConversationStreamEvent.activity(
+                    new AiConversationActivityData(
+                            state.sequence.incrementAndGet(),
+                            activity.activityId(),
+                            activity.phase().name(),
+                            activity.status().name(),
+                            activity.query(),
+                            occurredAt())));
+        }
+        if (event instanceof AiConversationModelEvent.Source source) {
+            String sourceKey = source.role().name() + "\n" + source.url();
+            if (state.researchSourceKeys.size() >= MAX_RESEARCH_SOURCES
+                    || !state.researchSourceKeys.add(sourceKey)) {
+                return List.of();
+            }
+            return List.of(AiConversationStreamEvent.source(
+                    new AiConversationSourceData(
+                            state.sequence.incrementAndGet(),
+                            source.activityId(),
+                            source.sourceId(),
+                            source.title(),
+                            source.url(),
+                            source.domain(),
+                            source.role().name(),
+                            occurredAt())));
+        }
+        if (event instanceof AiConversationModelEvent.ReasoningSummaryDelta
+                summary) {
+            List<AiConversationStreamEvent> events = new ArrayList<>(2);
+            if (state.reasoningStarted.compareAndSet(false, true)) {
+                events.add(AiConversationStreamEvent.activity(
+                        new AiConversationActivityData(
+                                state.sequence.incrementAndGet(),
+                                summary.activityId(),
+                                AiConversationActivityPhase.REASONING.name(),
+                                AiConversationActivityStatus.STARTED.name(),
+                                null,
+                                occurredAt())));
+            }
+            events.add(AiConversationStreamEvent.reasoningSummary(
+                    new AiConversationReasoningSummaryData(
+                            state.sequence.incrementAndGet(),
+                            summary.activityId(),
+                            summary.textDelta(),
+                            occurredAt())));
+            return List.copyOf(events);
+        }
+        if (event instanceof AiConversationModelEvent.Failure) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_UPSTREAM_STREAM_FAILED,
+                    "模型响应未能完成",
+                    true,
+                    AiConversationStreamFailureReason.UPSTREAM_PROTOCOL_ERROR,
+                    null);
+        }
+        return List.of();
+    }
+
+    private static AiConversationStreamEvent localActivity(
+            StreamState state,
+            String activityId,
+            AiConversationActivityPhase phase,
+            AiConversationActivityStatus status) {
+        return AiConversationStreamEvent.activity(
+                new AiConversationActivityData(
+                        state.sequence.incrementAndGet(),
+                        activityId,
+                        phase.name(),
+                        status.name(),
+                        null,
+                        occurredAt()));
+    }
+
+    private static String occurredAt() {
+        return Instant.now().toString();
+    }
+
     private List<AiConversationStreamEvent> processChunk(
             AiConversationModelChunk chunk,
             StreamState state) {
@@ -760,6 +885,13 @@ public final class AiConversationResponseServiceImpl
         }
         if (!chunk.text().isEmpty()) {
             appendBounded(state, chunk.text());
+            if (state.generatingStarted.compareAndSet(false, true)) {
+                events.add(localActivity(
+                        state,
+                        "generating-local",
+                        AiConversationActivityPhase.GENERATING,
+                        AiConversationActivityStatus.STARTED));
+            }
             events.add(AiConversationStreamEvent.delta(
                     new AiConversationDeltaData(
                             state.sequence.incrementAndGet(),
@@ -778,12 +910,11 @@ public final class AiConversationResponseServiceImpl
         if (state.usage.get() == null) {
             return Mono.empty();
         }
-        // 复用 delta 事件名并用明确类型标记最终落盘阶段，避免扩张公开 SSE 事件集合。
-        return Mono.just(AiConversationStreamEvent.delta(
-                new AiConversationDeltaData(
-                        state.sequence.incrementAndGet(),
-                        "FINALIZING",
-                        "")));
+        return Mono.just(localActivity(
+                state,
+                "finalizing-local",
+                AiConversationActivityPhase.FINALIZING,
+                AiConversationActivityStatus.STARTED));
     }
 
     private AiConversationStreamEvent complete(
@@ -932,7 +1063,8 @@ public final class AiConversationResponseServiceImpl
                         attachmentFinalization.partialFailure()
                                         || state.generatedMediaRejected
                                 ? List.of("ATTACHMENT_STORAGE_PARTIAL")
-                                : List.of()));
+                                : List.of(),
+                        state.sequence.incrementAndGet()));
     }
 
     private void commitPersistedCache(
@@ -1145,7 +1277,8 @@ public final class AiConversationResponseServiceImpl
                         classification.reason().name(),
                         safe.retryable(),
                         usagePublicId,
-                        publicErrorMessage(safe, classification.reason())));
+                        publicErrorMessage(safe, classification.reason()),
+                        state.sequence.incrementAndGet()));
     }
 
     private AiConversationStreamFailureClassification diagnoseOnce(
@@ -1791,7 +1924,8 @@ public final class AiConversationResponseServiceImpl
                                 responseAttachments,
                                 persistedAttachmentWarnings(
                                         inputAttachments,
-                                        responseAttachments)));
+                                        responseAttachments),
+                                terminalEvents.size() + 1L));
         terminalEvents.add(completed);
         return new AiConversationResponseStream(
                 accepted, Flux.fromIterable(terminalEvents));
@@ -2155,6 +2289,9 @@ public final class AiConversationResponseServiceImpl
         private final AtomicReference<AiConversationUsage> candidateUsage =
                 new AtomicReference<>();
         private final AtomicBoolean terminalFinishObserved = new AtomicBoolean();
+        private final AtomicBoolean reasoningStarted = new AtomicBoolean();
+        private final AtomicBoolean generatingStarted = new AtomicBoolean();
+        private final Set<String> researchSourceKeys = new HashSet<>();
         private final AtomicReference<AiConversationUsage> usage =
                 new AtomicReference<>();
         private final AtomicReference<String> upstreamRequestId =

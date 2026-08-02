@@ -8,5 +8,15 @@ public record AiConversationErrorData(
         String reasonCode,
         boolean retryable,
         String usagePublicId,
-        String message) {
+        String message,
+        long sequence) {
+
+    public AiConversationErrorData(
+            String code,
+            String reasonCode,
+            boolean retryable,
+            String usagePublicId,
+            String message) {
+        this(code, reasonCode, retryable, usagePublicId, message, 0L);
+    }
 }

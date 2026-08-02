@@ -44,7 +44,7 @@ final class AiConversationResponseFlowContractTest {
                 .contains("generationResourcesReleased.compareAndSet(false, true)")
                 .contains("attachmentProperties.maxFilesPerMessage()")
                 .contains("attachmentProperties.maxTotalBytesPerMessage()")
-                .contains("\"FINALIZING\"")
+                .contains("AiConversationActivityPhase.FINALIZING")
                 .doesNotContain("settlementService.settleInterrupted(command).subscribe");
     }
 
@@ -66,13 +66,18 @@ final class AiConversationResponseFlowContractTest {
     }
 
     @Test
-    void directResponseMapsEveryUpstreamChunkWithoutRedisBatching() throws IOException {
+    void directResponseMapsEveryStandardEventWithoutRedisBatching() throws IOException {
         String source = read(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/response/impl/AiConversationResponseServiceImpl.java");
 
         assertThat(source)
                 .contains("observeBoundary(\n                        upstream,")
-                .contains(".concatMapIterable(chunk -> processChunk(chunk, state))")
+                .contains(".concatMapIterable(event -> processModelEvent(event, state))")
+                .contains("AiConversationStreamingProtocol.CHAT_COMPLETIONS")
+                .contains(".RESPONSES_WEB_SEARCH")
+                .contains("AiConversationStreamEvent.activity(")
+                .contains("AiConversationStreamEvent.source(")
+                .contains("AiConversationStreamEvent.reasoningSummary(")
                 .contains("HEARTBEAT_INTERVAL = Duration.ofSeconds(15)")
                 .contains("contextStore.saveInterruptedTurn(")
                 .contains("AtomicReference<Subscription> responseSubscription")

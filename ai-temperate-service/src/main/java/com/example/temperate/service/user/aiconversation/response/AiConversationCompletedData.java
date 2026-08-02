@@ -18,12 +18,42 @@ public record AiConversationCompletedData(
         String finishReason,
         List<AiConversationAttachment> inputAttachments,
         List<AiConversationAttachment> responseAttachments,
-        List<String> warnings) {
+        List<String> warnings,
+        long sequence) {
 
     public AiConversationCompletedData {
         inputAttachments = inputAttachments == null ? List.of() : List.copyOf(inputAttachments);
         responseAttachments = responseAttachments == null ? List.of() : List.copyOf(responseAttachments);
         warnings = warnings == null ? List.of() : List.copyOf(warnings);
+    }
+
+    public AiConversationCompletedData(
+            String conversationPublicId,
+            String messagePublicId,
+            String usagePublicId,
+            String promptTokens,
+            String cachedPromptTokens,
+            String completionTokens,
+            String reasoningTokens,
+            String chargedQuotaMinor,
+            String finishReason,
+            List<AiConversationAttachment> inputAttachments,
+            List<AiConversationAttachment> responseAttachments,
+            List<String> warnings) {
+        this(
+                conversationPublicId,
+                messagePublicId,
+                usagePublicId,
+                promptTokens,
+                cachedPromptTokens,
+                completionTokens,
+                reasoningTokens,
+                chargedQuotaMinor,
+                finishReason,
+                inputAttachments,
+                responseAttachments,
+                warnings,
+                0L);
     }
 
     public AiConversationCompletedData(
@@ -48,6 +78,7 @@ public record AiConversationCompletedData(
                 finishReason,
                 List.of(),
                 List.of(),
-                List.of());
+                List.of(),
+                0L);
     }
 }

@@ -15,6 +15,21 @@ public record AiConversationStreamEvent(String name, Object data) {
         return new AiConversationStreamEvent("delta", data);
     }
 
+    public static AiConversationStreamEvent activity(
+            AiConversationActivityData data) {
+        return new AiConversationStreamEvent("activity", data);
+    }
+
+    public static AiConversationStreamEvent source(
+            AiConversationSourceData data) {
+        return new AiConversationStreamEvent("source", data);
+    }
+
+    public static AiConversationStreamEvent reasoningSummary(
+            AiConversationReasoningSummaryData data) {
+        return new AiConversationStreamEvent("reasoning_summary", data);
+    }
+
     public static AiConversationStreamEvent heartbeat() {
         return new AiConversationStreamEvent(
                 "heartbeat", new AiConversationHeartbeatData("alive"));
