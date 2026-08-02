@@ -41,6 +41,8 @@ AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH=/v1/responses
 
 上游供应商事件只在模型边界内存在，后端转换为 `activity`、`source`、`reasoning_summary`、`delta` 等项目事件后，才通过同一条浏览器 SSE 转发。研究过程只保存在请求内存和当前标签页 SessionStorage，不写入 Redis、PostgreSQL、普通内容日志或历史消息接口。
 
+正常完成后，前端把研究记录与最终 `messagePublicId` 绑定；刷新恢复时只按该消息 ID 精确挂载，禁止仅按会话把旧研究过程附加到后续普通回答。
+
 在给模型配置 `RESPONSES + WEB_SEARCH` 能力之前，必须先取得第二阶段授权，并使用以下受限脚本验证本机 8317。脚本拒绝非 loopback 地址，只输出事件类型、字段存在性、来源域名数量和时间，不输出密钥、完整问题、网页正文或模型完整回答：
 
 ```powershell

@@ -21,11 +21,11 @@ import java.util.concurrent.TimeoutException;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -108,10 +108,11 @@ public final class ResponsesWebSearchStreamingStrategy
     private Flux<AiConversationModelEvent> decodeResponse(
             ClientResponse response) {
         if (!response.statusCode().is2xxSuccessful()) {
-            ResponsesUpstreamStatusException failure =
-                    new ResponsesUpstreamStatusException(response.statusCode());
             // 非成功响应正文可能包含供应商敏感诊断，只释放缓冲并保留状态码用于安全分类。
-            return response.releaseBody().thenMany(Flux.error(failure));
+            return response.releaseBody().thenMany(Flux.error(
+                    new ResponseStatusException(
+                            response.statusCode(),
+                            "AI upstream returned a non-success status")));
         }
         boolean eventStream = response.headers().contentType()
                 .filter(MediaType.TEXT_EVENT_STREAM::isCompatibleWith)
@@ -199,21 +200,4 @@ public final class ResponsesWebSearchStreamingStrategy
                 failure);
     }
 
-    /**
-     * 仅携带 HTTP 状态供统一分类器读取，禁止保存上游错误正文。
-     */
-    private static final class ResponsesUpstreamStatusException
-            extends RuntimeException {
-
-        private final HttpStatusCode statusCode;
-
-        private ResponsesUpstreamStatusException(HttpStatusCode statusCode) {
-            super("AI upstream returned a non-success status");
-            this.statusCode = statusCode;
-        }
-
-        public HttpStatusCode getStatusCode() {
-            return statusCode;
-        }
-    }
 }

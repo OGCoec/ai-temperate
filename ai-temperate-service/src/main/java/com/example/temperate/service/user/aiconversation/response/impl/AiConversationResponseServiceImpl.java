@@ -26,6 +26,7 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationS
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
+import com.example.temperate.service.user.aiconversation.config.AiConversationWebSearchProperties;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyPermit;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
@@ -159,6 +160,7 @@ public final class AiConversationResponseServiceImpl
     private final AiConversationDirectResponseActiveRegistry activeRegistry;
     private final AiConversationDirectResponseControlStore directControlStore;
     private final AiConversationAsyncGenerationProperties asyncGenerationProperties;
+    private final AiConversationWebSearchProperties webSearchProperties;
     private final AiModelUsageMapper usageMapper;
     private final HybridBase64UrlCodec hybridIdCodec;
     private final PublicIdCodec publicIdCodec;
@@ -194,6 +196,7 @@ public final class AiConversationResponseServiceImpl
             AiConversationDirectResponseActiveRegistry activeRegistry,
             AiConversationDirectResponseControlStore directControlStore,
             AiConversationAsyncGenerationProperties asyncGenerationProperties,
+            AiConversationWebSearchProperties webSearchProperties,
             AiModelUsageMapper usageMapper,
             HybridBase64UrlCodec hybridIdCodec,
             PublicIdCodec publicIdCodec,
@@ -231,6 +234,7 @@ public final class AiConversationResponseServiceImpl
         this.directControlStore = Objects.requireNonNull(directControlStore);
         this.asyncGenerationProperties = Objects.requireNonNull(
                 asyncGenerationProperties);
+        this.webSearchProperties = Objects.requireNonNull(webSearchProperties);
         this.usageMapper = Objects.requireNonNull(usageMapper);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
@@ -294,6 +298,7 @@ public final class AiConversationResponseServiceImpl
         AiModelCacheEntry model = requiredModel(
                 publicIdCodec.decode(command.modelPublicId()));
         validateProtocolCapabilities(model, command.webSearchMode());
+        validateWebSearchEnabled(command.webSearchMode());
         AiConversationLifecycleTraceContext validatedTraceContext =
                 requestTraceContext.withModelPublicId(command.modelPublicId());
         validateAttachmentCapabilities(model, command.input().attachments());
@@ -1993,6 +1998,17 @@ public final class AiConversationResponseServiceImpl
                             ? "模型不支持普通对话协议"
                             : "模型不支持 Responses 联网搜索",
                     false);
+        }
+    }
+
+    private void validateWebSearchEnabled(
+            AiConversationWebSearchMode webSearchMode) {
+        if (webSearchMode != AiConversationWebSearchMode.OFF
+                && !webSearchProperties.enabled()) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
+                    "联网搜索功能当前未启用",
+                    true);
         }
     }
 

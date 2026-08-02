@@ -205,6 +205,16 @@ test('history reopening never merges Redis interrupted output into the visible t
 	assert.doesNotMatch(api, /Redis|ephemeral/)
 })
 
+test('research recovery binds stored process to its exact persisted message', () => {
+	const page = read('components/user/workspace/user-chat-panel.vue')
+	const research = read('common/aichat/ai-conversation-research-session.js')
+
+	assert.match(page, /bindMessage\?\.\(\s*event\.data\?\.messagePublicId/)
+	assert.match(page, /messagePublicId:\s*message\.messagePublicId/)
+	assert.doesNotMatch(page, /patchLatestMessage/)
+	assert.match(research, /if \(messagePublicId != null\)/)
+})
+
 test('H5 and Android share one SSE parser and Android transport accepts POST JSON plus cancellation', () => {
 	const h5 = read('common/aichat/ai-conversation-sse-h5.js')
 	const android = read('common/aichat/ai-conversation-sse-app.js')

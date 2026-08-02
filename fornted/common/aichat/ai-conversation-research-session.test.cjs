@@ -24,6 +24,7 @@ test('research session persists ordered safe events and rejects unsafe sources',
 	}
 	const module = loadModule()
 	const session = module.createAiConversationResearchSession({
+		conversationPublicId: 'conversation-public-id',
 		localId: 'local-1',
 		idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
 		webSearchMode: 'REQUIRED'
@@ -43,13 +44,20 @@ test('research session persists ordered safe events and rejects unsafe sources',
 		title: '<script>', url: 'https://openai.com/docs', domain: 'openai.com',
 		role: 'CONSULTED', occurredAt: 'now'
 	}), true)
+	session.bindMessage('message-public-id')
 	session.markTerminal('COMPLETED')
 
-	const restored = module.findAiConversationResearchSession({ localId: 'local-1' })
+	const restored = module.findAiConversationResearchSession({
+		messagePublicId: 'message-public-id'
+	})
 	assert.equal(restored.activities.length, 1)
 	assert.equal(restored.sources.length, 1)
 	assert.equal(restored.sources[0].url, 'https://openai.com/docs')
+	assert.equal(restored.messagePublicId, 'message-public-id')
 	assert.equal(restored.terminalState, 'COMPLETED')
+	assert.equal(module.findAiConversationResearchSession({
+		messagePublicId: 'different-message'
+	}), null)
 	module.clearAiConversationResearchSessions()
 	delete globalThis.sessionStorage
 })

@@ -78,6 +78,8 @@ function normalizeRecord(value) {
 		schemaVersion: SCHEMA_VERSION,
 		conversationPublicId: value.conversationPublicId
 			? text(value.conversationPublicId, 22) : null,
+		messagePublicId: value.messagePublicId
+			? text(value.messagePublicId, 22) : null,
 		localId: text(value.localId, 128),
 		idempotencyKey,
 		webSearchMode: ['OFF', 'AUTO', 'REQUIRED'].includes(value.webSearchMode)
@@ -156,6 +158,7 @@ export function createAiConversationResearchSession(initial) {
 	const record = normalizeRecord({
 		schemaVersion: SCHEMA_VERSION,
 		conversationPublicId: initial?.conversationPublicId || null,
+		messagePublicId: initial?.messagePublicId || null,
 		localId: initial?.localId,
 		idempotencyKey: initial?.idempotencyKey,
 		webSearchMode: initial?.webSearchMode || 'OFF',
@@ -205,6 +208,11 @@ export function createAiConversationResearchSession(initial) {
 				? text(conversationPublicId, 22) : null
 			touch(); queueImmediate()
 		},
+		bindMessage(messagePublicId) {
+			record.messagePublicId = messagePublicId
+				? text(messagePublicId, 22) : null
+			touch(); queueImmediate()
+		},
 		appendActivity(value) {
 			const normalized = normalizeActivity(value)
 			if (!normalized || !accepts(normalized)) return false
@@ -241,9 +249,13 @@ export function createAiConversationResearchSession(initial) {
 }
 
 export function findAiConversationResearchSession({
-	localId = '', idempotencyKey = '', conversationPublicId = null
+	localId = '', idempotencyKey = '', conversationPublicId = null,
+	messagePublicId = null
 } = {}) {
 	const records = readAll().filter(item => {
+		if (messagePublicId != null) {
+			return item.messagePublicId === messagePublicId
+		}
 		if (idempotencyKey && item.idempotencyKey === idempotencyKey) return true
 		if (localId && item.localId === localId) return true
 		return conversationPublicId != null

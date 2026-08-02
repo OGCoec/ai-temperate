@@ -133,6 +133,23 @@ final class AiConversationResponseFlowContractTest {
     }
 
     @Test
+    void disabledWebSearchIsRejectedBeforeConcurrencyAndBilling()
+            throws IOException {
+        String source = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/response/impl/AiConversationResponseServiceImpl.java");
+
+        int featureCheck = source.indexOf(
+                "validateWebSearchEnabled(command.webSearchMode())");
+        int concurrency = source.indexOf(
+                "concurrencyService\n                .tryAcquire", featureCheck);
+        int reservation = source.indexOf(
+                "billingService.reserve(", featureCheck);
+        assertThat(featureCheck).isGreaterThanOrEqualTo(0);
+        assertThat(concurrency).isGreaterThan(featureCheck);
+        assertThat(reservation).isGreaterThan(featureCheck);
+    }
+
+    @Test
     void settledIdempotentReplayRestoresPersistedAnswerBeforeCompleted()
             throws IOException {
         String source = read(

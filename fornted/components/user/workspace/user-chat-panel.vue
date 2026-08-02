@@ -220,7 +220,6 @@
 		discardTransientMessages,
 		markAiConversationHistoryStale,
 		patchLocalMessage,
-		patchLatestMessage,
 		patchMessage,
 		readAiConversationStore,
 		resetCurrentConversation,
@@ -873,6 +872,8 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
 				} else if (event.type === 'completed') {
+					this.activeResearchSession?.bindMessage?.(
+						event.data?.messagePublicId)
 					this.activeResearchSession?.markTerminal?.('COMPLETED')
 					this.patchResearch(localId)
 					this.markdownRenderState?.complete?.({
@@ -1006,14 +1007,18 @@
 				if (!aiConversationWebSearchEnabled()
 					|| !this.currentConversationPublicId
 					|| !this.messages.length) return
-				const research = findAiConversationResearchSession({
-					conversationPublicId: this.currentConversationPublicId
-				})
-				if (!research) return
-				this.applyStore(patchLatestMessage({
-					research,
-					researchExpanded: false
-				}))
+				for (const message of this.messages) {
+					if (!message.messagePublicId) continue
+					const research = findAiConversationResearchSession({
+						messagePublicId: message.messagePublicId
+					})
+					if (!research
+						|| research.conversationPublicId
+							!== this.currentConversationPublicId) continue
+					this.applyStore(patchMessage(
+						message.localId || message.messagePublicId,
+						{ research, researchExpanded: false }))
+				}
 			},
 			finishTextPresentation(callback) {
 				const drain = this.textDrain

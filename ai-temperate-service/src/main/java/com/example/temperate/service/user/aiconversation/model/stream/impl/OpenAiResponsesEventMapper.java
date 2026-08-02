@@ -19,9 +19,10 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
- * 把 OpenAI Responses 原生事件转换为项目内部白名单事件，并在边界处过滤不可信来源 URL 与超长文本。
+ * 把 OpenAI Responses 原生事件转换为项目内部白名单事件，并在边界处过滤不可信来源 URL、超长文本与上游标识。
  *
  * <p>未知供应商事件只累计固定维度指标，不记录事件正文或动态类型，避免内容泄露和高基数日志。</p>
  */
@@ -31,6 +32,10 @@ final class OpenAiResponsesEventMapper {
     private static final int MAXIMUM_TITLE_CHARACTERS = 512;
     private static final int MAXIMUM_URL_CHARACTERS = 4_096;
     private static final int MAXIMUM_SUMMARY_DELTA_CHARACTERS = 16_384;
+    private static final int MAXIMUM_SOURCES_PER_EVENT = 200;
+    private static final int MAXIMUM_IDENTIFIER_CHARACTERS = 128;
+    private static final Pattern SAFE_IDENTIFIER = Pattern.compile(
+            "[A-Za-z0-9._:-]{1," + MAXIMUM_IDENTIFIER_CHARACTERS + "}");
     private static final Counter UNKNOWN_EVENT_COUNTER = Metrics.counter(
             "ai.conversation.responses.event",
             "outcome",
@@ -141,8 +146,8 @@ final class OpenAiResponsesEventMapper {
 
     private static List<AiConversationModelEvent> outputItemDone(JsonNode root) {
         JsonNode item = root.path("item");
-        String activityId = firstNonBlank(
-                text(item, "id"), activityId(root, "search"));
+        String activityId = safeIdentifier(
+                text(item, "id"), "search", activityId(root, "search"));
         List<AiConversationModelEvent> result = new ArrayList<>();
         addSources(result, item.path("action").path("sources"),
                 activityId, AiConversationSourceRole.CONSULTED);
@@ -164,7 +169,10 @@ final class OpenAiResponsesEventMapper {
             return List.of();
         }
         return List.of(new AiConversationModelEvent.Activity(
-                firstNonBlank(text(item, "id"), activityId(root, "search")),
+                safeIdentifier(
+                        text(item, "id"),
+                        "search",
+                        activityId(root, "search")),
                 AiConversationActivityPhase.WEB_SEARCH,
                 AiConversationActivityStatus.STARTED,
                 limited(text(item.path("action"), "query"),
@@ -189,8 +197,10 @@ final class OpenAiResponsesEventMapper {
         JsonNode response = root.path("response");
         List<AiConversationModelEvent> result = new ArrayList<>();
         for (JsonNode output : response.path("output")) {
-            String activityId = firstNonBlank(
-                    text(output, "id"), "search-completed");
+            String activityId = safeIdentifier(
+                    text(output, "id"),
+                    "search",
+                    "search-completed");
             addSources(result, output.path("action").path("sources"),
                     activityId, AiConversationSourceRole.CONSULTED);
             addAnnotations(result, output, activityId);
@@ -236,7 +246,14 @@ final class OpenAiResponsesEventMapper {
         if (!sources.isArray()) {
             return;
         }
+        int accepted = sourceEventCount(result);
+        if (accepted >= MAXIMUM_SOURCES_PER_EVENT) {
+            return;
+        }
         for (JsonNode source : sources) {
+            if (accepted >= MAXIMUM_SOURCES_PER_EVENT) {
+                break;
+            }
             String url = firstText(
                     source.path("url"),
                     source.path("url_citation").path("url"));
@@ -252,8 +269,8 @@ final class OpenAiResponsesEventMapper {
                 title = uri.getHost();
             }
             String normalizedUrl = uri.toString();
-            String sourceId = firstNonBlank(
-                    text(source, "id"), stableSourceId(normalizedUrl));
+            String sourceId = safeIdentifier(
+                    text(source, "id"), "source", normalizedUrl);
             result.add(new AiConversationModelEvent.Source(
                     activityId,
                     sourceId,
@@ -261,7 +278,19 @@ final class OpenAiResponsesEventMapper {
                     normalizedUrl,
                     uri.getHost().toLowerCase(Locale.ROOT),
                     role));
+            accepted++;
         }
+    }
+
+    private static int sourceEventCount(
+            List<AiConversationModelEvent> result) {
+        int count = 0;
+        for (AiConversationModelEvent event : result) {
+            if (event instanceof AiConversationModelEvent.Source) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static JsonNode singleElementArray(JsonNode value) {
@@ -300,11 +329,31 @@ final class OpenAiResponsesEventMapper {
     }
 
     private static String activityId(JsonNode root, String fallback) {
-        return firstNonBlank(
+        String upstreamId = firstNonBlankOrNull(
                 text(root, "item_id"),
                 text(root.path("item"), "id"),
-                text(root.path("response"), "id"),
-                fallback);
+                text(root.path("response"), "id"));
+        return safeIdentifier(upstreamId, fallback, fallback);
+    }
+
+    private static String safeIdentifier(
+            String upstreamValue,
+            String fallbackPrefix,
+            String fallbackMaterial) {
+        // 上游标识会被复制到多个下游来源事件，必须先限长；异常值改用摘要，避免单个事件造成内存和带宽放大。
+        if (upstreamValue != null
+                && SAFE_IDENTIFIER.matcher(upstreamValue).matches()) {
+            return upstreamValue;
+        }
+        if ((upstreamValue == null || upstreamValue.isBlank())
+                && fallbackMaterial != null
+                && SAFE_IDENTIFIER.matcher(fallbackMaterial).matches()) {
+            return fallbackMaterial;
+        }
+        String material = upstreamValue == null || upstreamValue.isBlank()
+                ? fallbackMaterial
+                : upstreamValue;
+        return fallbackPrefix + "-" + stableSourceId(material);
     }
 
     private static String firstText(JsonNode... nodes) {
@@ -316,13 +365,13 @@ final class OpenAiResponsesEventMapper {
         return null;
     }
 
-    private static String firstNonBlank(String... values) {
+    private static String firstNonBlankOrNull(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
                 return value;
             }
         }
-        return "unknown";
+        return null;
     }
 
     private static String text(JsonNode node, String field) {

@@ -85,6 +85,34 @@ final class OpenAiResponsesEventMapperTest {
                 """))).noneMatch(Source.class::isInstance);
     }
 
+    @Test
+    void replacesOversizedProviderIdentifiersWithBoundedStableIdentifiers() {
+        String oversized = "x".repeat(2_048);
+
+        assertThat(mapper.map(event("response.web_search_call.searching", """
+                {"type":"response.web_search_call.searching","item_id":"%s"}
+                """.formatted(oversized))))
+                .singleElement()
+                .isInstanceOfSatisfying(Activity.class, activity -> {
+                    assertThat(activity.activityId()).hasSizeLessThanOrEqualTo(128);
+                    assertThat(activity.activityId()).isNotEqualTo(oversized);
+                });
+
+        assertThat(mapper.map(event("response.output_item.done", """
+                {"type":"response.output_item.done","item":{"id":"%s",
+                 "type":"web_search_call","action":{"sources":[
+                   {"id":"%s","title":"OpenAI Docs","url":"https://openai.com/docs"}
+                 ]}}}
+                """.formatted(oversized, oversized)))
+                .filteredOn(Source.class::isInstance)
+                .singleElement()
+                .isInstanceOfSatisfying(Source.class, source -> {
+                    assertThat(source.activityId()).hasSizeLessThanOrEqualTo(128);
+                    assertThat(source.sourceId()).hasSizeLessThanOrEqualTo(128);
+                    assertThat(source.sourceId()).isNotEqualTo(oversized);
+                });
+    }
+
     private static OpenAiResponsesSseEvent event(String name, String data) {
         return new OpenAiResponsesSseEvent(name, data);
     }

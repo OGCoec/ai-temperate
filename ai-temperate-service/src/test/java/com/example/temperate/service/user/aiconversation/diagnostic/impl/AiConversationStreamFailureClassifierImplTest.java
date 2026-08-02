@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.Exceptions;
 
 /**
@@ -37,6 +39,10 @@ final class AiConversationStreamFailureClassifierImplTest {
                 AiConversationStreamFailureReason.UPSTREAM_AUTH_UNAVAILABLE);
         assertReason(new StatusFailure(503, "secret-server-body"),
                 AiConversationStreamFailureReason.UPSTREAM_SERVER_ERROR);
+        assertReason(new ResponseStatusException(
+                        HttpStatus.TOO_MANY_REQUESTS,
+                        "safe-upstream-status-only"),
+                AiConversationStreamFailureReason.UPSTREAM_RATE_LIMITED);
     }
 
     @Test
