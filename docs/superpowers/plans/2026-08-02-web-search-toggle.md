@@ -162,4 +162,3 @@ For a model with `RESPONSES + WEB_SEARCH`, verify the switch appears beside reas
 ```
 
 Confirm the same SSE can subsequently carry real `activity`, `source`, `reasoning_summary`, and `delta` events without any fabricated search status.
-
