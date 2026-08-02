@@ -102,7 +102,10 @@ public final class ResponsesWebSearchStreamingStrategy
                 .bodyValue(requestFactory.create(
                         request, attachmentService::resolveModelUrl))
                 .exchangeToFlux(this::decodeResponse)
-                .flatMapSequential(this::rejectFailureEvent, 1, 1);
+                .flatMapSequential(
+                        ResponsesWebSearchStreamingStrategy::rejectFailureEvent,
+                        1,
+                        1);
     }
 
     private Flux<AiConversationModelEvent> decodeResponse(

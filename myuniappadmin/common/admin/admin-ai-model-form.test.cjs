@@ -43,7 +43,7 @@ test('empty form uses a safe disabled create default outside editable fields', a
 	assert.deepEqual(form.capabilities, [])
 	assert.equal(Object.hasOwn(form, 'enabled'), false)
 	assert.deepEqual(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code), [
-		'CHAT_COMPLETIONS', 'RESPONSES', 'IMAGE', 'VIDEO', 'AUDIO'
+		'CHAT_COMPLETIONS', 'RESPONSES', 'WEB_SEARCH', 'IMAGE', 'VIDEO', 'AUDIO'
 	])
 })
 

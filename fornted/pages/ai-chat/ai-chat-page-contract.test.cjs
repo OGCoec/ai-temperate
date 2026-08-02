@@ -259,7 +259,7 @@ test('stream diagnostics connect browser reads, parsed SSE and rendered text wit
 
 	assert.match(h5, /BROWSER_READ/)
 	assert.match(stream, /BROWSER_SSE_PARSED/)
-	assert.match(stream, /sequence: event\.type === 'delta' \? event\.data\?\.sequence/)
+	assert.match(stream, /sequence: event\.data\?\.sequence/)
 	assert.match(panel, /FRONTEND_RENDERED/)
 	assert.match(panel, /clientPlatform\(\) === 'H5'/)
 	assert.match(diagnostics, /ai_stream_client_timing_summary/)

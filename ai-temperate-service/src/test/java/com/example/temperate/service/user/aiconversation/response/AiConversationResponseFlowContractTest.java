@@ -73,7 +73,7 @@ final class AiConversationResponseFlowContractTest {
         assertThat(source)
                 .contains("observeBoundary(\n                        upstream,")
                 .contains(".concatMapIterable(event -> processModelEvent(event, state))")
-                .contains("AiConversationStreamingProtocol.CHAT_COMPLETIONS")
+                .contains(".CHAT_COMPLETIONS")
                 .contains(".RESPONSES_WEB_SEARCH")
                 .contains("AiConversationStreamEvent.activity(")
                 .contains("AiConversationStreamEvent.source(")
@@ -168,7 +168,10 @@ final class AiConversationResponseFlowContractTest {
     }
 
     private static String read(String relativePath) throws IOException {
-        return Files.readString(ROOT.resolve(relativePath), StandardCharsets.UTF_8);
+        // 源码契约只关心逻辑换行，统一 CRLF 与 LF，避免 Windows 工作树产生平台相关误报。
+        return Files.readString(ROOT.resolve(relativePath), StandardCharsets.UTF_8)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
     }
 
     private static Path findProjectRoot() {

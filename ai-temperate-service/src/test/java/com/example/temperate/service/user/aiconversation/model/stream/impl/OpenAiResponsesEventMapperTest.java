@@ -103,7 +103,7 @@ final class OpenAiResponsesEventMapperTest {
                  "type":"web_search_call","action":{"sources":[
                    {"id":"%s","title":"OpenAI Docs","url":"https://openai.com/docs"}
                  ]}}}
-                """.formatted(oversized, oversized)))
+                """.formatted(oversized, oversized))))
                 .filteredOn(Source.class::isInstance)
                 .singleElement()
                 .isInstanceOfSatisfying(Source.class, source -> {
