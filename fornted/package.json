@@ -24,6 +24,7 @@
     "verify:h5-release": "node scripts/verify-h5-release.cjs",
     "test:user-ui": "node --test common/ui/user-material-contract.test.cjs pages/user/user-workspace-contract.test.cjs",
     "test:chat": "node --test common/aichat/ai-conversation-api.test.cjs common/aichat/ai-conversation-async-generation-contract.test.cjs common/aichat/ai-conversation-error-presentation.test.cjs common/aichat/ai-conversation-generation-manager.test.cjs common/aichat/ai-conversation-sse-h5.test.cjs common/aichat/ai-conversation-sse-parser.test.cjs common/aichat/ai-conversation-store.test.cjs common/aichat/ai-conversation-text-drain.test.cjs common/aichat/ai-conversation-stream-diagnostics.test.cjs common/aichat/ai-conversation-lifecycle-diagnostics.test.cjs common/aichat/ai-conversation-upload-state.test.cjs common/aichat/ai-conversation-upload.test.cjs pages/ai-chat/ai-chat-page-contract.test.cjs",
+    "test:ai-code": "node --test common/aichat/ai-code-language.test.cjs common/aichat/ai-code-theme-antigravity.test.cjs common/aichat/ai-code-highlight-session.test.cjs common/aichat/ai-code-highlighter.integration.test.cjs common/aichat/ai-code-bracket-state.test.cjs common/aichat/ai-html-preview-document.test.cjs common/aichat/ai-markdown-parser.test.cjs common/aichat/ai-markdown-renderer-contract.test.cjs",
     "test:ai-generation-fake-upstream": "node --test ../scripts/diagnostics/ai-generation/fake-openai-server.test.mjs"
   },
   "keywords": [
@@ -34,8 +35,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@shikijs/stream": "4.4.1",
     "libphonenumber-js": "1.13.8",
     "markdown-it": "14.1.0",
+    "shiki": "4.4.1",
     "validator": "13.15.35"
   },
   "engines": {

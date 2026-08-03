@@ -67,7 +67,7 @@ function attributeValue(token, name) {
 function normalizeLanguage(info) {
 	const raw = String(info || '').trim().split(/\s+/)[0].toLowerCase()
 	if (!raw) return { id: 'plain', label: 'Plain text' }
-	const id = raw.replace(/[^a-z0-9+#.-]/g, '')
+	const id = raw.replace(/[^a-z0-9+#.-]/g, '').slice(0, 64)
 	if (!id) return { id: 'plain', label: 'Plain text' }
 	return {
 		id,
@@ -258,7 +258,7 @@ function normalizeNode(node) {
 	return node
 }
 
-function buildAst(tokens) {
+function buildAst(tokens, runtimeOptions = {}) {
 	const root = { type: 'document', children: [] }
 	const stack = [root]
 	for (const token of tokens || []) {
@@ -284,7 +284,7 @@ function buildAst(tokens) {
 				type: 'codeBlock',
 				language: normalizeLanguage(token.info),
 				code: token.content || '',
-				streaming: false
+				streaming: runtimeOptions.streaming === true
 			})
 			continue
 		}
@@ -311,11 +311,11 @@ export function createAiMarkdownParser(options = {}) {
 		breaks: requestedOptions.breaks === true
 	})
 	return {
-		parse(text) {
+		parse(text, runtimeOptions = {}) {
 			const value = text == null ? '' : String(text)
 			if (!value) return { type: 'document', children: [] }
 			try {
-				return buildAst(markdown.parse(value, {}))
+				return buildAst(markdown.parse(value, {}), runtimeOptions)
 			} catch {
 				return {
 					type: 'document',
@@ -330,9 +330,9 @@ const defaultParser = createAiMarkdownParser()
 
 export function parseAiMarkdown(text, options = {}) {
 	if (options && (options.markdown || options.markdownOptions)) {
-		return createAiMarkdownParser(options).parse(text)
+		return createAiMarkdownParser(options).parse(text, options)
 	}
-	return defaultParser.parse(text)
+	return defaultParser.parse(text, options)
 }
 
 export { normalizeLanguage, sanitizeUrl }

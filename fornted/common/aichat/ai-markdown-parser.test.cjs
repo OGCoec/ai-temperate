@@ -71,6 +71,7 @@ test('parses fenced code, language metadata, GFM tables, and task items', async 
 	assert.equal(ast.children[0].type, 'codeBlock')
 	assert.equal(ast.children[0].language.id, 'java')
 	assert.equal(ast.children[0].code, 'public class Main {}\n')
+	assert.equal(ast.children[0].streaming, false)
 	assert.equal(ast.children[1].type, 'table')
 	assert.deepEqual(ast.children[1].alignments, ['left', 'right'])
 	assert.deepEqual(ast.children[1].headers[0].children[0], {
@@ -80,6 +81,24 @@ test('parses fenced code, language metadata, GFM tables, and task items', async 
 	assert.equal(ast.children[2].children[0].type, 'taskItem')
 	assert.equal(ast.children[2].children[0].checked, true)
 	assert.equal(ast.children[2].children[1].checked, false)
+})
+
+test('propagates assistant streaming state to fenced code blocks', async () => {
+	const { parseAiMarkdown } = await loadParser()
+	const fence = String.fromCharCode(96).repeat(3)
+	const ast = parseAiMarkdown(fence + 'java\npublic class Main {', { streaming: true })
+
+	assert.equal(ast.children[0].type, 'codeBlock')
+	assert.equal(ast.children[0].streaming, true)
+})
+
+test('bounds fenced language metadata before it reaches the code toolbar', async () => {
+	const { parseAiMarkdown } = await loadParser()
+	const fence = String.fromCharCode(96).repeat(3)
+	const ast = parseAiMarkdown(fence + 'x'.repeat(200) + '\nvalue\n' + fence)
+
+	assert.equal(ast.children[0].language.id.length, 64)
+	assert.equal(ast.children[0].language.label.length, 64)
 })
 
 test('does not create executable HTML and rejects unsafe links', async () => {

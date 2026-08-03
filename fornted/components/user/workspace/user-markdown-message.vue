@@ -18,7 +18,7 @@
 		},
 		computed: {
 			ast() {
-				return parseAiMarkdown(this.text)
+				return parseAiMarkdown(this.text, { streaming: this.streaming })
 			}
 		}
 	}

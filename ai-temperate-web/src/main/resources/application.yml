@@ -270,10 +270,10 @@ app:
     direct-response-cancellation:
       # 多实例生产默认启用 RabbitMQ Owner 路由；仅测试或单实例诊断可显式关闭并依赖 Redis 意图与浏览器 Abort。
       rabbit-enabled: ${AI_CONVERSATION_DIRECT_RESPONSE_RABBIT_ENABLED:true}
-    # Responses 联网搜索默认关闭，只有完成本地 8317 受限探测后才允许部署环境开启。
+    # Responses 联网搜索默认开启，部署环境仍可通过环境变量显式关闭。
     web-search:
       # 总开关关闭时 AUTO 和 REQUIRED 请求会在连接上游前受控失败。
-      enabled: ${AI_CONVERSATION_WEB_SEARCH_ENABLED:false}
+      enabled: ${AI_CONVERSATION_WEB_SEARCH_ENABLED:true}
       # 专用客户端只允许在既有 CLIProxyAPI 基础地址下调用固定相对路径。
       responses-path: ${AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH:/v1/responses}
     # 后台异步 Generation 保留为回滚路径，普通用户默认使用直接 MVC POST SSE。

@@ -15,6 +15,9 @@ test('markdown renderer uses an explicit component whitelist and never injects H
 		'user-markdown-node.vue',
 		'user-markdown-inline.vue',
 		'user-markdown-code-block.vue',
+		'user-markdown-code-lines.vue',
+		'user-markdown-code-line.vue',
+		'user-markdown-html-preview.vue',
 		'user-markdown-table.vue',
 		'user-dialog-block.vue'
 	].map(readComponent).join('\n')
@@ -34,9 +37,74 @@ test('code and table components keep Markdown control syntax out of visible UI',
 	assert.equal(code.includes('String.fromCharCode(96)'), false)
 	assert.equal(code.includes('languageLabel'), true)
 	assert.equal(code.includes('setClipboardData'), true)
+	assert.equal(code.includes('{{ code }}'), false)
+	assert.equal(code.includes('highlightedStableLines'), true)
+	assert.equal(code.includes('highlightedUnstableLines'), true)
+	assert.equal(code.includes("revision + ':'"), false)
 	assert.equal(table.includes('alignments'), true)
 	assert.equal(table.includes('setClipboardData'), true)
 	assert.equal(table.includes('TSV'), true)
+})
+
+test('code blocks receive a stable AST path key and never render arbitrary token styles', () => {
+	const node = readComponent('user-markdown-node.vue')
+	const code = [
+		readComponent('user-markdown-code-block.vue'),
+		readComponent('user-markdown-code-lines.vue'),
+		readComponent('user-markdown-code-line.vue')
+	].join('\n')
+
+	assert.equal(node.includes(':block-key="messageKey +'), true)
+	assert.equal(code.includes(':style='), false)
+	assert.equal(code.includes('ai-code-color-'), true)
+	assert.equal(code.includes('createAiCodeHighlightSession'), true)
+	assert.equal(code.includes("blockKey + ':line:' + line.index"), true)
+})
+
+test('code token styles live beside the child component that renders token DOM', () => {
+	const block = readComponent('user-markdown-code-block.vue')
+	const line = readComponent('user-markdown-code-line.vue')
+
+	for (const selector of [
+		'.ai-code-line',
+		'.ai-code-token',
+		'.ai-code-color-keyword',
+		'.ai-code-color-comment',
+		'.ai-code-color-type',
+		'.ai-code-color-bracket-level-1'
+	]) {
+		assert.equal(line.includes(selector), true, selector + ' must be scoped to the token-rendering component')
+	}
+
+	assert.equal(block.includes('.ai-code-color-keyword'), false)
+	assert.equal(block.includes('.ai-code-token'), false)
+})
+
+test('HTML preview uses a script-only sandbox and cleans temporary URLs', () => {
+	const preview = readComponent('user-markdown-html-preview.vue')
+
+	assert.equal(preview.includes('sandbox="allow-scripts"'), true)
+	assert.equal(preview.includes('allow-same-origin'), false)
+	assert.equal(preview.includes('referrerpolicy="no-referrer"'), true)
+	assert.equal(preview.includes('URL.createObjectURL'), true)
+	assert.equal(preview.includes('URL.revokeObjectURL'), true)
+	assert.equal(preview.includes('v-html'), false)
+	assert.equal(preview.includes('innerHTML'), false)
+	assert.equal(preview.includes('eval('), false)
+	assert.equal(preview.includes('new Function'), false)
+})
+
+test('HTML code blocks expose an accessible code and preview toggle', () => {
+	const code = readComponent('user-markdown-code-block.vue')
+
+	assert.equal(code.includes('isAiHtmlPreviewLanguage'), true)
+	assert.equal(code.includes('role="group"'), true)
+	assert.equal(code.includes('aria-label="代码块视图切换"'), true)
+	assert.equal(code.includes(':aria-pressed='), true)
+	assert.equal(code.includes(':aria-disabled='), true)
+	assert.equal(code.includes(':disabled="previewDisabled"'), true)
+	assert.equal(code.includes('<user-markdown-html-preview'), true)
+	assert.equal(code.includes("viewMode = 'code'"), true)
 })
 
 test('renderer exposes accessible labels for copy actions and preserves safe links', () => {

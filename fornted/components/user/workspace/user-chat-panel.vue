@@ -187,6 +187,7 @@
 	} from '@/common/aichat/ai-conversation-generation-manager.js'
 	import { createAiConversationTextDrain } from '@/common/aichat/ai-conversation-text-drain.js'
 	import { createAiMarkdownRenderState } from '@/common/aichat/ai-markdown-render-state.js'
+	import { prewarmAiCodeHighlighter } from '@/common/aichat/ai-code-highlighter.js'
 	import {
 		findAiConversationStoppedDraft,
 		removeAiConversationStoppedDraft,
@@ -326,6 +327,9 @@
 				historyResyncing: false,
 				modelsLoading: false
 			}
+		},
+		mounted() {
+			void prewarmAiCodeHighlighter().catch(() => {})
 		},
 		beforeUnmount() {
 			const current = this.messages.find(message =>

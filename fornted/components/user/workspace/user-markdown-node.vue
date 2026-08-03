@@ -81,6 +81,7 @@
 	</view>
 	<user-markdown-code-block
 		v-else-if="node?.type === 'codeBlock'"
+		:block-key="messageKey + ':' + path.join('.')"
 		:language="node.language"
 		:code="node.code"
 		:streaming="Boolean(node.streaming)"
