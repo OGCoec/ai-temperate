@@ -114,6 +114,33 @@ test('decorates matched citations, removes their wrapper parentheses, and does n
 	assert.equal(decorated.children[1].children[2].value, '继续。')
 })
 
+test('uses a safe parenthesized Markdown domain link when no SSE source matches', () => {
+	const api = loadModule()
+	const ast = {
+		type: 'document',
+		children: [{
+			type: 'paragraph',
+			children: [
+				{ type: 'text', value: 'Three.js documentation (' },
+				{ type: 'link', safe: true,
+					href: 'HTTPS://ThreeJS.org/docs/#manual/en/introduction/Creating-a-scene',
+					children: [{ type: 'text', value: 'threejs.org' }] },
+				{ type: 'text', value: ') remains available.' }
+			]
+		}]
+	}
+	const decorated = api.decorateAiMarkdownSources(ast, [])
+	const link = decorated.children[0].children[1]
+
+	assert.equal(ast.children[0].children[0].value, 'Three.js documentation (')
+	assert.equal(ast.children[0].children[1].source, undefined)
+	assert.equal(decorated.children[0].children[0].value, 'Three.js documentation ')
+	assert.equal(link.source.domain, 'threejs.org')
+	assert.equal(link.source.url,
+		'https://threejs.org/docs/#manual/en/introduction/Creating-a-scene')
+	assert.equal(decorated.children[0].children[2].value, ' remains available.')
+})
+
 test('preserves ordinary parentheses, code, unmatched links, and citations with extra wrapper content', () => {
 	const api = loadModule()
 	const ast = {
@@ -123,7 +150,7 @@ test('preserves ordinary parentheses, code, unmatched links, and citations with 
 			children: [
 				{ type: 'text', value: 'ordinary (' },
 				{ type: 'link', safe: true, href: 'https://example.com',
-					children: [{ type: 'text', value: 'example.com' }] },
+					children: [{ type: 'text', value: 'example documentation' }] },
 				{ type: 'text', value: ') and (' },
 				{ type: 'link', safe: true, href: 'https://docs.oracle.com/object',
 					children: [{ type: 'text', value: 'docs.oracle.com' }] },

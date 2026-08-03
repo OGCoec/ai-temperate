@@ -56,17 +56,23 @@
 								<uni-icons :type="message.researchExpanded ? 'up' : 'down'" size="14" color="#8fdcbe" />
 							</button>
 							<view v-if="message.researchExpanded && researchDetailsAvailable(message)" class="research-panel">
-								<view v-for="item in researchActivityItems(message)" :key="item.activity.eventId || `activity-${item.activity.sequence}`" class="research-row">
-									<text class="research-time">{{ researchTime(item.activity.occurredAt) }}</text>
+								<view v-for="item in researchTimelineItems(message)" :key="researchTimelineKey(item)" class="research-row">
+									<text class="research-time">{{ researchTime(item.type === 'source' ? item.source.occurredAt : item.activity.occurredAt) }}</text>
 									<view class="research-activity-content">
-										<text>{{ item.label }}</text>
-										<user-source-chip
-											v-if="item.sourcePresentation"
-											:source="item.sourcePresentation.source"
-											:domain="item.sourcePresentation.domain"
-											:disabled="!item.sourcePresentation.clickable"
-											variant="activity"
-										/>
+										<template v-if="item.type === 'source'">
+											<text>已检索 ·</text>
+											<user-source-chip :source="item.source" variant="activity" />
+										</template>
+										<template v-else>
+											<text>{{ item.label }}</text>
+											<user-source-chip
+												v-if="item.sourcePresentation"
+												:source="item.sourcePresentation.source"
+												:domain="item.sourcePresentation.domain"
+												:disabled="!item.sourcePresentation.clickable"
+												variant="activity"
+											/>
+										</template>
 									</view>
 								</view>
 								<view v-if="message.research.reasoningSummaries.length" class="research-summary">
@@ -219,7 +225,7 @@
 	} from '@/common/aichat/ai-conversation-research-session.js'
 	import {
 		formatAiReasoningSummaryMarkdown,
-		presentAiSearchActivity
+		presentAiResearchTimeline
 	} from '@/common/aichat/ai-conversation-research-presentation.js'
 	import { mergeAiConversationSources } from '@/common/aichat/ai-conversation-source-presentation.js'
 	import {
@@ -1018,16 +1024,21 @@
 			researchSources(message) {
 				return mergeAiConversationSources(message?.research?.sources)
 			},
-			researchActivityItems(message) {
+			researchTimelineItems(message) {
 				const sources = this.researchSources(message)
-				return (message?.research?.activities || []).map(activity => {
-					const sourcePresentation = presentAiSearchActivity(activity, sources)
-					return {
-						activity,
-						sourcePresentation,
-						label: this.researchActivityText(activity, Boolean(sourcePresentation))
-					}
-				})
+				return presentAiResearchTimeline(
+					message?.research?.activities, sources).map(item =>
+						item.type === 'source' ? item : {
+							...item,
+							label: this.researchActivityText(
+								item.activity, Boolean(item.sourcePresentation))
+						})
+			},
+			researchTimelineKey(item) {
+				if (item?.type === 'source') {
+					return `source-${item.source?.sourceId || item.source?.url || item.sequence}`
+				}
+				return item?.activity?.eventId || `activity-${item?.sequence}`
 			},
 			researchActivityText(activity, hasSourceTarget = false) {
 				const status = RESEARCH_ACTIVITY_STATUS_LABELS[activity.status]

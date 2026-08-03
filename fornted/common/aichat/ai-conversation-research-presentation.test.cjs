@@ -16,6 +16,7 @@ function loadModule() {
 		.replaceAll('export function ', 'function ')
 	const factory = new Function(`${sourcePresentation}\n${favicon}\n${research}; return {
 		presentAiSearchActivity,
+		presentAiResearchTimeline,
 		formatAiReasoningSummaryMarkdown }`)
 	return factory()
 }
@@ -111,6 +112,37 @@ test('rejects unsafe or non-public search targets without inventing a source URL
 	assert.equal(api.presentAiSearchActivity({
 		phase: 'REASONING', query: 'site:docs.oracle.com'
 	}, []), null)
+})
+
+test('keeps query-null searches generic and adds real sources as ordered timeline rows', () => {
+	const api = loadModule()
+	const started = {
+		sequence: 2,
+		phase: 'WEB_SEARCH',
+		status: 'IN_PROGRESS',
+		query: null,
+		occurredAt: '2026-08-03T17:10:37Z'
+	}
+	const completed = {
+		sequence: 4,
+		phase: 'WEB_SEARCH',
+		status: 'COMPLETED',
+		query: null,
+		occurredAt: '2026-08-03T17:11:08Z'
+	}
+	const cited = source('https://threejs.org/docs/', 'threejs')
+	cited.sequence = 3
+	cited.occurredAt = '2026-08-03T17:11:00Z'
+
+	assert.equal(api.presentAiSearchActivity(started, [cited]), null)
+	const timeline = api.presentAiResearchTimeline(
+		[completed, started], [cited])
+
+	assert.deepEqual(timeline.map(item => item.type), [
+		'activity', 'source', 'activity'
+	])
+	assert.equal(timeline[1].source.domain, 'threejs.org')
+	assert.equal(timeline[1].source.url, 'https://threejs.org/docs/')
 })
 
 test('formats each reasoning summary event as one ordered-preserving Markdown list item', () => {

@@ -81,6 +81,48 @@ export function presentAiSearchActivity(activity, sources) {
 	})
 }
 
+function timelineSequence(value) {
+	const sequence = Number(value)
+	return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null
+}
+
+export function presentAiResearchTimeline(activities, sources) {
+	const normalizedSources = mergeAiConversationSources(sources)
+	const matchedSourceUrls = new Set()
+	const rows = []
+	let insertionOrder = 0
+	for (const activity of Array.isArray(activities) ? activities : []) {
+		const sequence = timelineSequence(activity?.sequence)
+		if (sequence == null) continue
+		const sourcePresentation = presentAiSearchActivity(
+			activity, normalizedSources)
+		const matchedUrl = canonicalAiConversationSourceUrl(
+			sourcePresentation?.source?.url)
+		if (matchedUrl) matchedSourceUrls.add(matchedUrl)
+		rows.push({
+			type: 'activity',
+			sequence,
+			insertionOrder: insertionOrder++,
+			activity,
+			sourcePresentation
+		})
+	}
+	for (const source of normalizedSources) {
+		const sourceUrl = canonicalAiConversationSourceUrl(source.url)
+		if (sourceUrl && matchedSourceUrls.has(sourceUrl)) continue
+		rows.push({
+			type: 'source',
+			sequence: source.sequence,
+			insertionOrder: insertionOrder++,
+			source
+		})
+	}
+	rows.sort((left, right) => left.sequence - right.sequence
+		|| left.insertionOrder - right.insertionOrder)
+	return Object.freeze(rows.map(({ insertionOrder: _, ...row }) =>
+		Object.freeze(row)))
+}
+
 export function formatAiReasoningSummaryMarkdown(summaries) {
 	const items = []
 	for (const summary of Array.isArray(summaries) ? summaries : []) {

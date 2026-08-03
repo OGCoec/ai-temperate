@@ -87,19 +87,43 @@ export function matchAiConversationSource(index, href) {
 	return index.exact.get(exactKey) || index.byPath.get(sourcePathKey(href)) || null
 }
 
+function inlineText(node) {
+	if (!node || typeof node !== 'object') return ''
+	if (node.type === 'text' || node.type === 'inlineCode') {
+		return String(node.value || '')
+	}
+	return Array.isArray(node.children)
+		? node.children.map(inlineText).join('') : ''
+}
+
+function markdownDomainSource(link) {
+	if (link?.type !== 'link' || link.safe !== true) return null
+	const source = normalizeAiConversationSource({
+		sequence: 0,
+		title: inlineText(link).trim(),
+		url: link.href
+	})
+	if (!source) return null
+	const visibleDomain = inlineText(link).trim().toLowerCase().replace(/\.$/, '')
+	return visibleDomain === source.domain ? source : null
+}
+
 function removeMatchedSourceParentheses(children) {
 	if (!Array.isArray(children) || children.length < 3) return children
 	for (let index = 1; index < children.length - 1; index += 1) {
 		const link = children[index]
 		const before = children[index - 1]
 		const after = children[index + 1]
-		if (link?.type !== 'link' || !link.source
+		if (link?.type !== 'link' || link.safe !== true
 			|| before?.type !== 'text' || after?.type !== 'text') continue
 		const opening = String(before.value || '').match(/([\(（])\s*$/u)
 		const closing = String(after.value || '').match(/^\s*([\)）])/u)
 		if (!opening || !closing) continue
 		const matching = opening[1] === '(' ? ')' : '）'
 		if (closing[1] !== matching) continue
+		const source = link.source || markdownDomainSource(link)
+		if (!source) continue
+		if (!link.source) link.source = source
 		before.value = String(before.value || '').slice(0, opening.index)
 		after.value = String(after.value || '').slice(closing[0].length)
 	}
