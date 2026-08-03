@@ -1,11 +1,37 @@
-export const AI_MODEL_CAPABILITY_OPTIONS = Object.freeze([
-	{ code: 'CHAT_COMPLETIONS', label: 'Chat Completions', hint: '兼容对话补全协议' },
-	{ code: 'RESPONSES', label: 'Responses', hint: '统一响应与工具调用' },
-	{ code: 'WEB_SEARCH', label: '联网搜索', hint: 'Responses 托管 web_search 工具' },
-	{ code: 'IMAGE', label: '图像', hint: '图像生成或理解' },
-	{ code: 'VIDEO', label: '视频', hint: '视频生成或理解' },
-	{ code: 'AUDIO', label: '音频', hint: '语音、音频生成或理解' }
+function capability(code, label, hint) {
+	return Object.freeze({ code, label, hint })
+}
+
+function capabilityGroup(code, label, options) {
+	return Object.freeze({ code, label, options: Object.freeze(options) })
+}
+
+export const AI_MODEL_CAPABILITY_GROUPS = Object.freeze([
+	capabilityGroup('protocol', '协议与工具', [
+		capability('CHAT_COMPLETIONS', 'Chat Completions', '兼容对话补全协议'),
+		capability('RESPONSES', 'Responses', '统一响应与工具调用'),
+		capability('WEB_SEARCH', '联网搜索', 'Responses 托管 web_search 工具')
+	]),
+	capabilityGroup('image', '图像能力', [
+		capability('IMAGE_INPUT', '图像输入', '理解用户上传或引用的图像'),
+		capability('IMAGE_GENERATION', '图像生成', '根据提示词生成新图像'),
+		capability('IMAGE_EDIT', '图像编辑', '基于输入图像执行修改')
+	]),
+	capabilityGroup('audio', '音频能力', [
+		capability('AUDIO_INPUT', '音频输入', '理解或转写用户上传的音频'),
+		capability('AUDIO_GENERATION', '音频生成', '生成语音或其他音频内容'),
+		capability('AUDIO_EDIT', '音频编辑', '基于输入音频执行修改')
+	]),
+	capabilityGroup('video', '视频能力', [
+		capability('VIDEO_INPUT', '视频输入', '理解用户上传或引用的视频'),
+		capability('VIDEO_GENERATION', '视频生成', '根据提示词生成新视频'),
+		capability('VIDEO_EDIT', '视频编辑', '基于输入视频执行修改')
+	])
 ])
+
+export const AI_MODEL_CAPABILITY_OPTIONS = Object.freeze(
+	AI_MODEL_CAPABILITY_GROUPS.flatMap(group => group.options)
+)
 
 const CAPABILITY_CODES = new Set(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code))
 const RATIO_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,8})?$/

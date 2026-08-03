@@ -3,18 +3,24 @@ package com.example.temperate.model.ai.enums;
 import java.util.Locale;
 
 /**
- * 定义第一版 AI 模型允许声明的稳定能力大类代码。
+ * 定义 AI 模型在数据库、HTTP 接口和运行时能力判断中共享的稳定能力代码。
  *
- * <p>枚举值用于描述模型支持的文本、图片、视频或音频 API 大类，同时作为数据库和 API 的白名单；
- * 新增能力必须同步更新建表约束，避免应用与数据库接受范围不一致。</p>
+ * <p>媒体输入、生成和编辑是彼此独立的声明，禁止根据模型名称、厂商或其他能力自动推导；新增或删除代码时必须同步
+ * PostgreSQL CHECK 约束、管理员前端白名单和缓存版本，避免各层接受范围不一致。</p>
  */
 public enum AiModelCapabilityCode {
     CHAT_COMPLETIONS,
     RESPONSES,
     WEB_SEARCH,
-    IMAGE,
-    VIDEO,
-    AUDIO;
+    IMAGE_INPUT,
+    IMAGE_GENERATION,
+    IMAGE_EDIT,
+    AUDIO_INPUT,
+    AUDIO_GENERATION,
+    AUDIO_EDIT,
+    VIDEO_INPUT,
+    VIDEO_GENERATION,
+    VIDEO_EDIT;
 
     public static AiModelCapabilityCode fromExternalCode(String value) {
         if (value == null || value.isBlank()) {

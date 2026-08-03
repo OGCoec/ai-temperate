@@ -28,7 +28,7 @@ final class AdminAiModelMergePatchMapperTest {
                   "cachedInputRatio": 0.125,
                   "contextWindowK": 256,
                   "maxOutputK": 32,
-                  "capabilities": ["RESPONSES", "IMAGE"]
+                  "capabilities": ["RESPONSES", "IMAGE_INPUT", "IMAGE_GENERATION"]
                 }
                 """));
 
@@ -42,7 +42,8 @@ final class AdminAiModelMergePatchMapperTest {
                 .isEqualByComparingTo(new BigDecimal("0.125"));
         assertThat(command.contextWindowTokens().value()).isEqualTo(256000L);
         assertThat(command.maxOutputTokens().value()).isEqualTo(32000L);
-        assertThat(command.capabilities().value()).containsExactly("RESPONSES", "IMAGE");
+        assertThat(command.capabilities().value())
+                .containsExactly("RESPONSES", "IMAGE_INPUT", "IMAGE_GENERATION");
     }
 
     @Test

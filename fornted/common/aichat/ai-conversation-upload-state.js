@@ -26,7 +26,10 @@ export function attachmentCategory(file) {
 
 export function requiredMediaCapability(file) {
 	const category = attachmentCategory(file)
-	return ['IMAGE', 'AUDIO', 'VIDEO'].includes(category) ? category : null
+	if (category === 'IMAGE') return 'IMAGE_INPUT'
+	if (category === 'AUDIO') return 'AUDIO_INPUT'
+	if (category === 'VIDEO') return 'VIDEO_INPUT'
+	return null
 }
 
 export function isAttachmentCompatible(file, model) {

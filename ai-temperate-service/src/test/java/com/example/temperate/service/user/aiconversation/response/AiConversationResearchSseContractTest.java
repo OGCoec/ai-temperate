@@ -14,6 +14,7 @@ final class AiConversationResearchSseContractTest {
         AiConversationStreamEvent activity = AiConversationStreamEvent.activity(
                 new AiConversationActivityData(
                         1L,
+                        "act_v1_0123456789012345678901234567890123456789012",
                         "search-1",
                         "WEB_SEARCH",
                         "IN_PROGRESS",
@@ -42,6 +43,8 @@ final class AiConversationResearchSseContractTest {
         assertThat(summary.name()).isEqualTo("reasoning_summary");
         assertThat(((AiConversationActivityData) activity.data()).sequence())
                 .isEqualTo(1L);
+        assertThat(((AiConversationActivityData) activity.data()).eventId())
+                .matches("^act_v1_[A-Za-z0-9_-]{43}$");
         assertThat(((AiConversationSourceData) source.data()).sequence())
                 .isEqualTo(2L);
         assertThat(((AiConversationReasoningSummaryData) summary.data()).sequence())

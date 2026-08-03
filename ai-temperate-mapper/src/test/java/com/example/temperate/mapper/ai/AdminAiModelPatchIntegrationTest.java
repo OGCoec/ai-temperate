@@ -163,7 +163,9 @@ final class AdminAiModelPatchIntegrationTest {
             assertThat(modelMapper.updateEditable(changed, 1L)).isEqualTo(1);
             assertThat(capabilityMapper.deleteByAiModelId(MODEL_ID)).isEqualTo(1);
             assertThat(capabilityMapper.insertBatch(java.util.List.of(
-                    capability(AiModelCapabilityCode.IMAGE)))).isEqualTo(1);
+                    capability(AiModelCapabilityCode.IMAGE_INPUT),
+                    capability(AiModelCapabilityCode.IMAGE_GENERATION),
+                    capability(AiModelCapabilityCode.IMAGE_EDIT)))).isEqualTo(3);
             session.rollback();
         }
 

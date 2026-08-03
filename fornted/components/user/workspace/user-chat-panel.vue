@@ -52,24 +52,40 @@
 								:aria-expanded="String(Boolean(message.researchExpanded))"
 								@click="toggleResearch(message)"
 							>
-								<text>查看研究过程 · {{ message.research.sources.length }} 个来源</text>
+								<text>查看研究过程 · {{ researchSources(message).length }} 个来源</text>
 								<uni-icons :type="message.researchExpanded ? 'up' : 'down'" size="14" color="#8fdcbe" />
 							</button>
 							<view v-if="message.researchExpanded && researchDetailsAvailable(message)" class="research-panel">
-								<view v-for="activity in message.research.activities" :key="`activity-${activity.sequence}`" class="research-row">
-									<text class="research-time">{{ researchTime(activity.occurredAt) }}</text>
-									<text>{{ researchActivityText(activity) }}</text>
+								<view v-for="item in researchActivityItems(message)" :key="item.activity.eventId || `activity-${item.activity.sequence}`" class="research-row">
+									<text class="research-time">{{ researchTime(item.activity.occurredAt) }}</text>
+									<view class="research-activity-content">
+										<text>{{ item.label }}</text>
+										<user-source-chip
+											v-if="item.sourcePresentation"
+											:source="item.sourcePresentation.source"
+											:domain="item.sourcePresentation.domain"
+											:disabled="!item.sourcePresentation.clickable"
+											variant="activity"
+										/>
+									</view>
 								</view>
 								<view v-if="message.research.reasoningSummaries.length" class="research-summary">
 									<text class="research-section-label">推理摘要</text>
-									<text>{{ researchSummaryText(message) }}</text>
+									<user-markdown-message
+										:text="researchSummaryMarkdown(message)"
+										:message-key="`${message.localId || message.messagePublicId || ''}:research-summary`"
+										:sources="researchSources(message)"
+										compact
+									/>
 								</view>
-								<view v-if="message.research.sources.length" class="research-sources">
+								<view v-if="researchSources(message).length" class="research-sources">
 									<text class="research-section-label">已检索来源</text>
-									<button v-for="source in message.research.sources" :key="`${source.role}-${source.url}`" class="research-source" type="button" @click="openResearchSource(source)">
-										<text>{{ source.title || source.domain }}</text>
-										<text class="research-domain">{{ source.domain }}</text>
-									</button>
+									<user-source-chip
+										v-for="source in researchSources(message)"
+										:key="`${source.role}-${source.url}`"
+										:source="source"
+										variant="card"
+									/>
 								</view>
 							</view>
 							<user-markdown-message
@@ -77,6 +93,7 @@
 								:text="message.responseText"
 								:streaming="Boolean(message.streaming)"
 								:message-key="message.localId || message.messagePublicId || ''"
+								:sources="researchSources(message)"
 							/>
 							<text v-else-if="message.streaming && !modelActivityText(message)" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
@@ -201,6 +218,11 @@
 		findAiConversationResearchSession
 	} from '@/common/aichat/ai-conversation-research-session.js'
 	import {
+		formatAiReasoningSummaryMarkdown,
+		presentAiSearchActivity
+	} from '@/common/aichat/ai-conversation-research-presentation.js'
+	import { mergeAiConversationSources } from '@/common/aichat/ai-conversation-source-presentation.js'
+	import {
 		AI_CONVERSATION_WEB_SEARCH_MODES,
 		aiConversationWebSearchEnabled,
 		modelSupportsAiConversationWebSearch,
@@ -216,6 +238,7 @@
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
+	import UserSourceChip from './user-source-chip.vue'
 	import {
 		appendLocalMessage,
 		clearAiConversationHistoryStale,
@@ -233,6 +256,14 @@
 		setMessagePage,
 		setMessagesLoading
 	} from '@/common/aichat/ai-conversation-store.js'
+
+	const RESEARCH_ACTIVITY_STATUS_LABELS = Object.freeze({
+		STARTED: '已开始',
+		IN_PROGRESS: '进行中',
+		COMPLETED: '已完成',
+		FAILED: '失败',
+		UNAVAILABLE: '不可用'
+	})
 
 	const MODEL_STORAGE_KEY = 'ait.user.ai.selected-model.v1'
 	const REASONING_EFFORT_STORAGE_KEY = 'ait.user.ai.reasoning-effort.v1'
@@ -294,7 +325,7 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserMarkdownMessage },
+		components: { UserChatAttachmentList, UserMarkdownMessage, UserSourceChip },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -919,21 +950,23 @@
 			handleModelActivity(localId, value) {
 				const activity = {
 					sequence: Number(value?.sequence || 0),
+					eventId: String(value?.eventId || ''),
 					activityId: String(value?.activityId || ''),
 					phase: String(value?.phase || ''),
 					status: String(value?.status || ''),
 					query: value?.query == null ? null : String(value.query),
 					occurredAt: String(value?.occurredAt || '')
 				}
+				const activityAccepted = this.activeResearchSession?.appendActivity
+					? this.activeResearchSession.appendActivity(activity) : null
+				if (activityAccepted === false) return
 				const patch = { modelActivity: activity }
 				if (activity.phase === 'FINALIZING') {
 					patch.streaming = false
 					patch.saving = true
 				}
 				this.applyStore(patchLocalMessage(localId, patch))
-				if (this.activeResearchSession?.appendActivity?.(activity)) {
-					this.patchResearch(localId)
-				}
+				if (activityAccepted === true) this.patchResearch(localId)
 			},
 			patchResearch(localId) {
 				const research = this.activeResearchSession?.snapshot?.()
@@ -946,8 +979,20 @@
 				if (activity.phase === 'PROCESSING') return '正在准备回答'
 				if (activity.phase === 'REASONING') return '正在推理和整理信息'
 				if (activity.phase === 'WEB_SEARCH') {
-					if (activity.status === 'COMPLETED') return '已完成联网检索，正在整理来源'
-					return activity.query ? `正在搜索：${activity.query}` : '正在执行联网搜索'
+					if (activity.status === 'STARTED') {
+						return activity.query
+							? `已开始搜索：${activity.query}` : '已开始联网搜索'
+					}
+					if (activity.status === 'IN_PROGRESS') {
+						return activity.query
+							? `正在搜索：${activity.query}` : '正在执行联网搜索'
+					}
+					if (activity.status === 'COMPLETED') {
+						return '已完成联网检索，正在整理来源'
+					}
+					if (activity.status === 'FAILED') return '联网搜索失败'
+					if (activity.status === 'UNAVAILABLE') return '联网搜索不可用'
+					return '联网搜索状态已更新'
 				}
 				if (activity.phase === 'GENERATING') return '正在生成回答'
 				if (activity.phase === 'FINALIZING') return '正在保存生成内容'
@@ -966,16 +1011,29 @@
 					researchExpanded: !message.researchExpanded
 				}))
 			},
-			researchSummaryText(message) {
-				return (message?.research?.reasoningSummaries || [])
-					.map(item => item.textDelta || '').join('')
+			researchSummaryMarkdown(message) {
+				return formatAiReasoningSummaryMarkdown(
+					message?.research?.reasoningSummaries)
 			},
-			researchActivityText(activity) {
-				const status = activity.status === 'COMPLETED' ? '已完成' : '进行中'
+			researchSources(message) {
+				return mergeAiConversationSources(message?.research?.sources)
+			},
+			researchActivityItems(message) {
+				const sources = this.researchSources(message)
+				return (message?.research?.activities || []).map(activity => {
+					const sourcePresentation = presentAiSearchActivity(activity, sources)
+					return {
+						activity,
+						sourcePresentation,
+						label: this.researchActivityText(activity, Boolean(sourcePresentation))
+					}
+				})
+			},
+			researchActivityText(activity, hasSourceTarget = false) {
+				const status = RESEARCH_ACTIVITY_STATUS_LABELS[activity.status]
+					|| '状态更新'
 				if (activity.phase === 'WEB_SEARCH') {
-					return activity.query
-						? `${status} · 搜索 ${activity.query}`
-						: `${status} · 联网搜索`
+					return `${status} · ${hasSourceTarget ? '搜索' : '联网搜索'}`
 				}
 				if (activity.phase === 'REASONING') return `${status} · 整理和推理`
 				if (activity.phase === 'GENERATING') return `${status} · 生成回答`
@@ -987,20 +1045,6 @@
 				return Number.isNaN(time.getTime()) ? '' : time.toLocaleTimeString([], {
 					hour: '2-digit', minute: '2-digit', second: '2-digit'
 				})
-			},
-			openResearchSource(source) {
-				let url = null
-				try {
-					const parsed = new URL(String(source?.url || ''))
-					if (['http:', 'https:'].includes(parsed.protocol)) url = parsed.href
-				} catch (_) {}
-				if (!url) return
-				// #ifdef H5
-				window.open(url, '_blank', 'noopener,noreferrer')
-				// #endif
-				// #ifdef APP-PLUS
-				plus.runtime.openURL(url)
-				// #endif
 			},
 			restoreResearchForCurrentConversation() {
 				if (!aiConversationWebSearchEnabled()
@@ -1298,7 +1342,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .research-source, .web-search-toggle { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .web-search-toggle { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -1324,12 +1368,11 @@
 	.research-toggle { min-height: 36px; margin: 0 0 10px; padding: 0 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; color: #a9d8c5; font-size: 12px; }
 	.research-panel { max-width: 680px; margin: 0 0 12px; padding: 12px; border: 1px solid rgba(75, 101, 89, .52); border-radius: 13px; background: rgba(19, 25, 22, .72); }
 	.research-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 5px 0; color: #b9c5bf; font-size: 12px; line-height: 1.5; }
-	.research-time, .research-domain { color: #718078; }
-	.research-summary, .research-sources { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; color: #b9c5bf; font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+	.research-time { color: #718078; }
+	.research-activity-content { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+	.research-summary, .research-sources { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; color: #b9c5bf; font-size: 12px; line-height: 1.65; word-break: break-word; }
+	.research-summary .ai-markdown-message { min-width: 0; }
 	.research-section-label { color: #78d7b2; font-size: 11px; font-weight: 700; letter-spacing: .4px; }
-	.research-source { width: 100%; min-height: 42px; margin: 0; padding: 7px 9px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; border-radius: 9px; color: #d5ded9; font-size: 12px; text-align: left; }
-	.research-source text:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.research-domain { flex: 0 0 auto; font-size: 10px; }
 	.message-text { color: #edf3f0; font-size: 15px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; }
 	.typing-indicator, .saving-indicator { color: #8b9690; font-size: 13px; }
 	.message-error, .message-warning, .composer-error { color: #f2a24d; font-size: 13px; }

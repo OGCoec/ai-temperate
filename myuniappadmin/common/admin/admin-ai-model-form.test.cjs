@@ -31,8 +31,37 @@ test('web search is an explicit model capability', async () => {
 	assert.deepEqual(result.command.capabilities, ['RESPONSES', 'WEB_SEARCH'])
 })
 
-test('empty form uses a safe disabled create default outside editable fields', async () => {
-	const { createEmptyAiModelForm, AI_MODEL_CAPABILITY_OPTIONS } = await loadModule()
+test('legacy aggregate media capabilities are rejected instead of being inferred', async () => {
+	const { validateAiModelForm } = await loadModule()
+	const base = {
+		modelName: 'gpt-media',
+		vendor: 'openai',
+		description: '',
+		iconPublicId: '',
+		tagsText: '',
+		inputRatio: '1',
+		cachedInputRatio: '1',
+		outputRatio: '1',
+		contextWindowK: '128',
+		maxOutputK: '16'
+	}
+
+	for (const removed of ['IMAGE', 'AUDIO', 'VIDEO']) {
+		const result = validateAiModelForm({
+			...base,
+			capabilities: ['RESPONSES', removed]
+		})
+		assert.equal(result.valid, false)
+		assert.equal(Object.hasOwn(result.errors, 'capabilities'), true)
+	}
+})
+
+test('empty form exposes the exact grouped capability contract', async () => {
+	const {
+		createEmptyAiModelForm,
+		AI_MODEL_CAPABILITY_GROUPS,
+		AI_MODEL_CAPABILITY_OPTIONS
+	} = await loadModule()
 	const form = createEmptyAiModelForm()
 
 	assert.equal(form.modelName, '')
@@ -43,8 +72,20 @@ test('empty form uses a safe disabled create default outside editable fields', a
 	assert.deepEqual(form.capabilities, [])
 	assert.equal(Object.hasOwn(form, 'enabled'), false)
 	assert.deepEqual(AI_MODEL_CAPABILITY_OPTIONS.map(item => item.code), [
-		'CHAT_COMPLETIONS', 'RESPONSES', 'WEB_SEARCH', 'IMAGE', 'VIDEO', 'AUDIO'
+		'CHAT_COMPLETIONS', 'RESPONSES', 'WEB_SEARCH',
+		'IMAGE_INPUT', 'IMAGE_GENERATION', 'IMAGE_EDIT',
+		'AUDIO_INPUT', 'AUDIO_GENERATION', 'AUDIO_EDIT',
+		'VIDEO_INPUT', 'VIDEO_GENERATION', 'VIDEO_EDIT'
 	])
+	assert.deepEqual(
+		AI_MODEL_CAPABILITY_GROUPS.map(group => group.options.map(option => option.code)),
+		[
+			['CHAT_COMPLETIONS', 'RESPONSES', 'WEB_SEARCH'],
+			['IMAGE_INPUT', 'IMAGE_GENERATION', 'IMAGE_EDIT'],
+			['AUDIO_INPUT', 'AUDIO_GENERATION', 'AUDIO_EDIT'],
+			['VIDEO_INPUT', 'VIDEO_GENERATION', 'VIDEO_EDIT']
+		]
+	)
 })
 
 test('gateway discovery prefill never supplies billing ratios or capabilities', async () => {
@@ -79,7 +120,7 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		outputRatio: '2.00000000',
 		contextWindowK: '256',
 		maxOutputK: '32',
-		capabilities: ['RESPONSES', 'IMAGE']
+		capabilities: ['RESPONSES', 'IMAGE_INPUT', 'IMAGE_GENERATION']
 	})
 
 	assert.equal(result.valid, true)
@@ -94,7 +135,7 @@ test('validation normalizes tags, ratios and capabilities without losing decimal
 		outputRatio: '2.00000000',
 		contextWindowK: 256,
 		maxOutputK: 32,
-		capabilities: ['RESPONSES', 'IMAGE']
+		capabilities: ['RESPONSES', 'IMAGE_INPUT', 'IMAGE_GENERATION']
 	})
 })
 
@@ -146,7 +187,7 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		tagsText: 'chat,reasoning',
 		cachedInputRatio: '0.25',
 		outputRatio: '2.50',
-		capabilities: ['RESPONSES', 'IMAGE']
+		capabilities: ['RESPONSES', 'IMAGE_INPUT', 'IMAGE_GENERATION']
 	}
 
 	assert.deepEqual(createMergePatch(snapshot, draft), {
@@ -155,7 +196,7 @@ test('merge patch contains only changed editable fields and uses null to clear o
 		tags: ['chat', 'reasoning'],
 		cachedInputRatio: '0.25',
 		outputRatio: '2.50',
-		capabilities: ['RESPONSES', 'IMAGE']
+		capabilities: ['RESPONSES', 'IMAGE_INPUT', 'IMAGE_GENERATION']
 	})
 	assert.equal(Object.hasOwn(createMergePatch(snapshot, draft), 'enabled'), false)
 })

@@ -53,18 +53,25 @@ test('validates attachment count, per-file size and combined size against existi
 test('only media attachments require matching model capability', async () => {
 	const state = await loadState()
 	const image = attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED)
+	const audio = attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED, 'audio/mpeg')
 	const video = attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED, 'video/mp4')
 	const document = attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED, 'application/pdf')
 
-	assert.equal(state.isAttachmentCompatible(image, { capabilities: ['IMAGE'] }), true)
-	assert.equal(state.isAttachmentCompatible(video, { capabilities: ['IMAGE'] }), false)
+	assert.equal(state.requiredMediaCapability(image), 'IMAGE_INPUT')
+	assert.equal(state.requiredMediaCapability(audio), 'AUDIO_INPUT')
+	assert.equal(state.requiredMediaCapability(video), 'VIDEO_INPUT')
+	assert.equal(state.isAttachmentCompatible(image, { capabilities: ['IMAGE_INPUT'] }), true)
+	assert.equal(state.isAttachmentCompatible(image, { capabilities: ['IMAGE_GENERATION'] }), false)
+	assert.equal(state.isAttachmentCompatible(audio, { capabilities: ['AUDIO_INPUT'] }), true)
+	assert.equal(state.isAttachmentCompatible(video, { capabilities: ['IMAGE_INPUT'] }), false)
+	assert.equal(state.isAttachmentCompatible(video, { capabilities: ['VIDEO_INPUT'] }), true)
 	assert.equal(state.isAttachmentCompatible(document, { capabilities: [] }), true)
 	assert.equal(state.isAttachmentCompatible(video, null), true)
 })
 
 test('send gate explains uploading, failed and incompatible blockers', async () => {
 	const state = await loadState()
-	const model = { capabilities: ['IMAGE'] }
+	const model = { capabilities: ['IMAGE_INPUT'] }
 
 	assert.match(state.deriveSendGate({
 		model,

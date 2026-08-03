@@ -38,7 +38,7 @@ final class AiConversationCompactionModelCatalogImplTest {
                 List.of(
                         model(11L, "text-model", AiModelCapabilityCode.RESPONSES),
                         model(12L, "disabled-after-cache", AiModelCapabilityCode.CHAT_COMPLETIONS),
-                        model(13L, "media-model", AiModelCapabilityCode.VIDEO)));
+                        model(13L, "media-model", AiModelCapabilityCode.VIDEO_INPUT)));
         when(cacheService.getOrLoadEnabledSnapshot()).thenReturn(snapshot);
         when(availabilityService.findEnabledIds(List.of(11L, 12L, 13L)))
                 .thenReturn(Set.of(11L, 13L));

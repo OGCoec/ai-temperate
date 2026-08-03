@@ -23,13 +23,13 @@ test('structured JSON content types serialize object payloads as JSON text', asy
 	)
 	assert.equal(
 		serializeStructuredJsonRequestBody(
-			['IMAGE', 'AUDIO'],
+			['IMAGE_INPUT', 'AUDIO_INPUT'],
 			{
 				'Content-Type': 'application/json',
 				'content-type': 'Application/Vnd.Ait+Json; charset=UTF-8'
 			}
 		),
-		'["IMAGE","AUDIO"]'
+		'["IMAGE_INPUT","AUDIO_INPUT"]'
 	)
 })
 

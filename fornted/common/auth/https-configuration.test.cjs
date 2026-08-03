@@ -49,6 +49,30 @@ test('ordinary H5 CSP uses self for API connections', () => {
 	assert.doesNotMatch(scriptSource, /'unsafe-inline'/)
 })
 
+test('ordinary H5 CSP permits HTTPS model icons without broadening active content sources', () => {
+	const index = readProjectFile('index.html')
+	const imageSource = index.match(/img-src ([^;]+)/)?.[1]
+	const scriptSource = index.match(/script-src ([^;]+)/)?.[1]
+
+	assert.ok(imageSource, 'ordinary user pages must declare img-src CSP')
+	assert.ok(scriptSource, 'ordinary user pages must declare script-src CSP')
+	assert.match(imageSource, /(?:^|\s)https:(?:\s|$)/)
+	assert.doesNotMatch(imageSource, /(?:^|\s)(?:http:|\*)(?:\s|$)/)
+	assert.doesNotMatch(scriptSource, /(?:^|\s)(?:https:|\*)(?:\s|$)/)
+})
+
+test('ordinary H5 CSP permits sandboxed blob HTML previews only as frame content', () => {
+	const index = readProjectFile('index.html')
+	const frameSource = index.match(/frame-src ([^;]+)/)?.[1]
+	const scriptSource = index.match(/script-src ([^;]+)/)?.[1]
+
+	assert.ok(frameSource, 'ordinary user pages must declare frame-src CSP')
+	assert.match(frameSource, /(?:^|\s)blob:(?:\s|$)/)
+	assert.match(frameSource, /https:\/\/challenges\.cloudflare\.com/)
+	assert.doesNotMatch(frameSource, /(?:^|\s)\*(?:\s|$)/)
+	assert.doesNotMatch(scriptSource, /(?:^|\s)blob:(?:\s|$)/)
+})
+
 test('login page eagerly initializes browser CSRF without removing the unsafe-request fallback', () => {
 	const login = readProjectFile('pages/auth/login.vue')
 	const httpClient = readProjectFile('common/auth/http-client.js')
@@ -120,6 +144,9 @@ test('local HTTPS launcher explicitly injects environment into IDE child process
 		source.indexOf('function Merge-OriginList'),
 		source.indexOf('function Merge-HostnameList')
 	)
+	const localEnvironmentStart = source.indexOf('$localHttpsEnvironment = @{')
+	const localEnvironmentEnd = source.indexOf('  if (-not $HBuilderXOnly)', localEnvironmentStart)
+	const localEnvironment = source.slice(localEnvironmentStart, localEnvironmentEnd)
 	const hostnameList = source.slice(
 		source.indexOf('function Merge-HostnameList'),
 		source.indexOf('$projectRoot =')
@@ -132,7 +159,8 @@ test('local HTTPS launcher explicitly injects environment into IDE child process
 	assert.match(source, /LOCAL_HTTPS_ENABLED/)
 	assert.match(source, /LOCAL_HTTPS_P12_PATH/)
 	assert.match(source, /SERVER_SSL_KEY_STORE_PASSWORD/)
-	assert.doesNotMatch(source, /AUTH_COOKIE_DOMAIN/)
+	assert.match(source, /"AUTH_COOKIE_DOMAIN"[\s\S]*"ADMIN_COOKIE_DOMAIN"[\s\S]*"ADMIN_CSRF_COOKIE_DOMAIN"[\s\S]*\$processEnvironment\.Remove\(\$cookieDomainVariable\)/)
+	assert.doesNotMatch(localEnvironment, /(?:AUTH|ADMIN(?:_CSRF)?)_COOKIE_DOMAIN/)
 	assert.match(source, /api\.niko000o\.site/)
 	assert.match(originList, /"https:\/\/dev\.niko000o\.site"/)
 	assert.match(hostnameList, /"dev\.niko000o\.site"/)

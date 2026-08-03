@@ -281,8 +281,8 @@ public final class RedisKeyFactory {
      * <p>模型名称和厂商等业务内容只存在于加密 Value 中，Key 本身保持固定且不携带模型标识。</p>
      */
     public String aiModelEnabledSnapshotKey() {
-        // v4 与十进制 K 的容量语义同步，改用新 Key 可避免新应用读取旧语义的加密快照。
-        return fixedKey("ai", "model", "v4", "enabled");
+        // v5 隔离细分前的媒体能力枚举，避免新应用把旧 IMAGE、AUDIO、VIDEO 快照当成有效数据。
+        return fixedKey("ai", "model", "v5", "enabled");
     }
 
     /**

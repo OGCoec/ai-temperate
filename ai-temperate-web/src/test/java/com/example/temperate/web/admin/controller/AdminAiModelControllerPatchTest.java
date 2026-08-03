@@ -59,7 +59,7 @@ final class AdminAiModelControllerPatchTest {
                 objectMapper.readTree("""
                         {
                           "description": null,
-                          "capabilities": ["RESPONSES", "IMAGE"]
+                          "capabilities": ["RESPONSES", "IMAGE_INPUT", "IMAGE_GENERATION"]
                         }
                         """));
 

@@ -24,6 +24,24 @@ test('workspace owns one persistent shell and statically imports every business 
 	assert.doesNotMatch(workspace, /__AIT_ADMIN_WORKSPACE_INITIAL_PATH__/)
 })
 
+test('administrator workspace keeps the active panel mounted when browser visibility changes', () => {
+	const app = source('App.vue')
+	const workspace = source('pages/admin/workspace.vue')
+	const lifecycleRefreshPattern = /\b(?:onShow|onHide)\s*\(/
+	const hardReloadPattern = /\b(?:window\.)?location\.reload\s*\(/
+	const visibilityListenerPattern = /addEventListener\(\s*['"](?:visibilitychange|focus|blur)['"]/
+
+	for (const [name, frontendSource] of [
+		['App.vue', app],
+		['pages/admin/workspace.vue', workspace]
+	]) {
+		assert.doesNotMatch(frontendSource, lifecycleRefreshPattern, name)
+		assert.doesNotMatch(frontendSource, hardReloadPattern, name)
+		assert.doesNotMatch(frontendSource, visibilityListenerPattern, name)
+	}
+	assert.doesNotMatch(workspace, /shouldRevalidateAdminSession|workspaceHidden/)
+})
+
 test('business panels do not own page-stack navigation or page-level guards', () => {
 	const panelDirectory = path.join(root, 'components', 'admin', 'workspace')
 	for (const name of fs.readdirSync(panelDirectory).filter(name => name.endsWith('.vue'))) {

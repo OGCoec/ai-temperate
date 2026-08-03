@@ -101,15 +101,22 @@ final class AiModelSchemaContractTest {
                 .contains("CHAT_COMPLETIONS")
                 .contains("RESPONSES")
                 .contains("'WEB_SEARCH'")
-                .contains("'IMAGE'")
-                .contains("'VIDEO'")
-                .contains("'AUDIO'")
+                .contains("'IMAGE_INPUT'")
+                .contains("'IMAGE_GENERATION'")
+                .contains("'IMAGE_EDIT'")
+                .contains("'AUDIO_INPUT'")
+                .contains("'AUDIO_GENERATION'")
+                .contains("'AUDIO_EDIT'")
+                .contains("'VIDEO_INPUT'")
+                .contains("'VIDEO_GENERATION'")
+                .contains("'VIDEO_EDIT'")
                 .contains("idx_ai_model_capability_ai_model_id")
                 .contains("idx_ai_model_capability_code_model_id")
                 .contains("capability_code ASC,")
                 .contains("ai_model_id ASC")
-                .doesNotContain("'IMAGE_GENERATION'")
-                .doesNotContain("'VIDEO_GENERATION'")
+                .doesNotContain("'IMAGE',")
+                .doesNotContain("'VIDEO',")
+                .doesNotContain("'AUDIO',")
                 .doesNotContain("FOREIGN KEY")
                 .doesNotContain("REFERENCES");
         assertThat(orphanCheck)
@@ -133,6 +140,28 @@ final class AiModelSchemaContractTest {
                 .contains("'IMAGE'")
                 .contains("'VIDEO'")
                 .contains("'AUDIO'")
+                .doesNotContain("FOREIGN KEY")
+                .doesNotContain("REFERENCES")
+                .contains("COMMIT;");
+    }
+
+    @Test
+    void mediaCapabilityMigrationMapsLegacyInputWithoutGrantingGenerationOrEdit()
+            throws IOException {
+        String migration = read(
+                "sql/migrations/023_split_ai_model_media_capabilities.sql");
+
+        assertThat(migration)
+                .contains("DROP CONSTRAINT IF EXISTS chk_ai_model_capability_code")
+                .contains("WHEN 'IMAGE' THEN 'IMAGE_INPUT'")
+                .contains("WHEN 'AUDIO' THEN 'AUDIO_INPUT'")
+                .contains("WHEN 'VIDEO' THEN 'VIDEO_INPUT'")
+                .contains("'IMAGE_GENERATION'")
+                .contains("'IMAGE_EDIT'")
+                .contains("'AUDIO_GENERATION'")
+                .contains("'AUDIO_EDIT'")
+                .contains("'VIDEO_GENERATION'")
+                .contains("'VIDEO_EDIT'")
                 .doesNotContain("FOREIGN KEY")
                 .doesNotContain("REFERENCES")
                 .contains("COMMIT;");
@@ -253,7 +282,13 @@ final class AiModelSchemaContractTest {
         assertThat(capabilityMapper)
                 .contains("<delete id=\"deleteByAiModelId\">")
                 .contains("DELETE FROM ai_model_capability")
-                .contains("#{capability.id,jdbcType=BIGINT}");
+                .contains("#{capability.id,jdbcType=BIGINT}")
+                .contains("javaType=\"com.example.temperate.model.ai.enums.AiModelCapabilityCode\"")
+                .contains("#{capability.capabilityCode,jdbcType=VARCHAR}")
+                .contains("<foreach collection=\"capabilities\"")
+                .doesNotContain("IMAGE_INPUT")
+                .doesNotContain("IMAGE_GENERATION")
+                .doesNotContain("IMAGE_EDIT");
     }
 
     private static String read(String relativePath) throws IOException {

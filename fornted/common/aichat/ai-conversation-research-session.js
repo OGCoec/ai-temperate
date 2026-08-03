@@ -1,11 +1,13 @@
 const STORAGE_KEY = 'ait.user.ai.research.v1'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
+const LEGACY_SCHEMA_VERSION = 1
 const MAX_RECORDS = 20
 const MAX_STORAGE_BYTES = 2 * 1024 * 1024
 const MAX_ACTIVITIES = 500
 const MAX_SOURCES = 200
 const MAX_SUMMARIES = 1000
 const MAX_SUMMARY_CHARACTERS = 256 * 1024
+const ACTIVITY_EVENT_ID_PATTERN = /^act_v1_[A-Za-z0-9_-]{43}$/
 
 function storage() {
 	try { return globalThis.sessionStorage || null } catch (_) { return null }
@@ -33,14 +35,41 @@ function safeHttpUrl(value) {
 function normalizeActivity(value) {
 	const sequence = safeSequence(value?.sequence)
 	if (sequence == null) return null
+	const eventId = text(value?.eventId, 64)
 	return {
 		sequence,
+		eventId: ACTIVITY_EVENT_ID_PATTERN.test(eventId) ? eventId : null,
 		activityId: text(value.activityId, 128),
 		phase: text(value.phase, 32),
 		status: text(value.status, 32),
 		query: value.query == null ? null : text(value.query, 1024),
 		occurredAt: text(value.occurredAt, 64)
 	}
+}
+
+function activityDedupeKey(value) {
+	if (ACTIVITY_EVENT_ID_PATTERN.test(String(value?.eventId || ''))) {
+		return value.eventId
+	}
+	// 旧后端没有 eventId 时只使用精确业务字段，传输序号和时间不得制造新的可见事件。
+	return JSON.stringify([
+		String(value?.activityId || ''),
+		String(value?.phase || ''),
+		String(value?.status || ''),
+		value?.query == null ? null : String(value.query)
+	])
+}
+
+function dedupeActivities(values) {
+	const keys = new Set()
+	const result = []
+	for (const activity of values) {
+		const key = activityDedupeKey(activity)
+		if (keys.has(key)) continue
+		keys.add(key)
+		result.push(activity)
+	}
+	return result
 }
 
 function normalizeSource(value) {
@@ -71,7 +100,8 @@ function normalizeSummary(value) {
 }
 
 function normalizeRecord(value) {
-	if (!value || value.schemaVersion !== SCHEMA_VERSION) return null
+	if (!value || ![LEGACY_SCHEMA_VERSION, SCHEMA_VERSION]
+		.includes(value.schemaVersion)) return null
 	const idempotencyKey = text(value.idempotencyKey, 64)
 	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) return null
 	return {
@@ -84,8 +114,9 @@ function normalizeRecord(value) {
 		idempotencyKey,
 		webSearchMode: ['OFF', 'AUTO', 'REQUIRED'].includes(value.webSearchMode)
 			? value.webSearchMode : 'OFF',
-		activities: (Array.isArray(value.activities) ? value.activities : [])
-			.map(normalizeActivity).filter(Boolean).slice(-MAX_ACTIVITIES),
+		activities: dedupeActivities(
+			(Array.isArray(value.activities) ? value.activities : [])
+				.map(normalizeActivity).filter(Boolean)).slice(-MAX_ACTIVITIES),
 		sources: (Array.isArray(value.sources) ? value.sources : [])
 			.map(normalizeSource).filter(Boolean).slice(-MAX_SOURCES),
 		reasoningSummaries: boundedSummaries(
@@ -110,8 +141,15 @@ function boundedSummaries(values) {
 function readAll() {
 	try {
 		const parsed = JSON.parse(storage()?.getItem(STORAGE_KEY) || '[]')
-		return (Array.isArray(parsed) ? parsed : [])
+		const source = Array.isArray(parsed) ? parsed : []
+		const normalized = source
 			.map(normalizeRecord).filter(Boolean)
+		const requiresMigration = normalized.length !== source.length
+			|| source.some((item, index) => item?.schemaVersion !== SCHEMA_VERSION
+				|| (Array.isArray(item?.activities)
+					&& item.activities.length !== normalized[index]?.activities?.length))
+		if (requiresMigration) writeAll(normalized)
+		return normalized
 	} catch (_) {
 		return []
 	}
@@ -173,6 +211,8 @@ export function createAiConversationResearchSession(initial) {
 	let immediateQueued = false
 	let summaryTimer = null
 	const sourceKeys = new Set()
+	const activityEventKeys = new Set(
+		record.activities.map(activityDedupeKey))
 
 	function touch() { record.updatedAt = new Date().toISOString() }
 	function accepts(value) {
@@ -216,6 +256,10 @@ export function createAiConversationResearchSession(initial) {
 		appendActivity(value) {
 			const normalized = normalizeActivity(value)
 			if (!normalized || !accepts(normalized)) return false
+			const eventKey = activityDedupeKey(normalized)
+			if (activityEventKeys.has(eventKey)
+				|| activityEventKeys.size >= MAX_ACTIVITIES) return false
+			activityEventKeys.add(eventKey)
 			record.activities.push(normalized)
 			record.activities = record.activities.slice(-MAX_ACTIVITIES)
 			touch(); queueImmediate(); return true

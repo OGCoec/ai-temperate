@@ -78,8 +78,7 @@ import {
 } from '@/common/admin/admin-workspace-entry-state.js'
 import {
 	ensureAdminSession,
-	invalidateAdminSessionValidation,
-	shouldRevalidateAdminSession
+	invalidateAdminSessionValidation
 } from '@/common/admin/admin-route-guard-runtime.js'
 import { handleAdminSessionInvalid } from '@/common/admin/admin-session-expiry-navigation.js'
 
@@ -118,7 +117,6 @@ export default {
 			retrying: false,
 			routeNotice: '',
 			activationSerial: 0,
-			workspaceHidden: false,
 			createdModelPublicId: '',
 			pendingModelPrefill: null,
 			panelRenderError: null,
@@ -224,19 +222,6 @@ export default {
 		this.historyAdapter?.start?.(this.location, buildAdminWorkspaceUrl(this.location))
 		await this.verifySession(false)
 	},
-	onShow() {
-		if (this.sessionState !== 'READY') return
-		if (shouldRevalidateAdminSession()) {
-			void this.verifySession(true)
-		} else if (this.workspaceHidden) {
-			this.workspaceHidden = false
-			void this.schedulePanelActivation(true)
-		}
-	},
-	onHide() {
-		this.workspaceHidden = true
-		this.$refs.activePanel?.onWorkspaceDeactivated?.()
-	},
 	onUnload() {
 		this.$refs.activePanel?.onWorkspaceDeactivated?.()
 		this.historyAdapter?.destroy?.()
@@ -288,7 +273,6 @@ export default {
 					return
 				}
 				this.sessionState = 'READY'
-				this.workspaceHidden = false
 				await this.schedulePanelActivation(true)
 			} catch (_error) {
 				this.sessionState = 'TRANSIENT_FAILURE'

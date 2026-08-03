@@ -264,15 +264,22 @@ public class AdminAiModelController {
             @NotNull Boolean enabled,
             @ArraySchema(schema = @Schema(
                     type = "string",
-                    description = "模型支持的单项 API 能力大类代码",
+                    description = "模型支持的单项协议、工具或媒体能力代码",
                     allowableValues = {
                             "CHAT_COMPLETIONS",
                             "RESPONSES",
-                            "IMAGE",
-                            "VIDEO",
-                            "AUDIO"
+                            "WEB_SEARCH",
+                            "IMAGE_INPUT",
+                            "IMAGE_GENERATION",
+                            "IMAGE_EDIT",
+                            "AUDIO_INPUT",
+                            "AUDIO_GENERATION",
+                            "AUDIO_EDIT",
+                            "VIDEO_INPUT",
+                            "VIDEO_GENERATION",
+                            "VIDEO_EDIT"
                     }))
-            @NotEmpty @Size(max = 5)
+            @NotEmpty @Size(max = 12)
             List<@NotBlank @Size(max = 64) String> capabilities) {
 
         AdminAiModelCreateCommand toCommand() {

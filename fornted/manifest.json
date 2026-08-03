@@ -39,7 +39,7 @@
             "base" : ""
         },
         "async" : {
-            "timeout" : 20000
+            "timeout" : 120000
         },
         "uniStatistics" : {
             "enable" : true

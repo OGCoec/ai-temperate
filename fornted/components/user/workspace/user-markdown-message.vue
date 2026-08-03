@@ -1,11 +1,12 @@
 <template>
-	<view class="ai-markdown-message" :class="{ 'is-streaming': streaming }">
+	<view class="ai-markdown-message" :class="{ 'is-streaming': streaming, 'is-compact': compact }">
 		<user-markdown-node :node="ast" :path="[]" :message-key="messageKey" />
 	</view>
 </template>
 
 <script>
 	import { parseAiMarkdown } from '@/common/aichat/ai-markdown-parser.js'
+	import { decorateAiMarkdownSources } from '@/common/aichat/ai-conversation-source-presentation.js'
 	import UserMarkdownNode from './user-markdown-node.vue'
 
 	export default {
@@ -14,11 +15,15 @@
 		props: {
 			text: { type: String, default: '' },
 			streaming: { type: Boolean, default: false },
-			messageKey: { type: String, default: '' }
+			messageKey: { type: String, default: '' },
+			sources: { type: Array, default: () => [] },
+			compact: { type: Boolean, default: false }
 		},
 		computed: {
 			ast() {
-				return parseAiMarkdown(this.text, { streaming: this.streaming })
+				return decorateAiMarkdownSources(
+					parseAiMarkdown(this.text, { streaming: this.streaming }),
+					this.sources)
 			}
 		}
 	}
@@ -27,4 +32,7 @@
 <style lang="scss">
 	.ai-markdown-message { min-width: 0; }
 	.ai-markdown-message.is-streaming { contain: content; }
+	.ai-markdown-message.is-compact .ai-markdown-document { color: inherit; font-size: 12px; line-height: 1.6; }
+	.ai-markdown-message.is-compact .ai-markdown-list { margin-bottom: 0; }
+	.ai-markdown-message.is-compact .ai-markdown-list-item .ai-markdown-paragraph { margin-bottom: 3px; }
 </style>

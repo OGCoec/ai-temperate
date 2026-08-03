@@ -765,9 +765,14 @@ public final class AiConversationResponseServiceImpl
             return processChunk(chunk.value(), state);
         }
         if (event instanceof AiConversationModelEvent.Activity activity) {
+            String eventId = state.researchActivityEvents.accept(activity);
+            if (eventId == null) {
+                return List.of();
+            }
             return List.of(AiConversationStreamEvent.activity(
                     new AiConversationActivityData(
                             state.sequence.incrementAndGet(),
+                            eventId,
                             activity.activityId(),
                             activity.phase().name(),
                             activity.status().name(),
@@ -798,6 +803,11 @@ public final class AiConversationResponseServiceImpl
                 events.add(AiConversationStreamEvent.activity(
                         new AiConversationActivityData(
                                 state.sequence.incrementAndGet(),
+                                AiConversationActivityEventDeduplicator.eventId(
+                                        summary.activityId(),
+                                        AiConversationActivityPhase.REASONING,
+                                        AiConversationActivityStatus.STARTED,
+                                        null),
                                 summary.activityId(),
                                 AiConversationActivityPhase.REASONING.name(),
                                 AiConversationActivityStatus.STARTED.name(),
@@ -831,6 +841,8 @@ public final class AiConversationResponseServiceImpl
         return AiConversationStreamEvent.activity(
                 new AiConversationActivityData(
                         state.sequence.incrementAndGet(),
+                        AiConversationActivityEventDeduplicator.eventId(
+                                activityId, phase, status, null),
                         activityId,
                         phase.name(),
                         status.name(),
@@ -2106,9 +2118,9 @@ public final class AiConversationResponseServiceImpl
             List<AiConversationAttachment> attachments) {
         for (AiConversationAttachment attachment : attachments) {
             AiModelCapabilityCode required = switch (attachment.category()) {
-                case IMAGE -> AiModelCapabilityCode.IMAGE;
-                case AUDIO -> AiModelCapabilityCode.AUDIO;
-                case VIDEO -> AiModelCapabilityCode.VIDEO;
+                case IMAGE -> AiModelCapabilityCode.IMAGE_INPUT;
+                case AUDIO -> AiModelCapabilityCode.AUDIO_INPUT;
+                case VIDEO -> AiModelCapabilityCode.VIDEO_INPUT;
                 case DOCUMENT, ARCHIVE, OTHER -> null;
             };
             // 文档、压缩包和其他附件仍可持久保存，但本期不会作为模型媒体发送。
@@ -2307,6 +2319,9 @@ public final class AiConversationResponseServiceImpl
         private final AtomicBoolean terminalFinishObserved = new AtomicBoolean();
         private final AtomicBoolean reasoningStarted = new AtomicBoolean();
         private final AtomicBoolean generatingStarted = new AtomicBoolean();
+        private final AiConversationActivityEventDeduplicator
+                researchActivityEvents =
+                        new AiConversationActivityEventDeduplicator();
         private final Set<String> researchSourceKeys = new HashSet<>();
         private final AtomicReference<AiConversationUsage> usage =
                 new AtomicReference<>();

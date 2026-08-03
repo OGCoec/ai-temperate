@@ -104,7 +104,7 @@ final class AdminAiModelServiceImplTest {
         when(modelMapper.countByNormalizedModelName("gpt-5.5")).thenReturn(0);
         when(idGenerator.nextPositiveId()).thenReturn(MODEL_ID);
         when(modelMapper.insert(any(AiModel.class))).thenReturn(1);
-        when(capabilityMapper.insertBatch(any())).thenReturn(6);
+        when(capabilityMapper.insertBatch(any())).thenReturn(12);
         when(modelMapper.findById(MODEL_ID)).thenReturn(model(MODEL_ID, true));
 
         service.create(command(
@@ -113,9 +113,15 @@ final class AdminAiModelServiceImplTest {
                         "CHAT_COMPLETIONS",
                         "RESPONSES",
                         "WEB_SEARCH",
-                        "IMAGE",
-                        "VIDEO",
-                        "AUDIO")));
+                        "IMAGE_INPUT",
+                        "IMAGE_GENERATION",
+                        "IMAGE_EDIT",
+                        "AUDIO_INPUT",
+                        "AUDIO_GENERATION",
+                        "AUDIO_EDIT",
+                        "VIDEO_INPUT",
+                        "VIDEO_GENERATION",
+                        "VIDEO_EDIT")));
 
         ArgumentCaptor<AiModel> modelCaptor = ArgumentCaptor.forClass(AiModel.class);
         verify(modelMapper).insert(modelCaptor.capture());
@@ -140,7 +146,7 @@ final class AdminAiModelServiceImplTest {
                 .doesNotHaveDuplicates();
         assertThat(capabilities.getValue())
                 .extracting(AiModelCapability::getCapabilityCode)
-                .contains(AiModelCapabilityCode.WEB_SEARCH);
+                .containsExactly(AiModelCapabilityCode.values());
         ArgumentCaptor<Runnable> refreshCaptor = ArgumentCaptor.forClass(Runnable.class);
         verify(afterCommitExecutor).execute(refreshCaptor.capture());
         verifyNoInteractions(cacheService);
@@ -252,12 +258,14 @@ final class AdminAiModelServiceImplTest {
     }
 
     @Test
-    void rejectsUnsupportedCapabilityBeforeDatabaseIo() {
-        assertThatThrownBy(() -> service.create(
-                command(false, List.of("IMAGE_GENERATION"))))
-                .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
-                        assertThat(exception.code())
-                                .isEqualTo(AdminAiModelErrorCode.AI_MODEL_CAPABILITY_INVALID));
+    void rejectsLegacyAggregateMediaCapabilitiesBeforeDatabaseIo() {
+        for (String legacyCapability : List.of("IMAGE", "AUDIO", "VIDEO")) {
+            assertThatThrownBy(() -> service.create(
+                    command(false, List.of(legacyCapability))))
+                    .isInstanceOfSatisfying(AdminAiModelException.class, exception ->
+                            assertThat(exception.code())
+                                    .isEqualTo(AdminAiModelErrorCode.AI_MODEL_CAPABILITY_INVALID));
+        }
 
         verifyNoInteractions(modelMapper, capabilityMapper, idGenerator, cacheService);
     }
@@ -427,7 +435,7 @@ final class AdminAiModelServiceImplTest {
         when(capabilityMapper.findByAiModelIds(List.of(MODEL_ID, secondId)))
                 .thenReturn(List.of(
                         capability(MODEL_ID, AiModelCapabilityCode.RESPONSES),
-                        capability(secondId, AiModelCapabilityCode.IMAGE)));
+                        capability(secondId, AiModelCapabilityCode.IMAGE_INPUT)));
 
         AdminAiModelPageResult result = service.list(
                 1,
@@ -441,7 +449,7 @@ final class AdminAiModelServiceImplTest {
         assertThat(result.models().get(0).capabilities())
                 .containsExactly(AiModelCapabilityCode.RESPONSES);
         assertThat(result.models().get(1).capabilities())
-                .containsExactly(AiModelCapabilityCode.IMAGE);
+                .containsExactly(AiModelCapabilityCode.IMAGE_INPUT);
         assertThat(result.models().get(0).descriptionMatchedTokens())
                 .containsExactly("gpt");
         assertThat(result.models().get(1).descriptionMatchedTokens()).isEmpty();
@@ -529,15 +537,19 @@ final class AdminAiModelServiceImplTest {
         after.setDescription(null);
         after.setCachedInputRatio(new BigDecimal("0.25000000"));
         after.setRowVersion(4L);
+        when(searchService.modelNameTokensJson("gpt-5.6"))
+                .thenReturn("[\"gpt\",\"5.6\"]");
         when(modelMapper.findById(MODEL_ID)).thenReturn(before, after);
         when(modelMapper.updateEditable(any(AiModel.class), org.mockito.ArgumentMatchers.eq(3L)))
                 .thenReturn(1);
         when(capabilityMapper.deleteByAiModelId(MODEL_ID)).thenReturn(1);
-        when(capabilityMapper.insertBatch(any())).thenReturn(2);
+        when(capabilityMapper.insertBatch(any())).thenReturn(4);
         when(capabilityMapper.findByAiModelId(MODEL_ID))
                 .thenReturn(List.of(
                         capability(MODEL_ID, AiModelCapabilityCode.RESPONSES),
-                        capability(MODEL_ID, AiModelCapabilityCode.IMAGE)));
+                        capability(MODEL_ID, AiModelCapabilityCode.IMAGE_INPUT),
+                        capability(MODEL_ID, AiModelCapabilityCode.IMAGE_GENERATION),
+                        capability(MODEL_ID, AiModelCapabilityCode.IMAGE_EDIT)));
 
         AdminAiModelDetailResult result = service.patch(
                 publicIdCodec.encode(MODEL_ID),
@@ -562,6 +574,13 @@ final class AdminAiModelServiceImplTest {
                 .extracting(AiModelCapability::getId)
                 .allMatch(id -> id != null && id > 0)
                 .doesNotHaveDuplicates();
+        assertThat(capabilities.getValue())
+                .extracting(AiModelCapability::getCapabilityCode)
+                .containsExactly(
+                        AiModelCapabilityCode.RESPONSES,
+                        AiModelCapabilityCode.IMAGE_INPUT,
+                        AiModelCapabilityCode.IMAGE_GENERATION,
+                        AiModelCapabilityCode.IMAGE_EDIT);
         verify(afterCommitExecutor).execute(any());
     }
 
@@ -794,7 +813,11 @@ final class AdminAiModelServiceImplTest {
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
                 AiModelPatchField.absent(),
-                AiModelPatchField.of(List.of("RESPONSES", "IMAGE")));
+                AiModelPatchField.of(List.of(
+                        "RESPONSES",
+                        "IMAGE_INPUT",
+                        "IMAGE_GENERATION",
+                        "IMAGE_EDIT")));
     }
 
     private static AdminAiModelPatchCommand descriptionPatch(String description) {

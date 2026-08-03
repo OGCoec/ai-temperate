@@ -271,7 +271,7 @@ final class RedisKeyFactoryTest {
     void createsFixedAiModelEnabledSnapshotKey() {
         RedisKeyFactory factory = new RedisKeyFactory("prod");
 
-        assertEquals("ait:prod:ai:model:v4:enabled", factory.aiModelEnabledSnapshotKey());
+        assertEquals("ait:prod:ai:model:v5:enabled", factory.aiModelEnabledSnapshotKey());
     }
 
     @Test

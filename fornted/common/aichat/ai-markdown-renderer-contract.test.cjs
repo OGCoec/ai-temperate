@@ -19,6 +19,7 @@ test('markdown renderer uses an explicit component whitelist and never injects H
 		'user-markdown-code-line.vue',
 		'user-markdown-html-preview.vue',
 		'user-markdown-table.vue',
+		'user-source-chip.vue',
 		'user-dialog-block.vue'
 	].map(readComponent).join('\n')
 
@@ -138,4 +139,39 @@ test('assistant messages use the Markdown view boundary instead of raw response 
 	assert.equal(panel.includes('<user-markdown-message'), true)
 	assert.equal(panel.includes('{{ message.responseText }}'), false)
 	assert.equal(panel.includes('createAiMarkdownRenderState'), true)
+})
+
+test('matched SSE sources use one accessible chip without weakening ordinary link safety', () => {
+	const message = readComponent('user-markdown-message.vue')
+	const inline = readComponent('user-markdown-inline.vue')
+	const chip = readComponent('user-source-chip.vue')
+	const panel = readComponent('user-chat-panel.vue')
+
+	assert.equal(message.includes('decorateAiMarkdownSources'), true)
+	assert.equal(message.includes("sources: { type: Array, default: () => [] }"), true)
+	assert.equal(inline.includes('node.safe && node.source'), true)
+	assert.equal(inline.includes('<user-source-chip'), true)
+	assert.equal(inline.includes('v-else-if="node?.type === \'link\' && node.safe"'), true)
+	assert.equal(chip.includes(':aria-disabled="String(inactive)"'), true)
+	assert.equal(chip.includes('window.open(url, \'_blank\', \'noopener,noreferrer\')'), true)
+	assert.equal(chip.includes('plus.runtime.openURL(url)'), true)
+	assert.equal(chip.includes('@error="handleFaviconError"'), true)
+	assert.equal(chip.includes('/static/icons/source-globe.svg'), true)
+	assert.equal(panel.includes('mergeAiConversationSources'), true)
+	assert.equal(panel.includes(':sources="researchSources(message)"'), true)
+	assert.equal(panel.includes('variant="activity"'), true)
+	assert.equal(panel.includes('variant="card"'), true)
+	assert.equal(chip.includes('v-html'), false)
+})
+
+test('research summaries render through compact safe Markdown and preserve exact activity states', () => {
+	const panel = readComponent('user-chat-panel.vue')
+
+	assert.equal(panel.includes('formatAiReasoningSummaryMarkdown'), true)
+	assert.equal(panel.includes('compact'), true)
+	assert.equal(panel.includes('presentAiSearchActivity'), true)
+	assert.equal(panel.includes("STARTED: '已开始'"), true)
+	assert.equal(panel.includes("IN_PROGRESS: '进行中'"), true)
+	assert.equal(panel.includes("COMPLETED: '已完成'"), true)
+	assert.equal(panel.includes('openResearchSource'), false)
 })

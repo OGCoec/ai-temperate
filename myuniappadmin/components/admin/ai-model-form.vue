@@ -187,29 +187,40 @@
 				</view>
 			</view>
 			<view
-				class="capability-grid"
-				role="group"
-				aria-label="模型能力"
+				class="capability-groups"
 				:aria-describedby="errors.capabilities ? 'model-capabilities-error' : undefined"
 			>
-				<button
-					v-for="option in capabilityOptions"
-					:key="option.code"
-					class="capability-option"
-					:class="{ selected: selected(option.code) }"
-					type="button"
-					:disabled="readonly || busy"
-					:aria-pressed="selected(option.code)"
-					@click="toggleCapability(option.code)"
+				<view
+					v-for="group in capabilityGroups"
+					:key="group.code"
+					class="capability-group"
+					role="group"
+					:aria-labelledby="`model-capability-group-${group.code}`"
 				>
-					<view class="capability-indicator" aria-hidden="true">
-						<view class="capability-dot" />
+					<text :id="`model-capability-group-${group.code}`" class="capability-group-label">
+						{{ group.label }}
+					</text>
+					<view class="capability-grid">
+						<button
+							v-for="option in group.options"
+							:key="option.code"
+							class="capability-option"
+							:class="{ selected: selected(option.code) }"
+							type="button"
+							:disabled="readonly || busy"
+							:aria-pressed="selected(option.code)"
+							@click="toggleCapability(option.code)"
+						>
+							<view class="capability-indicator" aria-hidden="true">
+								<view class="capability-dot" />
+							</view>
+							<view>
+								<text class="capability-label">{{ option.label }}</text>
+								<text class="capability-hint">{{ option.hint }}</text>
+							</view>
+						</button>
 					</view>
-					<view>
-						<text class="capability-label">{{ option.label }}</text>
-						<text class="capability-hint">{{ option.hint }}</text>
-					</view>
-				</button>
+				</view>
 			</view>
 			<text v-if="errors.capabilities" id="model-capabilities-error" class="field-error capability-error" role="alert">
 				{{ errors.capabilities }}
@@ -315,7 +326,11 @@
 </template>
 
 <script>
-import { AI_MODEL_CAPABILITY_OPTIONS, cloneAiModelForm } from '@/common/admin/admin-ai-model-form.js'
+import {
+	AI_MODEL_CAPABILITY_GROUPS,
+	AI_MODEL_CAPABILITY_OPTIONS,
+	cloneAiModelForm
+} from '@/common/admin/admin-ai-model-form.js'
 
 export default {
 	name: 'AiModelForm',
@@ -330,7 +345,7 @@ export default {
 	emits: ['update:modelValue', 'manage-icons'],
 	data() {
 		return {
-			capabilityOptions: AI_MODEL_CAPABILITY_OPTIONS,
+			capabilityGroups: AI_MODEL_CAPABILITY_GROUPS,
 			iconSearch: '',
 			advancedOpen: false
 		}
@@ -530,6 +545,15 @@ export default {
 .limit-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14rpx; padding: 0 18rpx; }
 .limit-control input { width: 100%; color: inherit; font-size: 28rpx; font-variant-numeric: tabular-nums; }
 .limit-control > text { color: $app-green; font-size: 24rpx; font-weight: 820; }
+.capability-groups { display: grid; gap: 22rpx; }
+.capability-group { min-width: 0; }
+.capability-group-label {
+	display: block;
+	margin-bottom: 10rpx;
+	color: #c9d5d8;
+	font-size: 24rpx;
+	font-weight: 720;
+}
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; }
 .capability-option {
 	min-height: 104rpx;

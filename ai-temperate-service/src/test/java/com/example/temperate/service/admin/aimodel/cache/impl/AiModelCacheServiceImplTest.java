@@ -42,7 +42,7 @@ final class AiModelCacheServiceImplTest {
 
     private static final String TEST_KEY_BASE64 =
             Base64.getEncoder().encodeToString(new byte[32]);
-    private static final String CACHE_KEY = "ait:test:ai:model:v4:enabled";
+    private static final String CACHE_KEY = "ait:test:ai:model:v5:enabled";
 
     @Mock
     private AiModelMapper modelMapper;
@@ -108,11 +108,11 @@ final class AiModelCacheServiceImplTest {
     }
 
     @Test
-    void rejectsPreviousKiloUnitSnapshotThenUnlinksLoadsDatabaseAndWritesV5() {
+    void rejectsPreviousMediaCapabilitySnapshotThenUnlinksLoadsDatabaseAndWritesV6() {
         ObjectMapper objectMapper = new ObjectMapper();
-        AiModelCacheSnapshot v4 = new AiModelCacheSnapshot(4, List.of());
+        AiModelCacheSnapshot v5 = new AiModelCacheSnapshot(5, List.of());
         String envelope = new AiModelCacheProtector(TEST_KEY_BASE64, objectMapper)
-                .protect(CACHE_KEY, v4)
+                .protect(CACHE_KEY, v5)
                 .envelope();
         AiModel model = model();
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -123,7 +123,7 @@ final class AiModelCacheServiceImplTest {
 
         AiModelCacheSnapshot result = service.getOrLoadEnabledSnapshot();
 
-        assertThat(result.schemaVersion()).isEqualTo(5);
+        assertThat(result.schemaVersion()).isEqualTo(6);
         assertThat(result.models()).hasSize(1);
         verify(redisTemplate, times(2)).unlink(CACHE_KEY);
         verify(valueOperations).set(eq(CACHE_KEY), any(String.class), any(Duration.class));

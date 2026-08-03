@@ -15,9 +15,15 @@ CREATE TABLE ai_model_capability (
             'CHAT_COMPLETIONS',
             'RESPONSES',
             'WEB_SEARCH',
-            'IMAGE',
-            'VIDEO',
-            'AUDIO'
+            'IMAGE_INPUT',
+            'IMAGE_GENERATION',
+            'IMAGE_EDIT',
+            'AUDIO_INPUT',
+            'AUDIO_GENERATION',
+            'AUDIO_EDIT',
+            'VIDEO_INPUT',
+            'VIDEO_GENERATION',
+            'VIDEO_EDIT'
         ))
 );
 
@@ -47,10 +53,11 @@ CREATE TRIGGER trg_ai_model_capability_set_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION set_ai_model_capability_updated_at();
 
-COMMENT ON TABLE ai_model_capability IS 'AI 模型支持的 API 能力大类明细表，通过 ai_model_id 与 ai_model 进行一对多逻辑关联';
+COMMENT ON TABLE ai_model_capability IS 'AI 模型协议、工具和媒体能力明细表，通过 ai_model_id 与 ai_model 进行一对多逻辑关联';
 COMMENT ON COLUMN ai_model_capability.id IS '应用层共享 SnowflakeIdWorker 生成的 BIGINT 主键，仅用于能力明细内部标识';
 COMMENT ON COLUMN ai_model_capability.ai_model_id IS '逻辑关联 ai_model.id，不建立物理外键';
-COMMENT ON COLUMN ai_model_capability.capability_code IS '固定能力大类代码：CHAT_COMPLETIONS、RESPONSES、WEB_SEARCH、IMAGE、VIDEO、AUDIO';
+COMMENT ON COLUMN ai_model_capability.capability_code IS
+    '固定能力代码：CHAT_COMPLETIONS、RESPONSES、WEB_SEARCH，以及图像、音频、视频的输入、生成和编辑能力';
 COMMENT ON COLUMN ai_model_capability.created_at IS '能力记录创建日期';
 COMMENT ON COLUMN ai_model_capability.updated_at IS '能力记录最后更新日期';
 

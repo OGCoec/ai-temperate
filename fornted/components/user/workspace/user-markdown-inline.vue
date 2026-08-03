@@ -28,6 +28,11 @@
 			:message-key="messageKey"
 		/>
 	</text>
+	<user-source-chip
+		v-else-if="node?.type === 'link' && node.safe && node.source"
+		:source="node.source"
+		variant="inline"
+	/>
 	<navigator
 		v-else-if="node?.type === 'link' && node.safe"
 		class="ai-markdown-link"
@@ -55,6 +60,8 @@
 </template>
 
 <script>
+	import UserSourceChip from './user-source-chip.vue'
+
 	const INLINE_TYPES = new Set([
 		'text',
 		'inlineCode',
@@ -66,6 +73,7 @@
 
 	export default {
 		name: 'UserMarkdownInline',
+		components: { UserSourceChip },
 		props: {
 			node: { type: Object, default: () => ({ type: 'text', value: '' }) },
 			path: { type: Array, default: () => [] },

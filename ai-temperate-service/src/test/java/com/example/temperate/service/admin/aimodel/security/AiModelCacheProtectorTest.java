@@ -18,12 +18,12 @@ import org.junit.jupiter.api.Test;
  */
 final class AiModelCacheProtectorTest {
 
-    private static final String CACHE_KEY = "ait:test:ai:model:v4:enabled";
+    private static final String CACHE_KEY = "ait:test:ai:model:v5:enabled";
     private static final String KEY = Base64.getEncoder().encodeToString(new byte[32]);
 
     @Test
     void protectsWholeSnapshotWithoutLeakingModelText() {
-        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(5);
+        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(6);
 
         AiModelCacheProtector protector = new AiModelCacheProtector(KEY, new ObjectMapper());
         AiModelCacheSnapshot snapshot = snapshot();
@@ -44,7 +44,7 @@ final class AiModelCacheProtectorTest {
     @Test
     void rejectsPreviousPlaintextSchemaVersion() {
         AiModelCacheProtector protector = new AiModelCacheProtector(KEY, new ObjectMapper());
-        AiModelCacheSnapshot previous = new AiModelCacheSnapshot(4, snapshot().models());
+        AiModelCacheSnapshot previous = new AiModelCacheSnapshot(5, snapshot().models());
         String envelope = protector.protect(CACHE_KEY, previous).envelope();
 
         assertThatThrownBy(() -> protector.unprotect(CACHE_KEY, envelope))
@@ -99,6 +99,6 @@ final class AiModelCacheProtectorTest {
                         32000L,
                         List.of(
                                 AiModelCapabilityCode.RESPONSES,
-                                AiModelCapabilityCode.IMAGE))));
+                                AiModelCapabilityCode.IMAGE_INPUT))));
     }
 }

@@ -36,9 +36,7 @@
 				})
 				// #endif
 			}
-		},
-		onShow() {},
-		onHide() {}
+		}
 	}
 </script>
 
