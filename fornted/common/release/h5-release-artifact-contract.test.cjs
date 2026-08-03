@@ -39,12 +39,40 @@ const headers = [
 
 test('accepts a static H5 release artifact with no Vite development modules', () => {
 	withFixture({
+		'index.html': '<!doctype html><meta http-equiv="Content-Security-Policy" content="frame-src https://ai-temperate-html-preview.pages.dev"><script type="module" src="/assets/index-a1b2c3.js"></script>',
+		'_headers': headers,
+		'_redirects': '/* /index.html 200\n',
+		'assets/index-a1b2c3.js': 'const previewOrigin="https://ai-temperate-html-preview.pages.dev";console.log("release")'
+	}, root => {
+		assert.deepEqual(verifyH5ReleaseArtifacts({ root }).errors, [])
+	})
+})
+
+test('rejects H5 artifacts that contain a loopback preview origin', () => {
+	withFixture({
+		'index.html': '<meta http-equiv="Content-Security-Policy" content="frame-src https://ai-temperate-html-preview.pages.dev">',
+		'_headers': headers,
+		'_redirects': '/* /index.html 200\n',
+		'assets/index-a1b2c3.js': 'const previewOrigin="https://localhost:4174"'
+	}, root => {
+		assert.match(
+			verifyH5ReleaseArtifacts({ root }).errors.join('\n'),
+			/loopback HTML preview origin/
+		)
+	})
+})
+
+test('rejects H5 artifacts that omit the public preview origin', () => {
+	withFixture({
 		'index.html': '<!doctype html><script type="module" src="/assets/index-a1b2c3.js"></script>',
 		'_headers': headers,
 		'_redirects': '/* /index.html 200\n',
 		'assets/index-a1b2c3.js': 'console.log("release")'
 	}, root => {
-		assert.deepEqual(verifyH5ReleaseArtifacts({ root }).errors, [])
+		assert.match(
+			verifyH5ReleaseArtifacts({ root }).errors.join('\n'),
+			/public HTML preview origin/
+		)
 	})
 })
 

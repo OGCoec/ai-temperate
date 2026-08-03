@@ -39,7 +39,7 @@ test('rejects invalid, extracted, and country-mismatched numbers', async () => {
 	assert.equal(isValidLocalPhoneNumber('202 555 0123', 'US'), false)
 	assert.equal(isValidLocalPhoneNumber('(202) 555-0123', 'US'), false)
 	assert.equal(isValidLocalPhoneNumber('+442079460018', 'US'), false)
-	assert.equal(isValidLocalPhoneNumber('2025550123', 'CN'), false)
+	assert.equal(isValidLocalPhoneNumber('13800138000', 'US'), false)
 	assert.equal(isValidLocalPhoneNumber('2025550123', ''), false)
 })
 

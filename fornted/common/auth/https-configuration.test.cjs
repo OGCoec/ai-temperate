@@ -61,6 +61,25 @@ test('ordinary H5 CSP permits HTTPS model icons without broadening active conten
 	assert.doesNotMatch(scriptSource, /(?:^|\s)(?:https:|\*)(?:\s|$)/)
 })
 
+test('ordinary H5 CSP permits blob-backed local attachment previews', () => {
+	const index = readProjectFile('index.html')
+	const imageSource = index.match(/img-src ([^;]+)/)?.[1]
+
+	assert.ok(imageSource, 'ordinary user pages must declare img-src CSP')
+	assert.match(imageSource, /(?:^|\s)blob:(?:\s|$)/)
+	assert.doesNotMatch(imageSource, /(?:^|\s)\*(?:\s|$)/)
+})
+
+test('ordinary H5 CSP permits presigned uploads only to the conversation OSS origin', () => {
+	const index = readProjectFile('index.html')
+	const connectSource = index.match(/connect-src ([^;]+)/)?.[1]
+
+	assert.ok(connectSource, 'ordinary user pages must declare connect-src CSP')
+	assert.match(connectSource, /https:\/\/ihaveaplan\.oss-us-west-1\.aliyuncs\.com/)
+	assert.doesNotMatch(connectSource, /(?:^|\s)(?:https:|\*)(?:\s|$)/)
+	assert.doesNotMatch(connectSource, /\*\.oss-us-west-1\.aliyuncs\.com/)
+})
+
 test('ordinary H5 CSP permits sandboxed blob HTML previews only as frame content', () => {
 	const index = readProjectFile('index.html')
 	const frameSource = index.match(/frame-src ([^;]+)/)?.[1]
@@ -69,6 +88,8 @@ test('ordinary H5 CSP permits sandboxed blob HTML previews only as frame content
 	assert.ok(frameSource, 'ordinary user pages must declare frame-src CSP')
 	assert.match(frameSource, /(?:^|\s)blob:(?:\s|$)/)
 	assert.match(frameSource, /https:\/\/challenges\.cloudflare\.com/)
+	assert.match(frameSource, /https:\/\/ai-temperate-html-preview\.pages\.dev/)
+	assert.doesNotMatch(frameSource, /https:\/\/(?:localhost|127\.0\.0\.1):4174/)
 	assert.doesNotMatch(frameSource, /(?:^|\s)\*(?:\s|$)/)
 	assert.doesNotMatch(scriptSource, /(?:^|\s)blob:(?:\s|$)/)
 })
@@ -131,6 +152,14 @@ test('configures the H5 Vite server with the external PKCS12 certificate', () =>
 	assert.doesNotMatch(source, /changeit/)
 })
 
+test('defaults HTML previews to the public Pages origin and rejects loopback origins', () => {
+	const source = readProjectFile('vite.config.js')
+
+	assert.match(source, /AI_HTML_PREVIEW_PRODUCTION_ORIGIN/)
+	assert.doesNotMatch(source, /NODE_ENV === 'production'[\s\S]*https:\/\/localhost:4174/)
+	assert.match(source, /normalizeAiHtmlPreviewOrigin/)
+})
+
 test('fails closed when the H5 certificate environment is incomplete', () => {
 	const source = readProjectFile('vite.config.js')
 
@@ -158,6 +187,7 @@ test('local HTTPS launcher explicitly injects environment into IDE child process
 	assert.match(source, /\$startInfo\.Environment\[\$name\]\s*=\s*\[string\]\$Environment\[\$name\]/)
 	assert.match(source, /LOCAL_HTTPS_ENABLED/)
 	assert.match(source, /LOCAL_HTTPS_P12_PATH/)
+	assert.match(localEnvironment, /"AI_HTML_PREVIEW_ORIGIN"\s*=\s*"https:\/\/ai-temperate-html-preview\.pages\.dev"/)
 	assert.match(source, /SERVER_SSL_KEY_STORE_PASSWORD/)
 	assert.match(source, /"AUTH_COOKIE_DOMAIN"[\s\S]*"ADMIN_COOKIE_DOMAIN"[\s\S]*"ADMIN_CSRF_COOKIE_DOMAIN"[\s\S]*\$processEnvironment\.Remove\(\$cookieDomainVariable\)/)
 	assert.doesNotMatch(localEnvironment, /(?:AUTH|ADMIN(?:_CSRF)?)_COOKIE_DOMAIN/)

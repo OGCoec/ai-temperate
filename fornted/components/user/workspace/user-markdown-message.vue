@@ -5,7 +5,7 @@
 </template>
 
 <script>
-	import { parseAiMarkdown } from '@/common/aichat/ai-markdown-parser.js'
+	import { parseAiResponse } from '@/common/aichat/ai-response-parser.js'
 	import { decorateAiMarkdownSources } from '@/common/aichat/ai-conversation-source-presentation.js'
 	import UserMarkdownNode from './user-markdown-node.vue'
 
@@ -22,7 +22,7 @@
 		computed: {
 			ast() {
 				return decorateAiMarkdownSources(
-					parseAiMarkdown(this.text, { streaming: this.streaming }),
+					parseAiResponse(this.text, { streaming: this.streaming }),
 					this.sources)
 			}
 		}

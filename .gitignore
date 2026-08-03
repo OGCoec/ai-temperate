@@ -17,5 +17,7 @@ target/
 /IP2LOCATION-LITE-DB11.IPV6.BIN
 /.admin/
 /.superpowers/
+/.codex-preview/
 /cloudflare/api-gateway/node_modules/
 /cloudflare/api-gateway/.wrangler/
+/cloudflare/html-preview-sandbox/.wrangler/

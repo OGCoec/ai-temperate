@@ -2,6 +2,10 @@ import fs from 'fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import uni from '@dcloudio/vite-plugin-uni'
+import {
+	AI_HTML_PREVIEW_PRODUCTION_ORIGIN,
+	normalizeAiHtmlPreviewOrigin
+} from './common/aichat/ai-html-preview-config.js'
 
 function requiredEnvironment(name) {
 	const value = process.env[name]?.trim()
@@ -14,6 +18,16 @@ function requiredEnvironment(name) {
 	return value
 }
 
+function aiHtmlPreviewOrigin() {
+	const candidate = process.env.AI_HTML_PREVIEW_ORIGIN?.trim()
+		|| AI_HTML_PREVIEW_PRODUCTION_ORIGIN
+	const origin = normalizeAiHtmlPreviewOrigin(candidate)
+	if (!origin) {
+		throw new Error('AI_HTML_PREVIEW_ORIGIN 只能包含 HTTPS 协议、主机和可选端口。')
+	}
+	return origin
+}
+
 export default defineConfig(() => {
 	const plugins = [uni()]
 	const resolve = {
@@ -24,6 +38,7 @@ export default defineConfig(() => {
 		}
 	}
 	const define = {
+		__AI_HTML_PREVIEW_ORIGIN__: JSON.stringify(aiHtmlPreviewOrigin()),
 		__AI_CONVERSATION_STREAM_DIAGNOSTICS_ENABLED__: JSON.stringify(
 			process.env.AI_CONVERSATION_STREAM_DIAGNOSTICS_ENABLED === 'true'
 		),

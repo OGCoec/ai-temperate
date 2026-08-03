@@ -28,7 +28,8 @@ test('refresh replaces AT and CSRF while preserving the fixed RT', async () => {
 		{
 			accessToken: 'new-at',
 			refreshToken: 'fixed-rt',
-			csrfToken: 'new-csrf'
+			csrfToken: 'new-csrf',
+			preAuthToken: ''
 		}
 	)
 })

@@ -1,0 +1,10 @@
+/*
+  Cache-Control: no-store, no-cache, must-revalidate
+  CDN-Cache-Control: no-store
+  Content-Security-Policy: default-src https: data: blob:; script-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src 'self' https: 'unsafe-inline'; frame-src 'self' https: data: blob:; child-src 'self' https: data: blob:; img-src https: data: blob:; connect-src https: wss:; worker-src https: blob:; font-src https: data:; media-src https: data: blob:; object-src 'none'; base-uri 'none'; form-action https:; frame-ancestors https://niko000o.site https://dev.niko000o.site
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), fullscreen=(), payment=(), usb=(), serial=(), hid=()
+  Cross-Origin-Resource-Policy: cross-origin
+  Origin-Agent-Cluster: ?1

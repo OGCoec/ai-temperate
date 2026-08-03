@@ -21,7 +21,7 @@ async function loadModule() {
 		'utf8'
 	).replace(
 		/import \{[\s\S]*?\} from '\.\/session-credentials\.js'/,
-		`const { emptySessionCredentials, hasCompleteSessionCredentials } =
+		`const { emptySessionCredentials, hasPersistableAndroidCredentials } =
 			globalThis.__androidSessionCredentials`
 	)
 	const sourceUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -75,7 +75,7 @@ test('corrupted ciphertext clears both private storage and the KeyStore alias', 
 	bridge.storage.set('ait.auth.android-session.v3', JSON.stringify(payload))
 
 	assert.deepEqual(module.loadAndroidSessionCredentials(), {
-		accessToken: '', refreshToken: '', csrfToken: ''
+		accessToken: '', refreshToken: '', csrfToken: '', preAuthToken: ''
 	})
 	assert.equal(bridge.storage.has('ait.auth.android-session.v3'), false)
 	assert.equal(bridge.aliases.has('ait-auth-session-v1'), false)
@@ -163,6 +163,7 @@ function createAndroidBridge() {
 						aliases.set(this.specification.alias, key)
 						return key
 					}
+				}
 			}
 		},
 		'android.security.keystore.KeyProperties': {

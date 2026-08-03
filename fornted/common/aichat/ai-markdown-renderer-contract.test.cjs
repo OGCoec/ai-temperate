@@ -81,14 +81,18 @@ test('code token styles live beside the child component that renders token DOM',
 	assert.equal(block.includes('.ai-code-token'), false)
 })
 
-test('HTML preview uses a script-only sandbox and cleans temporary URLs', () => {
+test('HTML preview uses a separate-origin sandbox and exact message boundary', () => {
 	const preview = readComponent('user-markdown-html-preview.vue')
 
-	assert.equal(preview.includes('sandbox="allow-scripts"'), true)
-	assert.equal(preview.includes('allow-same-origin'), false)
+	assert.equal(preview.includes('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"'), true)
+	assert.equal(preview.includes('allow-top-navigation'), false)
+	assert.equal(preview.includes('allow-downloads'), false)
 	assert.equal(preview.includes('referrerpolicy="no-referrer"'), true)
-	assert.equal(preview.includes('URL.createObjectURL'), true)
-	assert.equal(preview.includes('URL.revokeObjectURL'), true)
+	assert.equal(preview.includes('event.source !== frame.contentWindow'), true)
+	assert.equal(preview.includes('event.origin !== this.previewOrigin'), true)
+	assert.equal(preview.includes("postMessage(message, this.previewOrigin)"), true)
+	assert.equal(preview.includes('URL.createObjectURL'), false)
+	assert.equal(preview.includes('URL.revokeObjectURL'), false)
 	assert.equal(preview.includes('v-html'), false)
 	assert.equal(preview.includes('innerHTML'), false)
 	assert.equal(preview.includes('eval('), false)
@@ -131,6 +135,7 @@ test('dialog UI is driven by typed block data and emits commands instead of exec
 })
 
 test('assistant messages use the Markdown view boundary instead of raw response interpolation', () => {
+	const message = readComponent('user-markdown-message.vue')
 	const panel = fs.readFileSync(
 		path.join(componentRoot, 'user-chat-panel.vue'),
 		'utf8'
@@ -139,6 +144,8 @@ test('assistant messages use the Markdown view boundary instead of raw response 
 	assert.equal(panel.includes('<user-markdown-message'), true)
 	assert.equal(panel.includes('{{ message.responseText }}'), false)
 	assert.equal(panel.includes('createAiMarkdownRenderState'), true)
+	assert.equal(message.includes('parseAiResponse'), true)
+	assert.equal(message.includes('parseAiMarkdown(this.text'), false)
 })
 
 test('matched SSE sources use one accessible chip without weakening ordinary link safety', () => {

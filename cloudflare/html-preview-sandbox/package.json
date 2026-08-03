@@ -1,0 +1,9 @@
+{
+  "name": "ai-temperate-html-preview-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve-local.mjs",
+    "test": "node --test test/message-protocol.test.mjs test/runtime-document.test.mjs test/static-security-contract.test.mjs"
+  }
+}

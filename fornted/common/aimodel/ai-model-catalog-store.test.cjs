@@ -28,6 +28,7 @@ test('catalog store keeps the first page in memory and shares an in-flight initi
 
 	const first = store.refreshAiModelCatalog(loader)
 	const second = store.refreshAiModelCatalog(loader)
+	await Promise.resolve()
 	assert.equal(calls, 1)
 	assert.equal(store.readAiModelCatalog().initialLoading, true)
 
@@ -48,6 +49,7 @@ test('clearing the catalog prevents an old in-flight response from restoring a p
 	)
 
 	store.clearAiModelCatalog()
+	await Promise.resolve()
 	resolveRequest(page([{ publicId: 'AAABi0VWeJ8' }], 1, false))
 	await request
 
@@ -66,6 +68,7 @@ test('changing the applied keyword resets pagination and ignores the old request
 	assert.equal(changed.pageNum, 0)
 	assert.deepEqual(changed.models, [])
 
+	await Promise.resolve()
 	resolveRequest(page([{ publicId: 'AAABi0VWeJ8' }], 1, false))
 	await request
 

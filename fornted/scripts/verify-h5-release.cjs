@@ -2,6 +2,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const REQUIRED_FILES = ['index.html', '_headers', '_redirects']
+const PUBLIC_HTML_PREVIEW_ORIGIN = 'https://ai-temperate-html-preview.pages.dev'
 const FORBIDDEN_FILE_PATTERNS = [
 	{ re: /\.vue(?:$|[?#])/, label: 'Vue source module' },
 	{ re: /(?:^|\/)node_modules(?:\/|$)/, label: 'node_modules content' },
@@ -11,7 +12,11 @@ const FORBIDDEN_TEXT_PATTERNS = [
 	{ re: /\/@vite\/client|@vite\/client|__vite_ping|import\.meta\.hot/, label: 'Vite development module' },
 	{ re: /\/@fs\//, label: 'Vite file-system module' },
 	{ re: /\.vue(?:\?|['"])/, label: 'Vue source module' },
-	{ re: /pages-json-js/, label: 'uni-app development route module' }
+	{ re: /pages-json-js/, label: 'uni-app development route module' },
+	{
+		re: /https:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]):4174/i,
+		label: 'loopback HTML preview origin'
+	}
 ]
 
 function normalizeRelative(value) {
@@ -83,9 +88,16 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	}
 
 	verifyHeaders(root, errors)
+	const indexSource = readIfExists(path.join(root, 'index.html'))
+	const frameSource = indexSource.match(/frame-src ([^;]+)/)?.[1] || ''
+	if (!frameSource.includes(PUBLIC_HTML_PREVIEW_ORIGIN)) {
+		errors.push(
+			`index.html frame-src must include the public HTML preview origin: ${PUBLIC_HTML_PREVIEW_ORIGIN}`)
+	}
 
 	const files = []
 	walk(root, files)
+	let previewOriginFoundInScript = false
 	for (const file of files) {
 		const relative = normalizeRelative(path.relative(root, file))
 		for (const pattern of FORBIDDEN_FILE_PATTERNS) {
@@ -94,9 +106,16 @@ function verifyH5ReleaseArtifacts(options = {}) {
 
 		if (!/\.(?:html|js|css|json|map|txt|svg)$/.test(relative)) continue
 		const source = readIfExists(file)
+		if (/\.js$/.test(relative) && source.includes(PUBLIC_HTML_PREVIEW_ORIGIN)) {
+			previewOriginFoundInScript = true
+		}
 		for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
 			if (pattern.re.test(source)) errors.push(`${pattern.label} reference found in ${relative}`)
 		}
+	}
+	if (!previewOriginFoundInScript) {
+		errors.push(
+			`H5 JavaScript bundle must include the public HTML preview origin: ${PUBLIC_HTML_PREVIEW_ORIGIN}`)
 	}
 
 	return { root, errors }

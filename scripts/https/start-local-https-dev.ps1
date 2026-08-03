@@ -381,6 +381,7 @@ try {
     "SERVER_SSL_KEY_ALIAS" = $expectedAlias
     "LOCAL_HTTPS_ENABLED" = "true"
     "LOCAL_HTTPS_P12_PATH" = $p12Path
+    "AI_HTML_PREVIEW_ORIGIN" = "https://ai-temperate-html-preview.pages.dev"
     "CORS_ALLOWED_ORIGINS" = (Merge-OriginList)
     "TURNSTILE_ALLOWED_HOSTS" = (Merge-HostnameList)
     "EDGE_PROXY_MODE" = $edgeProxyMode

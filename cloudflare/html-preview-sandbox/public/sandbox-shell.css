@@ -1,0 +1,77 @@
+:root {
+	color-scheme: light dark;
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+.sandbox-shell,
+.sandbox-runtime-root {
+	width: 100%;
+	min-width: 0;
+	min-height: 100%;
+	margin: 0;
+}
+
+html,
+body {
+	height: 100%;
+	overflow: hidden;
+	background: #ffffff;
+}
+
+.sandbox-shell,
+.sandbox-runtime-root,
+.sandbox-runtime-frame {
+	box-sizing: border-box;
+}
+
+.sandbox-shell,
+.sandbox-runtime-root {
+	height: 100%;
+}
+
+.sandbox-runtime-frame {
+	width: 100%;
+	height: 100%;
+	min-height: 120px;
+	display: block;
+	border: 0;
+	background: #ffffff;
+}
+
+.sandbox-status {
+	position: fixed;
+	left: 50%;
+	top: 16px;
+	z-index: 2;
+	max-width: min(560px, calc(100% - 32px));
+	padding: 9px 12px;
+	border: 1px solid rgba(88, 102, 94, .2);
+	border-radius: 10px;
+	background: rgba(247, 249, 248, .94);
+	box-shadow: 0 8px 28px rgba(16, 24, 20, .12);
+	color: #34413a;
+	font-size: 13px;
+	line-height: 1.4;
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
+.sandbox-status[data-state="hidden"] {
+	display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+	html,
+	body,
+	.sandbox-runtime-frame {
+		background: #171918;
+	}
+
+	.sandbox-status {
+		border-color: rgba(255, 255, 255, .12);
+		background: rgba(36, 39, 37, .94);
+		color: #e8edea;
+	}
+}
