@@ -33,6 +33,8 @@ const PAGE_RESPONSE = {
 		outputRatio: 4,
 		capabilities: ['RESPONSES'],
 		supportedReasoningEffortLevels: [1, 2, 3, 4, 5],
+		supportedImageGenerationLevels: [],
+		supportedImageAspects: [],
 		defaultReasoningEffortLevel: 2
 	}],
 	pageNum: 2,
@@ -72,6 +74,54 @@ test('requests model pages through the authenticated client and normalizes safe 
 	assert.equal(Object.isFrozen(page.models[0].descriptionMatchedTokens), true)
 	assert.equal(page.models[0].defaultReasoningEffortLevel, 2)
 	assert.equal(Object.isFrozen(page.models[0].supportedReasoningEffortLevels), true)
+	assert.deepEqual(page.models[0].supportedImageGenerationLevels, [])
+	assert.deepEqual(page.models[0].supportedImageAspects, [])
+	assert.equal(Object.isFrozen(page.models[0].supportedImageGenerationLevels), true)
+	assert.equal(Object.isFrozen(page.models[0].supportedImageAspects), true)
+	delete globalThis.__requestAiModels
+})
+
+test('normalizes image generation profile levels and supported aspects', async () => {
+	const module = await loadAiModelApi(async () => ({
+		...PAGE_RESPONSE.models[0],
+		capabilities: ['RESPONSES', 'IMAGE_GENERATION'],
+		supportedImageGenerationLevels: [1, 2, 3],
+		supportedImageAspects: ['SQUARE', 'LANDSCAPE', 'PORTRAIT']
+	}))
+
+	const model = await module.aiModelApi.detail('AAABi0VWeJ8')
+
+	assert.deepEqual(model.supportedImageGenerationLevels, [1, 2, 3])
+	assert.deepEqual(model.supportedImageAspects, ['SQUARE', 'LANDSCAPE', 'PORTRAIT'])
+	delete globalThis.__requestAiModels
+})
+
+test('rejects image generation levels above High', async () => {
+	const module = await loadAiModelApi(async () => ({
+		...PAGE_RESPONSE.models[0],
+		capabilities: ['IMAGE_GENERATION'],
+		supportedImageGenerationLevels: [1, 2, 3, 4],
+		supportedImageAspects: ['SQUARE', 'LANDSCAPE', 'PORTRAIT']
+	}))
+
+	await assert.rejects(
+		() => module.aiModelApi.detail('AAABi0VWeJ8'),
+		error => error?.code === 'AI_MODEL_RESPONSE_INVALID'
+	)
+	delete globalThis.__requestAiModels
+})
+
+test('rejects unknown image generation aspects', async () => {
+	const module = await loadAiModelApi(async () => ({
+		...PAGE_RESPONSE.models[0],
+		supportedImageGenerationLevels: [1, 2, 3],
+		supportedImageAspects: ['SQUARE', 'CINEMA']
+	}))
+
+	await assert.rejects(
+		() => module.aiModelApi.detail('AAABi0VWeJ8'),
+		error => error?.code === 'AI_MODEL_RESPONSE_INVALID'
+	)
 	delete globalThis.__requestAiModels
 })
 

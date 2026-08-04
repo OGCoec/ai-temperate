@@ -276,10 +276,10 @@ app:
       enabled: ${AI_CONVERSATION_WEB_SEARCH_ENABLED:true}
       # 专用客户端只允许在既有 CLIProxyAPI 基础地址下调用固定相对路径。
       responses-path: ${AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH:/v1/responses}
-    # 后台异步 Generation 保留为回滚路径，普通用户默认使用直接 MVC POST SSE。
+    # 后台异步 Generation 默认启用，为图片生成提供任务执行、预览事件和最终持久化链路。
     async-generation:
-      # 新链路总开关默认关闭；需要回滚到异步 Generation 时显式设为 true。
-      enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:false}
+      # 新链路总开关默认开启；部署环境仍可显式设为 false 关闭异步 Generation。
+      enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}
       # 每个生产实例必须使用部署系统注入的唯一标识以定向路由取消命令。
       instance-id: ${AI_CONVERSATION_INSTANCE_ID:local-single-instance}
       # SSE 失联允许三十秒重连，期间模型生成不得被观察者断开取消。
@@ -316,6 +316,14 @@ app:
       burst-chunks: ${AI_CONVERSATION_STREAM_DIAGNOSTICS_BURST_CHUNKS:200}
     # 服务端可信系统提示不接受前端覆盖。
     system-prompt: ${AI_CONVERSATION_SYSTEM_PROMPT:你是一个可靠的 AI 助手，请依据已有上下文回答并明确不确定信息。}
+    # 图片生成使用独立配置组，关闭后仍保留策略 Bean 以便启动时完整校验注册表。
+    image-generation:
+      # 第一版默认启用 Images Generation，可通过部署变量立即关闭入口。
+      enabled: ${AI_CONVERSATION_IMAGE_GENERATION_ENABLED:true}
+      # 图片生成通过 CLIProxyAPI Images Generation 端点请求最终图和中间预览。
+      generations-path: ${AI_CONVERSATION_IMAGE_GENERATIONS_PATH:/v1/images/generations}
+      # 单张上游图片解码后最多三十二 MiB，超限事件直接作为协议失败处理。
+      maximum-decoded-image-bytes: ${AI_CONVERSATION_IMAGE_MAX_DECODED_BYTES:33554432}
     # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
     attachments:
       # 会话附件沿用现有公共读 Bucket，真实 Bucket 名允许按部署环境覆盖。
@@ -338,6 +346,10 @@ app:
       max-total-bytes-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:209715200}
       # 单个正式对象复制或上传失败时最多执行三次有界尝试。
       finalization-attempts: ${AI_CONVERSATION_ATTACHMENT_FINALIZATION_ATTEMPTS:3}
+      # 服务端向 OSS 上传最终生成图片时建立连接最多等待五秒。
+      upload-connect-timeout: ${AI_CONVERSATION_ATTACHMENT_UPLOAD_CONNECT_TIMEOUT:5s}
+      # 服务端向 OSS 上传最终生成图片时单次读写最多等待三十秒。
+      upload-read-write-timeout: ${AI_CONVERSATION_ATTACHMENT_UPLOAD_READ_WRITE_TIMEOUT:30s}
       # H5 与 Android 客户端直接上传 OSS 时最多并行三个 PUT。
       client-upload-concurrency: ${AI_CONVERSATION_ATTACHMENT_UPLOAD_CONCURRENCY:3}
       # 音频每开始一 MiB 使用四千零九十六 Token 进行上下文安全估算。

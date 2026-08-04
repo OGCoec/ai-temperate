@@ -24,11 +24,17 @@ test('web search requires the feature flag plus RESPONSES and WEB_SEARCH', () =>
 	assert.equal(enabled.modelSupportsAiConversationWebSearch({
 		capabilities: ['RESPONSES']
 	}), false)
+	assert.equal(enabled.modelSupportsAiConversationWebSearch({
+		capabilities: ['RESPONSES', 'WEB_SEARCH', 'IMAGE_GENERATION']
+	}), false)
 	assert.equal(disabled.modelSupportsAiConversationWebSearch(capable), false)
 	assert.equal(enabled.normalizeAiConversationWebSearchMode('required', capable),
 		'REQUIRED')
 	assert.equal(enabled.normalizeAiConversationWebSearchMode('AUTO', {
 		capabilities: ['CHAT_COMPLETIONS']
+	}), 'OFF')
+	assert.equal(enabled.normalizeAiConversationWebSearchMode('REQUIRED', {
+		capabilities: ['RESPONSES', 'WEB_SEARCH', 'IMAGE_GENERATION']
 	}), 'OFF')
 })
 

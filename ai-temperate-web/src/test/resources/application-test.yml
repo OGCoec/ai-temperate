@@ -167,6 +167,14 @@ app:
       enabled: false
       # 测试仍绑定正式相对路径以覆盖安全校验，不执行网络连接。
       responses-path: /v1/responses
+    # 测试图片生成只验证 Images Generation 配置绑定，不连接真实上游。
+    image-generation:
+      # 测试保持图片生成入口启用以覆盖 Controller 和策略注册合同。
+      enabled: true
+      # 测试绑定正式 Images Generation 相对路径，但不会连接真实上游。
+      generations-path: /v1/images/generations
+      # 测试沿用三十二 MiB 单图解码上限以覆盖安全绑定。
+      maximum-decoded-image-bytes: 33554432
     # 测试系统提示不包含任何生产业务数据。
     system-prompt: 你是测试环境中的可靠 AI 助手。
     # 测试会话附件使用完全虚构的 OSS 边界，不执行任何外部请求。

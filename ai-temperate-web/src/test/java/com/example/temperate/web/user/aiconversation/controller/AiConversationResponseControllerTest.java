@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -16,6 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationStatus;
@@ -28,6 +30,7 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.web.aiconversation.AiConversationPublicId;
 import com.example.temperate.web.user.aiconversation.api.AiConversationExceptionHandler;
 import com.example.temperate.web.user.aiconversation.api.AiConversationInputRequest;
+import com.example.temperate.web.user.aiconversation.api.AiConversationImageRequest;
 import com.example.temperate.web.user.aiconversation.api.AiConversationResponseRequest;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import java.lang.reflect.Method;
@@ -186,6 +189,79 @@ final class AiConversationResponseControllerTest {
                 .isEqualTo(
                         com.example.temperate.service.user.aiconversation.response
                                 .AiConversationWebSearchMode.OFF);
+    }
+
+    @Test
+    void rejectsImageGenerationWhenAsyncGenerationIsDisabled() {
+        AiConversationResponseService service =
+                mock(AiConversationResponseService.class);
+        AiConversationResponseController controller =
+                new AiConversationResponseController(service);
+
+        assertThatThrownBy(() -> controller.createAndRespond(
+                        PRINCIPAL,
+                        "4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6",
+                        new AiConversationResponseRequest(
+                                "AAAAAAAAAAA",
+                                (short) 5,
+                                null,
+                                new AiConversationImageRequest(
+                                        AiConversationImageAspect.PORTRAIT),
+                                new AiConversationInputRequest(
+                                        "draw a fox", List.of()))))
+                .isInstanceOf(AiConversationException.class)
+                .hasMessageContaining("异步 Generation");
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void routesImageRequestWithWebSearchToGenerationValidation() {
+        AiConversationResponseService responseService =
+                mock(AiConversationResponseService.class);
+        var generationService = mock(
+                com.example.temperate.service.user.aiconversation.generation
+                        .AiConversationGenerationService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.example.temperate.service.user.aiconversation.generation
+                .AiConversationGenerationService> generationProvider =
+                mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.example.temperate.service.user.aiconversation.generation.observer
+                .AiConversationGenerationObserverService> observerProvider =
+                mock(ObjectProvider.class);
+        var observerService = mock(
+                com.example.temperate.service.user.aiconversation.generation.observer
+                        .AiConversationGenerationObserverService.class);
+        when(generationProvider.getIfAvailable()).thenReturn(generationService);
+        when(observerProvider.getIfAvailable()).thenReturn(observerService);
+        when(generationService.create(any())).thenThrow(new AiConversationException(
+                AiConversationErrorCode.AI_REQUEST_INVALID,
+                "图片生成不支持联网搜索。",
+                false));
+        AiConversationResponseController controller =
+                new AiConversationResponseController(
+                        responseService,
+                        generationProvider,
+                        observerProvider,
+                        mock(com.example.temperate.common.codec.id.HybridBase64UrlCodec.class),
+                        mock(AiConversationDirectResponseCancellationService.class));
+
+        assertThatThrownBy(() -> controller.createAndRespond(
+                PRINCIPAL,
+                "4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6",
+                new AiConversationResponseRequest(
+                        "AAAAAAAAAAA",
+                        (short) 2,
+                        com.example.temperate.service.user.aiconversation.response
+                                .AiConversationWebSearchMode.REQUIRED,
+                        new AiConversationImageRequest(
+                                AiConversationImageAspect.PORTRAIT),
+                        new AiConversationInputRequest(
+                                "draw a fox", List.of()))))
+                .isInstanceOf(AiConversationException.class)
+                .hasMessageContaining("不支持联网搜索");
+        verify(generationService).create(any());
+        verifyNoInteractions(responseService);
     }
 
     @Test

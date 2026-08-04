@@ -8,6 +8,8 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentFinalization;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyPermit;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
@@ -31,6 +33,9 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalService;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalType;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputStore;
+import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
+import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputSnapshot;
+import com.example.temperate.service.user.aiconversation.generation.billing.AiConversationGenerationBillingTransactionService;
 import com.example.temperate.service.user.aiconversation.generation.worker.AiConversationGenerationActiveRegistry;
 import com.example.temperate.service.user.aiconversation.generation.worker.AiConversationGenerationClaim;
 import com.example.temperate.service.user.aiconversation.generation.worker.AiConversationGenerationControlService;
@@ -44,10 +49,19 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMod
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
+import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImage;
+import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImageFormat;
+import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImagePhase;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
+import com.example.temperate.service.user.aiconversation.image.AiConversationPersistedGeneratedAttachmentCodec;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategyRegistry;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamBatcher;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -65,6 +79,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
+import reactor.core.publisher.SynchronousSink;
 
 /**
  * 在 Rabbit Worker 生命周期内独立持有模型 SDK 流，批量写 Redis 快照，并依据完成、显式取消或异常冻结唯一终态。
@@ -81,9 +96,6 @@ public final class AiConversationGenerationWorkerImpl
 
     private static final int MAX_ASSISTANT_BYTES = 4 * 1024 * 1024;
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
-    private static final TypeReference<List<AiConversationAttachment>> ATTACHMENTS =
-            new TypeReference<>() { };
-
     private final AiConversationGenerationControlService controlService;
     private final AiConversationGenerationActiveRegistry activeRegistry;
     private final AiConversationGenerationTerminalService terminalService;
@@ -102,7 +114,13 @@ public final class AiConversationGenerationWorkerImpl
     private final AiConversationStreamTransportDiagnosticService transportDiagnosticService;
     private final AiConversationStreamTimingClock timingClock;
     private final ObjectMapper objectMapper;
+    private final AiConversationGenerationInputCodec inputCodec;
     private final AiConversationMetrics metrics;
+    private final AiConversationStreamingStrategyRegistry streamingStrategyRegistry;
+    private final AiConversationAttachmentService attachmentService;
+    private final AiConversationGenerationBillingTransactionService billingTransactionService;
+    private final AiConversationImagePreviewBroker imagePreviewBroker;
+    private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
 
     public AiConversationGenerationWorkerImpl(
             AiConversationGenerationControlService controlService,
@@ -142,7 +160,59 @@ public final class AiConversationGenerationWorkerImpl
                 timingClock,
                 metrics,
                 objectMapper,
-                AiConversationStreamTransportDiagnosticService.noOp());
+                AiConversationStreamTransportDiagnosticService.noOp(),
+                null,
+                null,
+                null,
+                AiConversationImagePreviewBroker.noOp(),
+                new AiConversationPersistedGeneratedAttachmentCodec(objectMapper));
+    }
+
+    public AiConversationGenerationWorkerImpl(
+            AiConversationGenerationControlService controlService,
+            AiConversationGenerationActiveRegistry activeRegistry,
+            AiConversationGenerationTerminalService terminalService,
+            AiModelCacheService modelCacheService,
+            AiConversationContextService contextService,
+            AiConversationContextStore contextStore,
+            AiConversationConcurrencyService concurrencyService,
+            AiConversationLeaseService leaseService,
+            AiConversationModelClient modelClient,
+            AiConversationGenerationOutputStore outputStore,
+            AiConversationProperties conversationProperties,
+            AiConversationAsyncGenerationProperties asyncProperties,
+            HybridBase64UrlCodec idCodec,
+            PublicIdCodec publicIdCodec,
+            AiConversationStreamTimingDiagnosticService timingDiagnosticService,
+            AiConversationStreamTimingClock timingClock,
+            AiConversationMetrics metrics,
+            ObjectMapper objectMapper,
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService) {
+        this(
+                controlService,
+                activeRegistry,
+                terminalService,
+                modelCacheService,
+                contextService,
+                contextStore,
+                concurrencyService,
+                leaseService,
+                modelClient,
+                outputStore,
+                conversationProperties,
+                asyncProperties,
+                idCodec,
+                publicIdCodec,
+                timingDiagnosticService,
+                timingClock,
+                metrics,
+                objectMapper,
+                transportDiagnosticService,
+                null,
+                null,
+                null,
+                AiConversationImagePreviewBroker.noOp(),
+                new AiConversationPersistedGeneratedAttachmentCodec(objectMapper));
     }
 
     @Autowired
@@ -165,7 +235,12 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationStreamTimingClock timingClock,
             AiConversationMetrics metrics,
             ObjectMapper objectMapper,
-            AiConversationStreamTransportDiagnosticService transportDiagnosticService) {
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService,
+            AiConversationStreamingStrategyRegistry streamingStrategyRegistry,
+            AiConversationAttachmentService attachmentService,
+            AiConversationGenerationBillingTransactionService billingTransactionService,
+            AiConversationImagePreviewBroker imagePreviewBroker,
+            AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec) {
         this.controlService = Objects.requireNonNull(controlService);
         this.activeRegistry = Objects.requireNonNull(activeRegistry);
         this.terminalService = Objects.requireNonNull(terminalService);
@@ -185,6 +260,12 @@ public final class AiConversationGenerationWorkerImpl
         this.timingClock = Objects.requireNonNull(timingClock);
         this.metrics = Objects.requireNonNull(metrics);
         this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.inputCodec = new AiConversationGenerationInputCodec(this.objectMapper);
+        this.streamingStrategyRegistry = streamingStrategyRegistry;
+        this.attachmentService = attachmentService;
+        this.billingTransactionService = billingTransactionService;
+        this.imagePreviewBroker = Objects.requireNonNull(imagePreviewBroker);
+        this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
     }
 
     @Override
@@ -220,8 +301,10 @@ public final class AiConversationGenerationWorkerImpl
         WorkerState state = new WorkerState();
         try {
             AiModelCacheEntry model = requiredModel(generation.getModelId());
+            AiConversationGenerationInputSnapshot inputSnapshot =
+                    inputCodec.decode(payload.getInputAttachmentsJson());
             AiConversationContent input = new AiConversationContent(
-                    payload.getInputText(), attachments(payload.getInputAttachmentsJson()));
+                    payload.getInputText(), inputSnapshot.attachments());
             AiConversationPromptSnapshot prompt = contextService.prepare(
                     generation.getConversationId(), conversationPublicId, model, input);
             permit = concurrencyService.tryAcquire(generation.getLoginIdentityId())
@@ -268,13 +351,29 @@ public final class AiConversationGenerationWorkerImpl
                             publicIdCodec.encode(generation.getModelId()),
                             AiConversationStreamTimingPath.ASYNC_GENERATION_WORKER,
                             timingClock.nanoTime());
-            Flux<AiConversationModelChunk> upstream = modelClient.stream(
+            AiConversationImageGenerationOptions imageGeneration =
+                    inputSnapshot.imageGeneration();
+            AiConversationModelRequest modelRequest =
                     new AiConversationModelRequest(
                             model.modelName(),
                             model.maxOutputTokens(),
                             AiConversationReasoningEffort.fromLevel(
                             payload.getReasoningEffort().shortValue()),
-                            prompt));
+                            prompt,
+                            imageGeneration);
+            Flux<AiConversationModelEvent> modelEvents = imageGeneration == null
+                    ? modelClient.stream(modelRequest)
+                            .map(AiConversationModelEvent.Chunk::new)
+                    : requiredImageDependency(streamingStrategyRegistry)
+                            .required(AiConversationStreamingProtocol
+                                    .IMAGES_GENERATION)
+                            .stream(new AiConversationStreamingRequest(
+                                    modelRequest,
+                                    com.example.temperate.service.user.aiconversation.response
+                                            .AiConversationWebSearchMode.OFF));
+            Flux<AiConversationModelChunk> upstream = modelEvents.handle(
+                    (event, sink) -> acceptModelEvent(
+                            generationPublicId, state, event, sink));
             AiConversationConcurrencyPermit acquiredPermit = permit;
             AiConversationLease acquiredLease = lease;
             // 后台 Worker 不再依赖 SSE 心跳，因此必须自行续租；任一租约丢失都转为系统失败并进入全额退款终态。
@@ -388,16 +487,24 @@ public final class AiConversationGenerationWorkerImpl
                         traceId);
             } else if (state.signal.get() == SignalType.ON_COMPLETE
                     && state.usage.get() != null) {
-                terminalService.freeze(new AiConversationGenerationTerminalCommand(
-                        generation.getId(),
-                        AiConversationGenerationTerminalType.COMPLETED,
-                        Objects.requireNonNullElse(state.finishReason.get(), "STOP"),
-                        state.answer.toString(),
-                        json(state.generatedMedia),
-                        state.usage.get(),
-                        state.finishReason.get(),
-                        state.upstreamRequestId.get(),
-                        traceId));
+                if (imageGeneration == null) {
+                    terminalService.freeze(new AiConversationGenerationTerminalCommand(
+                            generation.getId(),
+                            AiConversationGenerationTerminalType.COMPLETED,
+                            Objects.requireNonNullElse(state.finishReason.get(), "STOP"),
+                            state.answer.toString(),
+                            json(state.generatedMedia),
+                            state.usage.get(),
+                            state.finishReason.get(),
+                            state.upstreamRequestId.get(),
+                            traceId));
+                } else {
+                    freezeCompletedImage(
+                            generation,
+                            conversationPublicId,
+                            state,
+                            traceId);
+                }
             } else {
                 markInterrupted(conversationPublicId, state);
                 freezeFailure(
@@ -466,6 +573,112 @@ public final class AiConversationGenerationWorkerImpl
             state.upstreamRequestId.set(chunk.upstreamRequestId());
         }
         state.generatedMedia.addAll(chunk.generatedMedia());
+    }
+
+    private void acceptModelEvent(
+            String generationPublicId,
+            WorkerState state,
+            AiConversationModelEvent event,
+            SynchronousSink<AiConversationModelChunk> sink) {
+        if (event instanceof AiConversationModelEvent.Chunk chunk) {
+            sink.next(chunk.value());
+            return;
+        }
+        if (event instanceof AiConversationModelEvent.Image imageEvent) {
+            AiConversationGeneratedImage image = imageEvent.value();
+            imagePreviewBroker.publish(generationPublicId, image);
+            metrics.imagePreview(image.phase().name());
+            if (image.phase() == AiConversationGeneratedImagePhase.FINAL) {
+                state.finalImage.set(image);
+            }
+            return;
+        }
+        if (event instanceof AiConversationModelEvent.Failure failure) {
+            sink.error(new IllegalStateException(failure.reasonCode()));
+        }
+    }
+
+    private void freezeCompletedImage(
+            AiConversationGeneration generation,
+            String conversationPublicId,
+            WorkerState state,
+            String traceId) {
+        AiConversationGeneratedImage finalImage = state.finalImage.get();
+        if (finalImage == null) {
+            throw new IllegalStateException(
+                    "AI image stream completed without a final image");
+        }
+        AiConversationGenerationBillingTransactionService billing =
+                requiredImageDependency(billingTransactionService);
+        AiConversationAttachmentService attachments =
+                requiredImageDependency(attachmentService);
+        long messageId = billing.getOrReserveMessageId(generation.getId());
+        long persistenceStarted = System.nanoTime();
+        AiConversationAttachmentFinalization finalized;
+        try {
+            // 最终文件名必须由已检测的真实 MIME 决定，确保 OSS Content-Type、URL 后缀和数据库元数据一致。
+            String generatedFileName = AiConversationGeneratedImageFormat
+                    .fromContentType(finalImage.contentType())
+                    .generatedFileName();
+            finalized = attachments.finalizeAttachments(
+                    publicIdCodec.encode(generation.getLoginIdentityId()),
+                    conversationPublicId,
+                    publicIdCodec.encode(messageId),
+                    List.of(),
+                    List.of(new AiConversationGeneratedMedia(
+                            generatedFileName,
+                            finalImage.contentType(),
+                            finalImage.bytes())));
+        } catch (RuntimeException failure) {
+            metrics.imagePersistence(
+                    Duration.ofNanos(System.nanoTime() - persistenceStarted),
+                    "failed");
+            throw failure;
+        }
+        List<AiConversationAttachment> persisted = finalized.partialFailure()
+                ? List.of()
+                : finalized.responseAttachments().stream()
+                        .filter(item -> item.state()
+                                == com.example.temperate.service.user.aiconversation.attachment
+                                        .AiConversationAttachmentState.AVAILABLE)
+                        .limit(1)
+                        .toList();
+        if (persisted.isEmpty() && !finalized.createdObjectKeys().isEmpty()) {
+            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+        }
+        metrics.imagePersistence(
+                Duration.ofNanos(System.nanoTime() - persistenceStarted),
+                persisted.isEmpty() ? "dropped" : "success");
+        try {
+            boolean claimed = terminalService.freeze(
+                    new AiConversationGenerationTerminalCommand(
+                            generation.getId(),
+                            AiConversationGenerationTerminalType.COMPLETED,
+                            persisted.isEmpty()
+                                    ? "IMAGE_OSS_PERSISTENCE_DROPPED"
+                                    : "IMAGE_COMPLETED",
+                            "",
+                            generatedAttachmentCodec.encode(persisted),
+                            state.usage.get(),
+                            state.finishReason.get(),
+                            state.upstreamRequestId.get(),
+                            traceId))
+                    .claimed();
+            if (!claimed && !finalized.createdObjectKeys().isEmpty()) {
+                // 另一个终态已经赢得 CAS 时，本 Worker 创建的对象没有数据库引用，必须立即补偿删除。
+                attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+            }
+        } catch (RuntimeException failure) {
+            // 终态事务回滚后 URL 不会进入结算证据，刚上传的对象同样必须丢弃。
+            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+            throw failure;
+        }
+    }
+
+    private static <T> T requiredImageDependency(T dependency) {
+        return Objects.requireNonNull(
+                dependency,
+                "Image generation dependency is unavailable");
     }
 
     private boolean freezeCancellation(
@@ -551,14 +764,6 @@ public final class AiConversationGenerationWorkerImpl
                 .orElseThrow(() -> new IllegalStateException("AI Generation model is unavailable."));
     }
 
-    private List<AiConversationAttachment> attachments(String json) {
-        try {
-            return objectMapper.readValue(json, ATTACHMENTS);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("AI Generation input attachments are invalid.", exception);
-        }
-    }
-
     private String json(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -604,6 +809,8 @@ public final class AiConversationGenerationWorkerImpl
         private final AtomicReference<String> upstreamRequestId = new AtomicReference<>();
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private final AtomicReference<SignalType> signal = new AtomicReference<>();
+        private final AtomicReference<AiConversationGeneratedImage> finalImage =
+                new AtomicReference<>();
         private String cacheGeneration;
         private long ephemeralOrdinal;
         private int answerBytes;

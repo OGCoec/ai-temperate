@@ -12,6 +12,9 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.aimodel.search.AiModelSearchCriteria;
 import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfileService;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelPageResult;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelResult;
 import com.example.temperate.service.user.aimodel.exception.UserAiModelCatalogErrorCode;
@@ -31,7 +34,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 从已启用模型快照提供普通浏览，并通过 PostgreSQL 词元索引提供普通用户搜索分页。
+ * 从已启用模型快照提供普通浏览和图片档位能力，并通过 PostgreSQL 词元索引提供普通用户搜索分页。
  *
  * <p>空关键词只在最多五百条的稳定快照上切片；非空关键词固定查询已启用模型，并一次批量加载
  * 当前页能力，禁止逐模型访问数据库或把禁用模型暴露给普通用户。名称与描述高亮词分别由对应的
@@ -50,6 +53,8 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
     private final AiModelSearchService searchService;
     private final PublicIdCodec publicIdCodec;
     private final ObjectMapper objectMapper;
+    private final AiConversationImageProfileService imageProfileService;
+    private final AiConversationImageGenerationProperties imageProperties;
 
     public UserAiModelCatalogServiceImpl(
             AiModelCacheService cacheService,
@@ -57,13 +62,17 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
             AiModelCapabilityMapper capabilityMapper,
             AiModelSearchService searchService,
             PublicIdCodec publicIdCodec,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiConversationImageProfileService imageProfileService,
+            AiConversationImageGenerationProperties imageProperties) {
         this.cacheService = Objects.requireNonNull(cacheService);
         this.modelMapper = Objects.requireNonNull(modelMapper);
         this.capabilityMapper = Objects.requireNonNull(capabilityMapper);
         this.searchService = Objects.requireNonNull(searchService);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
         this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.imageProfileService = Objects.requireNonNull(imageProfileService);
+        this.imageProperties = Objects.requireNonNull(imageProperties);
     }
 
     @Override
@@ -183,7 +192,9 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.outputRatio(),
                 model.capabilities(),
                 AiConversationReasoningEffort.supportedLevels(),
-                AiConversationReasoningEffort.defaultLevel());
+                AiConversationReasoningEffort.defaultLevel(),
+                imageLevels(model.modelName(), model.capabilities()),
+                imageAspects(model.modelName(), model.capabilities()));
     }
 
     private UserAiModelResult toResult(
@@ -208,7 +219,29 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.getOutputRatio(),
                 capabilities,
                 AiConversationReasoningEffort.supportedLevels(),
-                AiConversationReasoningEffort.defaultLevel());
+                AiConversationReasoningEffort.defaultLevel(),
+                imageLevels(model.getModelName(), capabilities),
+                imageAspects(model.getModelName(), capabilities));
+    }
+
+    private List<Short> imageLevels(
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        return imageProperties.enabled()
+                && capabilities.contains(AiModelCapabilityCode.IMAGE_GENERATION)
+                && imageProfileService.supports(modelName)
+                ? imageProfileService.supportedLevels(modelName)
+                : List.of();
+    }
+
+    private List<AiConversationImageAspect> imageAspects(
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        return imageProperties.enabled()
+                && capabilities.contains(AiModelCapabilityCode.IMAGE_GENERATION)
+                && imageProfileService.supports(modelName)
+                ? imageProfileService.supportedAspects(modelName)
+                : List.of();
     }
 
     private Map<Long, List<AiModelCapabilityCode>> loadCapabilities(List<AiModel> models) {

@@ -94,6 +94,38 @@ function normalizedReasoningEffortLevels(value) {
 	return levels
 }
 
+function normalizedOptionalImageGenerationLevels(value) {
+	if (value == null) return []
+	if (!Array.isArray(value)) {
+		throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
+	}
+	const levels = value.map((level) => {
+		if (!Number.isSafeInteger(level) || level < 1 || level > 3) {
+			throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
+		}
+		return level
+	})
+	if (new Set(levels).size !== levels.length) {
+		throw responseError('模型响应中的 supportedImageGenerationLevels 包含重复档位。')
+	}
+	return levels
+}
+
+function normalizedOptionalImageAspects(value) {
+	if (value == null) return []
+	if (!Array.isArray(value)) {
+		throw responseError('模型响应中的 supportedImageAspects 无效。')
+	}
+	const allowed = new Set(['SQUARE', 'LANDSCAPE', 'PORTRAIT'])
+	const aspects = value.map((aspect) => normalizedRequiredText(
+		aspect, 'supportedImageAspects').toUpperCase())
+	if (aspects.some(aspect => !allowed.has(aspect))
+		|| new Set(aspects).size !== aspects.length) {
+		throw responseError('模型响应中的 supportedImageAspects 无效。')
+	}
+	return aspects
+}
+
 function normalizedModel(value) {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw responseError('模型响应中的模型条目无效。')
@@ -102,6 +134,10 @@ function normalizedModel(value) {
 	if (!PUBLIC_ID_PATTERN.test(publicId)) throw responseError('模型响应中的 publicId 无效。')
 	const supportedReasoningEffortLevels =
 		normalizedReasoningEffortLevels(value.supportedReasoningEffortLevels)
+	const supportedImageGenerationLevels =
+		normalizedOptionalImageGenerationLevels(value.supportedImageGenerationLevels)
+	const supportedImageAspects =
+		normalizedOptionalImageAspects(value.supportedImageAspects)
 	const defaultReasoningEffortLevel = value.defaultReasoningEffortLevel
 	if (!Number.isSafeInteger(defaultReasoningEffortLevel)
 		|| defaultReasoningEffortLevel < 1
@@ -129,6 +165,8 @@ function normalizedModel(value) {
 		outputRatio: normalizedRatio(value.outputRatio, 'outputRatio'),
 		capabilities: Object.freeze(normalizedStringList(value.capabilities, 'capabilities')),
 		supportedReasoningEffortLevels: Object.freeze(supportedReasoningEffortLevels),
+		supportedImageGenerationLevels: Object.freeze(supportedImageGenerationLevels),
+		supportedImageAspects: Object.freeze(supportedImageAspects),
 		defaultReasoningEffortLevel
 	})
 }

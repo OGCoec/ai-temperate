@@ -119,7 +119,9 @@ public final class AliyunAiConversationAttachmentObjectStorageImpl
                     bytes,
                     contentType,
                     IMMUTABLE_CACHE_CONTROL,
-                    true);
+                    true,
+                    properties.uploadConnectTimeout(),
+                    properties.uploadReadWriteTimeout());
             return properties.publicBaseUrl() + "/" + destinationObjectKey;
         } catch (RuntimeException exception) {
             throw map("OSS upload failed", exception);

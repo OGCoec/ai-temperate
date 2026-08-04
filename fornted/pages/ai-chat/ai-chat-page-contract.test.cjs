@@ -43,6 +43,18 @@ test('chat page sends and remembers the selected five-level reasoning effort', (
 	assert.match(page, /selectModel\(event\)[\s\S]*normalizeReasoningEffortForModel/)
 })
 
+test('image generation exposes only three quality levels and always disables web search', () => {
+	const page = read('components/user/workspace/user-chat-panel.vue')
+	const image = read('common/aichat/ai-conversation-image-generation.js')
+	const webSearch = read('common/aichat/ai-conversation-web-search.js')
+
+	assert.match(image, /level <= 3/)
+	assert.match(webSearch, /!capabilities\.has\('IMAGE_GENERATION'\)/)
+	assert.match(page,
+		/const webSearchMode = this\.imageGenerationAvailable[\s\S]*AI_CONVERSATION_WEB_SEARCH_MODES\.OFF[\s\S]*normalizeAiConversationWebSearchMode/)
+	assert.match(page, /profileControlLabel\(\)[\s\S]*'画质'/)
+})
+
 test('desktop chat uses one primary sidebar with new chat before navigation and recent after it', () => {
 	const workspace = read('components/user/user-workspace.vue')
 	const sidebar = read('components/user/user-workspace-sidebar.vue')
@@ -198,7 +210,7 @@ test('web search is capability gated and research events remain in session stora
 	assert.match(research, /activityEventKeys/)
 	assert.match(page, /eventId: String\(value\?\.eventId \|\| ''\)/)
 	assert.match(page, /if \(activityAccepted === false\) return/)
-	assert.match(page, /item\.activity\.eventId \|\| `activity-\$\{item\.activity\.sequence\}`/)
+	assert.match(page, /item\?\.activity\?\.eventId \|\| `activity-\$\{item\?\.sequence\}`/)
 	assert.match(page, /STARTED:\s*'已开始'/)
 	assert.match(page, /IN_PROGRESS:\s*'进行中'/)
 	assert.match(page, /COMPLETED:\s*'已完成'/)

@@ -4,14 +4,24 @@ function protocolError(message) {
 	return error
 }
 
-export function createAiConversationSseParser(onEvent = () => {}) {
+const DEFAULT_MAXIMUM_EVENT_CHARACTERS = 48 * 1024 * 1024
+
+export function createAiConversationSseParser(
+	onEvent = () => {},
+	{ maximumEventCharacters = DEFAULT_MAXIMUM_EVENT_CHARACTERS } = {}) {
+	if (!Number.isSafeInteger(maximumEventCharacters)
+		|| maximumEventCharacters < 1) {
+		throw protocolError('会话事件大小边界无效。')
+	}
 	let buffer = ''
 	let eventName = ''
 	let dataLines = []
+	let eventCharacters = 0
 
 	function dispatch() {
 		if (!dataLines.length) {
 			eventName = ''
+			eventCharacters = 0
 			return
 		}
 		let data
@@ -23,6 +33,7 @@ export function createAiConversationSseParser(onEvent = () => {}) {
 		onEvent(Object.freeze({ type: eventName || 'message', data }))
 		eventName = ''
 		dataLines = []
+		eventCharacters = 0
 	}
 
 	function line(value) {
@@ -33,7 +44,13 @@ export function createAiConversationSseParser(onEvent = () => {}) {
 		let content = separator < 0 ? '' : value.slice(separator + 1)
 		if (content.startsWith(' ')) content = content.slice(1)
 		if (field === 'event') eventName = content
-		else if (field === 'data') dataLines.push(content)
+		else if (field === 'data') {
+			eventCharacters += content.length
+			if (eventCharacters > maximumEventCharacters) {
+				throw protocolError('会话事件超过浏览器内存边界。')
+			}
+			dataLines.push(content)
+		}
 	}
 
 	return Object.freeze({
@@ -46,6 +63,9 @@ export function createAiConversationSseParser(onEvent = () => {}) {
 				buffer = buffer.slice(newline + 1)
 				line(current)
 				newline = buffer.indexOf('\n')
+			}
+			if (buffer.length > maximumEventCharacters) {
+				throw protocolError('会话事件超过浏览器内存边界。')
 			}
 		},
 		finish() {

@@ -27,7 +27,8 @@ class AliyunOssUtilsTest {
         OSSClient client = mock(OSSClient.class);
         when(client.putObject(any(PutObjectRequest.class)))
                 .thenReturn(PutObjectResult.newBuilder().build());
-        AliyunOssUtils utils = new AliyunOssUtils((region, endpoint) -> client);
+        AliyunOssUtils utils = new AliyunOssUtils(
+                (region, endpoint, connectTimeout, readWriteTimeout) -> client);
 
         utils.putObjectBytes(
                 "ihaveaplan",
@@ -62,7 +63,8 @@ class AliyunOssUtilsTest {
                                 "x-oss-object-acl", "private",
                                 "x-oss-forbid-overwrite", "true"))
                         .build());
-        AliyunOssUtils utils = new AliyunOssUtils((region, endpoint) -> client);
+        AliyunOssUtils utils = new AliyunOssUtils(
+                (region, endpoint, connectTimeout, readWriteTimeout) -> client);
 
         var result = utils.generatePresignedPutUrl(
                 "ihaveaplan",
@@ -85,7 +87,8 @@ class AliyunOssUtilsTest {
     @Test
     void rejectsContentLengthBeyondSdkIntegerLimit() {
         OSSClient client = mock(OSSClient.class);
-        AliyunOssUtils utils = new AliyunOssUtils((region, endpoint) -> client);
+        AliyunOssUtils utils = new AliyunOssUtils(
+                (region, endpoint, connectTimeout, readWriteTimeout) -> client);
 
         assertThatThrownBy(() -> utils.generatePresignedPutUrl(
                         "ihaveaplan",

@@ -124,6 +124,23 @@ public final class AiConversationMetrics {
         counter("ai.conversation.reconcile.required", "outcome", "failed");
     }
 
+    public void imagePreview(String phase) {
+        counter(
+                "ai.conversation.image.preview",
+                "phase",
+                "FINAL".equals(phase) ? "final" : "partial");
+    }
+
+    public void imagePersistence(Duration elapsed, String outcome) {
+        Timer.builder("ai.conversation.image.persistence.duration")
+                .tag("outcome", switch (outcome) {
+                    case "success", "dropped" -> outcome;
+                    default -> "failed";
+                })
+                .register(registry)
+                .record(elapsed);
+    }
+
     private void counter(String name, String key, String value) {
         Counter.builder(name)
                 .tag(key, value)

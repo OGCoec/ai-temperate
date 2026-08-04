@@ -105,6 +105,8 @@ final class UserAiModelControllerTest {
                 new BigDecimal("4.00000000"),
                 List.of(AiModelCapabilityCode.RESPONSES),
                 List.of((short) 1, (short) 2, (short) 3, (short) 4, (short) 5),
-                (short) 2);
+                (short) 2,
+                List.of(),
+                List.of());
     }
 }

@@ -38,3 +38,15 @@ test('rejects malformed JSON instead of emitting an untrusted frame', async () =
 		error => error?.code === 'AI_CONVERSATION_SSE_PROTOCOL_INVALID'
 	)
 })
+
+test('rejects an SSE event that exceeds the configured browser memory boundary', async () => {
+	const module = await loadParser()
+	const parser = module.createAiConversationSseParser(() => {}, {
+		maximumEventCharacters: 32
+	})
+
+	assert.throws(
+		() => parser.push(`event: image-preview\ndata: {"base64":"${'a'.repeat(64)}"}\n\n`),
+		error => error?.code === 'AI_CONVERSATION_SSE_PROTOCOL_INVALID'
+	)
+})

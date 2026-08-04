@@ -2,6 +2,7 @@ package com.example.temperate.service.user.aiconversation.generation;
 
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
 import java.util.Objects;
 
 /**
@@ -14,6 +15,7 @@ public record AiConversationGenerationCreateCommand(
         AiModelCacheEntry model,
         int reasoningEffort,
         AiConversationContent input,
+        AiConversationImageGenerationOptions imageGeneration,
         byte[] idempotencyDigest,
         long estimatedPromptTokens,
         String traceId) {

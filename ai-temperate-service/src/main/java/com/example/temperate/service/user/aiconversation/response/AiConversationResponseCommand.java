@@ -1,6 +1,7 @@
 package com.example.temperate.service.user.aiconversation.response;
 
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
 import java.util.Objects;
 import java.util.UUID;
@@ -15,6 +16,7 @@ public record AiConversationResponseCommand(
         String modelPublicId,
         AiConversationReasoningEffort reasoningEffort,
         AiConversationWebSearchMode webSearchMode,
+        AiConversationImageGenerationRequest imageGeneration,
         UUID idempotencyKey,
         AiConversationContent input) {
 
@@ -24,5 +26,29 @@ public record AiConversationResponseCommand(
                 : conversationId.clone();
         reasoningEffort = Objects.requireNonNull(reasoningEffort);
         webSearchMode = Objects.requireNonNull(webSearchMode);
+    }
+
+    /**
+     * 保留普通文字调用方的既有构造方式，避免图片能力影响未选择图片模型的路径。
+     */
+    public AiConversationResponseCommand(
+            long userId,
+            String userPublicId,
+            byte[] conversationId,
+            String modelPublicId,
+            AiConversationReasoningEffort reasoningEffort,
+            AiConversationWebSearchMode webSearchMode,
+            UUID idempotencyKey,
+            AiConversationContent input) {
+        this(
+                userId,
+                userPublicId,
+                conversationId,
+                modelPublicId,
+                reasoningEffort,
+                webSearchMode,
+                null,
+                idempotencyKey,
+                input);
     }
 }

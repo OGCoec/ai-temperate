@@ -22,7 +22,9 @@ export function aiConversationWebSearchEnabled() {
 export function modelSupportsAiConversationWebSearch(model) {
 	if (!aiConversationWebSearchEnabled() || !model) return false
 	const capabilities = new Set(model.capabilities || [])
-	return capabilities.has('RESPONSES') && capabilities.has('WEB_SEARCH')
+	return capabilities.has('RESPONSES')
+		&& capabilities.has('WEB_SEARCH')
+		&& !capabilities.has('IMAGE_GENERATION')
 }
 
 export function normalizeAiConversationWebSearchMode(mode, model) {

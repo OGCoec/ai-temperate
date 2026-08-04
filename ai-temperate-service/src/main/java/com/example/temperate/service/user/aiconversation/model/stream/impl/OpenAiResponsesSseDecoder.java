@@ -12,12 +12,28 @@ import java.util.List;
  */
 final class OpenAiResponsesSseDecoder {
 
-    private static final int MAXIMUM_LINE_BYTES = 1_048_576;
-    private static final int MAXIMUM_EVENT_CHARACTERS = 2_097_152;
+    private static final int DEFAULT_MAXIMUM_LINE_BYTES = 1_048_576;
+    private static final int DEFAULT_MAXIMUM_EVENT_CHARACTERS = 2_097_152;
 
     private final ByteArrayOutputStream lineBytes = new ByteArrayOutputStream();
     private final StringBuilder data = new StringBuilder();
+    private final int maximumLineBytes;
+    private final int maximumEventCharacters;
     private String eventName;
+
+    OpenAiResponsesSseDecoder() {
+        this(DEFAULT_MAXIMUM_LINE_BYTES, DEFAULT_MAXIMUM_EVENT_CHARACTERS);
+    }
+
+    OpenAiResponsesSseDecoder(
+            int maximumLineBytes,
+            int maximumEventCharacters) {
+        if (maximumLineBytes <= 0 || maximumEventCharacters <= 0) {
+            throw new IllegalArgumentException("SSE limits must be positive");
+        }
+        this.maximumLineBytes = maximumLineBytes;
+        this.maximumEventCharacters = maximumEventCharacters;
+    }
 
     List<OpenAiResponsesSseEvent> accept(byte[] bytes, int offset, int length) {
         if (bytes == null || offset < 0 || length < 0
@@ -32,7 +48,7 @@ final class OpenAiResponsesSseDecoder {
                 processLine(events);
                 continue;
             }
-            if (lineBytes.size() >= MAXIMUM_LINE_BYTES) {
+            if (lineBytes.size() >= maximumLineBytes) {
                 throw new IllegalStateException("AI upstream SSE line is too large");
             }
             lineBytes.write(value);
@@ -77,7 +93,7 @@ final class OpenAiResponsesSseDecoder {
                 data.append('\n');
             }
             if ((long) data.length() + value.length()
-                    > MAXIMUM_EVENT_CHARACTERS) {
+                    > maximumEventCharacters) {
                 throw new IllegalStateException("AI upstream SSE event is too large");
             }
             data.append(value);

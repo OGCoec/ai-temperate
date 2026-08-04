@@ -31,6 +31,8 @@ public final class AliyunOssUtils {
     private static final String REPLACE_METADATA = "REPLACE";
     private static final String IMMUTABLE_CACHE_CONTROL =
             "public, max-age=31536000, immutable";
+    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration DEFAULT_READ_WRITE_TIMEOUT = Duration.ofSeconds(20);
 
     private final OssClientFactory clientFactory;
 
@@ -156,6 +158,33 @@ public final class AliyunOssUtils {
             String contentType,
             String cacheControl,
             boolean forbidOverwrite) {
+        putObjectBytes(
+                bucket,
+                region,
+                endpoint,
+                objectKey,
+                bytes,
+                contentType,
+                cacheControl,
+                forbidOverwrite,
+                DEFAULT_CONNECT_TIMEOUT,
+                DEFAULT_READ_WRITE_TIMEOUT);
+    }
+
+    /**
+     * 使用调用方限定的连接和读写超时上传对象，避免最终图片持久化无限占用 Worker。
+     */
+    public void putObjectBytes(
+            String bucket,
+            String region,
+            String endpoint,
+            String objectKey,
+            byte[] bytes,
+            String contentType,
+            String cacheControl,
+            boolean forbidOverwrite,
+            Duration connectTimeout,
+            Duration readWriteTimeout) {
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("bytes must not be empty");
         }
@@ -169,7 +198,8 @@ public final class AliyunOssUtils {
                 .objectAcl(PUBLIC_READ_ACL)
                 .forbidOverwrite(forbidOverwrite)
                 .build();
-        OSSClient client = client(region, endpoint);
+        OSSClient client = client(
+                region, endpoint, connectTimeout, readWriteTimeout);
         try {
             client.putObject(request);
         } finally {
@@ -285,13 +315,35 @@ public final class AliyunOssUtils {
     private OSSClient client(String region, String endpoint) {
         return clientFactory.create(
                 requireText(region, "region"),
-                requireText(endpoint, "endpoint"));
+                requireText(endpoint, "endpoint"),
+                DEFAULT_CONNECT_TIMEOUT,
+                DEFAULT_READ_WRITE_TIMEOUT);
     }
 
-    private static OSSClient createClient(String region, String endpoint) {
+    private OSSClient client(
+            String region,
+            String endpoint,
+            Duration connectTimeout,
+            Duration readWriteTimeout) {
+        requirePositive(connectTimeout, "connectTimeout");
+        requirePositive(readWriteTimeout, "readWriteTimeout");
+        return clientFactory.create(
+                requireText(region, "region"),
+                requireText(endpoint, "endpoint"),
+                connectTimeout,
+                readWriteTimeout);
+    }
+
+    private static OSSClient createClient(
+            String region,
+            String endpoint,
+            Duration connectTimeout,
+            Duration readWriteTimeout) {
         return OSSClient.newBuilder()
                 .region(region)
                 .endpoint(endpoint)
+                .connectTimeout(connectTimeout)
+                .readWriteTimeout(readWriteTimeout)
                 .credentialsProvider(new EnvironmentVariableCredentialsProvider())
                 .build();
     }
@@ -364,6 +416,10 @@ public final class AliyunOssUtils {
     @FunctionalInterface
     interface OssClientFactory {
 
-        OSSClient create(String region, String endpoint);
+        OSSClient create(
+                String region,
+                String endpoint,
+                Duration connectTimeout,
+                Duration readWriteTimeout);
     }
 }

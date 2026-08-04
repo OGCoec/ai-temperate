@@ -24,6 +24,8 @@ public record AiConversationAttachmentProperties(
         @Min(1) @Max(8) int maxFilesPerMessage,
         @Min(1) @Max(209715200) long maxTotalBytesPerMessage,
         @Min(1) @Max(3) int finalizationAttempts,
+        @NotNull Duration uploadConnectTimeout,
+        @NotNull Duration uploadReadWriteTimeout,
         @Min(1) @Max(3) int clientUploadConcurrency,
         @Min(1) @Max(65536) int audioTokensPerMib,
         @Min(0) @Max(65536) int audioFixedTokens,
@@ -40,6 +42,8 @@ public record AiConversationAttachmentProperties(
         requirePositive(signedGetTtl, "signedGetTtl");
         requirePositive(mediaConnectTimeout, "mediaConnectTimeout");
         requirePositive(mediaReadTimeout, "mediaReadTimeout");
+        requirePositive(uploadConnectTimeout, "uploadConnectTimeout");
+        requirePositive(uploadReadWriteTimeout, "uploadReadWriteTimeout");
         if (maxTotalBytesPerMessage < maxFileBytes) {
             throw new IllegalArgumentException(
                     "maxTotalBytesPerMessage must be at least maxFileBytes");

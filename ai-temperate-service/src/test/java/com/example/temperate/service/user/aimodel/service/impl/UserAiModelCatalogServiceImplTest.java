@@ -22,6 +22,9 @@ import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import com.example.temperate.service.user.aimodel.exception.UserAiModelCatalogErrorCode;
 import com.example.temperate.service.user.aimodel.exception.UserAiModelCatalogException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
+import com.example.temperate.service.user.aiconversation.image.impl.AiConversationImageProfileServiceImpl;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -149,6 +152,26 @@ final class UserAiModelCatalogServiceImplTest {
     }
 
     @Test
+    void exposesOnlyThreeImageGenerationLevelsForGptImageModels() {
+        when(cacheService.getOrLoadEnabledSnapshot()).thenReturn(snapshot(
+                entry(51L, "gpt-image-2",
+                        List.of(AiModelCapabilityCode.IMAGE_GENERATION)),
+                entry(52L, "gpt-image-1.5",
+                        List.of(AiModelCapabilityCode.IMAGE_GENERATION))));
+        UserAiModelCatalogServiceImpl service = service();
+
+        var image2 = service.detail(publicIdCodec.encode(51L));
+        var image15 = service.detail(publicIdCodec.encode(52L));
+
+        assertThat(image2.supportedImageGenerationLevels())
+                .containsExactly((short) 1, (short) 2, (short) 3);
+        assertThat(image15.supportedImageGenerationLevels())
+                .containsExactly((short) 1, (short) 2, (short) 3);
+        assertThat(image2.supportedImageAspects())
+                .containsExactly(AiConversationImageAspect.values());
+    }
+
+    @Test
     void rejectsInvalidPaginationBeforeReadingCache() {
         UserAiModelCatalogServiceImpl service = service();
 
@@ -176,6 +199,13 @@ final class UserAiModelCatalogServiceImplTest {
     }
 
     private static AiModelCacheEntry entry(long id, String name) {
+        return entry(id, name, List.of(AiModelCapabilityCode.RESPONSES));
+    }
+
+    private static AiModelCacheEntry entry(
+            long id,
+            String name,
+            List<AiModelCapabilityCode> capabilities) {
         return new AiModelCacheEntry(
                 id,
                 name,
@@ -188,7 +218,7 @@ final class UserAiModelCatalogServiceImplTest {
                 new BigDecimal("4.00000000"),
                 256000L,
                 32000L,
-                List.of(AiModelCapabilityCode.RESPONSES));
+                capabilities);
     }
 
     private UserAiModelCatalogServiceImpl service() {
@@ -198,7 +228,10 @@ final class UserAiModelCatalogServiceImplTest {
                 capabilityMapper,
                 searchService,
                 publicIdCodec,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new AiConversationImageProfileServiceImpl(),
+                new AiConversationImageGenerationProperties(
+                        true, "/v1/images/generations", 33_554_432));
     }
 
     private static AiModelSearchCriteria emptyCriteria() {

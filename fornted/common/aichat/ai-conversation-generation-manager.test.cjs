@@ -62,3 +62,21 @@ test('retains a pending idempotency key before headers and removes it after gene
 	manager.registerGeneration({ generationPublicId: 'generation-a', idempotencyKey })
 	assert.equal(manager.listPendingGenerationRequests().length, 0)
 })
+
+test('keeps image previews in page memory without persisting Base64 to session storage', async () => {
+	const values = new Map()
+	globalThis.sessionStorage = {
+		getItem: key => values.get(key) || null,
+		setItem: (key, value) => values.set(key, value)
+	}
+	const manager = await loadManager()
+	manager.clearGenerationManager()
+	manager.registerGeneration({ generationPublicId: 'generation-image' })
+	manager.updateGeneration('generation-image', {
+		previewImage: { url: 'data:image/webp;base64,YWJj', volatilePreview: true }
+	})
+
+	assert.equal(manager.getGeneration('generation-image').previewImage.volatilePreview, true)
+	assert.equal([...values.values()].some(value => value.includes('YWJj')), false)
+	delete globalThis.sessionStorage
+})

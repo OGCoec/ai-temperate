@@ -271,6 +271,7 @@ public final class AiConversationResponseServiceImpl
                             command.modelPublicId(),
                             command.reasoningEffort(),
                             command.webSearchMode(),
+                            command.imageGeneration(),
                             command.idempotencyKey(),
                             command.input().validated(attachments));
             return respondValidated(prepared, traceContext);

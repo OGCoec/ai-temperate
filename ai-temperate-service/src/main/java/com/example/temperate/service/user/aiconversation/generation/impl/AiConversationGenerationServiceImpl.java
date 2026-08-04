@@ -8,6 +8,7 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
+import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextService;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
@@ -20,6 +21,10 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStart;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStatus;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationView;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfile;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfileService;
+import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import com.example.temperate.service.user.aiconversation.security.AiConversationIdempotencyHasher;
 import java.util.List;
@@ -54,6 +59,8 @@ public final class AiConversationGenerationServiceImpl
     private final AiConversationGenerationCreationTransactionService creationTransactionService;
     private final AiConversationGenerationMapper generationMapper;
     private final AiConversationIdempotencyHasher idempotencyHasher;
+    private final AiConversationImageProfileService imageProfileService;
+    private final AiConversationImageGenerationProperties imageProperties;
     private final HybridBase64UrlCodec hybridIdCodec;
     private final PublicIdCodec publicIdCodec;
 
@@ -64,6 +71,8 @@ public final class AiConversationGenerationServiceImpl
             AiConversationGenerationCreationTransactionService creationTransactionService,
             AiConversationGenerationMapper generationMapper,
             AiConversationIdempotencyHasher idempotencyHasher,
+            AiConversationImageProfileService imageProfileService,
+            AiConversationImageGenerationProperties imageProperties,
             HybridBase64UrlCodec hybridIdCodec,
             PublicIdCodec publicIdCodec) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
@@ -72,6 +81,8 @@ public final class AiConversationGenerationServiceImpl
         this.creationTransactionService = Objects.requireNonNull(creationTransactionService);
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.idempotencyHasher = Objects.requireNonNull(idempotencyHasher);
+        this.imageProfileService = Objects.requireNonNull(imageProfileService);
+        this.imageProperties = Objects.requireNonNull(imageProperties);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
     }
@@ -80,6 +91,8 @@ public final class AiConversationGenerationServiceImpl
     public AiConversationGenerationStart create(AiConversationResponseCommand command) {
         Objects.requireNonNull(command);
         AiModelCacheEntry model = requiredModel(command.modelPublicId());
+        AiConversationImageGenerationOptions imageGeneration =
+                resolveImageGeneration(command, model);
         List<AiConversationAttachment> attachments = attachmentService.validateTemporaryInputs(
                 command.userPublicId(), command.input().uploadReferences());
         AiConversationContent validatedInput = command.input().validated(attachments);
@@ -98,9 +111,44 @@ public final class AiConversationGenerationServiceImpl
                 model,
                 command.reasoningEffort().level(),
                 validatedInput,
+                imageGeneration,
                 digest,
                 preliminary.estimatedPromptTokens(),
                 currentTraceId()));
+    }
+
+    private AiConversationImageGenerationOptions resolveImageGeneration(
+            AiConversationResponseCommand command,
+            AiModelCacheEntry model) {
+        boolean imageModel = model.capabilities().contains(
+                AiModelCapabilityCode.IMAGE_GENERATION);
+        if (!imageModel && command.imageGeneration() == null) {
+            return null;
+        }
+        if (!imageProperties.enabled()) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
+                    "图片生成功能当前未启用。",
+                    true);
+        }
+        if (!imageModel
+                || command.imageGeneration() == null
+                || command.webSearchMode()
+                        != com.example.temperate.service.user.aiconversation.response
+                                .AiConversationWebSearchMode.OFF
+                || command.input().text().isBlank()
+                || !command.input().uploadReferences().isEmpty()) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_REQUEST_INVALID,
+                    "图片模型只接受不带附件的文字生成图片请求。",
+                    false);
+        }
+        AiConversationImageProfile profile = imageProfileService.required(
+                model.modelName(),
+                command.reasoningEffort(),
+                command.imageGeneration().aspect());
+        return AiConversationImageGenerationOptions.from(
+                command.imageGeneration().aspect(), profile);
     }
 
     @Override

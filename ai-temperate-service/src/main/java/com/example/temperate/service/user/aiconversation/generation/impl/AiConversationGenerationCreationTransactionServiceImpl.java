@@ -18,8 +18,7 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStart;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStatus;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationDetachedEvent;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -49,7 +48,7 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
     private final AiConversationGenerationPayloadMapper payloadMapper;
     private final HybridSemaphoreIdWorker idWorker;
     private final HybridBase64UrlCodec idCodec;
-    private final ObjectMapper objectMapper;
+    private final AiConversationGenerationInputCodec inputCodec;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
@@ -59,7 +58,7 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
             AiConversationGenerationPayloadMapper payloadMapper,
             HybridSemaphoreIdWorker idWorker,
             HybridBase64UrlCodec idCodec,
-            ObjectMapper objectMapper,
+            AiConversationGenerationInputCodec inputCodec,
             ApplicationEventPublisher eventPublisher,
             Clock clock) {
         this.billingService = Objects.requireNonNull(billingService);
@@ -67,7 +66,7 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
         this.payloadMapper = Objects.requireNonNull(payloadMapper);
         this.idWorker = Objects.requireNonNull(idWorker);
         this.idCodec = Objects.requireNonNull(idCodec);
-        this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.inputCodec = Objects.requireNonNull(inputCodec);
         this.eventPublisher = Objects.requireNonNull(eventPublisher);
         this.clock = Objects.requireNonNull(clock);
     }
@@ -139,7 +138,9 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
         AiConversationGenerationPayload payload = new AiConversationGenerationPayload();
         payload.setGenerationId(generationId);
         payload.setInputText(command.input().text());
-        payload.setInputAttachmentsJson(json(command.input().attachments()));
+        // 图片控制参数与附件共用现有 JSONB 版本化信封，禁止为媒体内容新增字段或把 Base64 写入数据库。
+        payload.setInputAttachmentsJson(inputCodec.encode(
+                command.input().attachments(), command.imageGeneration()));
         payload.setReasoningEffort(command.reasoningEffort());
         payload.setUpdatedAt(now);
         if (payloadMapper.insert(payload) != 1) {
@@ -173,12 +174,4 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
                 replay);
     }
 
-    private String json(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException(
-                    "AI Generation payload serialization failed.", exception);
-        }
-    }
 }

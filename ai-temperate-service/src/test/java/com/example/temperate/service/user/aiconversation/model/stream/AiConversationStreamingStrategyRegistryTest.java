@@ -18,13 +18,17 @@ final class AiConversationStreamingStrategyRegistryTest {
                 AiConversationStreamingProtocol.CHAT_COMPLETIONS);
         StubStrategy responses = new StubStrategy(
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH);
+        StubStrategy images = new StubStrategy(
+                AiConversationStreamingProtocol.IMAGES_GENERATION);
         AiConversationStreamingStrategyRegistry registry =
                 new AiConversationStreamingStrategyRegistry(Map.of(
                         "chat", chat,
-                        "responses", responses));
+                        "responses", responses,
+                        "images", images));
 
         assertThat(registry.required(chat.protocol())).isSameAs(chat);
         assertThat(registry.required(responses.protocol())).isSameAs(responses);
+        assertThat(registry.required(images.protocol())).isSameAs(images);
         assertThatThrownBy(() -> new AiConversationStreamingStrategyRegistry(
                 Map.of(
                         "first", chat,

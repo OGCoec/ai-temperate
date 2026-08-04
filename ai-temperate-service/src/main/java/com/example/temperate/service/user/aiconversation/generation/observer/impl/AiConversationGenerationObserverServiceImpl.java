@@ -23,6 +23,7 @@ import com.example.temperate.service.user.aiconversation.generation.observer.AiC
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputStore;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputSubscriber;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationSnapshotData;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -70,6 +71,7 @@ public final class AiConversationGenerationObserverServiceImpl
     private final AiConversationStreamTransportDiagnosticService transportDiagnosticService;
     private final Clock clock;
     private final AiConversationMetrics metrics;
+    private final AiConversationImagePreviewBroker previewBroker;
 
     public AiConversationGenerationObserverServiceImpl(
             AiConversationGenerationMapper generationMapper,
@@ -97,7 +99,8 @@ public final class AiConversationGenerationObserverServiceImpl
                 timingClock,
                 metrics,
                 clock,
-                AiConversationStreamTransportDiagnosticService.noOp());
+                AiConversationStreamTransportDiagnosticService.noOp(),
+                AiConversationImagePreviewBroker.noOp());
     }
 
     @Autowired
@@ -114,7 +117,8 @@ public final class AiConversationGenerationObserverServiceImpl
             AiConversationStreamTimingClock timingClock,
             AiConversationMetrics metrics,
             Clock clock,
-            AiConversationStreamTransportDiagnosticService transportDiagnosticService) {
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService,
+            AiConversationImagePreviewBroker previewBroker) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.outputStore = Objects.requireNonNull(outputStore);
         this.outputSubscriber = Objects.requireNonNull(outputSubscriber);
@@ -128,6 +132,7 @@ public final class AiConversationGenerationObserverServiceImpl
         this.transportDiagnosticService = Objects.requireNonNull(transportDiagnosticService);
         this.metrics = Objects.requireNonNull(metrics);
         this.clock = Objects.requireNonNull(clock);
+        this.previewBroker = Objects.requireNonNull(previewBroker);
     }
 
     @Override
@@ -246,9 +251,14 @@ public final class AiConversationGenerationObserverServiceImpl
         // 短心跳只用于尽快暴露真正失效的 TCP/SSE 写通道，页面隐藏但连接健康时不会改变 Generation 状态。
         Flux<AiConversationStreamEvent> heartbeat = Flux.interval(asyncProperties.observerHeartbeat())
                 .map(ignored -> AiConversationStreamEvent.heartbeat());
-        return Flux.merge(sink.asFlux(), heartbeat)
+        Flux<AiConversationStreamEvent> imagePreviews =
+                previewBroker.events(generationPublicId);
+        return Flux.merge(sink.asFlux(), heartbeat, imagePreviews)
                 .takeUntil(event -> terminalEvent(event.name()))
-                .doFinally(ignored -> closeQuietly(subscription));
+                .doFinally(ignored -> {
+                    closeQuietly(subscription);
+                    previewBroker.release(generationPublicId);
+                });
     }
 
     private void emitIfNew(

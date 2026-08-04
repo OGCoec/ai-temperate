@@ -30,7 +30,11 @@ function hydrate() {
 function persist() {
 	try {
 		storage()?.setItem(STORAGE_KEY, JSON.stringify({
-			tasks: [...tasks.values()],
+			// 中间图只属于当前页面内存，禁止把完整 Base64 写进 sessionStorage。
+			tasks: [...tasks.values()].map(task => {
+				const { previewImage, ...persisted } = task
+				return persisted
+			}),
 			pendingRequests: [...pendingRequests.values()]
 		}))
 	} catch (_) {
@@ -145,7 +149,8 @@ export function markGenerationTerminal(generationPublicId, status) {
 	return updateGeneration(generationPublicId, {
 		status,
 		observerAttached: false,
-		idempotencyKey: null
+		idempotencyKey: null,
+		previewImage: null
 	})
 }
 

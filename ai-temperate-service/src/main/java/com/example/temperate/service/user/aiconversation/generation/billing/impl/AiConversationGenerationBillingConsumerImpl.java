@@ -28,6 +28,9 @@ import com.example.temperate.service.user.aiconversation.generation.billing.AiCo
 import com.example.temperate.service.user.aiconversation.generation.billing.AiConversationGenerationBillingTransactionService;
 import com.example.temperate.service.user.aiconversation.generation.rabbit.AiConversationGenerationTerminated;
 import com.example.temperate.service.user.aiconversation.generation.rabbit.AiConversationGenerationMessageRejectedException;
+import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
+import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputSnapshot;
+import com.example.temperate.service.user.aiconversation.image.AiConversationPersistedGeneratedAttachmentCodec;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingAction;
@@ -56,8 +59,6 @@ import org.springframework.stereotype.Service;
 public final class AiConversationGenerationBillingConsumerImpl
         implements AiConversationGenerationBillingConsumer {
 
-    private static final TypeReference<List<AiConversationAttachment>> ATTACHMENTS =
-            new TypeReference<>() { };
     private static final TypeReference<List<AiConversationGeneratedMedia>> GENERATED_MEDIA =
             new TypeReference<>() { };
 
@@ -74,6 +75,8 @@ public final class AiConversationGenerationBillingConsumerImpl
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AiConversationMetrics metrics;
+    private final AiConversationGenerationInputCodec inputCodec;
+    private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
 
     public AiConversationGenerationBillingConsumerImpl(
             AiConversationGenerationMapper generationMapper,
@@ -88,6 +91,8 @@ public final class AiConversationGenerationBillingConsumerImpl
             PublicIdCodec publicIdCodec,
             ObjectMapper objectMapper,
             AiConversationMetrics metrics,
+            AiConversationGenerationInputCodec inputCodec,
+            AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
             ApplicationEventPublisher eventPublisher) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.payloadMapper = Objects.requireNonNull(payloadMapper);
@@ -101,6 +106,8 @@ public final class AiConversationGenerationBillingConsumerImpl
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.metrics = Objects.requireNonNull(metrics);
+        this.inputCodec = Objects.requireNonNull(inputCodec);
+        this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
         this.eventPublisher = Objects.requireNonNull(eventPublisher);
     }
 
@@ -118,7 +125,7 @@ public final class AiConversationGenerationBillingConsumerImpl
                     generation.getGenerationStatus());
             if (existing.terminal()) {
                 // 资金事务已提交但 Redis 终态通知失败时，Rabbit 重投只补发展示事件，绝不重复结算。
-                publishBilled(terminal, existing.name());
+                publishBilled(terminal, existing.name(), List.of());
             }
             return;
         }
@@ -130,8 +137,10 @@ public final class AiConversationGenerationBillingConsumerImpl
         if (payload == null || detail == null) {
             throw new IllegalStateException("AI Generation billing evidence is incomplete.");
         }
+        AiConversationGenerationInputSnapshot inputSnapshot =
+                inputCodec.decode(payload.getInputAttachmentsJson());
         AiConversationContent user = new AiConversationContent(
-                payload.getInputText(), attachments(payload.getInputAttachmentsJson()));
+                payload.getInputText(), inputSnapshot.attachments());
         AiConversationUsage usage = reportedUsage(payload);
         AiConversationGenerationTerminalType type = AiConversationGenerationTerminalType.valueOf(
                 terminal.terminalType());
@@ -142,12 +151,29 @@ public final class AiConversationGenerationBillingConsumerImpl
             // 消息 ID 先原子绑定到 Payload，Rabbit 重投时附件对象路径保持稳定，避免重复创建不同对象。
             long messageId = transactionService.getOrReserveMessageId(generationId);
             String conversationPublicId = idCodec.encode(generation.getConversationId());
-            finalized = attachmentService.finalizeAttachments(
-                    publicIdCodec.encode(generation.getLoginIdentityId()),
-                    conversationPublicId,
-                    publicIdCodec.encode(messageId),
-                    user.attachments(),
-                    generatedMedia(payload.getAssistantAttachmentsJson()));
+            if (inputSnapshot.imageGeneration() == null) {
+                finalized = attachmentService.finalizeAttachments(
+                        publicIdCodec.encode(generation.getLoginIdentityId()),
+                        conversationPublicId,
+                        publicIdCodec.encode(messageId),
+                        user.attachments(),
+                        generatedMedia(payload.getAssistantAttachmentsJson()));
+            } else {
+                // 图片字节已在 Worker 中有界上传；Billing 只读取 URL 信封，禁止再次解码或保存 Base64。
+                AiConversationAttachmentFinalization finalizedInputs =
+                        attachmentService.finalizeAttachments(
+                                publicIdCodec.encode(generation.getLoginIdentityId()),
+                                conversationPublicId,
+                                publicIdCodec.encode(messageId),
+                                user.attachments(),
+                                List.of());
+                finalized = new AiConversationAttachmentFinalization(
+                        finalizedInputs.inputAttachments(),
+                        generatedAttachmentCodec.decode(
+                                payload.getAssistantAttachmentsJson()),
+                        finalizedInputs.createdObjectKeys(),
+                        finalizedInputs.partialFailure());
+            }
             AiConversationContent finalizedUser = new AiConversationContent(
                     user.text(), finalized.inputAttachments());
             AiConversationContent assistant = new AiConversationContent(
@@ -230,7 +256,13 @@ public final class AiConversationGenerationBillingConsumerImpl
                             result.messageId(),
                             command.settlementCommand());
                 }
-                publishBilled(terminal, result.finalStatus());
+                List<AiConversationAttachment> responseAttachments =
+                        command.mode() == AiConversationGenerationBillingMode.COMPLETE
+                                && command.settlementCommand() != null
+                                ? command.settlementCommand().assistant().attachments()
+                                : List.of();
+                publishBilled(
+                        terminal, result.finalStatus(), responseAttachments);
             }
             metrics.generationBilling(
                     Duration.ofNanos(System.nanoTime() - billingStarted), "success");
@@ -246,7 +278,8 @@ public final class AiConversationGenerationBillingConsumerImpl
 
     private void publishBilled(
             AiConversationGenerationTerminated terminal,
-            String finalStatus) {
+            String finalStatus,
+            List<AiConversationAttachment> responseAttachments) {
         eventPublisher.publishEvent(new AiConversationGenerationBilledEvent(
                 terminal.generationPublicId(),
                 "completed",
@@ -256,7 +289,8 @@ public final class AiConversationGenerationBillingConsumerImpl
                         "status", finalStatus,
                         "terminalType", terminal.terminalType(),
                         "terminalReason", Objects.requireNonNullElse(
-                                terminal.terminalReason(), "unavailable")))));
+                                terminal.terminalReason(), "unavailable"),
+                        "attachments", List.copyOf(responseAttachments)))));
     }
 
     private AiConversationSettlementCommand settlementCommand(
@@ -319,10 +353,6 @@ public final class AiConversationGenerationBillingConsumerImpl
                 payload.getCachedPromptTokens(),
                 payload.getCompletionTokens(),
                 payload.getReasoningTokens());
-    }
-
-    private List<AiConversationAttachment> attachments(String json) {
-        return read(json, ATTACHMENTS);
     }
 
     private List<AiConversationGeneratedMedia> generatedMedia(String json) {

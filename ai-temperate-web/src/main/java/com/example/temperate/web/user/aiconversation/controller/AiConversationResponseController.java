@@ -8,6 +8,7 @@ import com.example.temperate.service.user.aiconversation.context.AiConversationC
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationRequest;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationService;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStart;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationObserverService;
@@ -210,6 +211,10 @@ public final class AiConversationResponseController {
                         AiConversationReasoningEffort.fromLevel(
                                 request.reasoningEffortLevel()),
                         request.webSearchMode(),
+                        request.image() == null
+                                ? null
+                                : new AiConversationImageGenerationRequest(
+                                        request.image().aspect()),
                         idempotencyUuid,
                         new AiConversationContent(
                                 request.input().text(),
@@ -227,13 +232,21 @@ public final class AiConversationResponseController {
                 ? null
                 : generationServiceProvider.getIfAvailable();
         if (generationService != null
-                && request.webSearchMode() == AiConversationWebSearchMode.OFF) {
-            // 旧 Generation 路径没有研究事件协议；联网搜索固定走直接 POST SSE，避免搜索状态丢失或重新经过 Redis Observer。
+                && (request.image() != null
+                        || request.webSearchMode() == AiConversationWebSearchMode.OFF)) {
+            // 图片请求必须进入 Generation 服务统一拒绝联网组合；只有纯文本联网请求继续走直接 POST SSE 研究协议。
             return asyncResponse(
                     principal,
                     command,
                     generationService,
                     Objects.requireNonNull(observerServiceProvider.getIfAvailable()));
+        }
+        if (command.imageGeneration() != null) {
+            // 图片字节与最终 OSS URL 只在异步 Generation 链路中有明确边界；该链路关闭时必须失败封闭，禁止误降级成文本调用。
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
+                    "图片生成需要启用异步 Generation 链路。",
+                    true);
         }
         AiConversationResponseStream stream = responseService.respond(command);
         Flux<ServerSentEvent<Object>> body = Flux.concat(

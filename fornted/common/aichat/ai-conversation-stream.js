@@ -8,6 +8,10 @@ import { createAiConversationStreamDiagnostics } from './ai-conversation-stream-
 import { reportAiConversationStreamDiagnostics } from './ai-conversation-stream-diagnostics-reporter.js'
 import { createAiConversationLifecycleDiagnostics } from './ai-conversation-lifecycle-diagnostics.js'
 import {
+	imagePreviewAttachment,
+	persistedImageAttachments
+} from './ai-conversation-image-generation.js'
+import {
 	asyncGenerationEnabled,
 	bindGenerationObserver,
 	getGeneration,
@@ -147,13 +151,20 @@ export async function openAiConversationStream(command, handlers = {}) {
 					responseText: `${current?.responseText || ''}${event.data.text}`
 				})
 			}
+			if (event.type === 'image-preview' && generationPublicId) {
+				const previewImage = imagePreviewAttachment(event.data)
+				if (previewImage) updateGeneration(generationPublicId, { previewImage })
+			}
 			if (asyncGenerationEnabled() && event.type === 'completed'
 				&& generationPublicId) {
-				markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
 				updateGeneration(generationPublicId, {
 					terminalType: event.data.terminalType,
-					terminalReason: event.data.terminalReason
+					terminalReason: event.data.terminalReason,
+					responseAttachments: persistedImageAttachments(event.data),
+					warnings: event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
+						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
+				markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
 			}
 			if (event.type === 'delta' && event.data?.type === 'TEXT'
 				&& String(event.data?.text || '').length > 0) {
@@ -270,12 +281,19 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					responseText: `${current?.responseText || ''}${event.data.text}`
 				})
 			}
+			if (event.type === 'image-preview') {
+				const previewImage = imagePreviewAttachment(event.data)
+				if (previewImage) updateGeneration(generationPublicId, { previewImage })
+			}
 			if (event.type === 'completed') {
-				markGenerationTerminal(generationPublicId, event.data?.status || 'COMPLETED')
 				updateGeneration(generationPublicId, {
 					terminalType: event.data?.terminalType,
-					terminalReason: event.data?.terminalReason
+					terminalReason: event.data?.terminalReason,
+					responseAttachments: persistedImageAttachments(event.data),
+					warnings: event.data?.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
+						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
+				markGenerationTerminal(generationPublicId, event.data?.status || 'COMPLETED')
 			}
 			diagnostics.record?.('BROWSER_SSE_PARSED', {
 				eventType: event.type,

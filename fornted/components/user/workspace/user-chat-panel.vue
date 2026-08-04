@@ -111,6 +111,9 @@
 										<uni-icons type="download" size="20" color="#37d39a" />
 										<text>{{ attachment.state === 'AVAILABLE' ? attachment.fileName : '生成内容保存失败' }}</text>
 									</button>
+									<text v-if="attachment.volatilePreview" class="image-preview-state">
+										{{ attachment.phase === 'FINAL' ? '最终图片正在保存到 OSS…' : '生成中的完整预览，仅最终图片会保存' }}
+									</text>
 								</view>
 							</view>
 							<text
@@ -136,7 +139,7 @@
 					@retry="retryAttachment"
 				/>
 				<view class="composer">
-					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
+					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || imageGenerationAvailable || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
 						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
 					</button>
 					<textarea v-model="draft" class="composer-input" auto-height :maxlength="65536" placeholder="输入消息" :disabled="generating" @confirm="send" />
@@ -160,7 +163,20 @@
 							@change="selectReasoningEffort"
 						>
 							<view class="reasoning-effort-picker">
-								<text>推理 · {{ selectedReasoningEffortLabel }}</text>
+								<text>{{ profileControlLabel }} · {{ selectedReasoningEffortLabel }}</text>
+								<uni-icons type="down" size="14" color="#9ba6a0" />
+							</view>
+						</picker>
+						<picker
+							v-if="imageGenerationAvailable"
+							:range="imageAspectOptions"
+							range-key="label"
+							:value="selectedImageAspectIndex"
+							:disabled="generating"
+							@change="selectImageAspect"
+						>
+							<view class="image-aspect-picker">
+								<text>画幅 · {{ selectedImageAspectLabel }}</text>
 								<uni-icons type="down" size="14" color="#9ba6a0" />
 							</view>
 						</picker>
@@ -220,6 +236,15 @@
 	import { reportAiConversationStreamDiagnostics } from '@/common/aichat/ai-conversation-stream-diagnostics-reporter.js'
 	import { createAiConversationLifecycleDiagnostics } from '@/common/aichat/ai-conversation-lifecycle-diagnostics.js'
 	import {
+		imageGenerationProfileLevels,
+		imageGenerationRequest,
+		imagePreviewAttachment,
+		modelSupportsImageGeneration,
+		normalizeImageGenerationAspect,
+		persistedImageAttachments,
+		supportedImageAspectOptions
+	} from '@/common/aichat/ai-conversation-image-generation.js'
+	import {
 		createAiConversationResearchSession,
 		findAiConversationResearchSession
 	} from '@/common/aichat/ai-conversation-research-session.js'
@@ -273,6 +298,7 @@
 
 	const MODEL_STORAGE_KEY = 'ait.user.ai.selected-model.v1'
 	const REASONING_EFFORT_STORAGE_KEY = 'ait.user.ai.reasoning-effort.v1'
+	const IMAGE_ASPECT_STORAGE_KEY = 'ait.user.ai.image-aspect.v1'
 	const REASONING_EFFORT_OPTIONS = Object.freeze([
 		Object.freeze({ value: 1, label: 'Low' }),
 		Object.freeze({ value: 2, label: 'Medium' }),
@@ -339,6 +365,7 @@
 				models: [],
 				selectedModelPublicId: '',
 				selectedReasoningEffortLevel: 2,
+				selectedImageAspect: 'SQUARE',
 				selectedWebSearchMode: AI_CONVERSATION_WEB_SEARCH_MODES.OFF,
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
@@ -391,9 +418,28 @@
 		computed: {
 			selectedModel() { return this.models.find(model => model.publicId === this.selectedModelPublicId) || null },
 			selectedModelIndex() { return Math.max(0, this.models.findIndex(model => model.publicId === this.selectedModelPublicId)) },
+			imageGenerationAvailable() {
+				return modelSupportsImageGeneration(this.selectedModel)
+			},
+			imageAspectOptions() {
+				return supportedImageAspectOptions(this.selectedModel)
+			},
+			selectedImageAspectIndex() {
+				return Math.max(0, this.imageAspectOptions.findIndex(option =>
+					option.value === this.selectedImageAspect))
+			},
+			selectedImageAspectLabel() {
+				return this.imageAspectOptions.find(option =>
+					option.value === this.selectedImageAspect)?.label || '正方形'
+			},
+			profileControlLabel() {
+				return this.imageGenerationAvailable ? '画质' : '推理'
+			},
 			reasoningEffortOptions() {
-				const supported = new Set(
-					this.selectedModel?.supportedReasoningEffortLevels || [])
+				const levels = this.imageGenerationAvailable
+					? imageGenerationProfileLevels(this.selectedModel)
+					: this.selectedModel?.supportedReasoningEffortLevels || []
+				const supported = new Set(levels)
 				return REASONING_EFFORT_OPTIONS.filter(option =>
 					supported.has(option.value))
 			},
@@ -413,6 +459,15 @@
 					=== AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
 			},
 			sendGate() {
+				if (this.imageGenerationAvailable && this.pendingAttachments.length) {
+					return Object.freeze({
+						allowed: false,
+						reason: '第一版图片生成只支持文字提示词，请先删除附件。'
+					})
+				}
+				if (this.imageGenerationAvailable && !String(this.draft || '').trim()) {
+					return Object.freeze({ allowed: false, reason: '请输入图片生成提示词。' })
+				}
 				return deriveSendGate({
 					model: this.selectedModel,
 					text: this.draft,
@@ -457,6 +512,9 @@
 					const level = this.normalizeReasoningEffortForModel(
 						this.selectedModel,
 						rememberedEffort)
+					this.selectedImageAspect = normalizeImageGenerationAspect(
+						this.selectedModel,
+						uni.getStorageSync(IMAGE_ASPECT_STORAGE_KEY))
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 						this.selectedWebSearchMode, this.selectedModel)
@@ -549,22 +607,33 @@
 				uni.setStorageSync(MODEL_STORAGE_KEY, model.publicId)
 				const level = this.normalizeReasoningEffortForModel(model)
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
+				this.selectedImageAspect = normalizeImageGenerationAspect(
+					model, this.selectedImageAspect)
+				uni.setStorageSync(IMAGE_ASPECT_STORAGE_KEY, this.selectedImageAspect)
 				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 					this.selectedWebSearchMode, model)
 			},
 			normalizeReasoningEffortForModel(
 				model,
 				candidate = this.selectedReasoningEffortLevel) {
-				const supported = model?.supportedReasoningEffortLevels || []
+				const supported = modelSupportsImageGeneration(model)
+					? imageGenerationProfileLevels(model)
+					: model?.supportedReasoningEffortLevels || []
 				const normalizedCandidate = Number(candidate)
 				const fallback = supported.includes(model?.defaultReasoningEffortLevel)
 					? model.defaultReasoningEffortLevel
-					: 2
+					: supported.includes(2) ? 2 : supported[0] || 2
 				const level = supported.includes(normalizedCandidate)
 					? normalizedCandidate
 					: fallback
 				this.selectedReasoningEffortLevel = level
 				return level
+			},
+			selectImageAspect(event) {
+				const option = this.imageAspectOptions[Number(event.detail.value)]
+				if (!option) return
+				this.selectedImageAspect = option.value
+				uni.setStorageSync(IMAGE_ASPECT_STORAGE_KEY, option.value)
 			},
 			selectReasoningEffort(event) {
 				const option =
@@ -581,7 +650,7 @@
 					: AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
 			},
 			async chooseAttachments() {
-				if (this.attachmentPickerBusy) return
+				if (this.attachmentPickerBusy || this.imageGenerationAvailable) return
 				this.attachmentPickerBusy = true
 				this.composerError = ''
 				try {
@@ -757,8 +826,11 @@
 					onDelta: chunk => this.textDrain?.push?.(chunk)
 				})
 				this.scrollBottom()
-				const webSearchMode = normalizeAiConversationWebSearchMode(
-					this.selectedWebSearchMode, this.selectedModel)
+				// 图片生成端点不接受联网工具，发送边界必须覆盖浏览器遗留的搜索状态。
+				const webSearchMode = this.imageGenerationAvailable
+					? AI_CONVERSATION_WEB_SEARCH_MODES.OFF
+					: normalizeAiConversationWebSearchMode(
+						this.selectedWebSearchMode, this.selectedModel)
 				const command = {
 					conversationPublicId: this.currentConversationPublicId,
 					idempotencyKey: uuidV4(),
@@ -768,7 +840,11 @@
 						modelPublicId: this.selectedModelPublicId,
 						reasoningEffortLevel: this.selectedReasoningEffortLevel,
 						webSearchMode,
-						input: { text, attachments: attachmentRefs }
+						input: { text, attachments: attachmentRefs },
+						...(this.imageGenerationAvailable
+							? { image: imageGenerationRequest(
+								this.selectedModel, this.selectedImageAspect) }
+							: {})
 					}
 				}
 				this.activeIdempotencyKey = command.idempotencyKey
@@ -815,7 +891,14 @@
 						this.patchResearch(localId)
 						const message = aiConversationErrorMessage(error)
 						this.finishTextPresentation(() => {
-							this.applyStore(patchLocalMessage(localId, { streaming: false, saving: false, error: message }))
+							const current = this.messages.find(item => item.localId === localId)
+							this.applyStore(patchLocalMessage(localId, {
+								responseAttachments: (current?.responseAttachments || [])
+									.filter(attachment => !attachment.volatilePreview),
+								streaming: false,
+								saving: false,
+								error: message
+							}))
 							this.composerError = message
 							this.streamDiagnostics?.finish?.('TRANSPORT_ERROR')
 							this.$nextTick(() =>
@@ -865,6 +948,15 @@
 					if (this.activeResearchSession?.appendReasoningSummary?.(event.data)) {
 						this.patchResearch(localId)
 					}
+				} else if (event.type === 'image-preview') {
+					const previewImage = imagePreviewAttachment(event.data)
+					if (!previewImage) return
+					this.applyStore(patchLocalMessage(localId, {
+						responseAttachments: [previewImage],
+						streaming: true,
+						saving: previewImage.phase === 'FINAL'
+					}))
+					this.scrollBottom()
 				} else if (event.type === 'snapshot') {
 					this.markdownRenderState?.applySnapshot?.({
 						revision: Number(event.data?.revision || 0),
@@ -890,14 +982,19 @@
 					})
 				} else if (event.type === 'completed' && event.data?.generationPublicId) {
 					const generationPublicId = event.data.generationPublicId
+					const responseAttachments = persistedImageAttachments(event.data)
+					const warnings = event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
+						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 					markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
 					this.finishTextPresentation(() => {
 						const failed = event.data.terminalType
 							&& event.data.terminalType !== 'COMPLETED'
 						this.applyStore(patchLocalMessage(localId, {
+							responseAttachments,
 							streaming: false,
 							saving: false,
 							stopped: String(event.data.terminalType || '').includes('CANCELLED'),
+							warnings,
 							error: failed && !String(event.data.terminalType).includes('CANCELLED')
 								? '模型响应未能完成，预扣额度已按终态处理。' : ''
 						}))
@@ -941,7 +1038,10 @@
 							event.data,
 							'模型响应未能完成'
 						)
+						const current = this.messages.find(item => item.localId === localId)
 						this.applyStore(patchLocalMessage(localId, {
+							responseAttachments: (current?.responseAttachments || [])
+								.filter(attachment => !attachment.volatilePreview),
 							streaming: false,
 							modelActivity: null,
 							error: message
@@ -1335,10 +1435,16 @@
 						if (!task || this.activeGenerationPublicId !== generationPublicId) return
 						this.applyStore(patchLocalMessage(localId, {
 							responseText: task.responseText || '',
+							...(task.previewImage
+								? { responseAttachments: [task.previewImage] }
+								: Array.isArray(task.responseAttachments)
+									? { responseAttachments: task.responseAttachments }
+									: {}),
 							streaming: !['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status),
 							saving: task.status === 'CANCEL_REQUESTED',
-							stopped: String(task.terminalType || '').includes('CANCELLED')
+							stopped: String(task.terminalType || '').includes('CANCELLED'),
+							warnings: task.warnings || []
 						}))
 						if (['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status)) {
@@ -1391,6 +1497,7 @@
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 	.attachment-card { min-width: 0; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
 	.attachment-image, .attachment-video { width: 100%; height: 180px; display: block; }
+	.image-preview-state { display: block; padding: 8px 10px; color: #8fdcbe; font-size: 11px; line-height: 1.45; }
 	.attachment-file { width: 100%; min-height: 54px; margin: 0; padding: 10px 12px; justify-content: flex-start; gap: 9px; border: 0; border-radius: 0; color: #dce5e0; text-align: left; }
 	.attachment-file text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.message-bottom { height: 1px; }
@@ -1405,7 +1512,8 @@
 	.composer-controls { min-width: 0; gap: 4px; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.reasoning-effort-picker { color: #8fdcbe; }
+	.reasoning-effort-picker, .image-aspect-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
+	.image-aspect-picker { color: #9bc8ec; }
 	.web-search-toggle { min-height: 36px; margin: 0; padding: 0 8px 0 10px; display: flex; align-items: center; gap: 7px; border-radius: 10px; color: #9bc8ec; font-size: 12px; line-height: 1; }
 	.web-search-toggle::after { border: 0; }
 	.web-search-toggle:focus-visible { outline: 2px solid rgba(55, 211, 154, .7); outline-offset: 2px; }

@@ -139,6 +139,8 @@ final class AiConversationAttachmentServiceImplTest {
                         8,
                         209_715_200L,
                         3,
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(30),
                         3,
                         4096,
                         256,
