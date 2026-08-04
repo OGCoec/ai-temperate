@@ -7,12 +7,23 @@ package com.example.temperate.service.auth.session.refresh.dto.result;
  */
 public record RefreshSessionValidation(Status status, RefreshSessionSnapshot session) {
 
+    public RefreshSessionValidation {
+        if (status == null) {
+            throw new IllegalArgumentException("Refresh session status is required.");
+        }
+        if ((status == Status.VALID) != (session != null)) {
+            throw new IllegalArgumentException(
+                    "Only a valid refresh session result may contain a snapshot.");
+        }
+    }
+
     public enum Status {
         VALID,
         MISSING_OR_EXPIRED,
         DEVICE_MISMATCH,
         CSRF_MISMATCH,
         INDEX_MISSING,
-        PREAUTH_MISMATCH
+        PREAUTH_MISMATCH,
+        TTL_INVARIANT_VIOLATION
     }
 }

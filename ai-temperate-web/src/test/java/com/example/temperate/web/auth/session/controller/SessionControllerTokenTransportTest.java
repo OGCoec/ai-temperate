@@ -11,7 +11,6 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.auth.session.authentication.dto.command.LogoutCommand;
-import com.example.temperate.service.auth.session.authentication.dto.command.SessionAuthenticationCommand;
 import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
 import com.example.temperate.service.auth.session.authentication.dto.result.SessionAuthenticationResult;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -19,11 +18,13 @@ import com.example.temperate.service.auth.session.authentication.exception.Sessi
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
-import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.example.temperate.web.auth.api.WebInvalidInputException;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
+import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -31,7 +32,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 /**
- * 验证 H5/Android 刷新、恢复和退出会话的 Token 来源与响应隔离测试。
+ * 验证显式刷新接口删除后，H5 恢复和双端退出会话仍保持严格的 Token 来源隔离。
  */
 class SessionControllerTokenTransportTest {
 
@@ -52,109 +53,15 @@ class SessionControllerTokenTransportTest {
                 mock(PreAuthService.class),
                 mock(PreAuthTransport.class),
                 mock(NetworkRiskProperties.class));
-        when(service.authenticate(any())).thenReturn(result());
         when(service.bootstrap(any())).thenReturn(result());
     }
 
     @Test
-    void h5RefreshUsesOnlyCookiesAndOmitsTokensFromTheResponse() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setCookies(
-                new Cookie(AuthCookieWriter.ACCESS_COOKIE, "browser-at"),
-                new Cookie(AuthCookieWriter.REFRESH_COOKIE, "browser-rt"));
-        request.addHeader("Authorization", "Bearer ignored-android-at");
-        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
-
-        SessionController.SessionResponse response = controller.refresh(
-                null,
-                "device-1",
-                "H5",
-                "csrf-value",
-                request,
-                servletResponse);
-
-        ArgumentCaptor<SessionAuthenticationCommand> command =
-                ArgumentCaptor.forClass(SessionAuthenticationCommand.class);
-        verify(service).authenticate(command.capture());
-        assertThat(command.getValue().getAccessToken()).isEqualTo("browser-at");
-        assertThat(command.getValue().getRefreshToken()).isEqualTo("browser-rt");
-        verify(cookieWriter).writeSession(
-                servletResponse,
-                "new-access-value",
-                "browser-rt",
-                "csrf-value",
-                REFRESH_EXPIRES_AT);
-        assertThat(response.accessToken()).isNull();
-        assertThat(response.csrfToken()).isNull();
-    }
-
-    @Test
-    void androidRefreshUsesAuthorizationAndTheRequestBodyWithoutCookieFallback() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setCookies(
-                new Cookie(AuthCookieWriter.ACCESS_COOKIE, "ignored-browser-at"),
-                new Cookie(AuthCookieWriter.REFRESH_COOKIE, "ignored-browser-rt"));
-        request.addHeader("Authorization", "Bearer android-at");
-        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
-
-        SessionController.SessionResponse response = controller.refresh(
-                new SessionController.SessionRequest("android-rt"),
-                "device-1",
-                "ANDROID",
-                "csrf-value",
-                request,
-                servletResponse);
-
-        ArgumentCaptor<SessionAuthenticationCommand> command =
-                ArgumentCaptor.forClass(SessionAuthenticationCommand.class);
-        verify(service).authenticate(command.capture());
-        assertThat(command.getValue().getAccessToken()).isEqualTo("android-at");
-        assertThat(command.getValue().getRefreshToken()).isEqualTo("android-rt");
-        verify(cookieWriter, never()).writeSession(any(), any(), any(), any(), any());
-        assertThat(response.accessToken()).isEqualTo("new-access-value");
-        assertThat(response.csrfToken()).isEqualTo("csrf-value");
-    }
-
-    @Test
-    void h5RefreshDoesNotFallBackToAndroidHeaderOrBodyCredentials() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("Authorization", "Bearer ignored-android-at");
-
-        controller.refresh(
-                new SessionController.SessionRequest("ignored-android-rt"),
-                "device-1",
-                "H5",
-                "csrf-value",
-                request,
-                new MockHttpServletResponse());
-
-        ArgumentCaptor<SessionAuthenticationCommand> command =
-                ArgumentCaptor.forClass(SessionAuthenticationCommand.class);
-        verify(service).authenticate(command.capture());
-        assertThat(command.getValue().getAccessToken()).isNull();
-        assertThat(command.getValue().getRefreshToken()).isNull();
-    }
-
-    @Test
-    void androidRefreshDoesNotFallBackToBrowserCookies() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setCookies(
-                new Cookie(AuthCookieWriter.ACCESS_COOKIE, "ignored-browser-at"),
-                new Cookie(AuthCookieWriter.REFRESH_COOKIE, "ignored-browser-rt"));
-
-        controller.refresh(
-                null,
-                "device-1",
-                "ANDROID",
-                "csrf-value",
-                request,
-                new MockHttpServletResponse());
-
-        ArgumentCaptor<SessionAuthenticationCommand> command =
-                ArgumentCaptor.forClass(SessionAuthenticationCommand.class);
-        verify(service).authenticate(command.capture());
-        assertThat(command.getValue().getAccessToken()).isNull();
-        assertThat(command.getValue().getRefreshToken()).isNull();
+    void noLongerExposesTheExplicitRefreshMethod() {
+        assertThat(Arrays.stream(SessionController.class.getDeclaredMethods())
+                .map(method -> method.getName())
+                .toList())
+                .doesNotContain("refresh");
     }
 
     @Test
@@ -195,7 +102,7 @@ class SessionControllerTokenTransportTest {
                 "ANDROID",
                 new MockHttpServletRequest(),
                 new MockHttpServletResponse()))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(WebInvalidInputException.class);
 
         verify(service, never()).bootstrap(any());
     }
@@ -270,7 +177,7 @@ class SessionControllerTokenTransportTest {
                 new Cookie(AuthCookieWriter.ACCESS_COOKIE, "browser-at"),
                 new Cookie(AuthCookieWriter.REFRESH_COOKIE, "browser-rt"));
         request.setAttribute(
-                AccessTokenAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
+                UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
                 new SessionPrincipal(10001L, "AAAAAAAAAAE", "User"));
         MockHttpServletResponse servletResponse = new MockHttpServletResponse();
 
@@ -287,7 +194,7 @@ class SessionControllerTokenTransportTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", "Bearer android-at");
         request.setAttribute(
-                AccessTokenAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
+                UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
                 new SessionPrincipal(10001L, "AAAAAAAAAAE", "User"));
         MockHttpServletResponse servletResponse = new MockHttpServletResponse();
 

@@ -16,7 +16,8 @@
     "test:auth-registration-flow": "node --test common/auth/registration-flow-policy.test.cjs common/auth/registration-flow-guard-contract.test.cjs",
     "test:auth-turnstile": "node --test common/auth/html-resource-separation.test.cjs common/auth/turnstile-client-error.test.cjs common/auth/turnstile-response-diagnostics.test.cjs pages/auth/turnstile-lifecycle.test.cjs",
     "test:auth-network-risk": "node --test ../shared-frontend/auth/risk-challenge-state-machine.test.cjs common/auth/network-risk-contract.test.cjs",
-    "test:auth": "node --test pages/auth/email-validation.test.cjs pages/auth/phone-country-search.test.cjs pages/auth/phone-country-default.test.cjs pages/auth/phone-country-assets.test.cjs pages/auth/auth-ui-structure.test.cjs pages/auth/phone-delivery-method.test.cjs pages/auth/phone-validation.test.cjs pages/auth/turnstile-lifecycle.test.cjs common/auth/html-resource-separation.test.cjs common/auth/password-policy.test.cjs common/auth/password-request-gate.test.cjs common/auth/browser-cookies.test.cjs common/auth/session-credentials.test.cjs common/auth/session-retry-policy.test.cjs common/auth/android-keystore.test.cjs common/auth/https-configuration.test.cjs common/auth/protected-routes.test.cjs common/auth/page-guard-contract.test.cjs common/auth/turnstile-client-error.test.cjs common/auth/turnstile-response-diagnostics.test.cjs common/auth/registration-flow-policy.test.cjs common/auth/registration-flow-guard-contract.test.cjs common/auth/network-risk-contract.test.cjs",
+    "test:auth-totp": "node --test common/auth/totp-contract.test.cjs",
+    "test:auth": "node --test pages/auth/email-validation.test.cjs pages/auth/phone-country-search.test.cjs pages/auth/phone-country-default.test.cjs pages/auth/phone-country-assets.test.cjs pages/auth/auth-ui-structure.test.cjs pages/auth/phone-delivery-method.test.cjs pages/auth/phone-validation.test.cjs pages/auth/turnstile-lifecycle.test.cjs common/auth/html-resource-separation.test.cjs common/auth/password-policy.test.cjs common/auth/password-request-gate.test.cjs common/auth/browser-cookies.test.cjs common/auth/session-credentials.test.cjs common/auth/session-retry-policy.test.cjs common/auth/android-keystore.test.cjs common/auth/https-configuration.test.cjs common/auth/protected-routes.test.cjs common/auth/page-guard-contract.test.cjs common/auth/turnstile-client-error.test.cjs common/auth/turnstile-response-diagnostics.test.cjs common/auth/registration-flow-policy.test.cjs common/auth/registration-flow-guard-contract.test.cjs common/auth/network-risk-contract.test.cjs common/auth/totp-contract.test.cjs",
     "test:profile": "node --test pages/account/profile/phone-presentation.test.cjs pages/account/profile/current-user-profile.test.cjs pages/account/profile/navigation-contract.test.cjs pages/account/profile/avatar-upload-contract.test.cjs",
     "test:models": "node --test common/aimodel/ai-model-api.test.cjs common/aimodel/ai-model-catalog-store.test.cjs common/aimodel/esm-export-contract.test.cjs pages/ai-models/ai-model-pages-contract.test.cjs",
     "test:release": "node --test common/aimodel/esm-export-contract.test.cjs common/release/h5-release-artifact-contract.test.cjs",
@@ -40,6 +41,7 @@
     "libphonenumber-js": "1.13.8",
     "lossless-json": "4.3.0",
     "markdown-it": "14.1.0",
+    "qrcode-generator": "1.4.4",
     "saxes": "6.0.0",
     "shiki": "4.4.1",
     "validator": "13.15.35"

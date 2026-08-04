@@ -48,6 +48,12 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
     private static final RedisScript<List> CREATE_SCRIPT = listScript(
             "create_refresh_session.lua");
     @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> VALIDATE_ACCESS_SCRIPT = listScript(
+            "validate_access_session.lua");
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> VALIDATE_ACCESS_WITH_PREAUTH_SCRIPT = listScript(
+            "validate_access_session_with_preauth.lua");
+    @SuppressWarnings("rawtypes")
     private static final RedisScript<List> VALIDATE_SCRIPT = listScript(
             "validate_refresh_session.lua");
     @SuppressWarnings("rawtypes")
@@ -122,6 +128,48 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
             case 2 -> throw new IllegalStateException("Refresh session limit was reached.");
             default -> throw unavailable("Unexpected refresh session create result.");
         };
+    }
+
+    @Override
+    public RefreshSessionValidation validateForAccess(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash) {
+        HmacIdentifier validRefresh = requireIdentifier(
+                "refresh token hash", refreshTokenHash);
+        // 受保护请求只读取并校验会话与索引 TTL，禁止把普通 API 访问变成滑动续期。
+        return validation(executeList(
+                VALIDATE_ACCESS_SCRIPT,
+                List.of(redisKeyFactory.sessionRefreshTokenKey(validRefresh)),
+                requireIdentifier("device hash", deviceHash).value(),
+                requireIdentifier("CSRF hash", csrfHash).value(),
+                redisKeyFactory.sessionUserIndexKeyPrefix(),
+                validRefresh.value()));
+    }
+
+    @Override
+    public RefreshSessionValidation validateForAccessWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash,
+            PreAuthSessionBinding preAuthBinding) {
+        HmacIdentifier validRefresh = requireIdentifier(
+                "refresh token hash", refreshTokenHash);
+        PreAuthSessionBinding binding = requireUserPreAuthBinding(preAuthBinding);
+        // 网络风控开启时，RT、用户索引和已认证 PreAuth 必须在同一次只读 Lua 中保持绑定。
+        return validation(executeList(
+                VALIDATE_ACCESS_WITH_PREAUTH_SCRIPT,
+                List.of(
+                        redisKeyFactory.sessionRefreshTokenKey(validRefresh),
+                        redisKeyFactory.userPreAuthKey(binding.tokenDigest())),
+                requireIdentifier("device hash", deviceHash).value(),
+                requireIdentifier("CSRF hash", csrfHash).value(),
+                redisKeyFactory.sessionUserIndexKeyPrefix(),
+                validRefresh.value(),
+                binding.scope().name(),
+                binding.deviceDigest().value(),
+                binding.sessionType().name(),
+                binding.sessionRefDigest().value()));
     }
 
     @Override
@@ -385,6 +433,8 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                     RefreshSessionValidation.Status.INDEX_MISSING, null);
             case 5 -> new RefreshSessionValidation(
                     RefreshSessionValidation.Status.PREAUTH_MISMATCH, null);
+            case 6 -> new RefreshSessionValidation(
+                    RefreshSessionValidation.Status.TTL_INVARIANT_VIOLATION, null);
             default -> throw unavailable("Unexpected refresh session validation result.");
         };
     }

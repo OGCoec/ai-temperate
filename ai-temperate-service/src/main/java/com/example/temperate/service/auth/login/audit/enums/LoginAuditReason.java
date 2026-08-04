@@ -5,6 +5,7 @@ package com.example.temperate.service.auth.login.audit.enums;
  */
 public enum LoginAuditReason {
     AUTHENTICATED,
+    PRIMARY_FACTOR_VERIFIED,
     INVALID_CREDENTIALS,
     BLOCKED,
     ACCOUNT_STATUS,

@@ -6,7 +6,6 @@ import com.example.temperate.model.auth.enums.AccountStatus;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.auth.session.authentication.dto.command.LogoutCommand;
-import com.example.temperate.service.auth.session.authentication.dto.command.SessionAuthenticationCommand;
 import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
 import com.example.temperate.service.auth.session.authentication.dto.result.SessionAuthenticationResult;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -25,10 +24,10 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 会话认证的业务协调器。
+ * 会话恢复与撤销的业务协调器。
  *
- * <p>Redis 中的刷新会话是长期会话状态的唯一依据；访问令牌只是短期凭据，不能替代刷新令牌、
- * 设备绑定和 CSRF 绑定。续期时如同时提供访问令牌，还必须证明它属于同一公共用户标识。</p>
+ * <p>该服务只负责 bootstrap、当前设备退出和全部设备撤销；普通业务请求的 RT-first 认证和 AT
+ * 自动续签由 AccessSessionService 承担。</p>
  *
  * <p>签发新访问令牌前会再次读取数据库中的账号状态，因此禁用、删除等账号变更不会仅因 Redis
  * 会话快照仍存在而继续获得访问权限。</p>
@@ -54,61 +53,6 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
         this.refreshSessionStore = Objects.requireNonNull(refreshSessionStore);
         this.secretProtector = Objects.requireNonNull(secretProtector);
         this.identityMapper = Objects.requireNonNull(identityMapper);
-    }
-
-    /**
-     * 执行常规会话续期：以刷新会话为准原子校验设备与 CSRF 绑定，再根据当前账号状态签发新的
-     * 短期访问令牌。
-     */
-    @Override
-    public SessionAuthenticationResult authenticate(SessionAuthenticationCommand command) {
-        return authenticate(command, null);
-    }
-
-    /**
-     * 在启用网络风控时，把 Refresh Session、用户索引与认证 PreAuth 的校验和 TTL 续期合并到
-     * 同一个 Redis Lua；未传绑定的兼容调用保留原有会话原子边界。
-     */
-    @Override
-    public SessionAuthenticationResult authenticate(
-            SessionAuthenticationCommand command,
-            PreAuthSessionBinding preAuthBinding) {
-        requireRefreshCommand(command == null ? null : command.getRefreshToken());
-        if (isBlank(command.getPresentedCsrfToken())) {
-            throw error(SessionAuthenticationErrorCode.CSRF_INVALID,
-                    "CSRF token is required.", false);
-        }
-        VerifiedAccessToken optionalAccess = verifyOptionalAccess(command.getAccessToken());
-        RefreshSessionSnapshot session;
-        try {
-            // 由 Lua 在一次 Redis 执行中校验三项会话凭据并同步续期会话与用户索引；
-            // 若拆成多次读写，并发登出或续期可能留下只续期一侧键的失配状态。
-            session = requireValid(preAuthBinding == null
-                    ? refreshSessionStore.validateAndRenew(
-                            secretProtector.refreshToken(command.getRefreshToken()),
-                            secretProtector.device(command.getDeviceInstallationId()),
-                            secretProtector.csrf(command.getPresentedCsrfToken()))
-                    : refreshSessionStore.validateAndRenewWithPreAuth(
-                            secretProtector.refreshToken(command.getRefreshToken()),
-                            secretProtector.device(command.getDeviceInstallationId()),
-                            secretProtector.csrf(command.getPresentedCsrfToken()),
-                            preAuthBinding));
-        } catch (SessionAuthenticationException exception) {
-            throw exception;
-        } catch (IllegalArgumentException exception) {
-            throw error(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID,
-                    "Refresh session is invalid.", true, exception);
-        } catch (RuntimeException exception) {
-            throw error(SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE,
-                    "Session renewal is temporarily unavailable.", false, exception);
-        }
-        requireAccessMatchesSession(optionalAccess, session);
-        AuthenticationContext context = requireCurrentAccount(session);
-        return new SessionAuthenticationResult(
-                principal(context, session),
-                authTokenService.issueAccessToken(session.userId()),
-                command.getPresentedCsrfToken(),
-                session.expiresAt());
     }
 
     /**
@@ -255,6 +199,9 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is missing or no longer bound to this session.",
                     false);
+            case TTL_INVARIANT_VIOLATION -> throw error(
+                    SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID,
+                    "Refresh session is invalid.", true);
         };
     }
 

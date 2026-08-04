@@ -58,11 +58,16 @@ class SecurityConfigurationTest {
         repository.saveToken(token, request, response);
 
         assertThat(token.getHeaderName()).isEqualTo("X-CSRF-Token");
+        assertThat(response.getCookie("XSRF-TOKEN"))
+                .isNotNull()
+                .satisfies(cookie -> {
+                    assertThat(cookie.getAttribute("SameSite")).isEqualTo("Strict");
+                    assertThat(cookie.isHttpOnly()).isFalse();
+                });
         assertThat(response.getHeader(HttpHeaders.SET_COOKIE))
                 .contains("XSRF-TOKEN=")
                 .contains("Path=/")
                 .contains("Secure")
-                .contains("SameSite=Strict")
                 .doesNotContain("HttpOnly")
                 .doesNotContain("Max-Age")
                 .doesNotContain("Domain=");
@@ -98,9 +103,16 @@ class SecurityConfigurationTest {
         assertThat(configuration.getAllowedHeaders())
                 .contains(
                         "X-Turnstile-Attempt-Id",
-                        "X-AI-Client-Request-Id");
+                        "X-AI-Client-Request-Id",
+                        "X-Refresh-Token");
         assertThat(configuration.getExposedHeaders())
-                .contains("X-Trace-Id", "X-AI-Generation-Id", "CF-Ray", "cf-mitigated");
+                .contains(
+                        "X-Trace-Id",
+                        "X-AI-Generation-Id",
+                        "X-New-Access-Token",
+                        "X-Session-Renewed",
+                        "CF-Ray",
+                        "cf-mitigated");
     }
 
     private static AuthSecurityProperties propertiesWithCookieDomain(String domain) {
@@ -113,8 +125,7 @@ class SecurityConfigurationTest {
                 new AuthSecurityProperties.CookieSettings(
                         true, true, AuthSecurityProperties.SameSite.STRICT, "/api"),
                 new AuthSecurityProperties.CookieSettings(
-                        true, true, AuthSecurityProperties.SameSite.STRICT,
-                        "/api/auth/session"),
+                        true, true, AuthSecurityProperties.SameSite.STRICT, "/api"),
                 csrf,
                 new AuthSecurityProperties.CookieSettings(
                         true, true, AuthSecurityProperties.SameSite.STRICT,
@@ -128,6 +139,9 @@ class SecurityConfigurationTest {
                 new AuthSecurityProperties.CookieSettings(
                         true, true, AuthSecurityProperties.SameSite.STRICT,
                         "/api/auth/password-reset/complete"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/login/totp"),
                 domain));
         return properties;
     }

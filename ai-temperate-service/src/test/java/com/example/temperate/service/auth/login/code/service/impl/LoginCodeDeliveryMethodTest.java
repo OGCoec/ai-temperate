@@ -26,7 +26,7 @@ import com.example.temperate.service.auth.login.limit.enums.LoginFailureBucket;
 import com.example.temperate.service.auth.login.limit.enums.LoginLimitDecision;
 import com.example.temperate.service.auth.login.limit.service.LoginRateLimitService;
 import com.example.temperate.service.auth.login.notification.LoginAccountNotificationService;
-import com.example.temperate.service.auth.login.session.LoginSessionIssuer;
+import com.example.temperate.service.auth.login.completion.LoginCompletionService;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
@@ -113,7 +113,7 @@ class LoginCodeDeliveryMethodTest {
                 publisher,
                 mock(LoginAccountNotificationService.class),
                 rateLimitService,
-                mock(LoginSessionIssuer.class),
+                mock(LoginCompletionService.class),
                 identityPresenceFilter,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }

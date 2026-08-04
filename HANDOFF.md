@@ -5,12 +5,12 @@
 认证模块代码已按“固定 Refresh Token + Redis 7.4 Hash 字段 TTL”v4 方案完成第一阶段改造：
 
 - 登录时只生成一次 NanoID38 RT。
-- 刷新 AT 时 RT 原文和 HMAC 摘要都不变化，只把 RT 与反向索引 TTL 恢复到三小时。
-- 普通刷新保持 CSRF 不变；H5 bootstrap 才生成新 CSRF。
+- 普通请求先只读校验 RT；仅当 AT 签名合法但过期时，才在同一请求中把 RT 与反向索引 TTL 恢复到三小时并签发新 AT。
+- 同请求 AT 续签保持 CSRF 不变；H5 bootstrap 才生成新 CSRF。
 - AT 已删除 `sid` 和 `passwordVersion` Claims。
 - Redis 会话已删除 family、active、used 与 RT 轮换结构。
 - 密码重置后按用户反向索引物理删除全部 RT。
-- Android 刷新响应没有 RT 时，不会清空 KeyStore 中的固定 RT。
+- Android 从 `X-New-Access-Token` 更新 AT 时，不会覆盖 KeyStore 中的固定 RT 与 CSRF。
 
 本轮严格处于“先交付代码”阶段：没有运行 Maven、前端构建、测试、依赖分析、安全扫描，也没有连接 PostgreSQL、Redis、RabbitMQ、SMTP、短信或 Turnstile。当前内容不能表述为“构建成功”或“测试通过”。
 
@@ -70,7 +70,7 @@ JWT TTL = 10 分钟
 Claims = sub(publicUserId), jti(NanoID38), ver(2), iat, exp
 ```
 
-AT 不含 `sid`、`passwordVersion`、邮箱、手机号、会员等级或额度字段。受保护业务请求验证 JWT 后，根据 publicUserId 查询 `userloginidentity + user_profile`，确认账号仍为 ACTIVE；不查询 Redis 会话或 `user_membership_quota`。退出或密码重置后，旧 AT 最长继续有效十分钟。
+AT 不含 `sid`、`passwordVersion`、邮箱、手机号、会员等级或额度字段。受保护业务请求先只读校验 Redis RT Session，再验证 JWT，并根据 RT Session 的 userId 查询 `userloginidentity + user_profile` 确认账号仍为 ACTIVE。退出或密码重置撤销 RT 后，旧 AT 在下一次请求立即失效。
 
 固定 RT Key：
 
@@ -105,8 +105,8 @@ Value=<完整的 v4 RT Key>
 
 - 每个索引字段使用 Redis 7.4 独立三小时 TTL。
 - 整个用户索引 Hash Key TTL 始终等于当前字段最大 TTL。
-- 登录、普通刷新和 bootstrap 通过 Lua 同时设置真实 RT Key、当前索引字段和索引 Hash Key 的过期时间。
-- 普通刷新校验 RT、设备、CSRF，续三处 TTL，只签发新 AT；RT 与 CSRF 均不改变。
+- 登录、AT 过期时的同请求续签和 bootstrap 通过 Lua 同时设置真实 RT Key、当前索引字段和索引 Hash Key 的过期时间。
+- 普通请求以只读 Lua 校验 RT、设备、CSRF、索引和正数 TTL，不延长 TTL；AT 过期后才用第二个原子 Lua 续三处 TTL 并签发新 AT。
 - H5 必须重写相同 RT Cookie 的 `Max-Age`；Android 不覆盖 KeyStore 中的 RT。
 - bootstrap 仅用于 H5，新生成 CSRF，RT 不变，旧 CSRF 立即失效。
 - 当前设备退出删除当前 RT 与索引字段，并有界重算索引最大 TTL。
@@ -171,7 +171,7 @@ Service 采用接口加 `Impl`，调用方依赖接口；使用构造器注入�
 - 国家与区号：`fornted/common/auth/phone-countries.js`
 - Turnstile：`fornted/components/auth/auth-turnstile.vue`
 
-普通 refresh 只替换内存 AT 并保留原 RT、原 CSRF；bootstrap 替换 AT 与 CSRF 并保留 RT。并发业务请求只允许一次 refresh，其余请求排队等待。
+普通业务请求只发送一次；后端同请求续签时，H5 接收新 AT Cookie，Android 从响应头只替换 KeyStore 中的 AT，原 RT 与 CSRF 保持不变。bootstrap 仅用于 H5 页面恢复并轮换 CSRF。
 
 ## 6. 本地依赖与环境变量
 

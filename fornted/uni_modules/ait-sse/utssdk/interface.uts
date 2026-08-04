@@ -4,12 +4,18 @@ export type AitSseFailure = {
   message: string
 }
 
+export type AitSseOpen = {
+  statusCode: number
+  sessionRenewed: string
+  newAccessToken: string
+}
+
 export type AitSseRequestOptions = {
   url: string
   method: string
   headers: UTSJSONObject
   body: string
-  onOpen: () => void
+  onOpen: (renewal: AitSseOpen) => void
   onChunk: (chunk: string) => void
   onError: (failure: AitSseFailure) => void
   onClosed: () => void

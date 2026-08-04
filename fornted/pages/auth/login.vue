@@ -269,6 +269,13 @@
 			return true
 		},
 		methods: {
+			completePrimaryFactor(result) {
+				if (result?.status === 'TOTP_REQUIRED') {
+					uni.navigateTo({ url: AUTH_ROUTES.totpLogin })
+					return
+				}
+				if (result?.status === 'AUTHENTICATED') this.completeLogin()
+			},
 			async initializePageCsrf() {
 				if (clientPlatform() !== 'H5') return
 				try {
@@ -443,9 +450,7 @@
 					...this.payload(this.identifierType),
 					password: this.password
 				}))
-				if (result) {
-					this.completeLogin()
-				}
+				if (result) this.completePrimaryFactor(result)
 			},
 			async startCodeFlow() {
 				const type = this.method === 'EMAIL_CODE' ? 'EMAIL' : 'PHONE'
@@ -497,9 +502,7 @@
 					return
 				}
 				const result = await this.run(() => authApi.loginCodeVerify(this.flow, this.method, this.code))
-				if (result) {
-					this.completeLogin()
-				}
+				if (result) this.completePrimaryFactor(result)
 			},
 			goRegister() { if (!this.busy) uni.navigateTo({ url: AUTH_ROUTES.register }) },
 			goReset() { if (!this.busy) uni.navigateTo({ url: AUTH_ROUTES.passwordReset }) }

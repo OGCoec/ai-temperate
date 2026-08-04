@@ -46,7 +46,7 @@ class EdgeProxySignatureFilterTest {
     void requiredModeAllowsUnsignedNativeRequestWithoutOrigin() throws Exception {
         EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
         MockHttpServletRequest request =
-                new MockHttpServletRequest("POST", "/api/auth/session/refresh");
+                new MockHttpServletRequest("POST", "/api/auth/session/bootstrap");
         request.addHeader("X-Client-Platform", "ANDROID");
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();

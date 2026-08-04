@@ -95,6 +95,7 @@ public class SecurityConfiguration {
                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of(
                 "Authorization",
+                "X-Refresh-Token",
                 "Content-Type",
                 "Idempotency-Key",
                 "X-Device-Installation-Id",
@@ -103,6 +104,7 @@ public class SecurityConfiguration {
                 "X-Register-Token",
                 "X-Register-CSRF",
                 "X-Login-Flow-Token",
+                "X-TOTP-Flow-Token",
                 "X-Reset-Flow-Token",
                 "X-Forget-Token",
                 "X-Turnstile-Challenge",
@@ -114,6 +116,8 @@ public class SecurityConfiguration {
                 "Retry-After",
                 AuthRequestTraceFilter.TRACE_HEADER,
                 "X-AI-Generation-Id",
+                "X-New-Access-Token",
+                "X-Session-Renewed",
                 "CF-Ray",
                 "cf-mitigated"));
         configuration.setMaxAge(600L);

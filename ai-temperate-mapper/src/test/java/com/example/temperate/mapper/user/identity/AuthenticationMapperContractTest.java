@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.example.temperate.model.auth.domain.AuthenticationContext;
+import com.example.temperate.model.auth.domain.TotpCredential;
 import com.example.temperate.model.auth.enums.AccountStatus;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -27,6 +28,7 @@ class AuthenticationMapperContractTest {
         assertThat(context.getIdentityId()).isEqualTo(10001L);
         assertThat(context.getPasswordVersion()).isEqualTo(7L);
         assertThat(context.getAccountStatus()).isEqualTo(AccountStatus.ACTIVE);
+        assertThat(context.isTotpEnabled()).isFalse();
         assertThat(context.toString()).doesNotContain("sensitive-hash");
         assertThat(AuthenticationContext.class.getDeclaredFields())
                 .allMatch(field -> java.lang.reflect.Modifier.isFinal(field.getModifiers()));
@@ -34,7 +36,8 @@ class AuthenticationMapperContractTest {
                 .noneMatch(field -> "membershipTier".equals(field.getName())
                         || "quotaBalanceMinor".equals(field.getName())
                         || "passwordStrengthLevel".equals(field.getName())
-                        || "passwordPolicyVersion".equals(field.getName()));
+                        || "passwordPolicyVersion".equals(field.getName())
+                        || "totpSecretEncrypted".equals(field.getName()));
     }
 
     @Test
@@ -48,17 +51,36 @@ class AuthenticationMapperContractTest {
         Method byId = requiredMethod(mapper, "findAuthenticationById", long.class);
         Method cas = requiredMethod(mapper,
                 "upgradePasswordHashCas", long.class, String.class, String.class);
+        Method totpCredential = requiredMethod(
+                mapper, "findTotpCredentialById", long.class);
+        Method enableTotp = requiredMethod(
+                mapper,
+                "enableOrRotateTotp",
+                long.class,
+                String.class,
+                boolean.class,
+                String.class);
+        Method disableTotp = requiredMethod(mapper, "disableTotp", long.class);
 
         assertThat(byEmail.getReturnType()).isEqualTo(AuthenticationContext.class);
         assertThat(byPhone.getReturnType()).isEqualTo(AuthenticationContext.class);
         assertThat(byId.getReturnType()).isEqualTo(AuthenticationContext.class);
         assertThat(cas.getReturnType()).isEqualTo(int.class);
+        assertThat(totpCredential.getReturnType()).isEqualTo(TotpCredential.class);
+        assertThat(enableTotp.getReturnType()).isEqualTo(int.class);
+        assertThat(disableTotp.getReturnType()).isEqualTo(int.class);
         assertParam(byEmail, 0, "normalizedEmail");
         assertParam(byPhone, 0, "normalizedPhone");
         assertParam(byId, 0, "identityId");
         assertParam(cas, 0, "identityId");
         assertParam(cas, 1, "expectedPasswordHash");
         assertParam(cas, 2, "upgradedPasswordHash");
+        assertParam(totpCredential, 0, "identityId");
+        assertParam(enableTotp, 0, "identityId");
+        assertParam(enableTotp, 1, "encryptedSecret");
+        assertParam(enableTotp, 2, "expectedEnabled");
+        assertParam(enableTotp, 3, "expectedEncryptedSecret");
+        assertParam(disableTotp, 0, "identityId");
     }
 
     @Test
@@ -72,12 +94,23 @@ class AuthenticationMapperContractTest {
         assertThat(xml).contains("id=\"findauthenticationbyid\"");
         assertThat(xml).contains("left join user_profile up on up.login_identity_id = uli.id");
         assertThat(xml).contains("uli.password_version");
+        assertThat(xml).contains("uli.totp_enabled");
         assertThat(xml).contains("when 0 then 'active'");
         assertThat(xml).contains("when 1 then 'frozen'");
         assertThat(xml).contains("when 2 then 'disabled'");
         assertThat(xml).contains("id=\"upgradepasswordhashcas\"");
         assertThat(xml).contains("password_hash = #{upgradedpasswordhash");
         assertThat(xml).contains("and password_hash = #{expectedpasswordhash");
+        assertThat(xml).contains("id=\"findtotpcredentialbyid\"");
+        assertThat(xml).contains("id=\"enableorrotatetotp\"");
+        assertThat(xml).contains("totp_enabled = true");
+        assertThat(xml).contains("totp_secret_encrypted = #{encryptedsecret");
+        assertThat(xml).contains("and totp_enabled = #{expectedenabled");
+        assertThat(xml).contains(
+                "totp_secret_encrypted is not distinct from #{expectedencryptedsecret");
+        assertThat(xml).contains("id=\"disabletotp\"");
+        assertThat(xml).contains("totp_enabled = false");
+        assertThat(xml).contains("totp_secret_encrypted = null");
 
         String casSql = xml.substring(xml.indexOf("id=\"upgradepasswordhashcas\""));
         assertThat(casSql).doesNotContain(

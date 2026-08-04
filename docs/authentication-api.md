@@ -8,6 +8,7 @@
 | `X-Client-Platform` | `H5` 或 `ANDROID`，缺省按 H5 处理 |
 | `X-Register-Token` | 注册流程 NanoID38 |
 | `X-Login-Flow-Token` | 验证码登录流程 NanoID38 |
+| `X-TOTP-Flow-Token` | Android 第一因子通过后使用的五分钟 TOTP 登录挑战；H5 改用路径隔离的 HttpOnly Cookie |
 | `X-Reset-Flow-Token` | 找回密码流程 NanoID38 |
 | `X-Forget-Token` | 验证码通过后签发的五分钟一次性密码重置凭证 |
 | `X-Turnstile-Challenge` | 与 Turnstile `cData` 绑定的 NanoID38 challenge |
@@ -82,8 +83,15 @@ Java `Long` 类型在 HTTP JSON 中统一序列化成字符串，防止超过 Ja
 | POST | `/api/auth/login/code/turnstile` | 每个验证码登录流程只验证一次 Turnstile |
 | POST | `/api/auth/login/code/send` | 统一返回“如果账号存在，验证码已经发送” |
 | POST | `/api/auth/login/code/verify` | 校验邮箱码或短信码，成功后创建固定 RT 会话 |
+| POST | `/api/auth/login/totp/verify` | 已启用 TOTP 时校验第一因子之后的六位动态码，成功后才创建固定 RT 会话 |
 
 密码登录完成恒定成本哈希比对后，再检查当次明文强度及数据库策略元数据；验证码登录在验证码成功后执行同样的元数据检查。旧记录或策略不合格时返回 HTTP 409 + `PASSWORD_RESET_REQUIRED`，不签发 AT、RT 或 CSRF，也不按错误密码计入失败次数。
+
+第一因子成功后统一进入登录完成边界：`totp_enabled=false` 才直接签发会话；启用 TOTP 时只返回
+`status=TOTP_REQUIRED`、到期时间和剩余次数，不提前创建 AT、RT 或 CSRF。H5 的原始挑战只写入
+`Path=/api/auth/login/totp` 的 HttpOnly Cookie；Android 响应体携带挑战并使用独立 AndroidKeyStore 密文保存。
+TOTP 挑战有效期五分钟、最多失败五次，验证码接受当前三十秒时间片前后各一个时间片；同一用户的同一
+匹配时间片通过 Redis 原子领取，禁止在并发登录或敏感操作中重放。
 
 H5 登录前若缺少 CSRF Cookie，先调用 `GET /api/auth/csrf`。该接口返回 204，并初始化 JavaScript 可读的 `XSRF-TOKEN` 会话 Cookie。
 
@@ -106,7 +114,7 @@ H5 同时接收：
 
 ```http
 Set-Cookie: access_token=<AT>; Max-Age=600; Path=/api; Secure; HttpOnly; SameSite=Strict
-Set-Cookie: refresh_token=<RT>; Max-Age=10800; Path=/api/auth/session; Secure; HttpOnly; SameSite=Strict
+Set-Cookie: refresh_token=<RT>; Max-Age=10800; Path=/api; Secure; HttpOnly; SameSite=Strict
 Set-Cookie: XSRF-TOKEN=<CSRF>; Path=/; Secure; SameSite=Strict
 ```
 
@@ -123,28 +131,45 @@ Android 登录响应继续返回顶层 `accessToken`、`refreshToken`、`csrfTok
 }
 ```
 
+## 当前用户 TOTP 管理
+
+全部接口位于 `/api/users/me/security/totp`，用户身份只取自 Access Token，不接受客户端用户 ID。
+所有响应使用 `private, no-store`。
+
+| Method | Path | 请求与行为 |
+| --- | --- | --- |
+| GET | `/api/users/me/security/totp` | 只返回 `enabled`，不返回密钥或密文 |
+| POST | `/reverification/password` | 当前密码复验后签发绑定用户、设备和动作的五分钟一次性 step-up token |
+| POST | `/reverification/code/start` | 从数据库读取当前用户邮箱或手机号，开始邮箱码/短信码复验 |
+| POST | `/reverification/code/turnstile` | 校验复验验证码流程的人机挑战 |
+| POST | `/reverification/code/send` | 发送邮箱或短信验证码 |
+| POST | `/reverification/code/verify` | 原子消费验证码并签发一次性 step-up token，不创建登录会话 |
+| POST | `/setup/start` | 消费 ENABLE/ROTATE step-up token；生成 32 随机字节密钥，以密文暂存 Redis 十分钟并返回 Base32 与 `otpauth` URI |
+| POST | `/setup/confirm` | 校验新认证器动态码后才以 CAS 写入密文并启用 TOTP |
+| POST | `/disable` | 消费 DISABLE step-up token、校验当前 TOTP，再以单条 SQL 清空密文并关闭状态 |
+
+客户端必须在本地从 `otpauth` URI 生成二维码，禁止把 URI 或 Base32 密钥发送给二维码网站。用户再次
+申请新密钥时，Redis 中旧待确认项立即失效；数据库当前密钥在新动态码确认前始终保持生效。轮换和关闭
+除密码/邮箱码/短信码复验外，还必须校验当前认证器动态码；当前动态码连续失败五次会销毁 step-up token，
+必须重新完成第一因子复验。
+
+开启、轮换或关闭成功后，服务端在 PostgreSQL 提交后删除待确认状态并撤销该用户全部 Refresh Session；
+H5 同时清理当前会话 Cookie，Android 清理 KeyStore 会话。普通 API 每次都先验证 Redis Refresh Session，
+所以其他设备即使仍持有未过期 AT，也会在下一次请求立即被拒绝。
+
 ## 会话
 
-### `POST /api/auth/session/refresh`
+普通用户不再提供 `POST /api/auth/session/refresh`。每个受保护请求按以下顺序完成认证：
 
-- H5 从 `access_token`、`refresh_token` Cookie 读取凭证；Android 从 `Authorization` 读取 AT，并从请求体读取 KeyStore 中的固定 RT。
-- 两个平台都校验安装设备和 `X-CSRF-Token`。
-- H5 只接受 AT Cookie，Android 只接受 Bearer AT；不存在跨来源回退。旧 AT 可缺省，合法但已过期可以刷新。
-- 成功后 RT 原文、RT HMAC 和 CSRF 都不变，只续三处 Redis TTL 并签发新 AT。
-- H5 重写新 AT、相同 RT 和相同 XSRF Cookie，响应体不返回 Token。
-- Android 响应新 AT 和相同 CSRF，不返回 `refreshToken`，客户端原子更新加密载荷并保留固定 RT。
+1. H5 从 `access_token`、`refresh_token` Cookie 读取 AT/RT；Android 从 `Authorization` 和
+   `X-Refresh-Token` 读取，两端禁止跨来源回退。
+2. 两端都必须提交 `X-Device-Installation-Id` 与 `X-CSRF-Token`，包括 GET 和 SSE 握手。
+3. 服务端先只读校验 Redis Refresh Session、用户索引、TTL、设备、CSRF 和可选 PreAuth 绑定。
+4. RT 失效时立即返回 401，不再解析 AT；AT 缺失、篡改或与 RT 用户不一致时也直接返回 401。
+5. AT 未过期时继续原业务请求且不延长 RT；AT 签名合法但过期时才原子续期 RT、签发新 AT，随后继续原业务请求。
 
-Android 刷新响应：
-
-```json
-{
-  "publicUserId": "AAAAAAAAJxE",
-  "displayName": "用户",
-  "accessToken": "<new JWT>",
-  "csrfToken": "<same CSRF>",
-  "refreshExpiresAt": "2026-07-15T03:00:00Z"
-}
-```
+同请求续签不改变业务响应体。H5 通过 `Set-Cookie` 接收新 AT；Android 通过
+`X-New-Access-Token` 接收。两端都会收到 `X-Session-Renewed: true`，RT 原文与 CSRF 保持不变。
 
 ### `POST /api/auth/session/bootstrap`
 
@@ -158,12 +183,14 @@ Android 刷新响应：
 - 校验固定 RT、安装设备和 CSRF。
 - 物理删除当前 RT Key，并删除用户 RT 反向索引中的当前字段。
 - 若删除的是索引最大 TTL 字段，Lua 用最多十个剩余字段的 `HPTTL` 重算索引 Key TTL。
-- H5 使用原始 Path 清除 AT、RT、XSRF Cookie；Android 清除包含三个 Token 的本地 KeyStore 密文。
-- 已签发 AT 不做 Redis 实时撤销，最长继续有效十分钟。
+- H5 同时清理新 `/api` 与旧 `/api/auth/session` 路径的 RT Cookie；Android 清除包含三个 Token 的本地 KeyStore 密文。
+- RT 被撤销后，即使 AT 尚未过期，下一次受保护请求也会立即返回 401。
 
-H5 业务请求由浏览器自动携带 `access_token`，所有 POST、PUT、PATCH、DELETE 等非安全方法还必须携带 `X-CSRF-Token`；Android 业务请求使用 `Authorization: Bearer <AT>`。两端业务请求都不携带 RT。AT 只包含 `sub`、`jti`、`ver`、`iat`、`exp`，不包含 `sid` 或 `passwordVersion`。
+H5 业务请求由浏览器自动携带 `/api` 路径的 `access_token` 与 `refresh_token`，并为所有受保护方法携带
+`X-CSRF-Token`；Android 使用 `Authorization: Bearer <AT>`、`X-Refresh-Token` 和 `X-CSRF-Token`。
+AT 只包含 `sub`、`jti`、`ver`、`iat`、`exp`，不包含 `sid` 或 `passwordVersion`。
 
-H5 的 Spring Cookie/Header 校验、会话 CSRF HMAC 校验或会话端点 Origin/Fetch Metadata 校验失败时统一返回 HTTP 403 与错误码 `CSRF_INVALID`，响应和日志不输出 Token。H5 最多执行一次 bootstrap 后重试；Android 收到该错误后清除本地完整加密会话并要求重新登录。
+H5 的 Spring Cookie/Header 校验、会话 CSRF HMAC 校验或会话端点 Origin/Fetch Metadata 校验失败时返回受控错误，响应和日志不输出 Token。普通业务请求只发送一次，不再调用 refresh 或自动重放；`bootstrap` 只用于新标签页、页面刷新或 CSRF 丢失后的浏览器会话恢复。
 
 ## 找回密码
 

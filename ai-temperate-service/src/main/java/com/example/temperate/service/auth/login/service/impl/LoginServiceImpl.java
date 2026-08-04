@@ -1,6 +1,5 @@
 package com.example.temperate.service.auth.login.service.impl;
 
-import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
@@ -11,6 +10,7 @@ import com.example.temperate.service.auth.login.audit.enums.LoginAuditOutcome;
 import com.example.temperate.service.auth.login.audit.enums.LoginAuditReason;
 import com.example.temperate.service.auth.login.audit.observer.LoginAuditObserver;
 import com.example.temperate.service.auth.login.component.normalizer.LoginInputNormalizer;
+import com.example.temperate.service.auth.login.completion.LoginCompletionService;
 import com.example.temperate.service.auth.login.dto.command.LoginCommand;
 import com.example.temperate.service.auth.login.dto.internal.NormalizedLoginInput;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
@@ -21,11 +21,6 @@ import com.example.temperate.service.auth.login.limit.dto.LoginAttempt;
 import com.example.temperate.service.auth.login.limit.enums.LoginLimitDecision;
 import com.example.temperate.service.auth.login.limit.service.LoginRateLimitService;
 import com.example.temperate.service.auth.login.service.LoginService;
-import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
-import com.example.temperate.service.auth.session.refresh.dto.command.NewRefreshSession;
-import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionSnapshot;
-import com.example.temperate.service.auth.session.refresh.store.RefreshSessionStore;
-import com.example.temperate.service.auth.session.token.service.AuthTokenService;
 import java.util.Objects;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -49,10 +44,7 @@ public final class LoginServiceImpl implements LoginService {
     private final PasswordEncoder passwordEncoder;
     private final LoginRateLimitService rateLimitService;
     private final LoginAuditObserver auditObserver;
-    private final AuthTokenService authTokenService;
-    private final RefreshSessionStore refreshSessionStore;
-    private final AuthSessionSecretProtector secretProtector;
-    private final PublicIdCodec publicIdCodec;
+    private final LoginCompletionService completionService;
     private final IdentityPresenceFilter identityPresenceFilter;
 
     public LoginServiceImpl(
@@ -61,10 +53,7 @@ public final class LoginServiceImpl implements LoginService {
             PasswordEncoder passwordEncoder,
             LoginRateLimitService rateLimitService,
             LoginAuditObserver auditObserver,
-            AuthTokenService authTokenService,
-            RefreshSessionStore refreshSessionStore,
-            AuthSessionSecretProtector secretProtector,
-            PublicIdCodec publicIdCodec,
+            LoginCompletionService completionService,
             IdentityPresenceFilter identityPresenceFilter) {
         this.inputNormalizer = Objects.requireNonNull(
                 inputNormalizer, "inputNormalizer must not be null");
@@ -76,14 +65,8 @@ public final class LoginServiceImpl implements LoginService {
                 rateLimitService, "rateLimitService must not be null");
         this.auditObserver = Objects.requireNonNull(
                 auditObserver, "auditObserver must not be null");
-        this.authTokenService = Objects.requireNonNull(
-                authTokenService, "authTokenService must not be null");
-        this.refreshSessionStore = Objects.requireNonNull(
-                refreshSessionStore, "refreshSessionStore must not be null");
-        this.secretProtector = Objects.requireNonNull(
-                secretProtector, "secretProtector must not be null");
-        this.publicIdCodec = Objects.requireNonNull(
-                publicIdCodec, "publicIdCodec must not be null");
+        this.completionService = Objects.requireNonNull(
+                completionService, "completionService must not be null");
         this.identityPresenceFilter = Objects.requireNonNull(
                 identityPresenceFilter, "identityPresenceFilter must not be null");
     }
@@ -117,9 +100,14 @@ public final class LoginServiceImpl implements LoginService {
                     LoginAuditReason.ACCOUNT_STATUS);
         }
         upgradePasswordHashIfRequired(context, input.getRawPassword());
-        LoginResult result = createSession(context, input);
+        LoginResult result = completionService.complete(
+                context, input.getDeviceInstallationId());
         clearSubjectFailures(attempt);
-        auditObserver.observe(LoginAuditOutcome.SUCCESS, LoginAuditReason.AUTHENTICATED);
+        auditObserver.observe(
+                LoginAuditOutcome.SUCCESS,
+                result.isAuthenticated()
+                        ? LoginAuditReason.AUTHENTICATED
+                        : LoginAuditReason.PRIMARY_FACTOR_VERIFIED);
         return result;
     }
 
@@ -226,43 +214,6 @@ public final class LoginServiceImpl implements LoginService {
             rateLimitService.clearSubjectFailures(attempt);
         } catch (RuntimeException exception) {
             throw infrastructure("Login failure counter clearing is unavailable.", exception);
-        }
-    }
-
-    private LoginResult createSession(
-            AuthenticationContext context, NormalizedLoginInput input) {
-        try {
-            String publicId = publicIdCodec.encode(context.getIdentityId());
-            String refreshToken = authTokenService.newRefreshToken();
-            String csrfToken = authTokenService.newCsrfToken();
-            // 原始 RT/CSRF 只在响应中短暂返回，Redis 会话持久化的是其受保护标识和设备绑定。
-            RefreshSessionSnapshot session = refreshSessionStore.create(new NewRefreshSession(
-                    context.getIdentityId(),
-                    publicId,
-                    secretProtector.refreshToken(refreshToken),
-                    secretProtector.device(input.getDeviceInstallationId()),
-                    secretProtector.csrf(csrfToken),
-                    context.getEmail(),
-                    context.getPhone()));
-            String accessToken = authTokenService.issueAccessToken(context.getIdentityId());
-            return new LoginResult(
-                    publicId,
-                    context.getDisplayName(),
-                    accessToken,
-                    refreshToken,
-                    csrfToken,
-                    session.expiresAt());
-        } catch (IllegalStateException exception) {
-            if (exception.getMessage() != null
-                    && exception.getMessage().contains("limit")) {
-                throw new LoginException(
-                        LoginErrorCode.SESSION_LIMIT_REACHED,
-                        "The account already has ten active sessions.",
-                        exception);
-            }
-            throw infrastructure("Login session creation failed.", exception);
-        } catch (RuntimeException exception) {
-            throw infrastructure("Login session creation failed.", exception);
         }
     }
 

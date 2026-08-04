@@ -3,6 +3,7 @@ package com.example.temperate.service.auth.login.code.service;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartResult;
+import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
@@ -17,6 +18,15 @@ import reactor.core.publisher.Mono;
 public interface LoginCodeFlowService {
 
     LoginCodeStartResult start(LoginCodeStartCommand command);
+
+    /**
+     * 为当前已认证用户使用数据库中的邮箱或手机号创建验证码复验流程，禁止客户端替换投递目标。
+     */
+    LoginCodeStartResult startForVerifiedIdentity(
+            long userId,
+            LoginStrategyType type,
+            String deviceInstallationId,
+            String clientIp);
 
     Mono<Void> verifyTurnstile(LoginCodeAccess access, String turnstileToken);
 
@@ -37,4 +47,11 @@ public interface LoginCodeFlowService {
     }
 
     LoginResult verifyAndLogin(LoginStrategyType type, LoginStrategyRequest request);
+
+    /**
+     * 原子消费登录验证码并返回已验证账号，不创建会话；仅供需要复用第一因子的受控敏感操作流程调用。
+     */
+    AuthenticationContext verifyPrimaryFactor(
+            LoginStrategyType type,
+            LoginStrategyRequest request);
 }

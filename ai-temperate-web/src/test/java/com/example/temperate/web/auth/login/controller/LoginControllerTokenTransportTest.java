@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.service.auth.login.code.service.LoginCodeFlowService;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
+import com.example.temperate.service.auth.login.dto.result.LoginFlowStatus;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRegistry;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
@@ -20,6 +21,8 @@ import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.service.auth.totp.login.TotpLoginService;
+import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
@@ -45,6 +48,8 @@ class LoginControllerTokenTransportTest {
     private LoginStrategyRegistry strategies;
     private LoginCodeFlowService codeFlowService;
     private AuthCookieWriter cookieWriter;
+    private AuthFlowCookieWriter flowCookieWriter;
+    private TotpLoginService totpLoginService;
     private PreAuthService preAuthService;
     private PreAuthTransport preAuthTransport;
     private RiskRequestContextResolver riskContextResolver;
@@ -56,6 +61,8 @@ class LoginControllerTokenTransportTest {
         strategies = mock(LoginStrategyRegistry.class);
         codeFlowService = mock(LoginCodeFlowService.class);
         cookieWriter = mock(AuthCookieWriter.class);
+        flowCookieWriter = mock(AuthFlowCookieWriter.class);
+        totpLoginService = mock(TotpLoginService.class);
         preAuthService = mock(PreAuthService.class);
         preAuthTransport = mock(PreAuthTransport.class);
         riskContextResolver = mock(RiskRequestContextResolver.class);
@@ -64,7 +71,9 @@ class LoginControllerTokenTransportTest {
         controller = new LoginController(
                 strategies,
                 codeFlowService,
+                totpLoginService,
                 cookieWriter,
+                flowCookieWriter,
                 preAuthService,
                 preAuthTransport,
                 riskContextResolver,
@@ -119,6 +128,28 @@ class LoginControllerTokenTransportTest {
         assertThat(response.accessToken()).isEqualTo("access-value");
         assertThat(response.refreshToken()).isEqualTo("refresh-value");
         assertThat(response.csrfToken()).isEqualTo("csrf-value");
+    }
+
+    @Test
+    void totpRequiredWritesOnlyH5FlowCookieAndDoesNotPromoteOrIssueSessionCookie() {
+        Instant expiresAt = Instant.parse("2026-07-15T00:05:00Z");
+        when(strategies.login(eq(LoginStrategyType.PASSWORD), any()))
+                .thenReturn(LoginResult.totpRequired("totp-flow", expiresAt, 5));
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        LoginController.LoginResponse response = controller.password(
+                passwordRequest(),
+                "device-1",
+                "H5",
+                new MockHttpServletRequest(),
+                servletResponse);
+
+        assertThat(response.status()).isEqualTo(LoginFlowStatus.TOTP_REQUIRED);
+        assertThat(response.totpFlowToken()).isNull();
+        verify(flowCookieWriter).writeTotpLoginFlow(
+                servletResponse, "totp-flow", expiresAt);
+        verify(cookieWriter, never()).writeSession(any(), any(), any(), any(), any());
+        verify(preAuthService, never()).promoteAuthenticated(any(), any(), any(), any());
     }
 
     @Test

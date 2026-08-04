@@ -35,6 +35,24 @@ test('registration login and reset show WhatsApp only for non-China phone flows'
 	}
 })
 
+test('TOTP management reuses SMS and WhatsApp delivery for phone reverification', () => {
+	const source = read('pages/account/totp-security.vue')
+
+	assert.match(source, /import PhoneDeliveryMethod from '@\/components\/auth\/phone-delivery-method\.vue'/)
+	assert.match(source, /components:\s*\{ AuthTurnstile, PhoneDeliveryMethod \}/)
+	assert.match(source, /loadCurrentUserProfile/)
+	assert.match(source, /\{ value: 'SMS_CODE', label: '手机验证码' \}/)
+	assert.match(source, /phoneDeliveryMethod:\s*'SMS'/)
+	assert.match(source, /phoneSupportsWhatsapp\(\)[\s\S]*!phone\.startsWith\('\+86'\)/)
+	assert.match(source, /v-if="phoneSupportsWhatsapp"/)
+	assert.match(source, /v-model="phoneDeliveryMethod"/)
+	assert.match(source, /:disabled="busy \|\| codeSent"/)
+	assert.match(source, /this\.verificationMethod === 'SMS_CODE'\s*\? this\.phoneDeliveryMethod\s*:\s*undefined/)
+	assert.match(source, /selectVerificationMethod\(method\)[\s\S]*this\.phoneDeliveryMethod = 'SMS'/)
+	assert.match(source, /resetOverview\(\)[\s\S]*this\.phoneDeliveryMethod = 'SMS'/)
+	assert.doesNotMatch(source, /this\.verificationMethod === 'SMS_CODE' \? 'SMS' : undefined/)
+})
+
 test('auth API sends deliveryMethod while preserving the legacy registration SMS route', () => {
 	const source = read('common/auth/auth-api.js')
 

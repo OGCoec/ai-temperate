@@ -38,17 +38,17 @@ const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
 const TERMINAL_SESSION_ERRORS = new Set([
 	'AT_REQUIRED',
-	'AT_EXPIRED',
 	'AT_INVALID',
 	'REFRESH_TOKEN_REQUIRED',
 	'REFRESH_TOKEN_INVALID',
 	'SESSION_MISMATCH',
 	'DEVICE_MISMATCH',
 	'CSRF_INVALID',
-	'ACCOUNT_UNAVAILABLE'
+	'ACCOUNT_UNAVAILABLE',
+	'SESSION_RESPONSE_INVALID'
 ])
 
-let refreshInFlight = null
+let bootstrapInFlight = null
 let csrfInFlight = null
 
 function rawRequestTask(options) {
@@ -61,6 +61,13 @@ function rawRequestTask(options) {
 			timeout: options.timeout,
 			withCredentials: true,
 			success(response) {
+				try {
+					// Android 必须在解释业务状态前保存同请求续签的 AT；H5 由浏览器接收 HttpOnly Cookie。
+					applySessionRenewalHeaders(response.header || {})
+				} catch (renewalError) {
+					reject(renewalError)
+					return
+				}
 				const diagnostics = inspectAuthResponse(response)
 				notifyResponseObserver(options.onResponse, diagnostics)
 				if (diagnostics.classification === 'EDGE_CHALLENGE') {
@@ -239,33 +246,19 @@ export async function publicRequest(
 	}
 }
 
-async function refreshSession(bootstrap = false) {
-	const session = currentSession()
-	const android = clientPlatform() === 'ANDROID'
-	if (!android && !bootstrap && !browserCsrfToken()) {
-		return refreshSession(true)
-	}
-	const headers = {}
-	let data
-	if (android) {
-		if (session.accessToken) headers.Authorization = `Bearer ${session.accessToken}`
-		if (session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken
-		data = { refreshToken: session.refreshToken || undefined }
-	}
-	const response = await publicRequest(
-		bootstrap ? BOOTSTRAP_PATH : '/api/auth/session/refresh',
-		{ headers, data }
-	)
+async function bootstrapBrowserSession() {
+	const response = await publicRequest(BOOTSTRAP_PATH)
 	saveSession(response)
 	return response
 }
 
 export function restoreBrowserSession() {
 	if (clientPlatform() !== 'H5') return Promise.resolve(null)
-	if (!refreshInFlight) {
-		refreshInFlight = refreshSession(true).finally(() => { refreshInFlight = null })
+	if (!bootstrapInFlight) {
+		bootstrapInFlight = bootstrapBrowserSession()
+			.finally(() => { bootstrapInFlight = null })
 	}
-	return refreshInFlight
+	return bootstrapInFlight
 }
 
 export function restorePersistedSession() {
@@ -276,33 +269,48 @@ export function restorePersistedSession() {
 		: null)
 }
 
-export async function authorizedRequest(path, options = {}, retried = false) {
-	const platform = clientPlatform()
-	const session = currentSession()
+export async function authorizedRequest(path, options = {}) {
 	const preserveSessionOnFailure = options.preserveSessionOnFailure === true
-	const headers = { ...(options.headers || {}) }
-	if (platform === 'ANDROID' && session.accessToken) {
-		headers.Authorization = `Bearer ${session.accessToken}`
-	}
 	try {
-		return await publicRequest(path, { ...options, headers })
+		// 所有可预先完成的安全准备必须发生在业务请求之前；业务请求本身固定只发送一次。
+		await ensureCookieScopeMigration()
+		await ensurePreAuth()
+		await ensureWebRtcVerified()
+		const headers = await protectedCredentialHeaders(options.headers)
+		return await requestTask({
+			path,
+			method: options.method || 'POST',
+			data: options.data,
+			headers,
+			timeout: options.timeout,
+			onResponse: options.onResponse
+		})
 	} catch (error) {
-		const renewalMode = sessionRenewalMode(platform, error.code, retried)
-		if (renewalMode !== SessionRenewalMode.NONE) {
-			try {
-				if (!refreshInFlight) {
-					refreshInFlight = renewSession(renewalMode)
-						.finally(() => { refreshInFlight = null })
-				}
-				await refreshInFlight
-				return authorizedRequest(path, options, true)
-			} catch (renewalError) {
-				if (!preserveSessionOnFailure) handleTerminalSessionError(renewalError)
-				throw renewalError
-			}
+		handleAuthorizedSecurityFailure(error)
+		if (!preserveSessionOnFailure || TERMINAL_SESSION_ERRORS.has(error?.code)) {
+			handleTerminalSessionError(error)
 		}
-		if (!preserveSessionOnFailure) handleTerminalSessionError(error)
 		throw error
+	}
+}
+
+function handleAuthorizedSecurityFailure(error) {
+	if (presentRiskBlock(error)) return
+	if (isWebRtcFailureCode(error?.code)) {
+		presentWebRtcFailure(error)
+		invalidateWebRtcVerification()
+	}
+	if (error?.code === 'RISK_CHALLENGE_REQUIRED') {
+		beginRiskChallenge(error)
+	}
+	if (error?.code === 'PREAUTH_REQUIRED') {
+		invalidatePreAuth()
+		invalidateWebRtcVerification()
+	}
+	if (error?.code === 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
+		invalidateCookieScopeMigration()
+		invalidatePreAuth()
+		invalidateWebRtcVerification()
 	}
 }
 
@@ -315,21 +323,7 @@ export async function prepareAuthorizedStreamingRequest(path, options = {}) {
 	await ensurePreAuth()
 	await ensureWebRtcVerified()
 	const method = String(options.method || 'POST').toUpperCase()
-	const headers = clientContextHeaders()
-	Object.assign(headers, options.headers || {})
-	if (clientPlatform() === 'H5' && requiresCsrf(method)) {
-		const csrfToken = browserCsrfToken() || await initializeBrowserCsrf()
-		if (!csrfToken) {
-			const error = new Error('CSRF token is unavailable.')
-			error.code = 'CSRF_INVALID'
-			throw error
-		}
-		applyBrowserCsrfHeader(headers, method, csrfToken)
-	}
-	const session = currentSession()
-	if (clientPlatform() === 'ANDROID' && session.accessToken) {
-		headers.Authorization = `Bearer ${session.accessToken}`
-	}
+	const headers = await protectedCredentialHeaders(options.headers)
 	return Object.freeze({
 		url: `${AUTH_API_BASE_URL}${path}`,
 		method,
@@ -346,22 +340,57 @@ export async function recoverAuthorizedStreamingSession(error) {
 		handleTerminalSessionError(error)
 		return false
 	}
-	if (!refreshInFlight) {
-		refreshInFlight = renewSession(mode).finally(() => { refreshInFlight = null })
+	if (!bootstrapInFlight) {
+		bootstrapInFlight = bootstrapBrowserSession()
+			.finally(() => { bootstrapInFlight = null })
 	}
-	await refreshInFlight
+	await bootstrapInFlight
 	return true
 }
 
-async function renewSession(renewalMode) {
-	const h5 = clientPlatform() === 'H5'
-	if (h5 && renewalMode === SessionRenewalMode.BOOTSTRAP) return refreshSession(true)
-	try {
-		return await refreshSession(false)
-	} catch (error) {
-		if (h5 && error.code === 'CSRF_INVALID') return refreshSession(true)
+async function protectedCredentialHeaders(additionalHeaders = {}) {
+	const headers = clientContextHeaders()
+	Object.assign(headers, additionalHeaders || {})
+	const session = currentSession()
+	if (clientPlatform() === 'ANDROID') {
+		if (session.accessToken) headers.Authorization = `Bearer ${session.accessToken}`
+		if (session.refreshToken) headers['X-Refresh-Token'] = session.refreshToken
+		if (session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken
+		return headers
+	}
+	if (!browserCsrfToken()) {
+		// 受保护会话丢失 CSRF 时必须通过 bootstrap 同步轮换 Redis 绑定，不能只领取未绑定的新 Cookie。
+		await restoreBrowserSession()
+	}
+	const csrfToken = browserCsrfToken()
+	if (!csrfToken) {
+		const error = new Error('CSRF token is unavailable.')
+		error.code = 'CSRF_INVALID'
 		throw error
 	}
+	// RT-first 要求安全读取请求也提交 CSRF，因此这里不再按 HTTP 方法过滤。
+	headers['X-CSRF-Token'] = csrfToken
+	return headers
+}
+
+export function applySessionRenewalHeaders(headers = {}) {
+	const renewed = responseHeader(headers, 'X-Session-Renewed')
+	if (String(renewed).toLowerCase() !== 'true') return false
+	if (clientPlatform() === 'H5') return true
+	const newAccessToken = responseHeader(headers, 'X-New-Access-Token')
+	if (!newAccessToken) {
+		const error = new Error('Session renewal response is incomplete.')
+		error.code = 'SESSION_RESPONSE_INVALID'
+		throw error
+	}
+	saveSession({ accessToken: String(newAccessToken) })
+	return true
+}
+
+function responseHeader(headers, expectedName) {
+	const entry = Object.entries(headers || {})
+		.find(([name]) => name.toLowerCase() === expectedName.toLowerCase())
+	return entry ? entry[1] : ''
 }
 
 function handleTerminalSessionError(error) {
@@ -397,13 +426,13 @@ export async function logoutSession() {
 	}
 	try {
 		if (platform === 'H5' && !browserCsrfToken()) {
-			await refreshSession(true)
+			await bootstrapBrowserSession()
 		}
 		try {
 			await publicRequest('/api/auth/session/logout', { headers, data })
 		} catch (error) {
 			if (platform !== 'H5' || error.code !== 'CSRF_INVALID') throw error
-			await refreshSession(true)
+			await bootstrapBrowserSession()
 			await publicRequest('/api/auth/session/logout', { headers, data })
 		}
 	} finally {

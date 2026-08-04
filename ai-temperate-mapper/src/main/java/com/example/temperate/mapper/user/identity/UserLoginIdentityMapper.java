@@ -1,6 +1,7 @@
 package com.example.temperate.mapper.user.identity;
 
 import com.example.temperate.model.auth.domain.AuthenticationContext;
+import com.example.temperate.model.auth.domain.TotpCredential;
 import com.example.temperate.model.user.domain.CurrentUserProfile;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
 import java.util.List;
@@ -10,8 +11,8 @@ import org.apache.ibatis.annotations.Param;
 /**
  * 提供用户登录身份的 MyBatis 数据访问契约。
  *
- * <p>该 Mapper 负责规范化邮箱、手机号和身份 ID 的查询及密码相关持久化；调用方必须完成输入规范化、
- * 授权和事务边界控制，Mapper 不承载业务状态机。</p>
+ * <p>该 Mapper 负责规范化邮箱、手机号和身份 ID 的查询，以及密码与 TOTP 凭据持久化；调用方必须完成
+ * 输入规范化、授权和事务边界控制。TOTP 密文只允许专用最小查询读取，Mapper 不承载业务状态机。</p>
  */
 @Mapper
 public interface UserLoginIdentityMapper {
@@ -50,6 +51,12 @@ public interface UserLoginIdentityMapper {
             @Param("identityId") long identityId);
 
     /**
+     * 按已认证用户 ID 读取当前 TOTP 状态和密文；调用方必须在服务层完成解密与状态一致性校验。
+     */
+    TotpCredential findTotpCredentialById(
+            @Param("identityId") long identityId);
+
+    /**
      * 按已认证的内部身份 ID 一次查询个人中心所需的最小资料，不加载密码哈希或会话信息。
      */
     CurrentUserProfile findCurrentUserProfileById(
@@ -77,4 +84,20 @@ public interface UserLoginIdentityMapper {
             @Param("identityId") long identityId,
             @Param("expectedPasswordHash") String expectedPasswordHash,
             @Param("upgradedPasswordHash") String upgradedPasswordHash);
+
+    /**
+     * 在单条 SQL 中按旧状态和旧密文执行 CAS，再同时写入新密文并启用 TOTP。
+     *
+     * <p>旧状态比较用于阻止并发开启、轮换或关闭请求互相覆盖，更新失败必须由服务层作为状态冲突处理。</p>
+     */
+    int enableOrRotateTotp(
+            @Param("identityId") long identityId,
+            @Param("encryptedSecret") String encryptedSecret,
+            @Param("expectedEnabled") boolean expectedEnabled,
+            @Param("expectedEncryptedSecret") String expectedEncryptedSecret);
+
+    /**
+     * 在单条 SQL 中同时关闭 TOTP 并清空旧密钥，禁止保留可恢复的失效认证材料。
+     */
+    int disableTotp(@Param("identityId") long identityId);
 }

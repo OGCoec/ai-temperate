@@ -87,6 +87,24 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       writer.flush()
       writer.close()
       const status = connection.getResponseCode()
+      const renewedHeader = connection.getHeaderField("X-Session-Renewed")
+      const newAccessHeader = connection.getHeaderField("X-New-Access-Token")
+      const sessionRenewed = renewedHeader == null ? "" : renewedHeader
+      const newAccessToken = newAccessHeader == null ? "" : newAccessHeader
+      if (sessionRenewed.lowercase() == "true" && newAccessToken.length == 0) {
+        notifyFailure({
+          code: 'SESSION_RESPONSE_INVALID',
+          statusCode: status,
+          message: '会话续签响应缺少新的访问令牌。'
+        })
+        return
+      }
+      // 续签响应头必须在读取首个事件块之前交给 JavaScript 更新 AndroidKeyStore。
+      options.onOpen({
+        statusCode: status,
+        sessionRenewed: sessionRenewed,
+        newAccessToken: newAccessToken
+      })
       if (status < 200 || status >= 300) {
         notifyFailure(failure(status, boundedError(connection)))
         return
@@ -101,7 +119,6 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
         })
         return
       }
-      options.onOpen()
       const reader = new BufferedReader(
         new InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
       activeReader = reader

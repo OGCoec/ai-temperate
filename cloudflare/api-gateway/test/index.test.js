@@ -741,6 +741,70 @@ test('response policy rejects parent-domain and cross-surface business cookies',
 	assert.equal(wrongSurface.status, 502)
 })
 
+test('root login verification preserves the host-only TOTP flow cookie', async () => {
+	const cookie = 'totp_login_flow=flow-token; Path=/api/auth/login/totp; '
+		+ 'Secure; HttpOnly; SameSite=Strict'
+	const response = await handleRequest(
+		request('niko000o.site', '/api/auth/login/code/verify', {
+			method: 'POST'
+		}),
+		ENV,
+		runtime(() => new Response('{"status":"TOTP_REQUIRED"}', {
+			status: 200,
+			headers: {
+				'Content-Type': 'application/json',
+				'Set-Cookie': cookie
+			}
+		}))
+	)
+
+	assert.equal(response.status, 200)
+	assert.deepEqual(response.headers.getSetCookie(), [cookie])
+	assert.equal(response.headers.get('Cache-Control'), 'no-store')
+})
+
+test('administrator surface rejects the ordinary TOTP flow cookie', async () => {
+	const response = await handleRequest(
+		request('admin.niko000o.site', '/api/admin/auth/state'),
+		ENV,
+		runtime(() => new Response('{}', {
+			status: 200,
+			headers: {
+				'Set-Cookie': 'totp_login_flow=flow-token; '
+					+ 'Path=/api/auth/login/totp; Secure; HttpOnly; SameSite=Strict'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.deepEqual(await response.json(), {
+		code: 'EDGE_COOKIE_POLICY_VIOLATION',
+		message: 'The edge request was rejected.'
+	})
+})
+
+test('root surface rejects a parent-domain TOTP flow cookie', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/api/auth/login/code/verify', {
+			method: 'POST'
+		}),
+		ENV,
+		runtime(() => new Response('{"status":"TOTP_REQUIRED"}', {
+			status: 200,
+			headers: {
+				'Set-Cookie': 'totp_login_flow=flow-token; Domain=niko000o.site; '
+					+ 'Path=/api/auth/login/totp; Secure; HttpOnly; SameSite=Strict'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.deepEqual(await response.json(), {
+		code: 'EDGE_COOKIE_POLICY_VIOLATION',
+		message: 'The edge request was rejected.'
+	})
+})
+
 test('allowed host-only cookies remain separate and responses are never cached', async () => {
 	const headers = new Headers()
 	headers.append('Set-Cookie', 'admin_session=session; Path=/api/admin; Secure; HttpOnly')

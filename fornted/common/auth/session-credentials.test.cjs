@@ -12,7 +12,7 @@ async function loadModule() {
 	return import(sourceUrl)
 }
 
-test('refresh replaces AT and CSRF while preserving the fixed RT', async () => {
+test('partial session update replaces AT and CSRF while preserving the fixed RT', async () => {
 	const { mergeSessionCredentials } = await loadModule()
 	const current = {
 		accessToken: 'old-at',

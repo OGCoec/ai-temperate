@@ -3,6 +3,8 @@
 登录与会话校验通过 `userloginidentity.id = user_profile.login_identity_id` 的逻辑关系一次查询认证上下文，不建立物理外键。
 
 - `userloginidentity.password_version` 是密码凭据版本，默认从 `1` 开始。
+- `userloginidentity.totp_enabled` 表示登录是否必须进入 TOTP 第二因子，默认 `false`。
+- `userloginidentity.totp_secret_encrypted` 只保存与用户 ID 绑定的 AES-256-GCM 密文；关闭时必须在同一 SQL 中置 `NULL`，Base32 只用于十分钟设置响应。
 - 用户主动创建或修改真实密码时必须递增 `password_version`。
 - 注册和密码重置时必须基于用户本次提交的明文执行 `SHOPPING_V1` 强度校验；强度结果不进入登录身份表。
 - 密码重置必须在同一 SQL 中同时更新密码哈希和凭据版本。
@@ -14,6 +16,7 @@
 - 个人中心可以在认证完成后按内部用户 ID 读取独立短期资料缓存；该缓存不扩展 `SessionPrincipal`，
   不参与 Token 验证，并且不能作为额度预扣或最终结算的数据来源。
 - 用户资料缺失或出现未知状态时认证必须安全拒绝。
+- `totp_enabled` 与密文存在性不一致时认证必须安全拒绝并返回配置不可用，禁止静默绕过第二因子。
 
 ## 逻辑关系补偿
 

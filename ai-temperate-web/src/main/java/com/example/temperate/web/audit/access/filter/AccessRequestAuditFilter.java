@@ -3,7 +3,7 @@ package com.example.temperate.web.audit.access.filter;
 import com.example.temperate.service.audit.access.command.AccessAuditCommand;
 import com.example.temperate.service.audit.access.service.AccessAuditEventService;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
-import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
 import jakarta.servlet.AsyncEvent;
@@ -25,10 +25,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerMapping;
 
 /**
- * 在受 Access Token 保护的业务 API 外围采集同步或异步请求的最终完成事实，并将原始 IP 仅短暂传给脱敏服务。
+ * 在受普通用户 Session 保护的业务 API 外围采集同步或异步请求的最终完成事实，并将原始 IP 仅短暂传给脱敏服务。
  *
  * <p>异步请求必须等待 Servlet 完成、错误或超时回调后才落审计；过滤器不读取请求体、Cookie、Authorization、
- * 查询参数、邮箱、手机号或设备安装 ID，任何审计异常都不会覆盖业务响应。</p>
+ * X-Refresh-Token、X-CSRF-Token、查询参数、邮箱、手机号或设备安装 ID，任何审计异常都不会覆盖业务响应。</p>
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
@@ -108,7 +108,7 @@ public final class AccessRequestAuditFilter extends OncePerRequestFilter {
 
     private static Long principalUserId(HttpServletRequest request) {
         Object value = request.getAttribute(
-                AccessTokenAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE);
+                UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE);
         return value instanceof SessionPrincipal principal ? principal.userId() : null;
     }
 

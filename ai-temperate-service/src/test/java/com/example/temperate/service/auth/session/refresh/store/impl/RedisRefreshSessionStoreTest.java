@@ -113,6 +113,39 @@ class RedisRefreshSessionStoreTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
+    void mapsReadOnlyAccessValidationWithoutChangingTheRefreshHash() {
+        doReturn(
+                snapshot(0L, session.csrfHash()),
+                List.of(1L),
+                List.of(2L),
+                List.of(3L),
+                List.of(4L),
+                List.of(6L))
+                .when(template).execute(
+                        any(RedisScript.class), anyList(), any(Object[].class));
+
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.VALID);
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.MISSING_OR_EXPIRED);
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.DEVICE_MISMATCH);
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.CSRF_MISMATCH);
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.INDEX_MISSING);
+        assertThat(store.validateForAccess(
+                session.refreshTokenHash(), session.deviceHash(), session.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.TTL_INVARIANT_VIOLATION);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
     void mapsCurrentAndAllSessionRevocationResults() {
         doReturn(1L, 0L, -2L, -3L, -4L).when(template).execute(
                 any(RedisScript.class), anyList(), any(Object[].class));

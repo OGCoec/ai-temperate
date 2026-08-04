@@ -15,6 +15,7 @@ import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowSnapshot;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowStore;
 import com.example.temperate.service.auth.login.code.flow.ProtectedLoginCodeAccess;
 import com.example.temperate.service.auth.login.code.service.LoginCodeFlowService;
+import com.example.temperate.service.auth.login.completion.LoginCompletionService;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
@@ -23,7 +24,6 @@ import com.example.temperate.service.auth.login.limit.enums.LoginFailureBucket;
 import com.example.temperate.service.auth.login.limit.enums.LoginLimitDecision;
 import com.example.temperate.service.auth.login.limit.service.LoginRateLimitService;
 import com.example.temperate.service.auth.login.notification.LoginAccountNotificationService;
-import com.example.temperate.service.auth.login.session.LoginSessionIssuer;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyType;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
@@ -71,7 +71,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     private final VerificationDeliveryPublisher deliveryPublisher;
     private final LoginAccountNotificationService notificationService;
     private final LoginRateLimitService rateLimitService;
-    private final LoginSessionIssuer sessionIssuer;
+    private final LoginCompletionService completionService;
     private final IdentityPresenceFilter identityPresenceFilter;
     private final Clock clock;
 
@@ -87,7 +87,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
             VerificationDeliveryPublisher deliveryPublisher,
             LoginAccountNotificationService notificationService,
             LoginRateLimitService rateLimitService,
-            LoginSessionIssuer sessionIssuer,
+            LoginCompletionService completionService,
             IdentityPresenceFilter identityPresenceFilter,
             Clock clock) {
         this.identityMapper = Objects.requireNonNull(identityMapper);
@@ -101,7 +101,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         this.deliveryPublisher = Objects.requireNonNull(deliveryPublisher);
         this.notificationService = Objects.requireNonNull(notificationService);
         this.rateLimitService = Objects.requireNonNull(rateLimitService);
-        this.sessionIssuer = Objects.requireNonNull(sessionIssuer);
+        this.completionService = Objects.requireNonNull(completionService);
         this.identityPresenceFilter = Objects.requireNonNull(identityPresenceFilter);
         this.clock = Objects.requireNonNull(clock);
     }
@@ -111,9 +111,6 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         Objects.requireNonNull(command);
         requireCodeType(command.strategyType());
         String identifier = normalize(command);
-        LoginAttempt attempt = new LoginAttempt(
-                identifier, command.deviceInstallationId());
-        requireAllowed(attempt);
         IdentityPresenceKind kind =
                 command.strategyType() == LoginStrategyType.EMAIL_CODE
                         ? IdentityPresenceKind.EMAIL
@@ -129,15 +126,56 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
             identityPresenceFilter.recordDatabaseVerification(
                     kind, presence, identity != null);
         }
+        return createFlow(
+                command.strategyType(),
+                identifier,
+                identity == null || identity.getId() == null ? 0L : identity.getId(),
+                command.deviceInstallationId(),
+                command.clientIp());
+    }
+
+    @Override
+    public LoginCodeStartResult startForVerifiedIdentity(
+            long userId,
+            LoginStrategyType type,
+            String deviceInstallationId,
+            String clientIp) {
+        requireCodeType(type);
+        AuthenticationContext context = identityMapper.findAuthenticationById(userId);
+        if (context == null
+                || context.getIdentityId() != userId
+                || context.getAccountStatus() != AccountStatus.ACTIVE) {
+            throw new LoginException(
+                    LoginErrorCode.ACCOUNT_UNAVAILABLE,
+                    "Account is unavailable.");
+        }
+        String identifier = type == LoginStrategyType.EMAIL_CODE
+                ? context.getEmail()
+                : context.getPhone();
+        if (identifier == null || identifier.isBlank()) {
+            throw new LoginException(
+                    LoginErrorCode.INVALID_INPUT,
+                    "The selected verification channel is unavailable.");
+        }
+        return createFlow(type, identifier, userId, deviceInstallationId, clientIp);
+    }
+
+    private LoginCodeStartResult createFlow(
+            LoginStrategyType type,
+            String identifier,
+            long userId,
+            String deviceInstallationId,
+            String clientIp) {
+        LoginAttempt attempt = new LoginAttempt(identifier, deviceInstallationId);
+        requireAllowed(attempt);
         String flowToken = tokenService.newFlowToken();
         String challenge = tokenService.newFlowToken();
         ProtectedLoginCodeAccess access = protect(
                 new LoginCodeAccess(flowToken, challenge,
-                        command.deviceInstallationId(), command.clientIp()));
+                        deviceInstallationId, clientIp));
         Instant now = clock.instant();
         // 无论身份是否存在都创建同样的流程并返回相同结构，避免启动接口成为账号枚举探针。
-        flowStore.create(access, command.strategyType(), identifier,
-                identity == null || identity.getId() == null ? 0L : identity.getId(), now);
+        flowStore.create(access, type, identifier, userId, now);
         return new LoginCodeStartResult(flowToken, challenge, now.plusSeconds(600));
     }
 
@@ -241,6 +279,13 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
     @Override
     public LoginResult verifyAndLogin(
             LoginStrategyType type, LoginStrategyRequest request) {
+        AuthenticationContext context = verifyPrimaryFactor(type, request);
+        return completionService.complete(context, request.deviceInstallationId());
+    }
+
+    @Override
+    public AuthenticationContext verifyPrimaryFactor(
+            LoginStrategyType type, LoginStrategyRequest request) {
         requireCodeType(type);
         if (request == null) throw invalid();
         LoginCodeAccess access = new LoginCodeAccess(
@@ -284,11 +329,10 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
             throw new LoginException(LoginErrorCode.ACCOUNT_UNAVAILABLE,
                     "Account is unavailable.");
         }
-        // 仅在验证码已原子消费且账号仍可用后签发会话；签发成功后再清理流程，避免临时基础设施失败丢失重试依据。
-        LoginResult result = sessionIssuer.issue(context, request.deviceInstallationId());
+        // 验证码已原子消费且账号仍可用后立即删除第一因子流程；后续登录完成或敏感操作复验不得再次使用该验证码。
         flowStore.delete(protectedAccess);
         rateLimitService.clearSubjectFailures(attempt);
-        return result;
+        return context;
     }
 
     private String normalize(LoginCodeStartCommand command) {

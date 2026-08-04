@@ -16,7 +16,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 /**
- * 验证三类认证 Cookie 的属性、有效期、共享域名和同路径清理行为。
+ * 验证三类认证 Cookie 的属性、有效期、共享域名和新旧路径清理行为。
  */
 class AuthCookieWriterTest {
 
@@ -30,7 +30,7 @@ class AuthCookieWriterTest {
     }
 
     @Test
-    void writesTheThreeBrowserSessionCookiesWithIsolatedPaths() {
+    void writesTheBrowserSessionCookiesAndExpiresTheLegacyRefreshPath() {
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         writer.writeSession(
@@ -51,12 +51,16 @@ class AuthCookieWriterTest {
                 .doesNotContain("Domain=");
         assertThat(cookie(cookies, AuthCookieWriter.REFRESH_COOKIE))
                 .contains("refresh_token=refresh-value")
-                .contains("Path=/api/auth/session")
+                .contains("Path=/api")
                 .contains("Max-Age=10800")
                 .contains("Secure")
                 .contains("HttpOnly")
                 .contains("SameSite=Strict")
                 .doesNotContain("Domain=");
+        assertThat(cookies).anySatisfy(value -> assertThat(value)
+                .startsWith(AuthCookieWriter.REFRESH_COOKIE + "=")
+                .contains("Path=/api/auth/session")
+                .contains("Max-Age=0"));
         assertThat(cookie(cookies, AuthCookieWriter.CSRF_COOKIE))
                 .contains("XSRF-TOKEN=csrf-value")
                 .contains("Path=/")
@@ -105,26 +109,17 @@ class AuthCookieWriterTest {
                 .contains("Path=/api")
                 .contains("Max-Age=0");
         assertThat(cookie(cookies, AuthCookieWriter.REFRESH_COOKIE))
-                .contains("Path=/api/auth/session")
+                .contains("Path=/api")
                 .contains("Max-Age=0");
+        assertThat(cookies).anySatisfy(value -> assertThat(value)
+                .startsWith(AuthCookieWriter.REFRESH_COOKIE + "=")
+                .contains("Path=/api/auth/session")
+                .contains("Max-Age=0"));
         assertThat(cookie(cookies, AuthCookieWriter.CSRF_COOKIE))
                 .contains("Path=/")
                 .contains("Max-Age=0");
         assertThat(cookie(cookies, AuthCookieWriter.LEGACY_REFRESH_COOKIE))
                 .contains("Path=/")
-                .contains("Max-Age=0");
-    }
-
-    @Test
-    void clearsOnlyTheAccessCookieForRecoverableAccessTokenErrors() {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        writer.clearAccessToken(response);
-
-        List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
-        assertThat(cookies).hasSize(1);
-        assertThat(cookie(cookies, AuthCookieWriter.ACCESS_COOKIE))
-                .contains("Path=/api")
                 .contains("Max-Age=0");
     }
 
@@ -134,8 +129,7 @@ class AuthCookieWriterTest {
                 new AuthSecurityProperties.CookieSettings(
                         true, true, AuthSecurityProperties.SameSite.STRICT, "/api"),
                 new AuthSecurityProperties.CookieSettings(
-                        true, true, AuthSecurityProperties.SameSite.STRICT,
-                        "/api/auth/session"),
+                        true, true, AuthSecurityProperties.SameSite.STRICT, "/api"),
                 new AuthSecurityProperties.CookieSettings(
                         true, false, AuthSecurityProperties.SameSite.STRICT, "/"),
                 new AuthSecurityProperties.CookieSettings(
@@ -150,6 +144,9 @@ class AuthCookieWriterTest {
                 new AuthSecurityProperties.CookieSettings(
                         true, true, AuthSecurityProperties.SameSite.STRICT,
                         "/api/auth/password-reset/complete"),
+                new AuthSecurityProperties.CookieSettings(
+                        true, true, AuthSecurityProperties.SameSite.STRICT,
+                        "/api/auth/login/totp"),
                 domain));
         when(properties.ttl()).thenReturn(new AuthSecurityProperties.Ttl(
                 Duration.ofMinutes(10),

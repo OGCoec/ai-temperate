@@ -60,7 +60,7 @@ class AuthSecurityPropertiesTest {
                     "app.security.cookies.refresh.secure=true",
                     "app.security.cookies.refresh.http-only=true",
                     "app.security.cookies.refresh.same-site=strict",
-                    "app.security.cookies.refresh.path=/api/auth/session",
+                    "app.security.cookies.refresh.path=/api",
                     "app.security.cookies.csrf.secure=true",
                     "app.security.cookies.csrf.http-only=false",
                     "app.security.cookies.csrf.same-site=strict",
@@ -81,6 +81,10 @@ class AuthSecurityPropertiesTest {
                     "app.security.cookies.password-reset-forget.http-only=true",
                     "app.security.cookies.password-reset-forget.same-site=strict",
                     "app.security.cookies.password-reset-forget.path=/api/auth/password-reset/complete",
+                    "app.security.cookies.totp-login-flow.secure=true",
+                    "app.security.cookies.totp-login-flow.http-only=true",
+                    "app.security.cookies.totp-login-flow.same-site=strict",
+                    "app.security.cookies.totp-login-flow.path=/api/auth/login/totp",
                     "app.security.cors.allowed-origins[0]=" + allowedOrigin,
                     "app.security.ttl.access-token=15m",
                     "app.security.ttl.verification-code=5m",
@@ -108,7 +112,7 @@ class AuthSecurityPropertiesTest {
             assertThat(properties.cookies().domain()).isEmpty();
             assertThat(properties.cookies().access().path()).isEqualTo("/api");
             assertThat(properties.cookies().refresh().path())
-                    .isEqualTo("/api/auth/session");
+                    .isEqualTo("/api");
             assertThat(properties.cookies().csrf().httpOnly()).isFalse();
             assertThat(properties.cookies().registerFlow().path())
                     .isEqualTo("/api/auth/register");

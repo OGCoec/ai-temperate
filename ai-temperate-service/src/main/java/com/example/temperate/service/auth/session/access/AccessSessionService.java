@@ -1,11 +1,17 @@
 package com.example.temperate.service.auth.session.access;
 
-import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.auth.session.access.dto.SessionAccessCommand;
+import com.example.temperate.service.auth.session.access.dto.SessionAccessResult;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 
 /**
- * 定义普通 API 使用访问令牌恢复当前会话主体的认证能力。
+ * 定义普通 API 先校验 Refresh Session、再验证或续签 Access Token 的统一认证能力。
  */
 public interface AccessSessionService {
 
-    SessionPrincipal authenticate(String accessToken);
+    SessionAccessResult authenticateOrRenew(SessionAccessCommand command);
+
+    SessionAccessResult authenticateOrRenew(
+            SessionAccessCommand command,
+            PreAuthSessionBinding preAuthBinding);
 }

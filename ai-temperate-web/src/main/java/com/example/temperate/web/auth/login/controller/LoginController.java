@@ -6,6 +6,7 @@ import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartResult;
 import com.example.temperate.service.auth.login.code.service.LoginCodeFlowService;
+import com.example.temperate.service.auth.login.dto.result.LoginFlowStatus;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRegistry;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
@@ -21,6 +22,8 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
+import com.example.temperate.service.auth.totp.login.TotpLoginService;
+import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
@@ -38,6 +41,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -68,10 +72,13 @@ public final class LoginController {
     private static final String PLATFORM_HEADER = "X-Client-Platform";
     private static final String FLOW_TOKEN_HEADER = "X-Login-Flow-Token";
     private static final String CHALLENGE_HEADER = "X-Turnstile-Challenge";
+    private static final String TOTP_FLOW_TOKEN_HEADER = "X-TOTP-Flow-Token";
 
     private final LoginStrategyRegistry strategyRegistry;
     private final LoginCodeFlowService codeFlowService;
+    private final TotpLoginService totpLoginService;
     private final AuthCookieWriter cookieWriter;
+    private final AuthFlowCookieWriter flowCookieWriter;
     private final PreAuthService preAuthService;
     private final PreAuthTransport preAuthTransport;
     private final RiskRequestContextResolver riskContextResolver;
@@ -80,14 +87,18 @@ public final class LoginController {
     public LoginController(
             LoginStrategyRegistry strategyRegistry,
             LoginCodeFlowService codeFlowService,
+            TotpLoginService totpLoginService,
             AuthCookieWriter cookieWriter,
+            AuthFlowCookieWriter flowCookieWriter,
             PreAuthService preAuthService,
             PreAuthTransport preAuthTransport,
             RiskRequestContextResolver riskContextResolver,
             NetworkRiskProperties networkRiskProperties) {
         this.strategyRegistry = strategyRegistry;
         this.codeFlowService = codeFlowService;
+        this.totpLoginService = totpLoginService;
         this.cookieWriter = cookieWriter;
+        this.flowCookieWriter = flowCookieWriter;
         this.preAuthService = preAuthService;
         this.preAuthTransport = preAuthTransport;
         this.riskContextResolver = riskContextResolver;
@@ -119,24 +130,7 @@ public final class LoginController {
                         null,
                         deviceId,
                         canonicalIp(request)));
-        PreAuthIssue preAuth = promotePreAuth(
-                request,
-                response,
-                platform,
-                result.getRefreshToken());
-        if (platform == AuthClientPlatform.H5) {
-            /*
-             * 必须先完成 PreAuth 旋转再写认证 Cookie；ENFORCE 下旋转失败时，异常响应不能提前向浏览器
-             * 交付一个尚未绑定网络风险状态的新会话。
-             */
-            cookieWriter.writeSession(
-                    response,
-                    result.getAccessToken(),
-                    result.getRefreshToken(),
-                    result.getCsrfToken(),
-                    result.getRefreshExpiresAt());
-        }
-        return response(result, platform, preAuth);
+        return transportResult(result, platform, request, response, false);
     }
 
     @PostMapping("/code/start")
@@ -208,19 +202,64 @@ public final class LoginController {
                 new LoginStrategyRequest(
                         null, null, null, null,
                         flowToken, challenge, body.code(), deviceId, canonicalIp(request)));
+        return transportResult(result, platform, request, response, false);
+    }
+
+    @PostMapping("/totp/verify")
+    @Operation(
+            summary = "完成登录 TOTP 二次认证",
+            description = "仅接受第一因子通过后创建的五分钟一次性挑战；验证成功后才创建刷新会话、"
+                    + "签发访问令牌并提升 PreAuth。H5 从 HttpOnly Cookie 读取流程凭据，Android 使用受保护请求头。")
+    public LoginResponse verifyTotp(
+            @Valid @RequestBody TotpVerifyRequest body,
+            @RequestHeader(DEVICE_HEADER) String deviceId,
+            @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
+            @RequestHeader(value = TOTP_FLOW_TOKEN_HEADER, required = false)
+                    String androidFlowToken,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
+        String rawFlowToken = platform == AuthClientPlatform.ANDROID
+                ? androidFlowToken
+                : flowCookieWriter.totpLoginFlowToken(request);
+        LoginResult result = totpLoginService.verify(
+                rawFlowToken, deviceId, body.code());
+        return transportResult(result, platform, request, response, true);
+    }
+
+    private LoginResponse transportResult(
+            LoginResult result,
+            AuthClientPlatform platform,
+            HttpServletRequest request,
+            HttpServletResponse response,
+            boolean completingTotp) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store, private");
+        if (!result.isAuthenticated()) {
+            // 第一因子成功但 TOTP 未完成时，只交付短期挑战，禁止创建或提升任何正式会话材料。
+            if (platform == AuthClientPlatform.H5) {
+                flowCookieWriter.writeTotpLoginFlow(
+                        response,
+                        result.getTotpFlowToken(),
+                        result.getTotpExpiresAt());
+            }
+            return response(result, platform, null);
+        }
         PreAuthIssue preAuth = promotePreAuth(
                 request,
                 response,
                 platform,
                 result.getRefreshToken());
         if (platform == AuthClientPlatform.H5) {
-            // 验证码登录复用相同的“先旋转 PreAuth、后交付会话 Cookie”安全顺序。
+            // 必须先完成 PreAuth 旋转再写认证 Cookie，避免旋转失败时提前交付未绑定风险状态的新会话。
             cookieWriter.writeSession(
                     response,
                     result.getAccessToken(),
                     result.getRefreshToken(),
                     result.getCsrfToken(),
                     result.getRefreshExpiresAt());
+            if (completingTotp) {
+                flowCookieWriter.clearTotpLoginFlow(response);
+            }
         }
         return response(result, platform, preAuth);
     }
@@ -290,13 +329,17 @@ public final class LoginController {
         boolean android = platform == AuthClientPlatform.ANDROID;
         // 只有 Android 响应体保留 Token 字段；H5 的 null 字段由 JsonInclude 省略。
         return new LoginResponse(
+                result.getStatus(),
                 result.getPublicId(),
                 result.getDisplayName(),
                 android ? result.getAccessToken() : null,
                 android ? result.getRefreshToken() : null,
                 android ? result.getCsrfToken() : null,
                 android && preAuthIssue != null ? preAuthIssue.rawToken() : null,
-                result.getRefreshExpiresAt());
+                result.getRefreshExpiresAt(),
+                android ? result.getTotpFlowToken() : null,
+                result.getTotpExpiresAt(),
+                result.getAttemptsRemaining());
     }
 
     public record PasswordLoginRequest(
@@ -330,17 +373,25 @@ public final class LoginController {
             @NotBlank @Pattern(regexp = "^[0-9]{6}$") String code) {
     }
 
+    public record TotpVerifyRequest(
+            @NotBlank @Pattern(regexp = "^[0-9]{6}$") String code) {
+    }
+
     public record FlowAcceptedResponse(boolean accepted, String message) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record LoginResponse(
+            LoginFlowStatus status,
             String publicUserId,
             String displayName,
             String accessToken,
             String refreshToken,
             String csrfToken,
             String preAuthToken,
-            Instant refreshExpiresAt) {
+            Instant refreshExpiresAt,
+            String totpFlowToken,
+            Instant totpExpiresAt,
+            Integer attemptsRemaining) {
     }
 }

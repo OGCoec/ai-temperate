@@ -4,8 +4,10 @@ import { clientPlatform } from './config.js'
 import { classifyPassword, passwordError } from './password-policy.js'
 import {
 	loadAndroidPasswordResetFlow,
-	loadAndroidRegisterFlow
+	loadAndroidRegisterFlow,
+	loadAndroidTotpLoginFlow
 } from './android-flow-keystore.js'
+import { beginTotpLoginFlow, clearTotpLoginFlow } from './totp-login-flow.js'
 import {
 	beginRegistrationFlow,
 	clearRegistrationFlowState,
@@ -76,6 +78,18 @@ function assertPasswordLoginAllowed(password) {
 	rejectClientPassword('密码强度不足，请重置密码。', 'PASSWORD_RESET_REQUIRED')
 }
 
+function handleLoginResponse(response) {
+	if (response?.status === 'TOTP_REQUIRED') {
+		beginTotpLoginFlow(response)
+		return response
+	}
+	if (response?.status === 'AUTHENTICATED') {
+		clearTotpLoginFlow()
+		saveSession(response)
+	}
+	return response
+}
+
 export const authApi = {
 	turnstileConfig() {
 		return publicRequest('/api/auth/turnstile/config', { method: 'GET' })
@@ -140,8 +154,7 @@ export const authApi = {
 	async passwordLogin(data) {
 		assertPasswordLoginAllowed(data?.password)
 		const response = await publicRequest('/api/auth/login/password', { data })
-		saveSession(response)
-		return response
+		return handleLoginResponse(response)
 	},
 	loginCodeStart(data) {
 		return publicRequest('/api/auth/login/code/start', { data })
@@ -161,8 +174,30 @@ export const authApi = {
 		const response = await publicRequest('/api/auth/login/code/verify', {
 			headers: flowHeaders('login', flow), data: { strategyType, code }
 		})
-		saveSession(response)
-		return response
+		return handleLoginResponse(response)
+	},
+	async totpLoginVerify(code) {
+		const headers = {}
+		if (clientPlatform() === 'ANDROID') {
+			const flow = loadAndroidTotpLoginFlow()
+			if (!flow?.totpFlowToken) {
+				const error = new Error('二次认证流程已过期，请重新登录。')
+				error.code = 'TOTP_FLOW_EXPIRED'
+				throw error
+			}
+			headers['X-TOTP-Flow-Token'] = flow.totpFlowToken
+		}
+		try {
+			const response = await publicRequest('/api/auth/login/totp/verify', {
+				headers,
+				data: { code }
+			})
+			return handleLoginResponse(response)
+		} catch (error) {
+			if (['TOTP_FLOW_EXPIRED', 'TOTP_ATTEMPTS_EXHAUSTED', 'TOTP_FLOW_FORBIDDEN']
+				.includes(error?.code)) clearTotpLoginFlow()
+			throw error
+		}
 	},
 	passwordResetStart(data) {
 		return publicRequest('/api/auth/password-reset/start', { data })

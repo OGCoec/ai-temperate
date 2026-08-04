@@ -79,21 +79,6 @@ class GlobalExceptionHandlerCookieTest {
     }
 
     @Test
-    void h5AccessExpiryClearsOnlyTheShortLivedAccessCookie() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Client-Platform", "H5");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        handler.handleSession(
-                exception(SessionAuthenticationErrorCode.ACCESS_TOKEN_EXPIRED, true),
-                request,
-                response);
-
-        verify(cookieWriter).clearAccessToken(response);
-        verify(cookieWriter, never()).clearSession(response);
-    }
-
-    @Test
     void h5TerminalSessionErrorsClearAllAuthenticationCookies() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Client-Platform", "H5");
@@ -101,6 +86,20 @@ class GlobalExceptionHandlerCookieTest {
 
         handler.handleSession(
                 exception(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID, true),
+                request,
+                response);
+
+        verify(cookieWriter).clearSession(response);
+    }
+
+    @Test
+    void h5MissingAccessTokenAlsoClearsTheUnusableRefreshSession() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.handleSession(
+                exception(SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED, true),
                 request,
                 response);
 
@@ -118,7 +117,6 @@ class GlobalExceptionHandlerCookieTest {
                 request,
                 response);
 
-        verify(cookieWriter, never()).clearAccessToken(response);
         verify(cookieWriter, never()).clearSession(response);
     }
 

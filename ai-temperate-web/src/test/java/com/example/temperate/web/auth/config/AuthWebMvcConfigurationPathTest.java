@@ -3,9 +3,9 @@ package com.example.temperate.web.auth.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
 import com.example.temperate.web.auth.interceptor.BrowserSessionSecurityInterceptor;
 import com.example.temperate.web.auth.interceptor.RegistrationFlowInterceptor;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,7 +23,7 @@ import org.springframework.web.servlet.handler.MappedInterceptor;
  */
 class AuthWebMvcConfigurationPathTest {
 
-    private AccessTokenAuthenticationInterceptor accessTokenInterceptor;
+    private UserSessionAuthenticationInterceptor userSessionInterceptor;
     private RegistrationFlowInterceptor registrationFlowInterceptor;
     private BrowserSessionSecurityInterceptor browserSessionSecurityInterceptor;
     private List<InterceptorRegistration> registrations;
@@ -32,11 +32,11 @@ class AuthWebMvcConfigurationPathTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        accessTokenInterceptor = mock(AccessTokenAuthenticationInterceptor.class);
+        userSessionInterceptor = mock(UserSessionAuthenticationInterceptor.class);
         registrationFlowInterceptor = mock(RegistrationFlowInterceptor.class);
         browserSessionSecurityInterceptor = mock(BrowserSessionSecurityInterceptor.class);
         AuthWebMvcConfiguration configuration = new AuthWebMvcConfiguration(
-                accessTokenInterceptor,
+                userSessionInterceptor,
                 registrationFlowInterceptor,
                 browserSessionSecurityInterceptor);
         InterceptorRegistry registry = new InterceptorRegistry();
@@ -53,18 +53,18 @@ class AuthWebMvcConfigurationPathTest {
                 .containsExactly(Ordered.HIGHEST_PRECEDENCE + 20);
         assertThat(ordersOf(browserSessionSecurityInterceptor))
                 .containsExactly(Ordered.HIGHEST_PRECEDENCE + 21);
-        assertThat(ordersOf(accessTokenInterceptor))
+        assertThat(ordersOf(userSessionInterceptor))
                 .containsExactly(
                         Ordered.HIGHEST_PRECEDENCE + 22,
                         Ordered.HIGHEST_PRECEDENCE + 22);
     }
 
     @Test
-    void overlappingLogoutAllRunsBrowserSecurityBeforeAccessTokenAuthentication() {
+    void overlappingLogoutAllRunsBrowserSecurityBeforeUserSessionAuthentication() {
         assertThat(matchingInterceptors("/api/auth/session/logout-all"))
                 .containsExactly(
                         browserSessionSecurityInterceptor,
-                        accessTokenInterceptor);
+                        userSessionInterceptor);
     }
 
     @Test
@@ -74,59 +74,59 @@ class AuthWebMvcConfigurationPathTest {
         assertThat(matchingInterceptors("/api/auth/session/logout"))
                 .containsExactly(browserSessionSecurityInterceptor);
         assertThat(matchingInterceptors("/api/users/me"))
-                .containsExactly(accessTokenInterceptor);
+                .containsExactly(userSessionInterceptor);
     }
 
     @Test
-    void administratorNamespaceDoesNotUseOrdinaryAccessTokenAuthentication() {
-        assertThat(matchesAccessTokenInterceptor("/api/admin/auth/state"))
+    void administratorNamespaceDoesNotUseOrdinaryUserSessionAuthentication() {
+        assertThat(matchesUserSessionInterceptor("/api/admin/auth/state"))
                 .isFalse();
     }
 
     @Test
-    void ordinaryProtectedApiStillUsesAccessTokenAuthentication() {
-        assertThat(matchesAccessTokenInterceptor("/api/users/me"))
+    void ordinaryProtectedApiUsesRtFirstUserSessionAuthentication() {
+        assertThat(matchesUserSessionInterceptor("/api/users/me"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor("/api/ai-models"))
+        assertThat(matchesUserSessionInterceptor("/api/ai-models"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor("/api/ai-models/AAABi0VWeJ8"))
+        assertThat(matchesUserSessionInterceptor("/api/ai-models/AAABi0VWeJ8"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor("/api/ai/conversations"))
+        assertThat(matchesUserSessionInterceptor("/api/ai/conversations"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor("/api/ai/conversations/responses"))
+        assertThat(matchesUserSessionInterceptor("/api/ai/conversations/responses"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor(
+        assertThat(matchesUserSessionInterceptor(
                         "/api/ai/conversations/AZ-vpV3kfag70-0EMMUETQ/messages"))
                 .isTrue();
-        assertThat(matchesAccessTokenInterceptor(
+        assertThat(matchesUserSessionInterceptor(
                         "/api/ai/conversation-attachments/preuploads"))
                 .isTrue();
     }
 
     @Test
-    void ordinaryPreAuthBootstrapDoesNotUseAccessTokenAuthentication() {
-        assertThat(matchesAccessTokenInterceptor("/api/_edge/pre-auth"))
+    void ordinaryPreAuthBootstrapDoesNotUseUserSessionAuthentication() {
+        assertThat(matchesUserSessionInterceptor("/api/_edge/pre-auth"))
                 .isFalse();
     }
 
     @Test
-    void ordinaryRiskChallengeNavigationDoesNotUseAccessTokenAuthentication() {
-        assertThat(matchesAccessTokenInterceptor("/api/_edge/risk-challenge"))
+    void ordinaryRiskChallengeNavigationDoesNotUseUserSessionAuthentication() {
+        assertThat(matchesUserSessionInterceptor("/api/_edge/risk-challenge"))
                 .isFalse();
     }
 
     @Test
-    void ordinaryWebRtcStartAndReportDoNotUseAccessTokenAuthentication() {
-        assertThat(matchesAccessTokenInterceptor("/api/_edge/webrtc/start"))
+    void ordinaryWebRtcStartAndReportDoNotUseUserSessionAuthentication() {
+        assertThat(matchesUserSessionInterceptor("/api/_edge/webrtc/start"))
                 .isFalse();
-        assertThat(matchesAccessTokenInterceptor("/api/_edge/webrtc/report"))
+        assertThat(matchesUserSessionInterceptor("/api/_edge/webrtc/report"))
                 .isFalse();
     }
 
-    private boolean matchesAccessTokenInterceptor(String path) {
+    private boolean matchesUserSessionInterceptor(String path) {
         return matchingInterceptors(path).stream()
                 .anyMatch(interceptor -> sameInterceptor(
-                        interceptor, accessTokenInterceptor));
+                        interceptor, userSessionInterceptor));
     }
 
     private List<HandlerInterceptor> matchingInterceptors(String path) {
@@ -150,7 +150,12 @@ class AuthWebMvcConfigurationPathTest {
 
     private static HandlerInterceptor interceptorOf(
             InterceptorRegistration registration) {
-        return ReflectionTestUtils.invokeMethod(registration, "getInterceptor");
+        Object registered = ReflectionTestUtils.invokeMethod(
+                registration, "getInterceptor");
+        if (registered instanceof MappedInterceptor mappedInterceptor) {
+            return mappedInterceptor.getInterceptor();
+        }
+        return (HandlerInterceptor) registered;
     }
 
     private static int registeredOrder(InterceptorRegistration registration) {

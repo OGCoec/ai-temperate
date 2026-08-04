@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(
         name = "用户-当前用户头像",
         description = "供 H5 与 Android 已认证普通用户创建阿里云 OSS 私有预上传、精确取消并同步确认公开头像。"
-                + "所有接口仅操作当前 Access Token 对应用户，不修改 Refresh Token、Refresh Session 或 Redis。")
+                + "所有接口仅操作当前 RT-first 会话对应用户，不修改 Refresh Token、Refresh Session 或 Redis。")
 public class CurrentUserAvatarController {
 
     private final UserAvatarService avatarService;

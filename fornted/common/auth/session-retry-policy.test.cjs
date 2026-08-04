@@ -12,15 +12,15 @@ async function loadModule() {
 	return import(sourceUrl)
 }
 
-test('allows only one access-token renewal attempt', async () => {
+test('never calls the removed refresh endpoint for access-token errors', async () => {
 	const { SessionRenewalMode, sessionRenewalMode } = await loadModule()
 
 	assert.equal(
 		sessionRenewalMode('H5', 'AT_EXPIRED', false),
-		SessionRenewalMode.REFRESH
+		SessionRenewalMode.NONE
 	)
 	assert.equal(
-		sessionRenewalMode('H5', 'AT_EXPIRED', true),
+		sessionRenewalMode('ANDROID', 'AT_REQUIRED', false),
 		SessionRenewalMode.NONE
 	)
 })

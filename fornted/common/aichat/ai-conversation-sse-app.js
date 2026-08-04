@@ -1,4 +1,5 @@
 import { createAiConversationSseParser } from './ai-conversation-sse-parser.js'
+import { applySessionRenewalHeaders } from '../auth/http-client.js'
 // #ifdef APP-PLUS
 import { openSseRequest } from '@/uni_modules/ait-sse'
 // #endif
@@ -22,9 +23,13 @@ export function openAiConversationSseApp(request, handlers = {}) {
 		method: request.method || 'POST',
 		headers: { ...request.headers },
 		body: request.body == null ? undefined : JSON.stringify(request.body),
-		onOpen() {
-			// 原生插件已在回调前校验成功状态和 SSE Content-Type，但当前接口不暴露具体响应头。
+		onOpen(renewal) {
+			applySessionRenewalHeaders({
+				'X-Session-Renewed': renewal?.sessionRenewed || '',
+				'X-New-Access-Token': renewal?.newAccessToken || ''
+			})
 			handlers.lifecycleDiagnostics?.record?.('CLIENT_RESPONSE_HEADERS', {
+				statusCode: Number(renewal?.statusCode || 0),
 				contentType: 'text/event-stream'
 			})
 		},

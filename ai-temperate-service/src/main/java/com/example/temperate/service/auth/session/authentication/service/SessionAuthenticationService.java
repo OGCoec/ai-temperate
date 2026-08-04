@@ -1,21 +1,14 @@
 package com.example.temperate.service.auth.session.authentication.service;
 
 import com.example.temperate.service.auth.session.authentication.dto.command.LogoutCommand;
-import com.example.temperate.service.auth.session.authentication.dto.command.SessionAuthenticationCommand;
 import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
 import com.example.temperate.service.auth.session.authentication.dto.result.SessionAuthenticationResult;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 
 /**
- * 定义刷新会话认证、CSRF 启动、登出和按用户撤销会话的业务边界。
+ * 定义 H5 会话恢复、当前设备登出和按用户撤销全部 Refresh Session 的业务边界。
  */
 public interface SessionAuthenticationService {
-
-    SessionAuthenticationResult authenticate(SessionAuthenticationCommand command);
-
-    SessionAuthenticationResult authenticate(
-            SessionAuthenticationCommand command,
-            PreAuthSessionBinding preAuthBinding);
 
     SessionAuthenticationResult bootstrap(SessionBootstrapCommand command);
 

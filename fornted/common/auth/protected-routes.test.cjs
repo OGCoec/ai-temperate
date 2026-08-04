@@ -32,6 +32,7 @@ test('allows authentication bootstrap and pre-auth security pages without login'
 	const anonymousRoutes = [
 		'/pages/launch/session-gate',
 		'/pages/auth/login',
+		'/pages/auth/totp-login',
 		'/pages/auth/register',
 		'/pages/auth/password-reset',
 		'/pages/risk/blocked',

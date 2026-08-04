@@ -16,6 +16,17 @@ public interface RefreshSessionStore {
 
     RefreshSessionSnapshot create(NewRefreshSession session);
 
+    RefreshSessionValidation validateForAccess(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash);
+
+    RefreshSessionValidation validateForAccessWithPreAuth(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash,
+            HmacIdentifier csrfHash,
+            PreAuthSessionBinding preAuthBinding);
+
     RefreshSessionValidation validateAndRenew(
             HmacIdentifier refreshTokenHash,
             HmacIdentifier deviceHash,

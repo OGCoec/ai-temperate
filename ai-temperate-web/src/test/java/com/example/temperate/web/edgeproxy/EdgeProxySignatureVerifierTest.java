@@ -97,7 +97,7 @@ class EdgeProxySignatureVerifierTest {
         EdgeProxySignatureVerifier verifier = verifier();
         MockHttpServletRequest pathChanged = signedRequest(
                 "POST",
-                "/api/auth/session/refresh",
+                "/api/auth/session/bootstrap",
                 null,
                 "niko000o.site",
                 NOW.getEpochSecond(),

@@ -52,7 +52,7 @@ Registry 在启动时拒绝重复类型，不支持类型返回受控业务错�
 | 登录策略 | `service.auth.login.strategy` | `LoginStrategy`、`LoginStrategyRegistry`、`LoginStrategyType` |
 | 会话认证 | `service.auth.session.authentication.service` | `SessionAuthenticationService` |
 | 会话认证实现 | `service.auth.session.authentication.service.impl` | `SessionAuthenticationServiceImpl` |
-| 会话命令 | `service.auth.session.authentication.dto.command` | `SessionAuthenticationCommand`、`SessionBootstrapCommand`、`LogoutCommand` |
+| 会话命令 | `service.auth.session.authentication.dto.command` | `SessionBootstrapCommand`、`LogoutCommand` |
 | 会话结果 | `service.auth.session.authentication.dto.result` | `SessionAuthenticationResult` |
 | 固定 RT Store | `service.auth.session.refresh.store` | `RefreshSessionStore` |
 | Redis RT Store | `service.auth.session.refresh.store.impl` | `RedisRefreshSessionStore` |

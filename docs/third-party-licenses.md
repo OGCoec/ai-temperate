@@ -15,3 +15,10 @@
 - 使用目的：把可信官方 SVG 中的 `<style>` 和行内 `style` 解析为 CSS AST，再执行选择器、媒体查询、属性和值的显式白名单校验。
 - 上游许可：Apache License 2.0。
 - 项目边界：该依赖只负责语法解析；是否允许某个 CSS 节点、属性或资源引用仍由项目安全策略决定，禁止把“解析成功”当作“内容安全”。
+
+## qrcode-generator
+
+- 依赖坐标：`qrcode-generator@1.4.4`
+- 使用目的：在普通用户 TOTP 设置页面中把后端返回的 `otpauth` URI 本地渲染为 SVG 二维码。
+- 上游许可：MIT。
+- 项目边界：二维码生成完全在当前 H5 或 Android WebView 进程内完成；`otpauth` URI 和 Base32 密钥不得发送给第三方二维码服务、日志或持久化存储。

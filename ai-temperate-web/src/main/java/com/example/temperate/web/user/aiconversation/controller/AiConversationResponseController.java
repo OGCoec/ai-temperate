@@ -60,7 +60,7 @@ import reactor.core.publisher.Flux;
 @Tag(
         name = "用户-AI 会话响应",
         description = "供已认证 H5 和 Android 用户以 POST SSE 创建或继续 AI 会话。"
-                + "接口经过现有 Access Token、设备和风险校验，不负责前端 EventSource 兼容或管理员配置。")
+                + "接口经过现有 RT-first 会话、设备和风险校验，不负责前端 EventSource 兼容或管理员配置。")
 public final class AiConversationResponseController {
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";

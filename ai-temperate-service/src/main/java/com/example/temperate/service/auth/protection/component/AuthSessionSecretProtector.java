@@ -122,6 +122,43 @@ public final class AuthSessionSecretProtector {
                 requireText("password reset claim", claimId, 64));
     }
 
+    public HmacIdentifier totpLoginFlowToken(String rawFlowToken) {
+        return identify("auth:totp:login-flow",
+                requireNanoId("TOTP login flow token", rawFlowToken));
+    }
+
+    public HmacIdentifier totpUsedTimeStep(long userId, long timeStep) {
+        if (userId <= 0 || timeStep < 0) {
+            throw invalid("TOTP replay identity is invalid.");
+        }
+        return identify(
+                "auth:totp:used-step",
+                Long.toString(userId),
+                Long.toString(timeStep));
+    }
+
+    public HmacIdentifier totpUser(long userId) {
+        if (userId <= 0) {
+            throw invalid("TOTP user identity is invalid.");
+        }
+        return identify("auth:totp:user", Long.toString(userId));
+    }
+
+    public HmacIdentifier totpSetupToken(String rawSetupToken) {
+        return identify("auth:totp:setup-token",
+                requireNanoId("TOTP setup token", rawSetupToken));
+    }
+
+    public HmacIdentifier totpStepUpFlowToken(String rawFlowToken) {
+        return identify("auth:totp:step-up-flow",
+                requireNanoId("TOTP step-up flow token", rawFlowToken));
+    }
+
+    public HmacIdentifier totpStepUpProofToken(String rawProofToken) {
+        return identify("auth:totp:step-up-proof",
+                requireNanoId("TOTP step-up proof token", rawProofToken));
+    }
+
     public HmacIdentifier refreshToken(String rawRefreshToken) {
         return identify("auth:session:refresh", requireNanoId("refresh token", rawRefreshToken));
     }

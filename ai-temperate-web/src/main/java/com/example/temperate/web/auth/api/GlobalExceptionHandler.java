@@ -39,7 +39,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
  * <p>用途：将领域异常映射为稳定 HTTP 状态、错误码和对外消息，并在终止性 H5 会话错误时清理认证 Cookie。</p>
  *
  * <p>安全原理：客户端只接收受控错误信息；浏览器 Cookie 清理仅针对 H5 和相应终止性错误执行，避免 Android
- * 请求或普通 AT 过期错误被错误地扩展为完整会话注销。</p>
+ * 请求或临时基础设施故障被错误地扩展为完整会话注销。</p>
  */
 @RestControllerAdvice
 public final class GlobalExceptionHandler implements AuthExceptionHandler {
@@ -86,9 +86,16 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleLogin(LoginException exception) {
         HttpStatus status = switch (exception.code()) {
             case LOGIN_BLOCKED, VERIFICATION_COOLDOWN,
-                    VERIFICATION_SEND_LIMIT -> HttpStatus.TOO_MANY_REQUESTS;
-            case SESSION_LIMIT_REACHED, PASSWORD_RESET_REQUIRED -> HttpStatus.CONFLICT;
-            case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+                    VERIFICATION_SEND_LIMIT,
+                    TOTP_ATTEMPTS_EXHAUSTED -> HttpStatus.TOO_MANY_REQUESTS;
+            case SESSION_LIMIT_REACHED,
+                    PASSWORD_RESET_REQUIRED,
+                    TOTP_SETUP_SUPERSEDED,
+                    TOTP_STATE_CONFLICT -> HttpStatus.CONFLICT;
+            case INFRASTRUCTURE_UNAVAILABLE,
+                    TOTP_CONFIGURATION_INVALID -> HttpStatus.SERVICE_UNAVAILABLE;
+            case TOTP_FLOW_EXPIRED, TOTP_SETUP_EXPIRED -> HttpStatus.GONE;
+            case TOTP_STEP_UP_REQUIRED -> HttpStatus.FORBIDDEN;
             case INVALID_INPUT -> HttpStatus.BAD_REQUEST;
             default -> HttpStatus.UNAUTHORIZED;
         };
@@ -113,7 +120,6 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
 
     private static HttpStatus sessionStatus(SessionAuthenticationErrorCode code) {
         return switch (code) {
-            case CSRF_INVALID -> HttpStatus.FORBIDDEN;
             case PREAUTH_REQUIRED -> HttpStatus.PRECONDITION_REQUIRED;
             case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.UNAUTHORIZED;
@@ -129,10 +135,7 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
                 != AuthClientPlatform.H5) {
             return;
         }
-        if (exception.code() == SessionAuthenticationErrorCode.ACCESS_TOKEN_EXPIRED
-                || exception.code() == SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED) {
-            cookieWriter.clearAccessToken(response);
-        } else if (exception.clearCookies()) {
+        if (exception.clearCookies()) {
             cookieWriter.clearSession(response);
         }
     }
@@ -338,7 +341,6 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
         return switch (code) {
             case ACCESS_TOKEN_REQUIRED -> "AT_REQUIRED";
             case ACCESS_TOKEN_INVALID -> "AT_INVALID";
-            case ACCESS_TOKEN_EXPIRED -> "AT_EXPIRED";
             default -> code.name();
         };
     }

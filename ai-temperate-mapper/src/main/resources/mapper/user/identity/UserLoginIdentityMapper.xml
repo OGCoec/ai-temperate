@@ -11,6 +11,8 @@
         <result property="phone" column="phone"/>
         <result property="passwordHash" column="password_hash"/>
         <result property="passwordVersion" column="password_version"/>
+        <result property="totpEnabled" column="totp_enabled"/>
+        <result property="totpSecretEncrypted" column="totp_secret_encrypted"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
@@ -26,6 +28,16 @@
             <arg column="display_name" javaType="java.lang.String"/>
             <arg column="email" javaType="java.lang.String"/>
             <arg column="phone" javaType="java.lang.String"/>
+            <arg column="totp_enabled" javaType="_boolean"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="TotpCredentialResultMap"
+               type="com.example.temperate.model.auth.domain.TotpCredential">
+        <constructor>
+            <idArg column="identity_id" javaType="_long"/>
+            <arg column="totp_enabled" javaType="_boolean"/>
+            <arg column="totp_secret_encrypted" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
 
@@ -67,6 +79,7 @@
         up.display_name
         , uli.email
         , uli.phone
+        , uli.totp_enabled
     </sql>
 
     <sql id="IdentityContactColumns">
@@ -141,6 +154,16 @@
         WHERE uli.id = #{identityId,jdbcType=BIGINT}
     </select>
 
+    <select id="findTotpCredentialById"
+            resultMap="TotpCredentialResultMap">
+        SELECT
+            id AS identity_id,
+            totp_enabled,
+            totp_secret_encrypted
+        FROM userloginidentity
+        WHERE id = #{identityId,jdbcType=BIGINT}
+    </select>
+
     <select id="findCurrentUserProfileById"
             resultMap="CurrentUserProfileResultMap">
         SELECT
@@ -202,5 +225,23 @@
         SET password_hash = #{upgradedPasswordHash,jdbcType=VARCHAR}
         WHERE id = #{identityId,jdbcType=BIGINT}
           AND password_hash = #{expectedPasswordHash,jdbcType=VARCHAR}
+    </update>
+
+    <update id="enableOrRotateTotp">
+        UPDATE userloginidentity
+        SET totp_secret_encrypted = #{encryptedSecret,jdbcType=VARCHAR},
+            totp_enabled = TRUE
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND totp_enabled = #{expectedEnabled,jdbcType=BOOLEAN}
+          AND totp_secret_encrypted IS NOT DISTINCT FROM
+              #{expectedEncryptedSecret,jdbcType=VARCHAR}
+    </update>
+
+    <update id="disableTotp">
+        UPDATE userloginidentity
+        SET totp_secret_encrypted = NULL,
+            totp_enabled = FALSE
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND totp_enabled = TRUE
     </update>
 </mapper>

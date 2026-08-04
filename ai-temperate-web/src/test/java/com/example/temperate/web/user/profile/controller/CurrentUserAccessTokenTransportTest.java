@@ -1,33 +1,40 @@
 package com.example.temperate.web.user.profile.controller;
 
+import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.service.auth.session.access.AccessSessionService;
+import com.example.temperate.service.auth.session.access.dto.SessionAccessCommand;
+import com.example.temperate.service.auth.session.access.dto.SessionAccessResult;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
+import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.user.profile.CurrentUserProfileResult;
 import com.example.temperate.service.user.profile.CurrentUserProfileService;
-import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
+import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.Cookie;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
- * 验证 H5 HttpOnly Cookie AT 与 Android Bearer AT 都通过统一拦截器建立 SecurityContext 后访问个人资料接口。
+ * 验证 H5 Cookie 与 Android Header 凭据都通过统一 RT-first 拦截器建立 SecurityContext 后访问个人资料接口。
  */
 class CurrentUserAccessTokenTransportTest {
 
@@ -38,8 +45,12 @@ class CurrentUserAccessTokenTransportTest {
     void setUp() {
         accessSessionService = mock(AccessSessionService.class);
         CurrentUserProfileService profileService = mock(CurrentUserProfileService.class);
-        when(accessSessionService.authenticate("valid-access-token"))
-                .thenReturn(new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice"));
+        when(accessSessionService.authenticateOrRenew(any(SessionAccessCommand.class)))
+                .thenReturn(new SessionAccessResult(
+                        new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice"),
+                        false,
+                        null,
+                        Instant.parse("2026-08-06T15:00:00Z")));
         when(profileService.getRequired(10001L)).thenReturn(new CurrentUserProfileResult(
                 "Alice",
                 "alice@example.test",
@@ -60,7 +71,11 @@ class CurrentUserAccessTokenTransportTest {
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(
                         new ObjectMapper().findAndRegisterModules()))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
-                .addInterceptors(new AccessTokenAuthenticationInterceptor(accessSessionService))
+                .addInterceptors(new UserSessionAuthenticationInterceptor(
+                        accessSessionService,
+                        mock(AuthCookieWriter.class),
+                        mock(PreAuthService.class),
+                        mock(NetworkRiskProperties.class)))
                 .build();
     }
 
@@ -73,7 +88,11 @@ class CurrentUserAccessTokenTransportTest {
     void h5UsesTheAccessTokenCookie() throws Exception {
         mockMvc.perform(get("/api/users/me")
                         .header("X-Client-Platform", "H5")
-                        .cookie(new Cookie("access_token", "valid-access-token")))
+                        .header("X-Device-Installation-Id", "device-installation-id")
+                        .header("X-CSRF-Token", "csrf-token")
+                        .cookie(
+                                new Cookie("access_token", "valid-access-token"),
+                                new Cookie("refresh_token", "valid-refresh-token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("alice@example.test"))
                 .andExpect(jsonPath("$.avatarUrl").value(nullValue()))
@@ -90,7 +109,10 @@ class CurrentUserAccessTokenTransportTest {
     void androidUsesTheBearerAccessToken() throws Exception {
         mockMvc.perform(get("/api/users/me")
                         .header("X-Client-Platform", "ANDROID")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer valid-access-token"))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer valid-access-token")
+                        .header("X-Refresh-Token", "valid-refresh-token")
+                        .header("X-Device-Installation-Id", "device-installation-id")
+                        .header("X-CSRF-Token", "csrf-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phone").value("+14155550123"));
     }

@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 为已通过 Access Token 认证的普通用户提供已启用 AI 模型目录和详情接口。
+ * 为已通过 RT-first 会话认证的普通用户提供已启用 AI 模型目录和详情接口。
  *
  * <p>该 Controller 不接受内部模型 ID，不提供启停或编辑能力，也不直接访问 PostgreSQL 或 Redis；
  * 模型可用性由 Service 的已启用快照或数据库 {@code is_enabled = TRUE} 边界控制。</p>
@@ -33,7 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/ai-models")
 @Tag(
         name = "用户-AI 模型目录",
-        description = "供已通过 Access Token 认证的 H5 和 Android 普通用户分页查看当前已启用模型及计费倍率。"
+        description = "供已通过 RT-first 会话认证的 H5 和 Android 普通用户分页查看当前已启用模型及计费倍率。"
                 + "接口只读，不暴露数据库 BIGINT，不负责模型调用、额度预扣、最终结算或管理员配置。")
 public class UserAiModelController {
 
@@ -84,7 +84,7 @@ public class UserAiModelController {
     @GetMapping("/{modelPublicId}")
     @Operation(
             summary = "读取单个已启用 AI 模型详情",
-            description = "禁用或不存在的模型统一返回 404；公共 ID 仅用于路由，仍受 Access Token 认证保护。")
+            description = "禁用或不存在的模型统一返回 404；公共 ID 仅用于路由，仍受 RT-first 会话认证保护。")
     public ResponseEntity<UserAiModelResult> detail(
             @PathVariable
             @Parameter(

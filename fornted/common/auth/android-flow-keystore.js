@@ -50,7 +50,7 @@ function decode(value) {
 }
 
 function emptyState() {
-	return { register: null, passwordReset: null }
+	return { register: null, passwordReset: null, totpLogin: null }
 }
 
 function hasFutureExpiry(flow) {
@@ -68,10 +68,16 @@ function validPasswordResetFlow(flow) {
 		flow?.challengeHandle && hasFutureExpiry(flow))
 }
 
+function validTotpLoginFlow(flow) {
+	const expiresAt = Date.parse(flow?.expiresAt || flow?.totpExpiresAt || '')
+	return Boolean(flow?.totpFlowToken && Number.isFinite(expiresAt) && expiresAt > Date.now())
+}
+
 function sanitizeState(state) {
 	return {
 		register: validRegisterFlow(state?.register) ? state.register : null,
-		passwordReset: validPasswordResetFlow(state?.passwordReset) ? state.passwordReset : null
+		passwordReset: validPasswordResetFlow(state?.passwordReset) ? state.passwordReset : null,
+		totpLogin: validTotpLoginFlow(state?.totpLogin) ? state.totpLogin : null
 	}
 }
 
@@ -112,7 +118,7 @@ function readState() {
 
 function writeState(nextState) {
 	const state = sanitizeState(nextState)
-	if (!state.register && !state.passwordReset) {
+	if (!state.register && !state.passwordReset && !state.totpLogin) {
 		clearStorageAndKey()
 		return
 	}
@@ -178,5 +184,27 @@ export function loadAndroidPasswordResetFlow() {
 export function clearAndroidPasswordResetFlow() {
 	const state = readState()
 	state.passwordReset = null
+	writeState(state)
+}
+
+export function saveAndroidTotpLoginFlow(flow) {
+	const state = readState()
+	state.totpLogin = validTotpLoginFlow(flow) ? {
+		totpFlowToken: flow.totpFlowToken,
+		expiresAt: flow.totpExpiresAt || flow.expiresAt,
+		attemptsRemaining: Number(flow.attemptsRemaining || 0)
+	} : null
+	writeState(state)
+}
+
+export function loadAndroidTotpLoginFlow() {
+	const state = readState()
+	if (!state.totpLogin) clearAndroidTotpLoginFlow()
+	return state.totpLogin
+}
+
+export function clearAndroidTotpLoginFlow() {
+	const state = readState()
+	state.totpLogin = null
 	writeState(state)
 }

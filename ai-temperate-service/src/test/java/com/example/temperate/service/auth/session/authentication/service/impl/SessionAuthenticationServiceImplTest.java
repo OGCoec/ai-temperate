@@ -14,7 +14,6 @@ import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.model.auth.enums.AccountStatus;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
-import com.example.temperate.service.auth.session.authentication.dto.command.SessionAuthenticationCommand;
 import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
 import com.example.temperate.service.auth.session.authentication.dto.result.SessionAuthenticationResult;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -36,7 +35,6 @@ class SessionAuthenticationServiceImplTest {
     private static final long USER_ID = 10001L;
     private static final String RT = "A2345678901234567890123456789012345678";
     private static final String DEVICE = "550e8400-e29b-41d4-a716-446655440000";
-    private static final String CSRF = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
     private static final String NEW_CSRF = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
     private static final Instant EXPIRES_AT = Instant.parse("2026-07-15T09:00:00Z");
     private static final HmacSha256Identifier HMAC = new HmacSha256Identifier(
@@ -49,7 +47,6 @@ class SessionAuthenticationServiceImplTest {
     private SessionAuthenticationServiceImpl service;
     private HmacIdentifier refreshHash;
     private HmacIdentifier deviceHash;
-    private HmacIdentifier csrfHash;
     private String publicId;
 
     @BeforeEach
@@ -62,32 +59,13 @@ class SessionAuthenticationServiceImplTest {
                 tokenService, sessionStore, protector, identityMapper);
         refreshHash = id("refresh");
         deviceHash = id("device");
-        csrfHash = id("csrf");
         publicId = new PublicIdCodec().encode(USER_ID);
         when(protector.refreshToken(RT)).thenReturn(refreshHash);
         when(protector.device(DEVICE)).thenReturn(deviceHash);
-        when(protector.csrf(CSRF)).thenReturn(csrfHash);
         when(identityMapper.findAuthenticationById(USER_ID)).thenReturn(
                 new AuthenticationContext(
                         USER_ID, "{bcrypt}hash", 3L, AccountStatus.ACTIVE, "用户"));
         when(tokenService.issueAccessToken(USER_ID)).thenReturn("new-access-token");
-    }
-
-    @Test
-    void refreshRenewsFixedRtAndReturnsSameCsrfWithoutIssuingAnotherRt() {
-        RefreshSessionSnapshot snapshot = snapshot(csrfHash);
-        when(sessionStore.validateAndRenew(refreshHash, deviceHash, csrfHash))
-                .thenReturn(new RefreshSessionValidation(
-                        RefreshSessionValidation.Status.VALID, snapshot));
-
-        SessionAuthenticationResult result = service.authenticate(
-                new SessionAuthenticationCommand(null, RT, CSRF, DEVICE));
-
-        assertThat(result.getAccessToken()).isEqualTo("new-access-token");
-        assertThat(result.getCsrfToken()).isEqualTo(CSRF);
-        assertThat(result.getRefreshExpiresAt()).isEqualTo(EXPIRES_AT);
-        verify(sessionStore).validateAndRenew(refreshHash, deviceHash, csrfHash);
-        verify(tokenService).issueAccessToken(USER_ID);
     }
 
     @Test
@@ -105,19 +83,6 @@ class SessionAuthenticationServiceImplTest {
         assertThat(result.getCsrfToken()).isEqualTo(NEW_CSRF);
         verify(sessionStore).bootstrapAndRenew(refreshHash, deviceHash, newCsrfHash);
         verify(tokenService).issueAccessToken(USER_ID);
-    }
-
-    @Test
-    void missingUserIndexFailsWithoutIssuingAccessToken() {
-        when(sessionStore.validateAndRenew(refreshHash, deviceHash, csrfHash))
-                .thenReturn(new RefreshSessionValidation(
-                        RefreshSessionValidation.Status.INDEX_MISSING, null));
-
-        assertThatThrownBy(() -> service.authenticate(
-                new SessionAuthenticationCommand(null, RT, CSRF, DEVICE)))
-                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception ->
-                        assertThat(exception.code())
-                                .isEqualTo(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID));
     }
 
     @Test

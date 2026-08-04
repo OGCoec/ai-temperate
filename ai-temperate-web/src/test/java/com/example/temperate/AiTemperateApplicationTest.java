@@ -2,6 +2,8 @@ package com.example.temperate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -10,6 +12,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.temperate.mapper.ai.AiConversationMapper;
+import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
+import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
 import com.example.temperate.mapper.ai.AiConversationMessageMapper;
 import com.example.temperate.mapper.ai.AiModelCapabilityMapper;
 import com.example.temperate.mapper.ai.AiModelIconMapper;
@@ -20,7 +24,13 @@ import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
+import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
+import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
+import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
+import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
+import com.example.temperate.service.auth.device.service.GlobalDeviceBlockService;
 import com.example.temperate.service.admin.config.properties.AdminProperties;
+import com.example.temperate.service.admin.mailinspection.lease.MailInspectionJobLeaseService;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleDiagnosticService;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTimingAspect;
@@ -28,8 +38,12 @@ import com.example.temperate.service.user.aiconversation.diagnostic.AiConversati
 import com.example.temperate.service.user.aiconversation.diagnostic.impl.NoOpAiConversationLifecycleDiagnosticServiceImpl;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
+import com.example.temperate.web.edgeproxy.EdgeProxySignatureVerifier;
+import com.example.temperate.web.edgeproxy.EdgeProxyVerificationResult;
 import jakarta.servlet.http.Cookie;
 import java.time.Clock;
+import java.time.Duration;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,6 +103,12 @@ class AiTemperateApplicationTest {
     private AiConversationMapper aiConversationMapper;
 
     @MockitoBean
+    private AiConversationGenerationMapper aiConversationGenerationMapper;
+
+    @MockitoBean
+    private AiConversationGenerationPayloadMapper aiConversationGenerationPayloadMapper;
+
+    @MockitoBean
     private AiConversationMessageMapper aiConversationMessageMapper;
 
     @MockitoBean
@@ -111,6 +131,23 @@ class AiTemperateApplicationTest {
 
     @MockitoBean
     private VerificationDeliveryPublisher verificationDeliveryPublisher;
+
+    @MockitoBean
+    private EdgeProxySignatureVerifier edgeProxySignatureVerifier;
+
+    @MockitoBean
+    private SessionAuthenticationService sessionAuthenticationService;
+
+    @MockitoBean
+    private GlobalDeviceBlockService globalDeviceBlockService;
+
+    @MockitoBean
+    private MailInspectionJobLeaseService mailInspectionJobLeaseService;
+
+    @BeforeEach
+    void allowUnblockedTestDevices() {
+        when(globalDeviceBlockService.remainingBlockTtl(any())).thenReturn(Duration.ZERO);
+    }
 
     @Test
     void healthEndpointIsPublicAndReportsUp() throws Exception {
@@ -220,7 +257,11 @@ class AiTemperateApplicationTest {
                 .andExpect(header().string("Set-Cookie", containsString("XSRF-TOKEN=")))
                 .andExpect(header().string("Set-Cookie", containsString("Path=/")))
                 .andExpect(header().string("Set-Cookie", containsString("Secure")))
-                .andExpect(header().string("Set-Cookie", containsString("SameSite=Strict")));
+                .andExpect(result -> {
+                    Cookie cookie = result.getResponse().getCookie("XSRF-TOKEN");
+                    assertThat(cookie).isNotNull();
+                    assertThat(cookie.getAttribute("SameSite")).isEqualTo("Strict");
+                });
     }
 
     @Test
@@ -233,24 +274,37 @@ class AiTemperateApplicationTest {
 
     @Test
     void bootstrapIsCsrfExemptButStillRequiresTheH5SessionBoundary() throws Exception {
+        allowTrustedBrowserEdgeRequest();
+        when(sessionAuthenticationService.bootstrap(any(SessionBootstrapCommand.class)))
+                .thenThrow(new SessionAuthenticationException(
+                        SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED,
+                        "Refresh token is required.",
+                        true));
         mockMvc.perform(post("/api/auth/session/bootstrap")
+                        .header("X-Client-Platform", "H5")
                         .header("X-Device-Installation-Id", "device-1")
                         .header("Origin", "http://localhost:5173")
-                        .header("Sec-Fetch-Site", "same-origin")
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .header("Sec-Fetch-Site", "same-origin"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("REFRESH_TOKEN_REQUIRED"));
     }
 
     @Test
-    void bootstrapRejectsAnIllegalBrowserOriginEvenThoughItIsHeaderExempt() throws Exception {
+    void bootstrapRejectsCrossSiteFetchMetadataEvenThoughItIsHeaderExempt() throws Exception {
+        allowTrustedBrowserEdgeRequest();
         mockMvc.perform(post("/api/auth/session/bootstrap")
+                        .header("X-Client-Platform", "H5")
                         .header("X-Device-Installation-Id", "device-1")
-                        .header("Origin", "https://attacker.example")
-                        .header("Sec-Fetch-Site", "cross-site")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isForbidden())
+                        .header("Origin", "http://localhost:5173")
+                        .header("Sec-Fetch-Site", "cross-site"))
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("CSRF_INVALID"));
+    }
+
+    private void allowTrustedBrowserEdgeRequest() {
+        when(edgeProxySignatureVerifier.hasAnyEdgeHeader(any())).thenReturn(true);
+        when(edgeProxySignatureVerifier.verify(any())).thenReturn(
+                new EdgeProxyVerificationResult("v2", "niko000o.site", null));
     }
 
     @Test

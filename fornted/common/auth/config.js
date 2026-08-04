@@ -14,11 +14,13 @@ export const AUTH_API_BASE_URL = authApiBaseUrl
 export const AUTH_ROUTES = Object.freeze({
 	sessionGate: '/pages/launch/session-gate',
 	login: '/pages/auth/login',
+	totpLogin: '/pages/auth/totp-login',
 	register: '/pages/auth/register',
 	passwordReset: '/pages/auth/password-reset',
 	home: '/pages/ai-chat/index',
 	chat: '/pages/ai-chat/index',
 	profile: '/pages/account/profile',
+	totpSecurity: '/pages/account/totp-security',
 	models: '/pages/ai-models/catalog'
 })
 

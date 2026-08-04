@@ -1,6 +1,7 @@
 export const PUBLIC_ROUTES = Object.freeze([
 	'/pages/launch/session-gate',
 	'/pages/auth/login',
+	'/pages/auth/totp-login',
 	'/pages/auth/register',
 	'/pages/auth/password-reset',
 	'/pages/risk/blocked',

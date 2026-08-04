@@ -59,6 +59,7 @@ const ROOT_COOKIE_NAMES = new Set([
 	'register_challenge',
 	'reset_flow_token',
 	'forget_token',
+	'totp_login_flow',
 	'__Host-ait-preauth'
 ])
 

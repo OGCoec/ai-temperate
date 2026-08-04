@@ -12,7 +12,7 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.service.audit.access.command.AccessAuditCommand;
 import com.example.temperate.service.audit.access.service.AccessAuditEventService;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
-import com.example.temperate.web.auth.interceptor.AccessTokenAuthenticationInterceptor;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
@@ -48,7 +48,7 @@ class AccessRequestAuditFilterTest {
                     HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
                     "/api/users/{id}");
             servletRequest.setAttribute(
-                    AccessTokenAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
+                    UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
                     new SessionPrincipal(10001L, "AAAAAAAAJxE", "Alice"));
             ((MockHttpServletResponse) servletResponse).setStatus(204);
         });
@@ -79,7 +79,7 @@ class AccessRequestAuditFilterTest {
                     HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
                     "/api/ai/conversations/{conversationId}/responses");
             servletRequest.setAttribute(
-                    AccessTokenAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
+                    UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
                     new SessionPrincipal(10002L, "AAAAAAAAJxF", "Bob"));
             servletRequest.startAsync(servletRequest, servletResponse);
         });

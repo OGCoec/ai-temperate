@@ -18,6 +18,7 @@ public final class AuthenticationContext {
     private final String displayName;
     private final String email;
     private final String phone;
+    private final boolean totpEnabled;
 
     public AuthenticationContext(
             long identityId,
@@ -25,7 +26,8 @@ public final class AuthenticationContext {
             long passwordVersion,
             AccountStatus accountStatus,
             String displayName) {
-        this(identityId, passwordHash, passwordVersion, accountStatus, displayName, null, null);
+        this(identityId, passwordHash, passwordVersion, accountStatus,
+                displayName, null, null, false);
     }
 
     public AuthenticationContext(
@@ -36,6 +38,19 @@ public final class AuthenticationContext {
             String displayName,
             String email,
             String phone) {
+        this(identityId, passwordHash, passwordVersion, accountStatus,
+                displayName, email, phone, false);
+    }
+
+    public AuthenticationContext(
+            long identityId,
+            String passwordHash,
+            long passwordVersion,
+            AccountStatus accountStatus,
+            String displayName,
+            String email,
+            String phone,
+            boolean totpEnabled) {
         this.identityId = identityId;
         this.passwordHash = passwordHash;
         this.passwordVersion = passwordVersion;
@@ -43,6 +58,7 @@ public final class AuthenticationContext {
         this.displayName = displayName;
         this.email = email;
         this.phone = phone;
+        this.totpEnabled = totpEnabled;
     }
 
 }

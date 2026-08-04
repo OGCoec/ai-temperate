@@ -134,12 +134,13 @@ class AuthFlowCookieWriterTest {
         AuthSecurityProperties properties = mock(AuthSecurityProperties.class);
         when(properties.cookies()).thenReturn(new AuthSecurityProperties.Cookies(
                 cookie(true, "/api"),
-                cookie(true, "/api/auth/session"),
+                cookie(true, "/api"),
                 cookie(false, "/"),
                 cookie(true, "/api/auth/register"),
                 cookie(true, "/api/auth/register"),
                 cookie(true, "/api/auth/password-reset"),
                 cookie(true, "/api/auth/password-reset/complete"),
+                cookie(true, "/api/auth/login/totp"),
                 domain));
         return new AuthFlowCookieWriter(properties, Clock.fixed(NOW, ZoneOffset.UTC));
     }

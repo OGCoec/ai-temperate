@@ -6,6 +6,8 @@ CREATE TABLE userloginidentity (
     phone VARCHAR(20),
     password_hash VARCHAR(255) NOT NULL,
     password_version BIGINT NOT NULL DEFAULT 1,
+    totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    totp_secret_encrypted VARCHAR(512),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -47,6 +49,10 @@ COMMENT ON COLUMN userloginidentity.phone IS '规范化后的 E.164 电话号码
 COMMENT ON COLUMN userloginidentity.password_hash IS '使用 Argon2id 或 BCrypt 生成的密码哈希';
 COMMENT ON COLUMN userloginidentity.password_version IS
     '密码凭据版本；真实密码创建或修改时递增，单纯哈希算法升级不得递增';
+COMMENT ON COLUMN userloginidentity.totp_enabled IS
+    '是否启用基于时间的一次性密码（TOTP）二次认证，默认关闭';
+COMMENT ON COLUMN userloginidentity.totp_secret_encrypted IS
+    'TOTP 三十二字节共享密钥的加密存储值；Base32 仅用于配置展示，未启用时保持为空';
 COMMENT ON COLUMN userloginidentity.created_at IS '创建时间';
 COMMENT ON COLUMN userloginidentity.updated_at IS '最后更新时间';
 

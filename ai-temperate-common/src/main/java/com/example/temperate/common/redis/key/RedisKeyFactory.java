@@ -199,6 +199,41 @@ public final class RedisKeyFactory {
         return authKey(LOGIN_OBJECT, IdentifierType.REGISTRATION_CHALLENGE, identifier);
     }
 
+    /**
+     * 生成第一因子通过后等待 TOTP 校验的短期登录挑战 Key。
+     */
+    public String totpLoginChallengeKey(HmacIdentifier identifier) {
+        return authKey("totp", IdentifierType.TOTP_LOGIN_FLOW, identifier);
+    }
+
+    /**
+     * 生成用户与已匹配 TOTP 时间片绑定的短期防重放 Key。
+     */
+    public String totpUsedTimeStepKey(HmacIdentifier identifier) {
+        return authKey("totp", IdentifierType.TOTP_USED_STEP, identifier);
+    }
+
+    /**
+     * 生成每个用户唯一的待确认新 TOTP 密钥 Key。
+     */
+    public String totpSetupKey(HmacIdentifier identifier) {
+        return authKey("totp", IdentifierType.TOTP_SETUP, identifier);
+    }
+
+    /**
+     * 生成 TOTP 敏感操作第一因子复验流程 Key。
+     */
+    public String totpStepUpFlowKey(HmacIdentifier identifier) {
+        return authKey("totp", IdentifierType.TOTP_STEP_UP_FLOW, identifier);
+    }
+
+    /**
+     * 生成 TOTP 敏感操作一次性复验凭证 Key。
+     */
+    public String totpStepUpProofKey(HmacIdentifier identifier) {
+        return authKey("totp", IdentifierType.TOTP_STEP_UP_PROOF, identifier);
+    }
+
     public String passwordResetFlowKey(HmacIdentifier identifier) {
         return authKey(PASSWORD_RESET_OBJECT, IdentifierType.AUTH_FLOW, identifier);
     }
@@ -774,6 +809,11 @@ public final class RedisKeyFactory {
         DEVICE_BLOCK("block"),
         LOGIN_CODE("code"),
         AUTH_FLOW("flow"),
+        TOTP_LOGIN_FLOW("login-flow"),
+        TOTP_USED_STEP("used-step"),
+        TOTP_SETUP("setup"),
+        TOTP_STEP_UP_FLOW("step-up-flow"),
+        TOTP_STEP_UP_PROOF("step-up-proof"),
         PASSWORD_RESET_FORGET("forget"),
         PASSWORD_RESET_TARGET_SEND("target-send"),
         TWILIO_MESSAGE_STATUS("twilio-status"),

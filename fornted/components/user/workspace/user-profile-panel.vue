@@ -146,6 +146,10 @@
 					</view>
 
 					<view class="profile-action-group">
+						<button class="profile-security" type="button" :disabled="logoutBusy" @click="openTotpSecurity">
+							<uni-icons type="locked" size="19" color="#37d39a" aria-hidden="true" />
+							<text>二次认证设置</text>
+						</button>
 						<button class="profile-logout" type="button" :disabled="logoutBusy" @click="logout">
 							{{ loggingOut ? '正在退出…' : '退出登录' }}
 						</button>
@@ -258,6 +262,9 @@
 			}
 		},
 		methods: {
+			openTotpSecurity() {
+				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.totpSecurity })
+			},
 			formatQuotaResetAt(value) {
 				if (!value) return '首次使用后开始计算'
 				const date = new Date(value)
@@ -493,7 +500,7 @@
 		margin-top: 52px;
 	}
 
-	.profile-retry, .profile-logout, .profile-logout-all {
+	.profile-retry, .profile-logout, .profile-logout-all, .profile-security {
 		@include user-frosted-control;
 		min-height: 48px;
 		border-radius: 14px;
@@ -506,7 +513,7 @@
 		line-height: 1.2;
 	}
 	.profile-retry { margin-top: 4px; padding: 0 22px; border-color: rgba(123, 238, 190, .36); background: rgba(55, 211, 154, .82); color: #07130e; }
-	.profile-retry::after, .profile-logout::after, .profile-logout-all::after { border: 0; }
+	.profile-retry::after, .profile-security::after, .profile-logout::after, .profile-logout-all::after { border: 0; }
 
 	.profile-identity-card {
 		@include user-frosted-surface;
@@ -597,20 +604,31 @@
 		background: rgba(201, 130, 47, .14);
 		color: #f2a24d;
 	}
+	.profile-security {
+		width: 100%;
+		gap: 9px;
+		border: 1px solid rgba(55, 211, 154, .46);
+		background: rgba(55, 211, 154, .1);
+		color: #9be4c5;
+	}
 	.profile-logout-all {
 		width: 100%;
 		border: 1px solid #d95d59;
 		background: rgba(217, 93, 89, .14);
 		color: #f08a82;
 	}
-	.profile-logout:active, .profile-logout-all:active, .profile-retry:active { transform: scale(.985); }
-	.profile-logout:disabled, .profile-logout-all:disabled { opacity: .55; }
+	.profile-security:active, .profile-logout:active, .profile-logout-all:active, .profile-retry:active { transform: scale(.985); }
+	.profile-security:disabled, .profile-logout:disabled, .profile-logout-all:disabled { opacity: .55; }
 	.profile-retry:focus-visible {
 		outline: 3px solid rgba(55, 211, 154, .28);
 		outline-offset: 3px;
 	}
 	.profile-logout:focus-visible {
 		outline: 3px solid rgba(242, 162, 77, .28);
+		outline-offset: 3px;
+	}
+	.profile-security:focus-visible {
+		outline: 3px solid rgba(55, 211, 154, .28);
 		outline-offset: 3px;
 	}
 	.profile-logout-all:focus-visible {
@@ -633,6 +651,6 @@
 		.profile-refresh:hover { background: #202520; border-color: #4d6258; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.profile-retry, .profile-logout, .profile-logout-all, .profile-refresh, .profile-quota-progress-fill { transition: none; }
+		.profile-retry, .profile-security, .profile-logout, .profile-logout-all, .profile-refresh, .profile-quota-progress-fill { transition: none; }
 	}
 </style>

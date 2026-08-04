@@ -233,6 +233,8 @@
 </template>
 
 <script>
+	import AdminActionButton from '@/components/admin/admin-action-button.vue'
+	import AdminFeedbackBanner from '@/components/admin/admin-feedback-banner.vue'
 	import IdentityForm from '@/components/admin/admin-identity-form.vue'
 	import PasswordFields from '@/components/admin/admin-password-fields.vue'
 	import VerificationCodeFields from '@/components/admin/admin-verification-code-fields.vue'
@@ -273,7 +275,14 @@
 	})
 
 	export default {
-		components: { IdentityForm, PasswordFields, VerificationCodeFields, LoginPasswordField },
+		components: {
+			AdminActionButton,
+			AdminFeedbackBanner,
+			IdentityForm,
+			PasswordFields,
+			VerificationCodeFields,
+			LoginPasswordField
+		},
 		data() {
 			return {
 				screenState: 'LOADING',

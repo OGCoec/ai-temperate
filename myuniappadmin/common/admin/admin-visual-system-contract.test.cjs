@@ -47,6 +47,14 @@ test('shared visual components are display-only and never own network primitives
 	)
 })
 
+test('administrator entry page explicitly registers the shared action and feedback components', () => {
+	const entryPage = read('pages/index/index.vue')
+
+	assert.match(entryPage, /import AdminActionButton from ['"]@\/components\/admin\/admin-action-button\.vue['"]/)
+	assert.match(entryPage, /import AdminFeedbackBanner from ['"]@\/components\/admin\/admin-feedback-banner\.vue['"]/)
+	assert.match(entryPage, /components:\s*\{[^}]*AdminActionButton[^}]*AdminFeedbackBanner[^}]*\}/s)
+})
+
 test('visual system provides motion, transparency and contrast accessibility fallbacks', () => {
 	const theme = read('common/app-theme.scss')
 	const sources = [theme, ...visualComponents.map(read)].join('\n')

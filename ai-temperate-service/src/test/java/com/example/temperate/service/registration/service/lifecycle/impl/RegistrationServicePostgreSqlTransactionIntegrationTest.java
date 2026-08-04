@@ -375,6 +375,26 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
                 long identityId, String expectedPasswordHash, String upgradedPasswordHash) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public com.example.temperate.model.auth.domain.TotpCredential findTotpCredentialById(
+                long identityId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int enableOrRotateTotp(
+                long identityId,
+                String encryptedSecret,
+                boolean expectedEnabled,
+                String expectedEncryptedSecret) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int disableTotp(long identityId) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class JdbcProfileMapper implements UserProfileMapper {

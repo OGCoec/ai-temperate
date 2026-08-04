@@ -45,7 +45,51 @@ class RefreshSessionLuaContractTest {
                 "redis.call('time')",
                 "hpexpireat",
                 "pexpireat");
-        assertThat(script).doesNotContain("redis.call('hset'", "scan", "keys");
+        assertThat(script).doesNotContain(
+                "redis.call('hset'", "redis.call('scan'", "redis.call('keys'");
+    }
+
+    @Test
+    void accessValidationChecksPositiveTtlWithoutRenewingAnyKey() throws IOException {
+        String script = script("validate_access_session.lua");
+
+        assertThat(script).contains(
+                "hmget",
+                "hexists",
+                "pttl",
+                "hpttl",
+                "redis.call('time')",
+                "sessionttl == -1",
+                "indexttl == -1",
+                "fieldttl == -1",
+                "sessionttl <= 0",
+                "indexttl <= 0",
+                "fieldttl <= 0");
+        assertThat(script).doesNotContain(
+                "pexpire",
+                "hpexpire",
+                "redis.call('hset'",
+                "unlink");
+    }
+
+    @Test
+    void preAuthAccessValidationChecksBindingWithoutPromotingOrRenewingIt()
+            throws IOException {
+        String script = script("validate_access_session_with_preauth.lua");
+
+        assertThat(script).contains(
+                "authenticated",
+                "preauthsessiontype",
+                "sessionrefdigest",
+                "devicedigest",
+                "pttl",
+                "preauthttl == -1",
+                "preauthttl <= 0");
+        assertThat(script).doesNotContain(
+                "pexpire",
+                "hpexpire",
+                "redis.call('hset'",
+                "anonymous");
     }
 
     @Test

@@ -32,7 +32,6 @@ public class GlobalDeviceBlockInterceptorConfiguration implements WebMvcConfigur
                         "/api/auth/register/**",
                         "/api/auth/password-reset",
                         "/api/auth/password-reset/**",
-                        "/api/auth/session/refresh",
                         "/api/auth/session/bootstrap")
                 .excludePathPatterns(
                         "/api/auth/session/logout",

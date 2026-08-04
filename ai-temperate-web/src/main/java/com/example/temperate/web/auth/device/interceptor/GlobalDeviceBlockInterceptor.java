@@ -100,7 +100,6 @@ public final class GlobalDeviceBlockInterceptor implements HandlerInterceptor {
         return matchesProtectedPrefix(path, "/api/auth/login")
                 || matchesProtectedPrefix(path, "/api/auth/register")
                 || matchesProtectedPrefix(path, "/api/auth/password-reset")
-                || "/api/auth/session/refresh".equals(path)
                 || "/api/auth/session/bootstrap".equals(path);
     }
 

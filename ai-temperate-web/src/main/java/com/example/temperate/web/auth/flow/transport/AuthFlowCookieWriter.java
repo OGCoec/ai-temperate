@@ -15,7 +15,8 @@ import org.springframework.stereotype.Component;
  * 统一写入、读取和清理 H5 注册与找回密码流程 Cookie。
  *
  * <p>用途：把短期流程凭据限制在浏览器 HttpOnly Cookie 传输边界内，避免 H5 JavaScript 和持久化存储接触
- * register/reset/forget 等原文材料；Android 不使用这些 Cookie，继续通过显式 Header 与 Keystore 协作。</p>
+ * register/reset/forget/TOTP 登录挑战等原文材料；Android 不使用这些 Cookie，继续通过显式 Header 与
+ * Keystore 协作。</p>
  */
 @Component
 public final class AuthFlowCookieWriter {
@@ -25,6 +26,7 @@ public final class AuthFlowCookieWriter {
     public static final String REGISTER_CHALLENGE_COOKIE = "register_challenge";
     public static final String RESET_FLOW_COOKIE = "reset_flow_token";
     public static final String FORGET_TOKEN_COOKIE = "forget_token";
+    public static final String TOTP_LOGIN_FLOW_COOKIE = "totp_login_flow";
 
     private final AuthSecurityProperties properties;
     private final Clock clock;
@@ -83,6 +85,22 @@ public final class AuthFlowCookieWriter {
     public void clearPasswordReset(HttpServletResponse response) {
         clearPasswordResetFlow(response);
         clearForgetToken(response);
+    }
+
+    public void writeTotpLoginFlow(
+            HttpServletResponse response,
+            String rawFlowToken,
+            Instant expiresAt) {
+        add(response, TOTP_LOGIN_FLOW_COOKIE, rawFlowToken, remaining(expiresAt),
+                properties.cookies().totpLoginFlow());
+    }
+
+    public void clearTotpLoginFlow(HttpServletResponse response) {
+        clear(response, TOTP_LOGIN_FLOW_COOKIE, properties.cookies().totpLoginFlow());
+    }
+
+    public String totpLoginFlowToken(HttpServletRequest request) {
+        return cookieValue(request, TOTP_LOGIN_FLOW_COOKIE);
     }
 
     public RegistrationFlowCookies registration(HttpServletRequest request) {

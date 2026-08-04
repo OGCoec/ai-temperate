@@ -22,6 +22,7 @@ public final class AuthCookieWriter {
     public static final String REFRESH_COOKIE = "refresh_token";
     public static final String CSRF_COOKIE = "XSRF-TOKEN";
     public static final String LEGACY_REFRESH_COOKIE = "rt";
+    private static final String LEGACY_REFRESH_PATH = "/api/auth/session";
 
     private final AuthSecurityProperties properties;
     private final Clock clock;
@@ -53,6 +54,8 @@ public final class AuthCookieWriter {
             HttpServletResponse response, String refreshToken, Instant expiresAt) {
         add(response, REFRESH_COOKIE, refreshToken, remaining(expiresAt),
                 properties.cookies().refresh());
+        // 路径改变后浏览器可能同时保留两个同名 RT；写入新值时主动过期旧路径，避免服务端收到歧义 Cookie。
+        clearLegacyRefreshPath(response);
     }
 
     public void writeCsrfToken(HttpServletResponse response, String csrfToken) {
@@ -63,12 +66,9 @@ public final class AuthCookieWriter {
         // 清理必须复用写入时的 Path 和 Domain，否则浏览器会保留旧 Cookie。
         clear(response, ACCESS_COOKIE, properties.cookies().access());
         clear(response, REFRESH_COOKIE, properties.cookies().refresh());
+        clearLegacyRefreshPath(response);
         clear(response, CSRF_COOKIE, properties.cookies().csrf());
         clearLegacyRefreshToken(response);
-    }
-
-    public void clearAccessToken(HttpServletResponse response) {
-        clear(response, ACCESS_COOKIE, properties.cookies().access());
     }
 
     private void clearLegacyRefreshToken(HttpServletResponse response) {
@@ -78,6 +78,17 @@ public final class AuthCookieWriter {
                         refresh.secure(), refresh.httpOnly(), refresh.sameSite(), "/");
         // 历史 rt 使用根路径，必须单独按原路径清除，不能复用当前 refresh_token 的专用路径。
         clear(response, LEGACY_REFRESH_COOKIE, legacy);
+    }
+
+    private void clearLegacyRefreshPath(HttpServletResponse response) {
+        AuthSecurityProperties.CookieSettings refresh = properties.cookies().refresh();
+        AuthSecurityProperties.CookieSettings legacyPath =
+                new AuthSecurityProperties.CookieSettings(
+                        refresh.secure(),
+                        refresh.httpOnly(),
+                        refresh.sameSite(),
+                        LEGACY_REFRESH_PATH);
+        clear(response, REFRESH_COOKIE, legacyPath);
     }
 
     private Duration remaining(Instant expiresAt) {

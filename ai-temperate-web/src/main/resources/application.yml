@@ -489,7 +489,7 @@ app:
         same-site: ${AUTH_ACCESS_COOKIE_SAME_SITE:STRICT}
         # Access Token Cookie 仅作用于全部 API 路径。
         path: ${AUTH_ACCESS_COOKIE_PATH:/api}
-      # Refresh Token Cookie 只允许会话端点自动携带。
+      # Refresh Token Cookie 必须随全部受保护 API 请求发送，以便服务端先验证长期会话状态。
       refresh:
         # Refresh Token Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_REFRESH_COOKIE_SECURE:true}
@@ -497,8 +497,8 @@ app:
         http-only: ${AUTH_REFRESH_COOKIE_HTTP_ONLY:true}
         # Refresh Token Cookie 固定使用严格同站策略。
         same-site: ${AUTH_REFRESH_COOKIE_SAME_SITE:STRICT}
-        # Refresh Token Cookie 仅作用于刷新、恢复和退出端点。
-        path: ${AUTH_REFRESH_COOKIE_PATH:/api/auth/session}
+        # Refresh Token Cookie 固定作用于全部普通 API 路径，不得扩大到站点页面。
+        path: ${AUTH_REFRESH_COOKIE_PATH:/api}
       # CSRF Cookie 允许 H5 读取并复制到受控请求头。
       csrf:
         # CSRF Cookie 必须只通过 HTTPS 传输。
@@ -549,6 +549,16 @@ app:
         same-site: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_SAME_SITE:STRICT}
         # 找回密码一次性完成凭证 Cookie 仅作用于完成端点。
         path: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_PATH:/api/auth/password-reset/complete}
+      # TOTP 登录流程 Token Cookie 只允许二次认证端点自动携带。
+      totp-login-flow:
+        # TOTP 登录流程 Cookie 必须只通过 HTTPS 传输。
+        secure: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_SECURE:true}
+        # TOTP 登录流程 Cookie 必须保持 HttpOnly 以阻止 JavaScript 读取。
+        http-only: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_HTTP_ONLY:true}
+        # TOTP 登录流程 Cookie 固定使用严格同站策略。
+        same-site: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_SAME_SITE:STRICT}
+        # TOTP 登录流程 Cookie 只作用于验证码提交端点。
+        path: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_PATH:/api/auth/login/totp}
     # 浏览器跨域访问白名单配置。
     cors:
       # 仅允许显式 HTTP(S) Origin，禁止通配符。
@@ -563,6 +573,32 @@ app:
       positive-cache: ${AUTH_POSITIVE_CACHE_TTL:10m}
       # 空值缓存 TTL 默认 45 秒并限制在 30 至 60 秒。
       empty-cache: ${AUTH_EMPTY_CACHE_TTL:45s}
+    # 普通用户 TOTP 二次认证采用固定兼容参数和独立密钥保护边界。
+    totp:
+      # 认证器二维码展示的发行方名称支持部署环境覆盖。
+      issuer: ${TOTP_ISSUER:AI Temperate}
+      # 每个用户的 TOTP 原始共享密钥固定生成三十二个随机字节。
+      secret-bytes: ${TOTP_SECRET_BYTES:32}
+      # 认证器动态口令固定为六位十进制数字。
+      digits: ${TOTP_DIGITS:6}
+      # RFC 6238 时间步长固定为三十秒。
+      period: ${TOTP_PERIOD:30s}
+      # 服务端只接受当前时间片前后各一个时间片以容忍有限时钟漂移。
+      allowed-drift-steps: ${TOTP_ALLOWED_DRIFT_STEPS:1}
+      # 尚未确认的新密钥在 Redis 中最多暂存十分钟。
+      setup-ttl: ${TOTP_SETUP_TTL:10m}
+      # 第一因子通过后的登录二次认证挑战最多保留五分钟。
+      login-challenge-ttl: ${TOTP_LOGIN_CHALLENGE_TTL:5m}
+      # 开启、轮换和关闭前的敏感操作复验凭证最多保留五分钟。
+      step-up-ttl: ${TOTP_STEP_UP_TTL:5m}
+      # 单个 TOTP 流程最多允许五次错误验证码尝试。
+      max-attempts: ${TOTP_MAX_ATTEMPTS:5}
+      # TOTP 共享密钥使用独立 AES-256-GCM 主密钥加密，禁止复用 JWT 或 Redis HMAC 密钥。
+      encryption:
+        # 当前密文信封 Key ID 用于后续受控密钥轮换。
+        active-key-id: ${TOTP_ENCRYPTION_ACTIVE_KEY_ID:v1}
+        # AES 主密钥必须由环境提供规范 Base64，解码后恰好三十二字节且禁止生产默认值。
+        active-key-base64: ${TOTP_ENCRYPTION_KEY_BASE64}
 
   # 单管理员初始化、hCaptcha 登录和六小时会话的安全配置。
   admin:

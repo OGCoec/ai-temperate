@@ -84,6 +84,7 @@ public record AuthSecurityProperties(
             @Valid @NotNull CookieSettings registerChallenge,
             @Valid @NotNull CookieSettings passwordResetFlow,
             @Valid @NotNull CookieSettings passwordResetForget,
+            @Valid @NotNull CookieSettings totpLoginFlow,
             @Size(max = 253) String domain) {
 
         public Cookies {
@@ -100,14 +101,16 @@ public record AuthSecurityProperties(
                         "Authentication cookie policies do not match the required transport contract")
         public boolean isTransportContractValid() {
             return isExactCookiePolicy(access, true, "/api")
-                    && isExactCookiePolicy(refresh, true, "/api/auth/session")
+                    && isExactCookiePolicy(refresh, true, "/api")
                     && isExactCookiePolicy(csrf, false, "/")
                     && isExactCookiePolicy(registerFlow, true, "/api/auth/register")
                     && isExactCookiePolicy(registerChallenge, true, "/api/auth/register")
                     && isExactCookiePolicy(passwordResetFlow, true,
                             "/api/auth/password-reset")
                     && isExactCookiePolicy(passwordResetForget, true,
-                            "/api/auth/password-reset/complete");
+                            "/api/auth/password-reset/complete")
+                    && isExactCookiePolicy(totpLoginFlow, true,
+                            "/api/auth/login/totp");
         }
     }
 

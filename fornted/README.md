@@ -1,6 +1,6 @@
 # AI Temperate Frontend
 
-这是 AI Temperate 的 UniApp 前端，当前覆盖认证流程、普通用户 AI 聊天、个人中心和已启用模型目录。
+这是 AI Temperate 的 UniApp 前端，当前覆盖认证流程、TOTP 二次认证、普通用户 AI 聊天、个人中心和已启用模型目录。
 
 当前页面范围：
 

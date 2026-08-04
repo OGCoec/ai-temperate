@@ -27,6 +27,14 @@ class PersistenceSqlContractTest {
         assertTrue(baseIdentitySchema.contains(
                 "constraint chk_userloginidentity_password_version_positive"));
         assertTrue(baseIdentitySchema.contains("check (password_version > 0)"));
+        assertTrue(baseIdentitySchema.contains(
+                "totp_enabled boolean not null default false"));
+        assertTrue(baseIdentitySchema.contains(
+                "totp_secret_encrypted varchar(512)"));
+        assertTrue(baseIdentitySchema.contains(
+                "comment on column userloginidentity.totp_enabled is"));
+        assertTrue(baseIdentitySchema.contains(
+                "comment on column userloginidentity.totp_secret_encrypted is"));
         assertFalse(baseIdentitySchema.contains("password_strength_level"));
         assertFalse(baseIdentitySchema.contains("password_policy_version"));
         assertFalse(baseIdentitySchema.contains("email_verified_at"));
@@ -160,6 +168,10 @@ class PersistenceSqlContractTest {
         assertTrue(identityMapper.contains("id=\"findbynormalizedphone\""));
         assertTrue(identityMapper.contains("id=\"insert\""));
         assertTrue(identityMapper.contains("insert into userloginidentity"));
+        assertTrue(identityMapper.contains(
+                "property=\"totpenabled\" column=\"totp_enabled\""));
+        assertTrue(identityMapper.contains(
+                "property=\"totpsecretencrypted\" column=\"totp_secret_encrypted\""));
         assertTrue(identityMapper.contains("id=\"updatepasswordhash\""));
         assertTrue(identityMapper.contains("password_hash = #{passwordhash"));
         assertTrue(identityMapper.contains("password_version = password_version + 1"));

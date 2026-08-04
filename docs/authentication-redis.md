@@ -96,7 +96,7 @@ Redis 7.4.9 为每个 `tokenHash` 字段设置独立三小时 TTL。强制保持
 = 用户索引 Hash Key 的最大字段 TTL
 ```
 
-登录、普通刷新和 bootstrap 均在 Lua 中使用 Redis 服务器时间计算同一个 `expiresAt`：
+登录、AT 已过期时的同请求续签和 bootstrap 均在 Lua 中使用 Redis 服务器时间计算同一个 `expiresAt`：
 
 ```text
 PEXPIREAT  rtKey       expiresAt
@@ -111,12 +111,32 @@ PEXPIREAT  userRtsKey  expiresAt
 | Lua | 职责 |
 | --- | --- |
 | `create_refresh_session.lua` | 原子创建六字段 RT Hash 和索引字段；过期字段不计入最多十个会话限制 |
+| `validate_access_session.lua` | 普通请求只读校验 RT、设备、CSRF、索引成员和全部正数 TTL，不延长任何 TTL |
+| `validate_access_session_with_preauth.lua` | 在同一次只读校验中额外验证已认证 PreAuth 的用户作用域、设备和 RT Session 绑定 |
 | `validate_refresh_session.lua` | 校验 RT、设备、CSRF 与已有索引字段后续三处 TTL；不得恢复缺失索引字段 |
 | `update_refresh_session_csrf.lua` | bootstrap 校验 RT 和设备，更新同一 RT 的 `csrfHash` 并续三处 TTL |
 | `revoke_refresh_session.lua` | 删除当前 RT 和索引字段，用最多十个剩余字段的 `HPTTL` 重算索引 Key TTL |
 | Pipeline + 多 Key `UNLINK` | 读取 v4 `HVALS` 和迁移期 v3 字段后，一次批量删除全部真实 RT 与两版用户索引 |
 
 固定 RT 不做轮换，因此不存在 family、active、used、轮换竞争和旧 RT 重放墓碑。该取舍的安全边界依赖 HttpOnly Cookie、AndroidKeyStore、安装设备 HMAC、CSRF 和三小时滑动 TTL。
+
+## TOTP 域
+
+```text
+ait:<env>:auth:totp:v2:login-flow:<HMAC(totpFlowToken)>
+ait:<env>:auth:totp:v2:used-step:<HMAC(userId,timeStep)>
+ait:<env>:auth:totp:v2:setup:<HMAC(userId)>
+ait:<env>:auth:totp:v2:step-up-flow:<HMAC(loginFlowToken)>
+ait:<env>:auth:totp:v2:step-up-proof:<HMAC(stepUpToken)>
+```
+
+- `login-flow` 是第一因子通过后的五分钟 Hash，只保存用户 ID、设备 HMAC、失败次数和时间边界；不保存 TOTP 密钥。
+- `used-step` 是九十秒 `SET NX` 防重放标记，同一用户的同一匹配时间片只能被一个成功请求领取。
+- `setup` 每用户最多一个，保存 setupToken HMAC、设备 HMAC、待确认密钥密文、生成时的数据库 TOTP 状态快照、动作、失败次数和十分钟到期时间；重新申请直接覆盖旧值，确认时使用该快照执行 CAS，禁止过期流程覆盖中途已变更的密钥。
+- `step-up-flow` 把当前用户验证码流程绑定到用户、设备和 ENABLE/ROTATE/DISABLE 动作；验证码原子消费后提升为五分钟 `step-up-proof`。
+- `step-up-proof` 只能由对应用户、设备和动作消费一次，不能把开启凭证改用于关闭；轮换或关闭时当前 TOTP 连续失败五次会原子销毁该凭证，用户必须重新复验第一因子。
+- TOTP Redis 异常全部 Fail Closed；数据库正式密钥不进入通用用户缓存，登录和管理操作直接读取 PostgreSQL 当前状态。
+- Redis 仅暂存 AES-256-GCM 密文，不保存原始 32 字节密钥、Base32 展示值、`otpauth` URI 或六位动态码。
 
 ## 找回密码域
 
@@ -145,4 +165,5 @@ ait:<env>:auth:password-reset:v2:forget:<HMAC(forgetToken)>
 - PostgreSQL 与 Redis 不使用分布式事务。
 - 密码先在 PostgreSQL 本地事务中提交，再消费 forgetToken、撤销全部 RT、异步发送提醒邮件。
 - RT Pipeline 撤销失败同步重试三次；Pipeline 不具备事务原子性，仍失败时返回 `SESSION_REVOCATION_FAILED`，不得错误报告全部设备已下线；TTL 仅提供兜底收敛，不构成强一致保证。
-- 已签发 AT 不通过 Redis 实时撤销，密码重置或退出后最长继续有效十分钟。
+- AT 本身不写入 Redis；但普通 API 每次都先校验 RT Session，因此密码重置、TOTP 变更或退出全部设备撤销 RT 后，旧 AT 会在下一次请求立即失效。
+- TOTP 开启、轮换和关闭同样先提交 PostgreSQL，再删除待确认项并批量撤销全部固定 RT；缓存或会话删除失败不回滚已经提交的 TOTP 状态，TTL 与后续重试只提供尽力收敛。

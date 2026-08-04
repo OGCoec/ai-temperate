@@ -125,6 +125,10 @@ app:
 
   # 测试 AI 会话配置只参与属性绑定和 Bean 装配，不连接真实 Redis 或模型服务。
   ai-conversation:
+    # 测试环境关闭后台异步生成，避免注册 RabbitMQ 拓扑、消费者和恢复任务。
+    async-generation:
+      # 上下文测试不连接任何 Broker，异步生成行为由专用单元测试覆盖。
+      enabled: false
     # 测试保持固定七十二小时绝对缓存期限。
     context-ttl: 72h
     # 测试生成租约使用四十五秒。
@@ -330,8 +334,8 @@ app:
         http-only: true
         # 测试 Refresh Token Cookie 使用严格同站策略。
         same-site: STRICT
-        # 测试 Refresh Token Cookie 仅作用于会话端点。
-        path: /api/auth/session
+        # 测试 Refresh Token Cookie 作用于全部普通用户 API，以支持每次请求校验会话状态。
+        path: /api
       # 测试 CSRF Cookie 的可读属性和路径。
       csrf:
         # 测试 CSRF Cookie 保持 Secure。
@@ -382,6 +386,16 @@ app:
         same-site: STRICT
         # 测试找回密码一次性凭证 Cookie 只作用于完成端点。
         path: /api/auth/password-reset/complete
+      # 测试 TOTP 登录流程使用独立 HttpOnly Cookie。
+      totp-login-flow:
+        # 测试 TOTP 登录流程 Cookie 保持 Secure。
+        secure: true
+        # 测试 TOTP 登录流程 Cookie 保持 HttpOnly。
+        http-only: true
+        # 测试 TOTP 登录流程 Cookie 使用严格同站策略。
+        same-site: STRICT
+        # 测试 TOTP 登录流程 Cookie 只作用于验证码提交端点。
+        path: /api/auth/login/totp
     # 测试 CORS 白名单配置。
     cors:
       # TEST 环境允许本机开发服务器的显式 Origin。
@@ -396,6 +410,32 @@ app:
       positive-cache: 10m
       # 测试空值缓存 TTL 为 45 秒。
       empty-cache: 45s
+    # 测试 TOTP 配置使用固定参数和不对应任何生产环境的密钥。
+    totp:
+      # 测试二维码发行方与正式默认名称一致。
+      issuer: AI Temperate
+      # 测试仍固定生成三十二字节用户密钥。
+      secret-bytes: 32
+      # 测试验证码固定为六位数字。
+      digits: 6
+      # 测试时间片固定为三十秒。
+      period: 30s
+      # 测试允许前后各一个时间片的漂移。
+      allowed-drift-steps: 1
+      # 测试待确认密钥保留十分钟。
+      setup-ttl: 10m
+      # 测试登录二次认证挑战保留五分钟。
+      login-challenge-ttl: 5m
+      # 测试敏感操作复验凭证保留五分钟。
+      step-up-ttl: 5m
+      # 测试每个流程最多允许五次失败。
+      max-attempts: 5
+      # 测试密钥保护使用固定非生产 AES-256-GCM 密钥。
+      encryption:
+        # 测试密文信封使用固定 v1 Key ID。
+        active-key-id: v1
+        # 固定测试密钥恰好解码为三十二字节，不可用于生产。
+        active-key-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 
   # 测试单管理员配置使用隔离路径、假密钥和本机 hCaptcha 域名。
   admin:

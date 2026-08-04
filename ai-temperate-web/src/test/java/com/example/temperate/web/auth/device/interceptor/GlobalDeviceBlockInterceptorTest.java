@@ -65,8 +65,8 @@ class GlobalDeviceBlockInterceptorTest {
     }
 
     @Test
-    void allowsUnblockedRefreshRequest() throws Exception {
-        MockHttpServletRequest request = request("POST", "/api/auth/session/refresh");
+    void allowsUnblockedBootstrapRequest() throws Exception {
+        MockHttpServletRequest request = request("POST", "/api/auth/session/bootstrap");
         request.addHeader("X-Device-Installation-Id", DEVICE_ID);
         MockHttpServletResponse response = new MockHttpServletResponse();
         when(blockService.remainingBlockTtl(DEVICE_ID)).thenReturn(Duration.ZERO);

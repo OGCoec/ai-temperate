@@ -121,6 +121,45 @@ class RedisRefreshSessionStoreIntegrationTest {
     }
 
     @Test
+    void accessValidationReadsPositiveTtlsWithoutExtendingTheSession() {
+        NewRefreshSession current = session("access-read");
+        store.create(current);
+        String rtKey = KEYS.sessionRefreshTokenKey(current.refreshTokenHash());
+        String userIndexKey = KEYS.sessionUserIndexKey(USER_ID);
+        redisTemplate.expire(rtKey, 60, TimeUnit.SECONDS);
+        redisTemplate.expire(userIndexKey, 90, TimeUnit.SECONDS);
+        setHashFieldTtl(userIndexKey, current.refreshTokenHash().value(), 120_000L);
+
+        RefreshSessionValidation validation = store.validateForAccess(
+                current.refreshTokenHash(), current.deviceHash(), current.csrfHash());
+
+        assertThat(validation.status()).isEqualTo(RefreshSessionValidation.Status.VALID);
+        assertThat(redisTemplate.getExpire(rtKey, TimeUnit.MILLISECONDS))
+                .isBetween(50_000L, 60_000L);
+        assertThat(redisTemplate.getExpire(userIndexKey, TimeUnit.MILLISECONDS))
+                .isBetween(80_000L, 90_000L);
+        assertThat(hashFieldTtl(userIndexKey, current.refreshTokenHash().value()))
+                .isBetween(110_000L, 120_000L);
+    }
+
+    @Test
+    void accessValidationRejectsMissingAndNonExpiringSessionKeys() {
+        NewRefreshSession current = session("ttl-invariant");
+        store.create(current);
+        String rtKey = KEYS.sessionRefreshTokenKey(current.refreshTokenHash());
+        redisTemplate.persist(rtKey);
+
+        assertThat(store.validateForAccess(
+                current.refreshTokenHash(), current.deviceHash(), current.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.TTL_INVARIANT_VIOLATION);
+
+        redisTemplate.delete(rtKey);
+        assertThat(store.validateForAccess(
+                current.refreshTokenHash(), current.deviceHash(), current.csrfHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.MISSING_OR_EXPIRED);
+    }
+
+    @Test
     void bootstrapChangesOnlyCsrfAndCurrentLogoutKeepsOtherSession() {
         NewRefreshSession current = session("current");
         NewRefreshSession other = session("other");
