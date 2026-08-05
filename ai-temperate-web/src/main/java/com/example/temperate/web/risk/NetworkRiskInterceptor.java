@@ -48,6 +48,8 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             NetworkRiskInterceptor.class.getName() + ".preAuthAccess";
     public static final String DIAGNOSTIC_INVOCATION_ATTRIBUTE =
             NetworkRiskInterceptor.class.getName() + ".diagnosticInvocation";
+    public static final String WEBRTC_GENERATION_CHANGED_ATTRIBUTE =
+            NetworkRiskInterceptor.class.getName() + ".webRtcGenerationChanged";
     private static final String COMPLETED_EVALUATION_ATTRIBUTE =
             NetworkRiskInterceptor.class.getName() + ".completedEvaluation";
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
@@ -198,6 +200,35 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
                     "RISK_ASSESSMENT_UNAVAILABLE",
                     RejectionReason.ASSESSMENT_UNAVAILABLE,
                     Map.of());
+        }
+        if (assessment != null
+                && access.state() != null
+                && access.state().currentIpDigest() != null
+                && !access.state().currentIpDigest().equals(
+                        assessment.currentIpDigest())) {
+            // IP 变化已在 Redis 原子提升 WebRTC generation；下游必须改用新快照，禁止登录轮换继承旧 VERIFIED。
+            PreAuthAccess refreshedAccess = preAuthService.resolve(
+                            scope,
+                            transport.read(request, scope),
+                            request.getHeader(DEVICE_HEADER))
+                    .orElse(null);
+            if (refreshedAccess == null) {
+                metrics.rejection(scope, "preauth_concurrent_expiry");
+                if (properties.mode() == NetworkRiskMode.OBSERVE) {
+                    return allow(request, scope, "observe_preauth_concurrent_expiry");
+                }
+                return reject(
+                        request,
+                        response,
+                        HttpStatus.PRECONDITION_REQUIRED,
+                        "PREAUTH_REQUIRED",
+                        RejectionReason.PREAUTH_CONCURRENT_EXPIRY,
+                        Map.of());
+            }
+            access = refreshedAccess;
+            request.setAttribute(PREAUTH_ACCESS_ATTRIBUTE, refreshedAccess);
+            // 只传递低敏布尔信号，让后置 WebRTC 门禁准确记录本请求发生过 generation 提升。
+            request.setAttribute(WEBRTC_GENERATION_CHANGED_ATTRIBUTE, Boolean.TRUE);
         }
         if (assessment == null || properties.mode() == NetworkRiskMode.OBSERVE) {
             logAllowed(scope, assessment, "observe_or_empty");

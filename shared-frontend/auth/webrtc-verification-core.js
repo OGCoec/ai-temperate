@@ -1,14 +1,25 @@
-export const WEBRTC_DEFAULT_TIMEOUT_MILLIS = 15000
+export const WEBRTC_DEFAULT_TIMEOUT_MILLIS = 12000
 
 export const WEBRTC_FAILURE_CODES = Object.freeze([
 	'WEBRTC_IP_MISMATCH',
-	'WEBRTC_VERIFICATION_FAILED'
+	'WEBRTC_VERIFICATION_FAILED',
+	'WEBRTC_VERIFICATION_TIMEOUT'
 ])
 
 export const WEBRTC_RETRY_CODES = Object.freeze([
-	'WEBRTC_VERIFICATION_REQUIRED',
-	'WEBRTC_NETWORK_CHANGED'
+	'WEBRTC_NETWORK_CHANGED',
+	'WEBRTC_REPORT_STALE'
 ])
+
+export const WEBRTC_PENDING_CODE = 'WEBRTC_VERIFICATION_PENDING'
+
+export function webRtcTriggerFromHeaders(headers = {}) {
+	const state = responseHeader(headers, 'X-AIT-WebRTC-State').toUpperCase()
+	const generation = responseHeader(headers, 'X-AIT-WebRTC-Generation')
+	if (!['REQUIRED', 'PENDING', 'VERIFIED', 'FAILED'].includes(state)
+		|| !/^[1-9][0-9]{0,18}$/.test(generation)) return null
+	return Object.freeze({ state, generation })
+}
 
 export function collectBrowserWebRtcIps(stunUrls, timeoutMillis = WEBRTC_DEFAULT_TIMEOUT_MILLIS) {
 	return new Promise(resolve => {
@@ -100,6 +111,12 @@ function boundedTimeout(value) {
 	return Number.isFinite(numeric) && numeric > 0
 		? Math.min(numeric, WEBRTC_DEFAULT_TIMEOUT_MILLIS)
 		: WEBRTC_DEFAULT_TIMEOUT_MILLIS
+}
+
+function responseHeader(headers, expected) {
+	const entry = Object.entries(headers || {})
+		.find(([name]) => name.toLowerCase() === expected.toLowerCase())
+	return entry ? String(entry[1] ?? '') : ''
 }
 
 function candidateTypeFromLine(line) {

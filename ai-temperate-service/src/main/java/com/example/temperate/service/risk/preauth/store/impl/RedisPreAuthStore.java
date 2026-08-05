@@ -11,6 +11,9 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthGeoSource;
 import com.example.temperate.service.risk.preauth.domain.PreAuthNetworkSnapshot;
 import com.example.temperate.service.risk.preauth.domain.PreAuthRiskSource;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcBeginResult;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcWriteResult;
 import com.example.temperate.service.risk.preauth.store.PreAuthStore;
 import java.nio.charset.StandardCharsets;
@@ -31,10 +34,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 
 /**
- * 使用普通与管理员独立的单个 Redis Hash 保存 PreAuth v4 全部有界风险状态。
+ * 使用普通与管理员独立的单个 Redis Hash 保存 PreAuth v6 全部有界风险状态。
  *
- * <p>设备校验、事件窗口维护、Challenge 复用/消费、登录旋转和 TTL 刷新均由 Lua 保证各自原子边界，
- * 不再创建独立 Travel ZSet 或 Challenge 引用 Key。</p>
+ * <p>设备校验、事件窗口维护、WebRTC generation/截止时间迁移、Challenge 复用/消费、登录旋转和
+ * TTL 刷新均由 Lua 保证各自原子边界，不再创建独立 Travel ZSet 或 Challenge 引用 Key。</p>
  */
 @Component
 public final class RedisPreAuthStore implements PreAuthStore {
@@ -47,10 +50,13 @@ public final class RedisPreAuthStore implements PreAuthStore {
             longScript("lua/network-risk/preauth_mutate.lua");
     private static final RedisScript<Long> RECORD_ASSESSMENT =
             longScript("lua/network-risk/preauth_record_assessment.lua");
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> BEGIN_WEBRTC =
+            listScript("lua/network-risk/preauth_begin_webrtc.lua");
     private static final RedisScript<Long> WRITE_WEBRTC =
             longScript("lua/network-risk/preauth_write_webrtc.lua");
-    private static final RedisScript<Long> CLEAR_WEBRTC =
-            longScript("lua/network-risk/preauth_clear_webrtc.lua");
+    private static final RedisScript<Long> EXPIRE_WEBRTC =
+            longScript("lua/network-risk/preauth_expire_webrtc.lua");
     private static final RedisScript<Long> RECORD_EVENT =
             longScript("lua/network-risk/preauth_record_travel_event.lua");
     @SuppressWarnings("rawtypes")
@@ -81,11 +87,13 @@ public final class RedisPreAuthStore implements PreAuthStore {
             HmacIdentifier contextDigest,
             Instant temporaryBlockUntil,
             boolean trustCurrent,
+            Duration startGrace,
             Duration ttl) {
         List<String> arguments = new ArrayList<>();
         arguments.add(Long.toString(ttl.toMillis()));
+        arguments.add(Long.toString(startGrace.toMillis()));
+        arguments.add(Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION));
         fields(arguments,
-                "schemaVersion", Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 "scope", scope.name(),
                 "authState", "ANONYMOUS",
                 "sessionType", RiskSessionType.NONE.name(),
@@ -168,7 +176,13 @@ public final class RedisPreAuthStore implements PreAuthStore {
                     protectedValue(values, "activeChallengeIpDigest"),
                     protectedValue(values, "activeChallengeContextDigest"),
                     nullableInstant(values, "activeChallengeExpiresAt"),
-                    nullableBoolean(values, "webRtcStatus"),
+                    PreAuthWebRtcPhase.valueOf(value(values, "webRtcPhase")),
+                    Long.parseLong(value(values, "webRtcGeneration")),
+                    nullableEpochMillis(values, "webRtcDeadlineAt"),
+                    nullableEnum(
+                            values,
+                            "webRtcFailureReason",
+                            PreAuthWebRtcFailureReason.class),
                     nullable(values, "webRtcIps")));
         } catch (RuntimeException exception) {
             // 无法解析的状态不能参与安全决策；异步释放损坏 Key，避免主线程被大 Key 删除阻塞。
@@ -203,6 +217,7 @@ public final class RedisPreAuthStore implements PreAuthStore {
             HmacIdentifier contextDigest,
             Instant temporaryBlockUntil,
             boolean trustCurrent,
+            Duration startGrace,
             Duration ttl) {
         List<String> fieldValues = new ArrayList<>();
         fields(fieldValues, "lastSeenAt", decisionAt.toString());
@@ -218,10 +233,13 @@ public final class RedisPreAuthStore implements PreAuthStore {
         if (decision != RiskDecision.CHALLENGE) {
             clearActiveChallenge(fieldValues);
         }
-        List<String> arguments = new ArrayList<>(4 + fieldValues.size());
+        List<String> arguments = new ArrayList<>(6 + fieldValues.size());
+        arguments.add(Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION));
         arguments.add(deviceDigest.value());
         arguments.add(scope.name());
         arguments.add(snapshot.ipDigest().value());
+        // IP 变化时只创建 REQUIRED；真正的 report 窗口由后续 begin 使用 Redis TIME 开启。
+        arguments.add(Long.toString(startGrace.toMillis()));
         arguments.add(Long.toString(ttl.toMillis()));
         arguments.addAll(fieldValues);
         Long result = redisTemplate.execute(
@@ -232,26 +250,99 @@ public final class RedisPreAuthStore implements PreAuthStore {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public PreAuthWebRtcBeginResult beginWebRtcVerification(
+            RiskScope scope,
+            HmacIdentifier tokenDigest,
+            HmacIdentifier deviceDigest,
+            HmacIdentifier currentIpDigest,
+            long expectedGeneration,
+            Duration verificationWindow,
+            Duration ttl) {
+        if (expectedGeneration <= 0
+                || verificationWindow == null
+                || verificationWindow.isZero()
+                || verificationWindow.isNegative()) {
+            throw new IllegalArgumentException("WebRTC begin parameters are invalid.");
+        }
+        List<Object> result = redisTemplate.execute(
+                BEGIN_WEBRTC,
+                List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
+                deviceDigest.value(),
+                scope.name(),
+                currentIpDigest.value(),
+                Long.toString(expectedGeneration),
+                Long.toString(verificationWindow.toMillis()),
+                Long.toString(ttl.toMillis()));
+        if (result == null || result.size() < 4) {
+            return new PreAuthWebRtcBeginResult(
+                    PreAuthWebRtcBeginResult.Status.STATE_INVALID,
+                    0L,
+                    null,
+                    0L);
+        }
+        long statusCode = Long.parseLong(Objects.toString(result.get(0)));
+        long generation = Long.parseLong(Objects.toString(result.get(1)));
+        long deadlineMillis = Long.parseLong(Objects.toString(result.get(2)));
+        long remainingMillis = Long.parseLong(Objects.toString(result.get(3)));
+        PreAuthWebRtcBeginResult.Status status = switch ((int) statusCode) {
+            case 1 -> PreAuthWebRtcBeginResult.Status.STARTED;
+            case 2 -> PreAuthWebRtcBeginResult.Status.VERIFIED_PRESERVED;
+            case 3 -> PreAuthWebRtcBeginResult.Status.FAILURE_PRESERVED;
+            case 4 -> PreAuthWebRtcBeginResult.Status.START_TIMEOUT;
+            case 5 -> PreAuthWebRtcBeginResult.Status.PENDING_PRESERVED;
+            case 6 -> PreAuthWebRtcBeginResult.Status.REPORT_TIMEOUT;
+            case -1 -> PreAuthWebRtcBeginResult.Status.NETWORK_CHANGED;
+            case -2 -> PreAuthWebRtcBeginResult.Status.STALE_GENERATION;
+            default -> PreAuthWebRtcBeginResult.Status.STATE_INVALID;
+        };
+        Instant deadline = deadlineMillis > 0
+                ? Instant.ofEpochMilli(deadlineMillis)
+                : null;
+        return new PreAuthWebRtcBeginResult(
+                status,
+                Math.max(0L, generation),
+                deadline,
+                Math.max(0L, remainingMillis));
+    }
+
+    @Override
     public PreAuthWebRtcWriteResult writeWebRtcResult(
             RiskScope scope,
             HmacIdentifier tokenDigest,
             HmacIdentifier deviceDigest,
             HmacIdentifier currentIpDigest,
-            boolean webRtcStatus,
+            long probeGeneration,
+            boolean verified,
+            PreAuthWebRtcFailureReason failureReason,
             String encryptedWebRtcIps,
             boolean hasReportedIps,
             Duration ttl) {
-        if (encryptedWebRtcIps == null || encryptedWebRtcIps.isBlank()) {
+        if (probeGeneration <= 0) {
+            throw new IllegalArgumentException("WebRTC generation is required.");
+        }
+        if (hasReportedIps
+                && (encryptedWebRtcIps == null || encryptedWebRtcIps.isBlank())) {
             throw new IllegalArgumentException("Encrypted WebRTC IPs are required.");
+        }
+        if (!hasReportedIps && encryptedWebRtcIps != null) {
+            throw new IllegalArgumentException("Empty WebRTC reports cannot retain evidence.");
+        }
+        if (verified == (failureReason != null)) {
+            throw new IllegalArgumentException("WebRTC result and failure reason are inconsistent.");
         }
         Long result = redisTemplate.execute(
                 WRITE_WEBRTC,
                 List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 scope.name(),
                 currentIpDigest.value(),
-                Boolean.toString(webRtcStatus),
-                encryptedWebRtcIps,
+                Long.toString(probeGeneration),
+                verified ? PreAuthWebRtcPhase.VERIFIED.name() : PreAuthWebRtcPhase.FAILED.name(),
+                failureReason == null ? "" : failureReason.name(),
+                encryptedWebRtcIps == null ? "" : encryptedWebRtcIps,
                 hasReportedIps ? "1" : "0",
                 Long.toString(ttl.toMillis()));
         if (Long.valueOf(1L).equals(result)) {
@@ -263,6 +354,12 @@ public final class RedisPreAuthStore implements PreAuthStore {
         if (Long.valueOf(3L).equals(result)) {
             return PreAuthWebRtcWriteResult.FAILURE_PRESERVED;
         }
+        if (Long.valueOf(4L).equals(result)) {
+            return PreAuthWebRtcWriteResult.DEADLINE_EXPIRED;
+        }
+        if (Long.valueOf(-2L).equals(result)) {
+            return PreAuthWebRtcWriteResult.STALE_GENERATION;
+        }
         if (Long.valueOf(-1L).equals(result)) {
             return PreAuthWebRtcWriteResult.NETWORK_CHANGED;
         }
@@ -270,18 +367,21 @@ public final class RedisPreAuthStore implements PreAuthStore {
     }
 
     @Override
-    public boolean clearWebRtcResult(
+    public boolean expireWebRtcDeadline(
             RiskScope scope,
             HmacIdentifier tokenDigest,
             HmacIdentifier deviceDigest,
             HmacIdentifier currentIpDigest,
+            long probeGeneration,
             Duration ttl) {
         Long result = redisTemplate.execute(
-                CLEAR_WEBRTC,
+                EXPIRE_WEBRTC,
                 List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 scope.name(),
                 currentIpDigest.value(),
+                Long.toString(probeGeneration),
                 Long.toString(ttl.toMillis()));
         return Long.valueOf(1L).equals(result);
     }
@@ -299,6 +399,7 @@ public final class RedisPreAuthStore implements PreAuthStore {
         Long result = redisTemplate.execute(
                 RECORD_EVENT,
                 List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 Long.toString(occurredAt.toEpochMilli()),
                 Long.toString(eventWindow.toMillis()),
@@ -323,6 +424,7 @@ public final class RedisPreAuthStore implements PreAuthStore {
         List<Object> result = redisTemplate.execute(
                 ACTIVATE_CHALLENGE,
                 List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 currentIpDigest.value(),
                 contextDigest.value(),
@@ -357,6 +459,7 @@ public final class RedisPreAuthStore implements PreAuthStore {
         Long result = redisTemplate.execute(
                 CONSUME_CHALLENGE,
                 List.of(key(scope, tokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 currentIpDigest.value(),
                 contextDigest.value(),
@@ -376,28 +479,53 @@ public final class RedisPreAuthStore implements PreAuthStore {
             RiskSessionType sessionType,
             HmacIdentifier sessionRefDigest,
             HmacIdentifier decisionContextDigest,
-            Boolean webRtcStatus,
+            PreAuthWebRtcPhase expectedSourceWebRtcPhase,
+            long expectedSourceWebRtcGeneration,
+            PreAuthWebRtcPhase webRtcPhase,
+            long webRtcGeneration,
             String encryptedWebRtcIps,
             Instant seenAt,
+            Duration startGrace,
             Duration ttl) {
-        if (webRtcStatus != null
+        if (expectedSourceWebRtcPhase == null
+                || expectedSourceWebRtcGeneration <= 0
+                || webRtcPhase == null
+                || webRtcGeneration <= 0) {
+            throw new IllegalArgumentException("Rotated WebRTC state is required.");
+        }
+        if (webRtcPhase != PreAuthWebRtcPhase.REQUIRED
+                && webRtcPhase != PreAuthWebRtcPhase.VERIFIED) {
+            throw new IllegalArgumentException(
+                    "Only REQUIRED or VERIFIED may survive token rotation.");
+        }
+        if (webRtcPhase == PreAuthWebRtcPhase.VERIFIED
                 && (encryptedWebRtcIps == null || encryptedWebRtcIps.isBlank())) {
             throw new IllegalArgumentException(
                     "Rotated WebRTC state requires encrypted IPs.");
+        }
+        if (webRtcPhase == PreAuthWebRtcPhase.REQUIRED
+                && encryptedWebRtcIps != null) {
+            throw new IllegalArgumentException(
+                    "Rotated REQUIRED state must not contain encrypted IPs.");
         }
         Long result = redisTemplate.execute(
                 ROTATE_AUTHENTICATED,
                 List.of(
                         key(scope, oldTokenDigest),
                         key(scope, newTokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
                 deviceDigest.value(),
                 Long.toString(ttl.toMillis()),
                 seenAt.toString(),
                 sessionType.name(),
                 sessionRefDigest.value(),
                 decisionContextDigest.value(),
-                webRtcStatus == null ? "" : webRtcStatus.toString(),
-                webRtcStatus == null ? "" : encryptedWebRtcIps);
+                expectedSourceWebRtcPhase.name(),
+                Long.toString(expectedSourceWebRtcGeneration),
+                webRtcPhase.name(),
+                Long.toString(webRtcGeneration),
+                encryptedWebRtcIps == null ? "" : encryptedWebRtcIps,
+                Long.toString(startGrace.toMillis()));
         return Long.valueOf(1L).equals(result);
     }
 
@@ -412,7 +540,8 @@ public final class RedisPreAuthStore implements PreAuthStore {
             HmacIdentifier deviceDigest,
             Duration ttl,
             String... fieldValues) {
-        List<String> arguments = new ArrayList<>(2 + fieldValues.length);
+        List<String> arguments = new ArrayList<>(3 + fieldValues.length);
+        arguments.add(Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION));
         arguments.add(deviceDigest.value());
         arguments.add(Long.toString(ttl.toMillis()));
         fields(arguments, fieldValues);
@@ -527,17 +656,19 @@ public final class RedisPreAuthStore implements PreAuthStore {
         return value == null ? null : Instant.parse(value);
     }
 
-    private static Boolean nullableBoolean(
+    private static Instant nullableEpochMillis(
             Map<Object, Object> values,
             String field) {
         String value = nullable(values, field);
-        if (value == null) {
-            return null;
-        }
-        if (!"true".equals(value) && !"false".equals(value)) {
-            throw new IllegalArgumentException("PreAuth boolean field is invalid.");
-        }
-        return Boolean.valueOf(value);
+        return value == null ? null : Instant.ofEpochMilli(Long.parseLong(value));
+    }
+
+    private static <E extends Enum<E>> E nullableEnum(
+            Map<Object, Object> values,
+            String field,
+            Class<E> type) {
+        String value = nullable(values, field);
+        return value == null ? null : Enum.valueOf(type, value);
     }
 
     private static String protectedText(HmacIdentifier value) {

@@ -261,9 +261,9 @@ app:
     single-flight-ttl: 9s
     # 测试外部查询最大并发保持四个。
     max-concurrent-lookups: 4
-    # 测试匿名 PreAuth 使用三十分钟期限。
+    # 测试匿名 PreAuth 服务端状态使用三十分钟期限，Cookie 保持会话级。
     anonymous-pre-auth-ttl: 30m
-    # 测试登录 PreAuth 使用六小时期限。
+    # 测试登录 PreAuth 服务端状态使用六小时期限，Cookie 保持会话级。
     authenticated-pre-auth-ttl: 6h
     # 测试 Challenge 引用使用五分钟期限。
     challenge-ttl: 5m
@@ -277,8 +277,12 @@ app:
     temporary-block-ttl: 10m
     # 测试 WebRTC 配置只参与属性绑定，不连接任何公共 STUN 服务。
     web-rtc:
-      # 测试客户端探测上限固定为十五秒。
-      probe-timeout: 15s
+      # 测试新 generation 的 start grace 固定为八秒。
+      start-grace: 8s
+      # 测试客户端 ICE 探测上限固定为十二秒。
+      probe-timeout: 12s
+      # 测试报告预留三秒，确保 start 后总窗口不超过十五秒。
+      report-grace: 3s
       # 测试保持生产环境相同的四个 STUN 地址和顺序。
       stun-urls:
         # Google STUN 测试配置只作为响应数据。
@@ -346,7 +350,7 @@ app:
         same-site: STRICT
         # 测试 CSRF Cookie 作用于整个站点。
         path: /
-      # 测试注册流程 Token Cookie 的安全属性和路径。
+      # 测试注册流程 Token 使用会话 Cookie 并保持生产安全属性和路径。
       register-flow:
         # 测试注册流程 Token Cookie 保持 Secure。
         secure: true
@@ -356,7 +360,7 @@ app:
         same-site: STRICT
         # 测试注册流程 Token Cookie 只作用于注册端点。
         path: /api/auth/register
-      # 测试注册 Challenge Cookie 的安全属性和路径。
+      # 测试注册 Challenge 使用会话 Cookie 并保持生产安全属性和路径。
       register-challenge:
         # 测试注册 Challenge Cookie 保持 Secure。
         secure: true
@@ -366,7 +370,7 @@ app:
         same-site: STRICT
         # 测试注册 Challenge Cookie 只作用于注册端点。
         path: /api/auth/register
-      # 测试找回密码流程 Token Cookie 的安全属性和路径。
+      # 测试找回密码流程 Token 使用会话 Cookie 并保持生产安全属性和路径。
       password-reset-flow:
         # 测试找回密码流程 Token Cookie 保持 Secure。
         secure: true
@@ -376,7 +380,7 @@ app:
         same-site: STRICT
         # 测试找回密码流程 Token Cookie 只作用于找回密码端点。
         path: /api/auth/password-reset
-      # 测试找回密码一次性凭证 Cookie 的安全属性和路径。
+      # 测试找回密码一次性凭证使用会话 Cookie 并保持生产安全属性和路径。
       password-reset-forget:
         # 测试找回密码一次性凭证 Cookie 保持 Secure。
         secure: true
@@ -386,7 +390,7 @@ app:
         same-site: STRICT
         # 测试找回密码一次性凭证 Cookie 只作用于完成端点。
         path: /api/auth/password-reset/complete
-      # 测试 TOTP 登录流程使用独立 HttpOnly Cookie。
+      # 测试 TOTP 登录流程使用独立 HttpOnly 会话 Cookie。
       totp-login-flow:
         # 测试 TOTP 登录流程 Cookie 保持 Secure。
         secure: true
@@ -402,7 +406,7 @@ app:
       allowed-origins: http://localhost:5173
     # 测试 TTL 使用生产允许范围内的固定值。
     ttl:
-      # 测试 Access Token 签发与 Cookie Max-Age 共用十分钟 TTL。
+      # 测试 Access Token JWT 使用十分钟 TTL，Cookie 保持会话级。
       access-token: 10m
       # 测试验证码 TTL 为 5 分钟。
       verification-code: 5m
@@ -424,7 +428,7 @@ app:
       allowed-drift-steps: 1
       # 测试待确认密钥保留十分钟。
       setup-ttl: 10m
-      # 测试登录二次认证挑战保留五分钟。
+      # 测试 TOTP 登录挑战服务端状态保留五分钟，Cookie 保持会话级。
       login-challenge-ttl: 5m
       # 测试敏感操作复验凭证保留五分钟。
       step-up-ttl: 5m
@@ -443,13 +447,13 @@ app:
     config-path: target/admin-test/complete.yaml
     # 固定测试 HMAC 密钥不可用于生产会话。
     session-hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
-    # 测试管理员会话保持六小时滑动期限。
+    # 测试管理员 Redis Session 保持六小时滑动期限，Cookie 保持会话级。
     session-ttl: 6h
     # 测试最多允许十个管理员设备会话。
     max-sessions: 10
-    # 测试管理员注册 Flow 固定十分钟。
+    # 测试管理员注册 Flow 服务端状态固定十分钟，Cookie 保持会话级。
     registration-flow-ttl: 10m
-    # 测试管理员登录 Flow 固定十分钟。
+    # 测试管理员登录 Flow 服务端状态固定十分钟，Cookie 保持会话级。
     login-flow-ttl: 10m
     # 测试管理员邮箱检查只验证属性绑定，不创建 Rabbit 连接或执行外部邮箱调用。
     mail-inspection:
@@ -553,7 +557,7 @@ app:
         same-site: Strict
         # 测试 CSRF Cookie 作用于根路径。
         path: /
-      # 测试管理员注册 Flow Cookie。
+      # 测试管理员注册 Flow 使用会话 Cookie。
       register-flow:
         # 测试注册 Flow Cookie 保持 Secure。
         secure: true
@@ -563,7 +567,7 @@ app:
         same-site: Strict
         # 测试注册 Flow Cookie 仅作用于注册端点。
         path: /api/admin/auth/register
-      # 测试管理员注册 CSRF Cookie。
+      # 测试管理员注册 CSRF 使用前端可读的会话 Cookie。
       register-csrf:
         # 测试注册 CSRF Cookie 保持 Secure。
         secure: true
@@ -573,7 +577,7 @@ app:
         same-site: Strict
         # 测试注册 CSRF Cookie 允许根页面读取并复制到请求头。
         path: /
-      # 测试管理员登录 Flow Cookie。
+      # 测试管理员登录 Flow 使用会话 Cookie。
       login-flow:
         # 测试登录 Flow Cookie 保持 Secure。
         secure: true
@@ -583,7 +587,7 @@ app:
         same-site: Strict
         # 测试登录 Flow Cookie 仅作用于登录端点。
         path: /api/admin/auth/login
-      # 测试管理员登录 CSRF Cookie。
+      # 测试管理员登录 CSRF 使用前端可读的会话 Cookie。
       login-csrf:
         # 测试登录 CSRF Cookie 保持 Secure。
         secure: true
@@ -628,7 +632,7 @@ app:
   auth-session:
     # 测试会话 HMAC 密钥由固定测试字节构造，不可用于生产。
     hmac-secret-base64: c2Vzc2lvbi10ZXN0LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVm
-    # 测试固定 Refresh Token 使用三小时滑动空闲有效期。
+    # 测试固定 Refresh Token Redis Session 使用三小时滑动空闲有效期，Cookie 保持会话级。
     refresh-token-ttl: 3h
     # 测试单用户最多保留十个刷新会话。
     max-sessions-per-user: 10
@@ -649,7 +653,7 @@ app:
     environment: test
     # 测试 HMAC 密钥与生产无关且满足至少 32 字节要求。
     hmac-secret-base64: YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk=
-    # 测试注册流程仍保持固定 600 秒生命周期。
+    # 测试注册服务端流程仍保持固定 600 秒生命周期，Cookie 保持会话级。
     flow-ttl: 600s
     # 测试冲突滑动窗口为五分钟。
     conflict-window: 5m

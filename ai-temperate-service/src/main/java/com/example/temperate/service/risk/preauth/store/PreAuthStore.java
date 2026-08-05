@@ -7,13 +7,16 @@ import com.example.temperate.service.risk.domain.RiskSessionType;
 import com.example.temperate.service.risk.preauth.domain.PreAuthChallengeActivation;
 import com.example.temperate.service.risk.preauth.domain.PreAuthNetworkSnapshot;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcBeginResult;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcWriteResult;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
 /**
- * 定义 PreAuth Hash 的创建、读取、滑动续期、决策记录和可信网络更新原子边界。
+ * 定义 PreAuth Hash 的创建、读取、滑动续期、决策记录、WebRTC 状态迁移和可信网络更新原子边界。
  */
 public interface PreAuthStore {
 
@@ -26,6 +29,7 @@ public interface PreAuthStore {
             HmacIdentifier contextDigest,
             Instant temporaryBlockUntil,
             boolean trustCurrent,
+            Duration startGrace,
             Duration ttl);
 
     Optional<PreAuthState> find(RiskScope scope, HmacIdentifier tokenDigest);
@@ -47,6 +51,16 @@ public interface PreAuthStore {
             HmacIdentifier contextDigest,
             Instant temporaryBlockUntil,
             boolean trustCurrent,
+            Duration startGrace,
+            Duration ttl);
+
+    PreAuthWebRtcBeginResult beginWebRtcVerification(
+            RiskScope scope,
+            HmacIdentifier tokenDigest,
+            HmacIdentifier deviceDigest,
+            HmacIdentifier currentIpDigest,
+            long expectedGeneration,
+            Duration verificationWindow,
             Duration ttl);
 
     PreAuthWebRtcWriteResult writeWebRtcResult(
@@ -54,16 +68,19 @@ public interface PreAuthStore {
             HmacIdentifier tokenDigest,
             HmacIdentifier deviceDigest,
             HmacIdentifier currentIpDigest,
-            boolean webRtcStatus,
+            long probeGeneration,
+            boolean verified,
+            PreAuthWebRtcFailureReason failureReason,
             String encryptedWebRtcIps,
             boolean hasReportedIps,
             Duration ttl);
 
-    boolean clearWebRtcResult(
+    boolean expireWebRtcDeadline(
             RiskScope scope,
             HmacIdentifier tokenDigest,
             HmacIdentifier deviceDigest,
             HmacIdentifier currentIpDigest,
+            long probeGeneration,
             Duration ttl);
 
     long recordImpossibleTravelEvent(
@@ -106,9 +123,13 @@ public interface PreAuthStore {
             RiskSessionType sessionType,
             HmacIdentifier sessionRefDigest,
             HmacIdentifier decisionContextDigest,
-            Boolean webRtcStatus,
+            PreAuthWebRtcPhase expectedSourceWebRtcPhase,
+            long expectedSourceWebRtcGeneration,
+            PreAuthWebRtcPhase webRtcPhase,
+            long webRtcGeneration,
             String encryptedWebRtcIps,
             Instant seenAt,
+            Duration startGrace,
             Duration ttl);
 
     void delete(RiskScope scope, HmacIdentifier tokenDigest);

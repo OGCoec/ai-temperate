@@ -10,10 +10,12 @@ import com.example.temperate.service.auth.session.authentication.exception.Sessi
 import com.example.temperate.service.humanverification.exception.HumanVerificationUnavailableException;
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.exception.RegistrationException;
+import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.PreAuthTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Clock;
@@ -36,7 +38,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 /**
  * Web 层认证与通用异常的集中处理器。
  *
- * <p>用途：将领域异常映射为稳定 HTTP 状态、错误码和对外消息，并在终止性 H5 会话错误时清理认证 Cookie。</p>
+ * <p>用途：将领域异常映射为稳定 HTTP 状态、错误码和对外消息，并在终止性 H5 会话错误时清理认证与 PreAuth Cookie。</p>
  *
  * <p>安全原理：客户端只接收受控错误信息；浏览器 Cookie 清理仅针对 H5 和相应终止性错误执行，避免 Android
  * 请求或临时基础设施故障被错误地扩展为完整会话注销。</p>
@@ -49,14 +51,17 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     private final Clock clock;
     private final AuthCookieWriter cookieWriter;
     private final AuthFlowCookieWriter flowCookieWriter;
+    private final PreAuthTransport preAuthTransport;
 
     public GlobalExceptionHandler(
             Clock clock,
             AuthCookieWriter cookieWriter,
-            AuthFlowCookieWriter flowCookieWriter) {
+            AuthFlowCookieWriter flowCookieWriter,
+            PreAuthTransport preAuthTransport) {
         this.clock = clock;
         this.cookieWriter = cookieWriter;
         this.flowCookieWriter = flowCookieWriter;
+        this.preAuthTransport = preAuthTransport;
     }
 
     @Override
@@ -137,6 +142,7 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
         }
         if (exception.clearCookies()) {
             cookieWriter.clearSession(response);
+            preAuthTransport.clearCookie(response, RiskScope.USER);
         }
     }
 

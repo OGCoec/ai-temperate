@@ -82,7 +82,6 @@ test('administrator motion only targets compositor-friendly properties', () => {
 
 test('WebRTC safety gate pages remain outside the Quiet Apple Pro component system', () => {
 	const webRtcPages = [
-		read('pages/risk/webrtc-probe.vue'),
 		read('pages/risk/webrtc-failed.vue')
 	].join('\n')
 

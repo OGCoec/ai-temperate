@@ -55,6 +55,19 @@ test('image generation exposes only three quality levels and always disables web
 	assert.match(page, /profileControlLabel\(\)[\s\S]*'画质'/)
 })
 
+test('generated response images preserve their intrinsic ratio without changing uploaded media thumbnails', () => {
+	const page = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(page,
+		/message\.contentAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
+	assert.match(page,
+		/message\.responseAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image generated-response-image"[^>]*mode="widthFix"/)
+	assert.match(page,
+		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
+	assert.match(page,
+		/\.attachment-image\.generated-response-image\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*height:\s*auto[^}]*display:\s*block[^}]*\}/)
+})
+
 test('desktop chat uses one primary sidebar with new chat before navigation and recent after it', () => {
 	const workspace = read('components/user/user-workspace.vue')
 	const sidebar = read('components/user/user-workspace-sidebar.vue')

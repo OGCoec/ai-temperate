@@ -20,6 +20,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -57,18 +58,21 @@ public final class SessionController {
     private final PreAuthService preAuthService;
     private final PreAuthTransport preAuthTransport;
     private final NetworkRiskProperties networkRiskProperties;
+    private final WebRtcVerificationTransport webRtcTransport;
 
     public SessionController(
             SessionAuthenticationService sessionService,
             AuthCookieWriter cookieWriter,
             PreAuthService preAuthService,
             PreAuthTransport preAuthTransport,
-            NetworkRiskProperties networkRiskProperties) {
+            NetworkRiskProperties networkRiskProperties,
+            WebRtcVerificationTransport webRtcTransport) {
         this.sessionService = sessionService;
         this.cookieWriter = cookieWriter;
         this.preAuthService = preAuthService;
         this.preAuthTransport = preAuthTransport;
         this.networkRiskProperties = networkRiskProperties;
+        this.webRtcTransport = webRtcTransport;
     }
 
     @PostMapping("/bootstrap")
@@ -97,15 +101,22 @@ public final class SessionController {
                 response,
                 result.getAccessToken(),
                 refreshToken,
-                result.getCsrfToken(),
-                result.getRefreshExpiresAt());
+                result.getCsrfToken());
+        Object preAuth = request.getAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
+        if (preAuth instanceof PreAuthAccess access) {
+            webRtcTransport.write(
+                    response,
+                    access.state().webRtcPhase(),
+                    access.state().webRtcGeneration());
+        }
         return response(result, platform);
     }
 
     @PostMapping("/logout")
     @Operation(
             summary = "退出当前设备",
-            description = "撤销当前固定 RT，并从用户 RT 反向索引删除当前字段；H5 同时清除 AT、RT、XSRF 三个 Cookie。")
+            description = "撤销当前固定 RT，并从用户 RT 反向索引删除当前字段；H5 同时清除 AT、RT、XSRF 和用户 PreAuth Cookie。")
     public LogoutResponse logout(
             @RequestBody(required = false) SessionRequest body,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceId,
@@ -121,6 +132,7 @@ public final class SessionController {
                 preAuthTransport.read(request, RiskScope.USER));
         if (platform == AuthClientPlatform.H5) {
             cookieWriter.clearSession(response);
+            preAuthTransport.clearCookie(response, RiskScope.USER);
         }
         return new LogoutResponse(true);
     }
@@ -133,7 +145,7 @@ public final class SessionController {
     @Operation(
             summary = "退出当前用户的所有设备",
             description = "使用已完成 RT-first 会话认证的主体确定当前用户，不接受请求体中的 userId；"
-                    + "随后批量撤销该用户的全部 Refresh Session。H5 成功后清理浏览器认证 Cookie。")
+                    + "随后批量撤销该用户的全部 Refresh Session。H5 成功后清理浏览器认证与 PreAuth Cookie。")
     public LogoutResponse logoutAll(
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
             HttpServletRequest request,
@@ -145,6 +157,7 @@ public final class SessionController {
                 preAuthTransport.read(request, RiskScope.USER));
         if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
             cookieWriter.clearSession(response);
+            preAuthTransport.clearCookie(response, RiskScope.USER);
         }
         return new LogoutResponse(true);
     }

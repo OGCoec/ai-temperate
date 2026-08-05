@@ -34,13 +34,6 @@
 			}
 		},
 		{
-			"path": "pages/risk/webrtc-probe",
-			"style": {
-				"navigationStyle": "custom",
-				"backgroundColor": "#080b0d"
-			}
-		},
-		{
 			"path": "pages/risk/webrtc-failed",
 			"style": {
 				"navigationStyle": "custom",

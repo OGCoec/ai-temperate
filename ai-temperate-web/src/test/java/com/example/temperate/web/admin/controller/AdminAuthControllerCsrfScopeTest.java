@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.admin.security.AdminClientPlatformResolver;
 import com.example.temperate.web.admin.security.AdminH5CsrfCookieScopeValidator;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
@@ -86,7 +87,8 @@ class AdminAuthControllerCsrfScopeTest {
                 mock(PreAuthService.class),
                 mock(PreAuthTransport.class),
                 mock(RiskRequestContextResolver.class),
-                mock(NetworkRiskProperties.class));
+                mock(NetworkRiskProperties.class),
+                new WebRtcVerificationTransport());
         return new Fixture(controller, registrationService);
     }
 

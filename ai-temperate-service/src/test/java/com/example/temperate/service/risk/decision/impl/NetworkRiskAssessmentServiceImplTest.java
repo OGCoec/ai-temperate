@@ -389,7 +389,9 @@ class NetworkRiskAssessmentServiceImplTest {
 
     private static NetworkRiskProperties.WebRtc webRtc(String secret) {
         return new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),

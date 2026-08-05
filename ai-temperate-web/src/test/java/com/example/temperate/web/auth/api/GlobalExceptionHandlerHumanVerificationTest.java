@@ -49,7 +49,8 @@ class GlobalExceptionHandlerHumanVerificationTest {
         handler = new GlobalExceptionHandler(
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 cookieWriter,
-                flowCookieWriter);
+                flowCookieWriter,
+                mock(com.example.temperate.web.risk.PreAuthTransport.class));
     }
 
     @Test

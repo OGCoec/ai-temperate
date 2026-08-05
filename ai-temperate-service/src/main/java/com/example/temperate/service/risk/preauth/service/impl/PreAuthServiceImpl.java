@@ -11,6 +11,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthIssue;
 import com.example.temperate.service.risk.preauth.domain.PreAuthNetworkSnapshot;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.risk.preauth.store.PreAuthStore;
 import com.example.temperate.service.risk.security.NetworkRiskIdentifier;
@@ -26,7 +27,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
- * 使用 256 位随机 Token 和单个 Redis Hash 实现普通与管理员隔离的 PreAuth v4 生命周期。
+ * 使用 256 位随机 Token 和单个 Redis Hash 实现普通与管理员隔离的 PreAuth v6 生命周期。
  *
  * <p>IP 信用快照、事件计数和活动 Challenge 都通过 Store 的 Lua 边界写入同一个 Hash；原始
  * PreAuth Token、明文 IP 和原始会话 Token 从不写入 Redis、日志或异常。</p>
@@ -87,10 +88,13 @@ public final class PreAuthServiceImpl implements PreAuthService {
                     contextDigest,
                     temporaryBlockUntil,
                     trustCurrent,
+                    properties.webRtc().startGrace(),
                     properties.anonymousPreAuthTtl())) {
                 return new PreAuthIssue(
                         rawToken,
-                        snapshot.observedAt().plus(properties.anonymousPreAuthTtl()));
+                        snapshot.observedAt().plus(properties.anonymousPreAuthTtl()),
+                        PreAuthWebRtcPhase.REQUIRED,
+                        1L);
             }
         }
         throw new IllegalStateException("PreAuth token allocation failed.");
@@ -204,6 +208,7 @@ public final class PreAuthServiceImpl implements PreAuthService {
                 contextDigest,
                 temporaryBlockUntil,
                 trustCurrent,
+                properties.webRtc().startGrace(),
                 ttl(access.state()));
     }
 
@@ -280,8 +285,9 @@ public final class PreAuthServiceImpl implements PreAuthService {
         }
         HmacIdentifier sessionDigest =
                 identifier.identifySession(rawSessionReference);
-        WebRtcRotationState webRtcState = decryptWebRtcForRotation(oldAccess);
+        PreAuthAccess rotationAccess = oldAccess;
         for (int attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+            WebRtcRotationState webRtcState = decryptWebRtcForRotation(rotationAccess);
             String newRawToken = randomToken();
             HmacIdentifier newTokenDigest =
                     identifier.identifyPreAuthToken(newRawToken);
@@ -291,39 +297,58 @@ public final class PreAuthServiceImpl implements PreAuthService {
                                     + "|"
                                     + newTokenDigest.value()
                                     + "|"
-                                    + oldAccess.state().deviceDigest().value()
+                                    + rotationAccess.state().deviceDigest().value()
                                     + "|"
-                                    + oldAccess.state().currentIpDigest().value());
-            String rotatedWebRtcIps = webRtcState.status() == null
+                                    + rotationAccess.state().currentIpDigest().value());
+            String rotatedWebRtcIps = webRtcState.ips().isEmpty()
                     ? null
                     : webRtcIpProtector.encrypt(
                             webRtcState.ips(),
                             scope,
                             newTokenDigest,
-                            oldAccess.state().currentIpDigest());
+                            rotationAccess.state().currentIpDigest());
             if (store.rotateAuthenticated(
                     scope,
                     oldAccess.tokenDigest(),
                     newTokenDigest,
-                    oldAccess.state().deviceDigest(),
+                    rotationAccess.state().deviceDigest(),
                     sessionType,
                     sessionDigest,
                     newContextDigest,
-                    webRtcState.status(),
+                    rotationAccess.state().webRtcPhase(),
+                    rotationAccess.state().webRtcGeneration(),
+                    webRtcState.phase(),
+                    webRtcState.generation(),
                     rotatedWebRtcIps,
                     seenAt,
+                    properties.webRtc().startGrace(),
                     properties.authenticatedPreAuthTtl())) {
                 return new PreAuthIssue(
                         newRawToken,
-                        seenAt.plus(properties.authenticatedPreAuthTtl()));
+                        seenAt.plus(properties.authenticatedPreAuthTtl()),
+                        webRtcState.phase(),
+                        webRtcState.generation());
+            }
+            // 源 generation 在登录并发窗口内可能被 IP 变化推进；失败后只重读原 Token，再按新状态重算轮换。
+            Optional<PreAuthState> refreshed = store.find(
+                    scope,
+                    oldAccess.tokenDigest());
+            if (refreshed.isPresent()) {
+                rotationAccess = new PreAuthAccess(
+                        oldAccess.tokenDigest(),
+                        refreshed.get());
             }
         }
         throw new IllegalStateException("Authenticated PreAuth rotation failed.");
     }
 
     private WebRtcRotationState decryptWebRtcForRotation(PreAuthAccess oldAccess) {
-        if (oldAccess.state().webRtcStatus() == null) {
-            return new WebRtcRotationState(null, List.of());
+        if (oldAccess.state().webRtcPhase() != PreAuthWebRtcPhase.VERIFIED) {
+            // Token 轮换会改变 report 的绑定身份；未完成或失败状态必须建立新 generation，不能继承旧窗口。
+            return new WebRtcRotationState(
+                    PreAuthWebRtcPhase.REQUIRED,
+                    nextGeneration(oldAccess.state().webRtcGeneration()),
+                    List.of());
         }
         try {
             List<String> ips = webRtcIpProtector.decrypt(
@@ -331,12 +356,23 @@ public final class PreAuthServiceImpl implements PreAuthService {
                     oldAccess.state().scope(),
                     oldAccess.tokenDigest(),
                     oldAccess.state().currentIpDigest());
+            if (ips.isEmpty()) {
+                // VERIFIED 却解密为空说明旧证据已不满足 v6 不变量；轮换后重新探测，不能继承伪成功。
+                return new WebRtcRotationState(
+                        PreAuthWebRtcPhase.REQUIRED,
+                        nextGeneration(oldAccess.state().webRtcGeneration()),
+                        List.of());
+            }
             return new WebRtcRotationState(
-                    oldAccess.state().webRtcStatus(),
+                    PreAuthWebRtcPhase.VERIFIED,
+                    oldAccess.state().webRtcGeneration(),
                     ips);
         } catch (WebRtcIpProtectionException exception) {
-            // 损坏密文不能迁移到新 Token；登录本身继续，后续请求会回到未校验状态重新探测。
-            return new WebRtcRotationState(null, List.of());
+            // 无法验证旧证据时不继承成功；新 Token 进入全新的 REQUIRED，避免永久锁死合法会话。
+            return new WebRtcRotationState(
+                    PreAuthWebRtcPhase.REQUIRED,
+                    nextGeneration(oldAccess.state().webRtcGeneration()),
+                    List.of());
         }
     }
 
@@ -357,11 +393,21 @@ public final class PreAuthServiceImpl implements PreAuthService {
     /**
      * 暂存登录旋转前已认证解密的 WebRTC 状态，不跨请求、不写日志也不离开当前方法调用链。
      */
-    private record WebRtcRotationState(Boolean status, List<String> ips) {
+    private record WebRtcRotationState(
+            PreAuthWebRtcPhase phase,
+            long generation,
+            List<String> ips) {
 
         private WebRtcRotationState {
             ips = List.copyOf(ips);
         }
+    }
+
+    private static long nextGeneration(long generation) {
+        if (generation == Long.MAX_VALUE) {
+            throw new IllegalStateException("WebRTC generation is exhausted.");
+        }
+        return generation + 1L;
     }
 
     private String randomToken() {

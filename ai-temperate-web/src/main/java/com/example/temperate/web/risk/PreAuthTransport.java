@@ -4,8 +4,6 @@ import com.example.temperate.service.risk.domain.RiskScope;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Arrays;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -44,16 +42,25 @@ public final class PreAuthTransport {
     public void writeCookie(
             HttpServletResponse response,
             RiskScope scope,
-            String rawToken,
-            Instant expiresAt,
-            Instant now) {
-        Duration maxAge = Duration.between(now, expiresAt);
+            String rawToken) {
+        // PreAuth 到期值仍需送达风险状态机以完成重新初始化，Cookie 生命周期不得复制 Redis TTL。
         ResponseCookie cookie = ResponseCookie.from(cookieName(scope), rawToken)
                 .secure(true)
                 .httpOnly(true)
                 .sameSite("Strict")
                 .path("/")
-                .maxAge(maxAge.isNegative() ? Duration.ZERO : maxAge)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    public void clearCookie(HttpServletResponse response, RiskScope scope) {
+        // 显式退出或不可恢复的会话错误必须复用 __Host- Cookie 的原始作用域才能可靠清理。
+        ResponseCookie cookie = ResponseCookie.from(cookieName(scope), "")
+                .secure(true)
+                .httpOnly(true)
+                .sameSite("Strict")
+                .path("/")
+                .maxAge(0)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }

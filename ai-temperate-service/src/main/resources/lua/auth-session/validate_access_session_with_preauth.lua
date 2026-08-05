@@ -6,6 +6,7 @@ local preAuthScope = ARGV[5]
 local preAuthDeviceDigest = ARGV[6]
 local preAuthSessionType = ARGV[7]
 local preAuthSessionRefDigest = ARGV[8]
+local expectedPreAuthSchemaVersion = ARGV[9]
 
 local values = redis.call('HMGET', KEYS[1],
         'userId', 'publicId', 'csrfHash', 'email', 'phone', 'deviceHash')
@@ -29,7 +30,7 @@ end
 local preAuth = redis.call('HMGET', KEYS[2],
         'schemaVersion', 'scope', 'authState', 'sessionType',
         'sessionRefDigest', 'deviceDigest')
-if preAuth[1] ~= '4'
+if preAuth[1] ~= expectedPreAuthSchemaVersion
         or preAuth[2] ~= preAuthScope
         or preAuth[3] ~= 'AUTHENTICATED'
         or preAuth[4] ~= preAuthSessionType

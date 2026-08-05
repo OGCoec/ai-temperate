@@ -9,32 +9,23 @@
 	import {
 		isAdminRiskChallengeFlowPage
 	} from '@/common/admin/admin-risk-challenge-navigation.js'
-	// #ifdef H5
 	import {
-		ensureAdminWebRtcVerified,
+		startAdminWebRtcVerificationInBackground,
 		presentAdminWebRtcFailure
 	} from '@/common/admin/admin-webrtc-verification.js'
-	// #endif
 
 	export default {
 		onLaunch(options) {
 			if (!isAdminRiskChallengeFlowPage(options?.path)) {
 				// 管理员认证先完成父域 Cookie 清理，再建立独立 Host-only PreAuth。
 				void ensureAdminCookieScopeMigration().catch(() => {})
-				// #ifdef H5
-				// 与普通端保持一致：启动时只执行一次 PreAuth 与 WebRTC 校验，后续网络变化由业务请求按需发现。
+				// 普通端和管理员端都在 PreAuth 建立后后台探测，页面和业务请求不等待 Report。
 				void ensureAdminPreAuth()
-					.then(() => ensureAdminWebRtcVerified())
+					.then(() => startAdminWebRtcVerificationInBackground())
 					.catch(error => {
 						if (presentAdminRiskBlock(error)) return
 						presentAdminWebRtcFailure(error)
 					})
-				// #endif
-				// #ifndef H5
-				void ensureAdminPreAuth().catch(error => {
-					presentAdminRiskBlock(error)
-				})
-				// #endif
 			}
 		}
 	}

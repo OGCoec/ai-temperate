@@ -7,7 +7,6 @@ export const PUBLIC_ROUTES = Object.freeze([
 	'/pages/risk/blocked',
 	'/pages/risk/challenge-complete',
 	'/pages/risk/challenge-failed',
-	'/pages/risk/webrtc-probe',
 	'/pages/risk/webrtc-failed'
 ])
 

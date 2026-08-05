@@ -9,6 +9,7 @@ local preAuthSessionType = ARGV[8]
 local preAuthSessionRefDigest = ARGV[9]
 local preAuthTtlMillis = tonumber(ARGV[10])
 local promoteAnonymous = ARGV[11] == '1'
+local expectedPreAuthSchemaVersion = ARGV[12]
 
 local values = redis.call('HMGET', KEYS[1],
         'userId', 'publicId', 'csrfHash', 'email', 'phone', 'deviceHash')
@@ -39,7 +40,7 @@ local anonymousRecovery = promoteAnonymous
         and preAuth[3] == 'ANONYMOUS'
         and preAuth[4] == 'NONE'
         and (not preAuth[5] or preAuth[5] == '')
-if preAuth[1] ~= '4'
+if preAuth[1] ~= expectedPreAuthSchemaVersion
         or preAuth[2] ~= preAuthScope
         or preAuth[6] ~= preAuthDeviceDigest
         or (not alreadyBound and not anonymousRecovery) then

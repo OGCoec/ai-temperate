@@ -216,8 +216,7 @@ class AdminSessionAuthenticationInterceptorTest {
         verify(cookieWriter).refreshSession(
                 response,
                 SESSION_TOKEN,
-                "test-admin-csrf",
-                profile.expiresAt());
+                "test-admin-csrf");
 
         interceptor.afterCompletion(request, response, new Object(), null);
 

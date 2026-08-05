@@ -7,6 +7,8 @@ import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.observability.WebRtcMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationOutcome;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
@@ -25,6 +27,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
@@ -123,9 +126,14 @@ public final class WebRtcEdgeController {
         if (properties.mode() == NetworkRiskMode.DISABLED) {
             return noStore(ResponseEntity.ok(new WebRtcStartResponse(
                     properties.mode().name(),
+                    "DISABLED",
                     false,
                     null,
+                    null,
+                    null,
+                    0L,
                     properties.webRtc().probeTimeout().toMillis(),
+                    properties.webRtc().reportGrace().toMillis(),
                     stunUrls(),
                     reportPath(scope),
                     null,
@@ -136,12 +144,12 @@ public final class WebRtcEdgeController {
         }
         PreAuthAccess access = requireAccess(request);
         TrustedNetworkObservation observation = requireObservation(request);
-        WebRtcVerificationDecision decision = verificationService.inspect(
+        WebRtcVerificationDecision decision = verificationService.begin(
                 access,
                 observation.clientIp());
+        recordStartTransition(scope, platform, access, decision);
         boolean probeRequired = decision.outcome()
-                == WebRtcVerificationOutcome.VERIFICATION_REQUIRED
-                || decision.outcome() == WebRtcVerificationOutcome.NETWORK_CHANGED;
+                == WebRtcVerificationOutcome.VERIFICATION_PENDING;
         String code = decision.outcome() == WebRtcVerificationOutcome.VERIFIED
                 ? null
                 : code(decision.outcome());
@@ -156,9 +164,16 @@ public final class WebRtcEdgeController {
                 : decision.webRtcIps();
         return noStore(ResponseEntity.ok(new WebRtcStartResponse(
                 properties.mode().name(),
+                decision.verificationState(),
                 probeRequired,
                 decision.webRtcStatus(),
+                decision.probeGeneration() > 0
+                        ? Long.toString(decision.probeGeneration())
+                        : null,
+                decision.pendingUntil(),
+                decision.pendingRemainingMillis(),
                 properties.webRtc().probeTimeout().toMillis(),
+                properties.webRtc().reportGrace().toMillis(),
                 stunUrls(),
                 reportPath(scope),
                 code,
@@ -166,7 +181,7 @@ public final class WebRtcEdgeController {
                 httpIp,
                 ips,
                 Boolean.FALSE.equals(decision.webRtcStatus())
-                        ? Boolean.TRUE
+                        ? Boolean.FALSE
                         : null)));
     }
 
@@ -193,6 +208,7 @@ public final class WebRtcEdgeController {
             decision = verificationService.report(
                     access,
                     observation.clientIp(),
+                    body.probeGeneration(),
                     body.webRtcIps());
         } catch (WebRtcInvalidReportException exception) {
             metrics.verification(
@@ -207,7 +223,7 @@ public final class WebRtcEdgeController {
                             null,
                             null,
                             null,
-                            true,
+                            false,
                             Instant.now())));
         }
         metrics.verification(
@@ -215,13 +231,16 @@ public final class WebRtcEdgeController {
                 verificationOutcome(decision.outcome()),
                 metricPlatform(platform),
                 properties.mode());
+        recordReportTransition(scope, platform, access, decision);
         HttpStatus status = reportStatus(decision.outcome(), properties.mode());
         String httpIp = switch (decision.outcome()) {
-            case VERIFICATION_FAILED, IP_MISMATCH -> observation.clientIp();
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH ->
+                    observation.clientIp();
             default -> null;
         };
         List<String> ips = switch (decision.outcome()) {
-            case VERIFICATION_FAILED, IP_MISMATCH -> decision.webRtcIps();
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH ->
+                    decision.webRtcIps();
             default -> null;
         };
         return noStore(ResponseEntity.status(status).body(
@@ -233,7 +252,8 @@ public final class WebRtcEdgeController {
                         decision.webRtcStatus(),
                         httpIp,
                         ips,
-                        decision.outcome() != WebRtcVerificationOutcome.VERIFIED,
+                        decision.outcome() == WebRtcVerificationOutcome.NETWORK_CHANGED
+                                || decision.outcome() == WebRtcVerificationOutcome.STALE_REPORT,
                         Instant.now())));
     }
 
@@ -296,25 +316,30 @@ public final class WebRtcEdgeController {
             WebRtcVerificationOutcome outcome,
             NetworkRiskMode mode) {
         if (mode == NetworkRiskMode.OBSERVE
-                && (outcome == WebRtcVerificationOutcome.IP_MISMATCH
-                || outcome == WebRtcVerificationOutcome.VERIFICATION_FAILED)) {
+                && outcome != WebRtcVerificationOutcome.STATE_INVALID) {
             return HttpStatus.OK;
         }
         return switch (outcome) {
             case VERIFIED -> HttpStatus.OK;
             case IP_MISMATCH -> HttpStatus.FORBIDDEN;
-            case VERIFICATION_FAILED, VERIFICATION_REQUIRED ->
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    VERIFICATION_REQUIRED, VERIFICATION_PENDING ->
                     HttpStatus.PRECONDITION_REQUIRED;
-            case NETWORK_CHANGED -> HttpStatus.CONFLICT;
+            case NETWORK_CHANGED, STALE_REPORT -> HttpStatus.CONFLICT;
+            case STATE_INVALID -> HttpStatus.SERVICE_UNAVAILABLE;
         };
     }
 
     private static String verificationOutcome(WebRtcVerificationOutcome outcome) {
         return switch (outcome) {
             case VERIFIED -> "matched";
+            case VERIFICATION_PENDING -> "pending";
             case IP_MISMATCH -> "mismatch";
             case VERIFICATION_FAILED, VERIFICATION_REQUIRED -> "empty";
+            case VERIFICATION_TIMEOUT -> "timeout";
             case NETWORK_CHANGED -> "network_changed";
+            case STALE_REPORT -> "stale";
+            case STATE_INVALID -> "invalid";
         };
     }
 
@@ -322,25 +347,99 @@ public final class WebRtcEdgeController {
         return platform == AuthClientPlatform.ANDROID ? "android" : "h5";
     }
 
+    private void recordStartTransition(
+            RiskScope scope,
+            AuthClientPlatform platform,
+            PreAuthAccess access,
+            WebRtcVerificationDecision decision) {
+        if (access.state().webRtcPhase() == PreAuthWebRtcPhase.REQUIRED
+                && decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_PENDING) {
+            metrics.transition(
+                    scope,
+                    "required_started",
+                    metricPlatform(platform),
+                    "none",
+                    properties.mode());
+        } else if (access.state().webRtcPhase() == PreAuthWebRtcPhase.REQUIRED
+                && decision.failureReason() == PreAuthWebRtcFailureReason.START_TIMEOUT) {
+            metrics.transition(
+                    scope,
+                    "required_timeout",
+                    metricPlatform(platform),
+                    "start_timeout",
+                    properties.mode());
+        }
+    }
+
+    private void recordReportTransition(
+            RiskScope scope,
+            AuthClientPlatform platform,
+            PreAuthAccess access,
+            WebRtcVerificationDecision decision) {
+        String metricPlatform = metricPlatform(platform);
+        if (access.state().webRtcPhase() == PreAuthWebRtcPhase.PENDING
+                && decision.outcome() == WebRtcVerificationOutcome.VERIFIED) {
+            metrics.transition(
+                    scope,
+                    "pending_verified",
+                    metricPlatform,
+                    "none",
+                    properties.mode());
+            return;
+        }
+        if (access.state().webRtcPhase() == PreAuthWebRtcPhase.PENDING
+                && (decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_FAILED
+                || decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_TIMEOUT
+                || decision.outcome() == WebRtcVerificationOutcome.IP_MISMATCH)) {
+            metrics.transition(
+                    scope,
+                    "pending_failed",
+                    metricPlatform,
+                    failureReason(decision.failureReason()),
+                    properties.mode());
+            return;
+        }
+        if (decision.outcome() == WebRtcVerificationOutcome.STALE_REPORT) {
+            metrics.transition(
+                    scope,
+                    "stale_report",
+                    metricPlatform,
+                    "stale",
+                    properties.mode());
+        }
+    }
+
+    private static String failureReason(PreAuthWebRtcFailureReason reason) {
+        return reason == null ? "none" : reason.name().toLowerCase(java.util.Locale.ROOT);
+    }
+
     private static String code(WebRtcVerificationOutcome outcome) {
         return switch (outcome) {
             case VERIFIED -> "WEBRTC_VERIFIED";
+            case VERIFICATION_PENDING -> "WEBRTC_VERIFICATION_PENDING";
             case VERIFICATION_REQUIRED -> "WEBRTC_VERIFICATION_REQUIRED";
             case VERIFICATION_FAILED -> "WEBRTC_VERIFICATION_FAILED";
+            case VERIFICATION_TIMEOUT -> "WEBRTC_VERIFICATION_TIMEOUT";
             case IP_MISMATCH -> "WEBRTC_IP_MISMATCH";
             case NETWORK_CHANGED -> "WEBRTC_NETWORK_CHANGED";
+            case STALE_REPORT -> "WEBRTC_REPORT_STALE";
+            case STATE_INVALID -> "WEBRTC_STATE_UNAVAILABLE";
         };
     }
 
     private static String message(WebRtcVerificationOutcome outcome) {
         return switch (outcome) {
             case VERIFIED -> "WebRTC 网络一致性校验已通过。";
+            case VERIFICATION_PENDING -> "WebRTC 网络一致性校验正在后台进行。";
             case VERIFICATION_REQUIRED -> "请先完成 WebRTC 网络一致性校验。";
             case VERIFICATION_FAILED ->
-                    "未获取到可用于校验的 WebRTC 公网 IP，请检查 WebRTC、UDP、VPN 或代理设置后重试。";
+                    "未获取到可用于校验的 WebRTC 公网 IP，当前会话已停止访问。";
+            case VERIFICATION_TIMEOUT -> "WebRTC 网络一致性校验已超时，当前会话已停止访问。";
             case IP_MISMATCH ->
-                    "检测到 WebRTC IP 与当前 HTTP IP 不一致，请更换网络环境后重试。";
-            case NETWORK_CHANGED -> "检测期间网络环境发生变化，请重新检测。";
+                    "检测到 WebRTC IP 与当前 HTTP IP 不一致，当前会话已停止访问。";
+            case NETWORK_CHANGED -> "检测期间网络环境发生变化，请读取最新探测状态。";
+            case STALE_REPORT -> "该 WebRTC Report 已过期，请读取最新探测状态。";
+            case STATE_INVALID -> "WebRTC 校验状态暂时不可用。";
         };
     }
 
@@ -363,13 +462,19 @@ public final class WebRtcEdgeController {
      */
     public static final class WebRtcReportRequest {
 
+        @NotBlank
+        @Pattern(regexp = "^[1-9][0-9]{0,18}$")
+        private final String probeGeneration;
+
         @NotNull
         @Size(max = 8)
         private final List<@NotBlank @Size(max = 64) String> webRtcIps;
 
         @JsonCreator
         public WebRtcReportRequest(
+                @JsonProperty("probeGeneration") String probeGeneration,
                 @JsonProperty("webRtcIps") List<String> webRtcIps) {
+            this.probeGeneration = probeGeneration;
             this.webRtcIps = webRtcIps == null
                     ? null
                     : List.copyOf(webRtcIps);
@@ -377,6 +482,10 @@ public final class WebRtcEdgeController {
 
         public List<String> webRtcIps() {
             return webRtcIps;
+        }
+
+        public String probeGeneration() {
+            return probeGeneration;
         }
 
         @JsonAnySetter
@@ -388,14 +497,19 @@ public final class WebRtcEdgeController {
     }
 
     /**
-     * 返回当前三态、固定 STUN 清单和本作用域 Report 路径；完整 IP 只在失败详情中返回。
+     * 返回当前四态、固定 STUN 清单和本作用域 Report 路径；完整 IP 只在失败详情中返回。
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record WebRtcStartResponse(
             String mode,
+            String verificationState,
             boolean probeRequired,
             Boolean webRtcStatus,
+            String probeGeneration,
+            Instant pendingUntil,
+            long pendingRemainingMillis,
             long timeoutMillis,
+            long reportGraceMillis,
             List<String> stunUrls,
             String reportPath,
             String code,

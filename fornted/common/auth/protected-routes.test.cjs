@@ -38,7 +38,6 @@ test('allows authentication bootstrap and pre-auth security pages without login'
 		'/pages/risk/blocked',
 		'/pages/risk/challenge-complete',
 		'/pages/risk/challenge-failed',
-		'/pages/risk/webrtc-probe',
 		'/pages/risk/webrtc-failed'
 	]
 	for (const route of anonymousRoutes) {

@@ -105,7 +105,7 @@
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
 							<view v-if="message.responseAttachments?.length" class="attachment-grid">
 								<view v-for="attachment in message.responseAttachments" :key="attachment.attachmentId" class="attachment-card">
-									<image v-if="previewImage(attachment)" class="attachment-image" :src="attachment.url" mode="aspectFit" />
+									<image v-if="previewImage(attachment)" class="attachment-image generated-response-image" :src="attachment.url" mode="widthFix" />
 									<video v-else-if="previewVideo(attachment)" class="attachment-video" :src="attachment.url" controls />
 									<button v-else class="attachment-file" type="button" :disabled="attachment.state !== 'AVAILABLE'" @click="openAttachment(attachment)">
 										<uni-icons type="download" size="20" color="#37d39a" />
@@ -1497,6 +1497,7 @@
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 	.attachment-card { min-width: 0; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
 	.attachment-image, .attachment-video { width: 100%; height: 180px; display: block; }
+	.attachment-image.generated-response-image { width: 100%; max-width: 100%; height: auto; display: block; }
 	.image-preview-state { display: block; padding: 8px 10px; color: #8fdcbe; font-size: 11px; line-height: 1.45; }
 	.attachment-file { width: 100%; min-height: 54px; margin: 0; padding: 10px 12px; justify-content: flex-start; gap: 9px; border: 0; border-radius: 0; color: #dce5e0; text-align: left; }
 	.attachment-file text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

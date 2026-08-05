@@ -45,7 +45,6 @@ test('administrator route policy protects every business page and leaves securit
 		'/pages/risk/challenge-complete',
 		'/pages/risk/challenge-failed',
 		'/pages/risk/blocked',
-		'/pages/risk/webrtc-probe',
 		'/pages/risk/webrtc-failed'
 	]) {
 		assert.equal(isAdminPublicRoute(route), true, route)
@@ -117,7 +116,6 @@ test('administrator route guard leaves public security pages usable without a se
 	})
 
 	assert.equal(await guard.guardAdminPage('/pages/risk/challenge-failed'), true)
-	assert.equal(await guard.guardedAdminNavigate('/pages/risk/webrtc-probe'), true)
 	assert.equal(bootstrapCalls, 0)
 	assert.equal(navigations, 1)
 })

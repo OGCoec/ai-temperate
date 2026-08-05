@@ -5,10 +5,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,8 +15,6 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * 验证三类认证 Cookie 的属性、有效期、共享域名和新旧路径清理行为。
  */
 class AuthCookieWriterTest {
-
-    private static final Instant NOW = Instant.parse("2026-07-15T00:00:00Z");
 
     private AuthCookieWriter writer;
 
@@ -37,25 +31,26 @@ class AuthCookieWriterTest {
                 response,
                 "access-value",
                 "refresh-value",
-                "csrf-value",
-                NOW.plus(Duration.ofHours(3)));
+                "csrf-value");
 
         List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
         assertThat(cookie(cookies, AuthCookieWriter.ACCESS_COOKIE))
                 .contains("access_token=access-value")
                 .contains("Path=/api")
-                .contains("Max-Age=600")
                 .contains("Secure")
                 .contains("HttpOnly")
                 .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
                 .doesNotContain("Domain=");
         assertThat(cookie(cookies, AuthCookieWriter.REFRESH_COOKIE))
                 .contains("refresh_token=refresh-value")
                 .contains("Path=/api")
-                .contains("Max-Age=10800")
                 .contains("Secure")
                 .contains("HttpOnly")
                 .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
                 .doesNotContain("Domain=");
         assertThat(cookies).anySatisfy(value -> assertThat(value)
                 .startsWith(AuthCookieWriter.REFRESH_COOKIE + "=")
@@ -68,6 +63,7 @@ class AuthCookieWriterTest {
                 .contains("SameSite=Strict")
                 .doesNotContain("HttpOnly")
                 .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
                 .doesNotContain("Domain=");
         assertThat(cookie(cookies, AuthCookieWriter.LEGACY_REFRESH_COOKIE))
                 .contains("rt=")
@@ -84,8 +80,7 @@ class AuthCookieWriterTest {
                 response,
                 "access-value",
                 "refresh-value",
-                "csrf-value",
-                NOW.plus(Duration.ofHours(3)));
+                "csrf-value");
 
         List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
         assertThat(cookie(cookies, AuthCookieWriter.ACCESS_COOKIE))
@@ -148,12 +143,7 @@ class AuthCookieWriterTest {
                         true, true, AuthSecurityProperties.SameSite.STRICT,
                         "/api/auth/login/totp"),
                 domain));
-        when(properties.ttl()).thenReturn(new AuthSecurityProperties.Ttl(
-                Duration.ofMinutes(10),
-                Duration.ofMinutes(5),
-                Duration.ofMinutes(10),
-                Duration.ofSeconds(45)));
-        return new AuthCookieWriter(properties, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new AuthCookieWriter(properties);
     }
 
     private static String cookie(List<String> cookies, String name) {

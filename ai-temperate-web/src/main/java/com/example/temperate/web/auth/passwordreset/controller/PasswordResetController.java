@@ -78,9 +78,9 @@ public final class PasswordResetController {
                 request.getRemoteAddr()));
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         if (platform == AuthClientPlatform.H5) {
-            // H5 找回密码流程令牌只写入 HttpOnly Cookie，避免响应 JSON 暴露 resetFlowToken。
+            // H5 找回密码流程令牌只写入 HttpOnly 会话 Cookie，避免响应 JSON 暴露 resetFlowToken。
             flowCookieWriter.writePasswordResetFlow(
-                    response, result.resetFlowToken(), result.expiresAt());
+                    response, result.resetFlowToken());
         }
         return startResponse(result, platform);
     }
@@ -135,9 +135,9 @@ public final class PasswordResetController {
                 access(flowToken, challenge, deviceId, platformHeader, request), body.code());
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         if (platform == AuthClientPlatform.H5) {
-            // forgetToken 是一次性完成凭证，H5 仅通过专用 HttpOnly Cookie 携带到 complete 端点。
+            // forgetToken 是一次性完成凭证，H5 仅通过专用 HttpOnly 会话 Cookie 携带到 complete 端点。
             flowCookieWriter.writeForgetToken(
-                    response, result.forgetToken(), result.expiresAt());
+                    response, result.forgetToken());
         }
         return forgetTokenResponse(result, platform);
     }

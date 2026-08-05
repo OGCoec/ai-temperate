@@ -69,11 +69,11 @@ class RegistrationControllerTokenTransportTest {
                 servletResponse,
                 "register-token",
                 "register-csrf",
-                "challenge-handle",
-                EXPIRES_AT);
+                "challenge-handle");
         assertThat(response.registerToken()).isNull();
         assertThat(response.flowCsrf()).isNull();
         assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(EXPIRES_AT);
         String json = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .writeValueAsString(response);
@@ -94,10 +94,11 @@ class RegistrationControllerTokenTransportTest {
                 new MockHttpServletRequest(),
                 servletResponse);
 
-        verify(flowCookieWriter, never()).writeRegistration(any(), any(), any(), any(), any());
+        verify(flowCookieWriter, never()).writeRegistration(any(), any(), any(), any());
         assertThat(response.registerToken()).isEqualTo("register-token");
         assertThat(response.flowCsrf()).isEqualTo("register-csrf");
         assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(EXPIRES_AT);
     }
 
     @Test

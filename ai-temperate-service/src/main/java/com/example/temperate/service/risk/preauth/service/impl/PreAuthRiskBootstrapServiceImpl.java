@@ -26,7 +26,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 /**
- * 在首次 Bootstrap 时执行共享 IP 情报降级链，并把完整信用快照写入 PreAuth v4 单 Hash。
+ * 在首次 Bootstrap 时执行共享 IP 情报降级链，并把完整信用快照写入 PreAuth v6 单 Hash。
  *
  * <p>首次请求不计算不可能旅行；基础分低于 40 阻断、40 至 59 挑战、60 及以上允许。已有状态
  * 统一交给评估服务依据 Redis 初始命中事实复用或重评估。</p>
@@ -153,7 +153,11 @@ public final class PreAuthRiskBootstrapServiceImpl
                 ? properties.authenticatedPreAuthTtl()
                 : properties.anonymousPreAuthTtl();
         return outcome(
-                new PreAuthIssue(rawToken, now.plus(ttl)),
+                new PreAuthIssue(
+                        rawToken,
+                        now.plus(ttl),
+                        access.state().webRtcPhase(),
+                        access.state().webRtcGeneration()),
                 access,
                 assessment,
                 reauthenticationRequired,

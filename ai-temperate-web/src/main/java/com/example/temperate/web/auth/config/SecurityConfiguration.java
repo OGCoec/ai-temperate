@@ -5,6 +5,7 @@ import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
@@ -117,6 +118,8 @@ public class SecurityConfiguration {
                 AuthRequestTraceFilter.TRACE_HEADER,
                 "X-AI-Generation-Id",
                 "X-New-Access-Token",
+                WebRtcVerificationTransport.STATE_HEADER,
+                WebRtcVerificationTransport.GENERATION_HEADER,
                 "X-Session-Renewed",
                 "CF-Ray",
                 "cf-mitigated"));

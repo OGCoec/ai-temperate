@@ -53,7 +53,8 @@ final class AdminMailInspectionSseErrorResponseTest {
                                 ZoneOffset.UTC),
                         mock(AdminCookieWriter.class),
                         new AdminClientPlatformResolver(),
-                        mock(AdminExceptionLogger.class));
+                        mock(AdminExceptionLogger.class),
+                        mock(com.example.temperate.web.risk.PreAuthTransport.class));
         DefaultFormattingConversionService conversionService =
                 new DefaultFormattingConversionService();
         conversionService.addConverter(

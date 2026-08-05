@@ -5,6 +5,7 @@ import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.config.SpaCsrfTokenRequestHandler;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -85,6 +86,8 @@ public class AdminSecurityConfiguration {
         configuration.setExposedHeaders(List.of(
                 "X-Trace-Id",
                 "X-Accel-Buffering",
+                WebRtcVerificationTransport.STATE_HEADER,
+                WebRtcVerificationTransport.GENERATION_HEADER,
                 "Idempotency-Replayed"));
         configuration.setMaxAge(600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

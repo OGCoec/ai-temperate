@@ -90,13 +90,12 @@ public final class RegistrationController {
                 request.getRemoteAddr()));
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         if (platform == AuthClientPlatform.H5) {
-            // H5 流程凭据只写入 HttpOnly Cookie，响应 JSON 不再暴露 registerToken 和 flowCsrf。
+            // H5 流程凭据只写入 HttpOnly 会话 Cookie，响应 JSON 不再暴露 registerToken 和 flowCsrf。
             flowCookieWriter.writeRegistration(
                     response,
                     result.registerToken(),
                     result.flowCsrf(),
-                    result.challengeHandle(),
-                    result.expiresAt());
+                    result.challengeHandle());
         }
         return startResponse(result, platform);
     }

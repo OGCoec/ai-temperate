@@ -1,16 +1,14 @@
 <script>
 	import { version } from './package.json'
-	// #ifdef H5
 	import { ensureCookieScopeMigration } from '@/common/auth/cookie-scope-migration.js'
 	import { ensurePreAuth } from '@/common/auth/pre-auth.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import { isRiskChallengeFlowPage } from '@/common/auth/risk-challenge-navigation.js'
 	import {
-		ensureWebRtcVerified,
+		startWebRtcVerificationInBackground,
 		presentWebRtcFailure
 	} from '@/common/auth/webrtc-verification.js'
 	import { prewarmTurnstile } from '@/common/auth/turnstile-prewarm.js'
-	// #endif
 	// #ifdef APP
 	import checkUpdate from '@/uni_modules/uni-upgrade-center-app/utils/check-update'
 	// #endif
@@ -23,19 +21,21 @@
 				'background:#10251d;padding:1px;border-radius:3px 0 0 3px;color:#dff8ed',
 				'background:#37d39a;padding:1px;border-radius:0 3px 3px 0;color:#04110c;font-weight:bold'
 			)
+			// #endif
 			if (!isRiskChallengeFlowPage(options?.path)) {
 				// 所有认证请求共享迁移和 PreAuth Promise，启动阶段不弹出重复错误。
 				void ensureCookieScopeMigration().catch(() => {})
 				void ensurePreAuth()
-					.then(() => ensureWebRtcVerified())
+					.then(() => startWebRtcVerificationInBackground())
 					.catch(error => {
 						if (presentRiskBlock(error)) return
 						presentWebRtcFailure(error)
 					})
+				// #ifdef H5
 				// 启动阶段只预热官方 SDK，真实挑战仍等待后端下发。
 				void prewarmTurnstile()
+				// #endif
 			}
-			// #endif
 			console.log('App Launch')
 			// #ifdef APP-PLUS
 			if (plus.runtime.appid !== 'HBuilder') {

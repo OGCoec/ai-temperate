@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,17 +18,25 @@ import com.example.temperate.service.auth.session.authentication.enums.SessionAu
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
+import com.example.temperate.service.risk.domain.RiskScope;
+import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
+import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.auth.api.WebInvalidInputException;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
 import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
@@ -41,19 +50,25 @@ class SessionControllerTokenTransportTest {
 
     private SessionAuthenticationService service;
     private AuthCookieWriter cookieWriter;
+    private PreAuthService preAuthService;
+    private PreAuthTransport preAuthTransport;
     private SessionController controller;
 
     @BeforeEach
     void setUp() {
         service = mock(SessionAuthenticationService.class);
         cookieWriter = mock(AuthCookieWriter.class);
+        preAuthService = mock(PreAuthService.class);
+        preAuthTransport = mock(PreAuthTransport.class);
         controller = new SessionController(
                 service,
                 cookieWriter,
-                mock(PreAuthService.class),
-                mock(PreAuthTransport.class),
-                mock(NetworkRiskProperties.class));
+                preAuthService,
+                preAuthTransport,
+                mock(NetworkRiskProperties.class),
+                new WebRtcVerificationTransport());
         when(service.bootstrap(any())).thenReturn(result());
+        when(preAuthTransport.read(any(), any())).thenReturn("user-preauth");
     }
 
     @Test
@@ -88,10 +103,40 @@ class SessionControllerTokenTransportTest {
                 servletResponse,
                 "new-access-value",
                 "browser-rt",
-                "csrf-value",
-                REFRESH_EXPIRES_AT);
+                "csrf-value");
         assertThat(response.accessToken()).isNull();
         assertThat(response.csrfToken()).isNull();
+    }
+
+    @Test
+    void h5BootstrapPreservesCurrentBackgroundVerificationSignal() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setCookies(
+                new Cookie(AuthCookieWriter.ACCESS_COOKIE, "browser-at"),
+                new Cookie(AuthCookieWriter.REFRESH_COOKIE, "browser-rt"));
+        PreAuthAccess access = mock(PreAuthAccess.class);
+        PreAuthState state = mock(PreAuthState.class);
+        PreAuthSessionBinding binding = mock(PreAuthSessionBinding.class);
+        when(access.state()).thenReturn(state);
+        when(state.webRtcPhase()).thenReturn(PreAuthWebRtcPhase.PENDING);
+        when(state.webRtcGeneration()).thenReturn(9L);
+        when(preAuthService.requireSessionBinding(any(), any(), any(), any()))
+                .thenReturn(binding);
+        when(service.bootstrap(any(), any())).thenReturn(result());
+        request.setAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE, access);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        controller.bootstrap(
+                null,
+                "device-1",
+                "H5",
+                request,
+                response);
+
+        assertThat(response.getHeader(WebRtcVerificationTransport.STATE_HEADER))
+                .isEqualTo("PENDING");
+        assertThat(response.getHeader(WebRtcVerificationTransport.GENERATION_HEADER))
+                .isEqualTo("9");
     }
 
     @Test
@@ -122,9 +167,13 @@ class SessionControllerTokenTransportTest {
                 servletResponse);
 
         ArgumentCaptor<LogoutCommand> command = ArgumentCaptor.forClass(LogoutCommand.class);
-        verify(service).logout(command.capture());
+        InOrder order = inOrder(service, preAuthService, cookieWriter, preAuthTransport);
+        order.verify(service).logout(command.capture());
+        order.verify(preAuthTransport).read(request, RiskScope.USER);
+        order.verify(preAuthService).revoke(RiskScope.USER, "user-preauth");
+        order.verify(cookieWriter).clearSession(servletResponse);
+        order.verify(preAuthTransport).clearCookie(servletResponse, RiskScope.USER);
         assertThat(command.getValue().getRefreshToken()).isEqualTo("browser-rt");
-        verify(cookieWriter).clearSession(servletResponse);
     }
 
     @Test
@@ -148,6 +197,7 @@ class SessionControllerTokenTransportTest {
                 .isInstanceOf(SessionAuthenticationException.class);
 
         verify(cookieWriter, never()).clearSession(servletResponse);
+        verify(preAuthTransport, never()).clearCookie(servletResponse, RiskScope.USER);
     }
 
     @Test
@@ -168,6 +218,7 @@ class SessionControllerTokenTransportTest {
         verify(service).logout(command.capture());
         assertThat(command.getValue().getRefreshToken()).isEqualTo("android-rt");
         verify(cookieWriter, never()).clearSession(servletResponse);
+        verify(preAuthTransport, never()).clearCookie(servletResponse, RiskScope.USER);
     }
 
     @Test
@@ -187,6 +238,7 @@ class SessionControllerTokenTransportTest {
         assertThat(response.loggedOut()).isTrue();
         verify(service).logoutAllForUser(10001L);
         verify(cookieWriter).clearSession(servletResponse);
+        verify(preAuthTransport).clearCookie(servletResponse, RiskScope.USER);
     }
 
     @Test
@@ -204,6 +256,7 @@ class SessionControllerTokenTransportTest {
         assertThat(response.loggedOut()).isTrue();
         verify(service).logoutAllForUser(10001L);
         verify(cookieWriter, never()).clearSession(servletResponse);
+        verify(preAuthTransport, never()).clearCookie(servletResponse, RiskScope.USER);
     }
 
     private static SessionAuthenticationResult result() {

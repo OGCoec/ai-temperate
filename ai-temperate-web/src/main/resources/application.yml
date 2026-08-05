@@ -422,9 +422,9 @@ app:
     single-flight-ttl: ${NETWORK_RISK_SINGLE_FLIGHT_TTL:9s}
     # 单实例最多允许三十二个缓存未命中的外部风险查询并发。
     max-concurrent-lookups: ${NETWORK_RISK_MAX_CONCURRENT_LOOKUPS:32}
-    # 未登录 PreAuth 每次有效业务请求获得三十分钟滑动期限。
+    # 未登录 PreAuth 服务端状态每次有效业务请求获得三十分钟滑动期限，H5 会话 Cookie 不复制该 TTL。
     anonymous-pre-auth-ttl: ${NETWORK_RISK_ANONYMOUS_PREAUTH_TTL:30m}
-    # 登录成功关联后的 PreAuth 每次有效业务请求获得六小时滑动期限。
+    # 登录成功关联后的 PreAuth 服务端状态获得六小时滑动期限，H5 会话 Cookie 不复制该 TTL。
     authenticated-pre-auth-ttl: ${NETWORK_RISK_AUTHENTICATED_PREAUTH_TTL:6h}
     # 一次性 WAF Challenge 引用五分钟后失效。
     challenge-ttl: ${NETWORK_RISK_CHALLENGE_TTL:5m}
@@ -438,8 +438,12 @@ app:
     temporary-block-ttl: ${NETWORK_RISK_TEMPORARY_BLOCK_TTL:10m}
     # WebRTC 客户端探测只定义有界协议参数和加密材料，后端不会向 STUN 发起请求。
     web-rtc:
-      # 浏览器与 Android 系统 WebView 最多等待十五秒完成 ICE 候选收集。
-      probe-timeout: ${WEBRTC_PROBE_TIMEOUT:15s}
+      # 新 generation 创建后必须在八秒内调用幂等 start，否则下一次请求会观察到启动超时终态。
+      start-grace: ${WEBRTC_START_GRACE:8s}
+      # 浏览器与 Android 系统 WebView 最多等待十二秒完成 ICE 候选收集。
+      probe-timeout: ${WEBRTC_PROBE_TIMEOUT:12s}
+      # ICE 探测结束后预留三秒提交同一 generation 的 Report，start 后总窗口不超过十五秒。
+      report-grace: ${WEBRTC_REPORT_GRACE:3s}
       # STUN 地址按固定优先顺序下发，服务端校验客户端上报结果的并集。
       stun-urls:
         # Google STUN 作为第一个全局候选来源。
@@ -509,7 +513,7 @@ app:
         same-site: ${AUTH_CSRF_COOKIE_SAME_SITE:STRICT}
         # CSRF Cookie 作用于整个站点以保护全部写请求。
         path: ${AUTH_CSRF_COOKIE_PATH:/}
-      # 注册流程 Token Cookie 只允许注册端点自动携带。
+      # 注册流程 Token 使用会话 Cookie 且只允许注册端点自动携带，服务端流程 TTL 不控制浏览器删除时间。
       register-flow:
         # 注册流程 Token Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_REGISTER_FLOW_COOKIE_SECURE:true}
@@ -519,7 +523,7 @@ app:
         same-site: ${AUTH_REGISTER_FLOW_COOKIE_SAME_SITE:STRICT}
         # 注册流程 Token Cookie 仅作用于注册端点。
         path: ${AUTH_REGISTER_FLOW_COOKIE_PATH:/api/auth/register}
-      # 注册 Turnstile Challenge Cookie 仅用于 H5 刷新后由服务端恢复流程。
+      # 注册 Turnstile Challenge 使用会话 Cookie，仅用于 H5 刷新后由服务端恢复流程。
       register-challenge:
         # 注册 Challenge Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_REGISTER_CHALLENGE_COOKIE_SECURE:true}
@@ -529,7 +533,7 @@ app:
         same-site: ${AUTH_REGISTER_CHALLENGE_COOKIE_SAME_SITE:STRICT}
         # 注册 Challenge Cookie 仅作用于注册端点。
         path: ${AUTH_REGISTER_CHALLENGE_COOKIE_PATH:/api/auth/register}
-      # 找回密码流程 Token Cookie 只允许找回密码端点自动携带。
+      # 找回密码流程 Token 使用会话 Cookie 且只允许找回密码端点自动携带。
       password-reset-flow:
         # 找回密码流程 Token Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_SECURE:true}
@@ -539,7 +543,7 @@ app:
         same-site: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_SAME_SITE:STRICT}
         # 找回密码流程 Token Cookie 仅作用于找回密码端点。
         path: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_PATH:/api/auth/password-reset}
-      # 找回密码一次性完成凭证 Cookie 只允许最终重置端点携带。
+      # 找回密码一次性完成凭证使用会话 Cookie 且只允许最终重置端点携带。
       password-reset-forget:
         # 找回密码一次性完成凭证 Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_SECURE:true}
@@ -549,7 +553,7 @@ app:
         same-site: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_SAME_SITE:STRICT}
         # 找回密码一次性完成凭证 Cookie 仅作用于完成端点。
         path: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_PATH:/api/auth/password-reset/complete}
-      # TOTP 登录流程 Token Cookie 只允许二次认证端点自动携带。
+      # TOTP 登录流程 Token 使用会话 Cookie 且只允许二次认证端点自动携带。
       totp-login-flow:
         # TOTP 登录流程 Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_SECURE:true}
@@ -565,7 +569,7 @@ app:
       allowed-origins: ${CORS_ALLOWED_ORIGINS}
     # 认证与缓存 TTL 边界配置。
     ttl:
-      # Access Token 默认使用十分钟生命周期，签发和 Cookie Max-Age 共用该配置。
+      # Access Token JWT 默认使用十分钟生命周期，H5 会话 Cookie 不复制该有效期。
       access-token: ${AUTH_ACCESS_TOKEN_TTL:10m}
       # 验证码 TTL 默认 5 分钟且限制在 30 秒至 15 分钟。
       verification-code: ${AUTH_VERIFICATION_CODE_TTL:5m}
@@ -587,7 +591,7 @@ app:
       allowed-drift-steps: ${TOTP_ALLOWED_DRIFT_STEPS:1}
       # 尚未确认的新密钥在 Redis 中最多暂存十分钟。
       setup-ttl: ${TOTP_SETUP_TTL:10m}
-      # 第一因子通过后的登录二次认证挑战最多保留五分钟。
+      # 第一因子通过后的 TOTP 登录挑战服务端状态最多保留五分钟，H5 会话 Cookie 不复制该 TTL。
       login-challenge-ttl: ${TOTP_LOGIN_CHALLENGE_TTL:5m}
       # 开启、轮换和关闭前的敏感操作复验凭证最多保留五分钟。
       step-up-ttl: ${TOTP_STEP_UP_TTL:5m}
@@ -622,13 +626,13 @@ app:
         max-models: ${CLI_PROXY_MAX_MODELS:500}
     # 管理员 Flow 和会话标识使用独立规范 Base64 HMAC 密钥，禁止复用 JWT 或普通用户 HMAC。
     session-hmac-secret-base64: ${ADMIN_SESSION_HMAC_SECRET_BASE64}
-    # 管理员不透明会话每次成功访问后滑动续期六小时。
+    # 管理员 Redis 不透明会话每次成功访问后滑动续期六小时，H5 会话 Cookie 不复制该 TTL。
     session-ttl: ${ADMIN_SESSION_TTL:6h}
     # 单管理员最多允许十个同时在线设备，超过上限拒绝新会话。
     max-sessions: ${ADMIN_MAX_SESSIONS:10}
-    # 管理员首次注册 Flow 固定十分钟有效。
+    # 管理员首次注册 Flow 服务端状态固定十分钟有效，H5 会话 Cookie 不复制该 TTL。
     registration-flow-ttl: ${ADMIN_REGISTRATION_FLOW_TTL:10m}
-    # 管理员登录 hCaptcha Flow 固定十分钟有效。
+    # 管理员登录 hCaptcha Flow 服务端状态固定十分钟有效，H5 会话 Cookie 不复制该 TTL。
     login-flow-ttl: ${ADMIN_LOGIN_FLOW_TTL:10m}
     # 管理员 API 只允许显式 HTTPS Origin 携带凭据访问。
     allowed-origins: ${ADMIN_ALLOWED_ORIGINS:https://admin.niko000o.site}
@@ -672,7 +676,7 @@ app:
         same-site: ${ADMIN_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员 CSRF Cookie 作用于整个站点以保护退出等写请求。
         path: ${ADMIN_CSRF_COOKIE_PATH:/}
-      # 管理员首次注册 Token 与 Challenge Cookie 配置。
+      # 管理员注册 Token 与 Challenge 使用会话 Cookie，服务端 TTL 独立生效。
       register-flow:
         # 管理员注册 Flow Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_REGISTER_FLOW_COOKIE_SECURE:true}
@@ -682,7 +686,7 @@ app:
         same-site: ${ADMIN_REGISTER_FLOW_COOKIE_SAME_SITE:Strict}
         # 管理员注册 Flow Cookie 仅发送到注册端点。
         path: ${ADMIN_REGISTER_FLOW_COOKIE_PATH:/api/admin/auth/register}
-      # 管理员注册 Flow 双提交 CSRF Cookie 配置。
+      # 管理员注册 Flow 双提交 CSRF 使用前端可读的会话 Cookie。
       register-csrf:
         # 管理员注册 CSRF Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_REGISTER_CSRF_COOKIE_SECURE:true}
@@ -692,7 +696,7 @@ app:
         same-site: ${ADMIN_REGISTER_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员页面必须能读取注册 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
         path: ${ADMIN_REGISTER_CSRF_COOKIE_PATH:/}
-      # 管理员登录 Flow Token 与 Challenge Cookie 配置。
+      # 管理员登录 Flow Token 与 Challenge 使用会话 Cookie，服务端 TTL 独立生效。
       login-flow:
         # 管理员登录 Flow Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_LOGIN_FLOW_COOKIE_SECURE:true}
@@ -702,7 +706,7 @@ app:
         same-site: ${ADMIN_LOGIN_FLOW_COOKIE_SAME_SITE:Strict}
         # 管理员登录 Flow Cookie 仅发送到登录端点。
         path: ${ADMIN_LOGIN_FLOW_COOKIE_PATH:/api/admin/auth/login}
-      # 管理员登录 Flow 双提交 CSRF Cookie 配置。
+      # 管理员登录 Flow 双提交 CSRF 使用前端可读的会话 Cookie。
       login-csrf:
         # 管理员登录 CSRF Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_LOGIN_CSRF_COOKIE_SECURE:true}
@@ -901,7 +905,7 @@ app:
   auth-session:
     # 会话敏感标识使用独立 HMAC 密钥，缺失时必须启动失败。
     hmac-secret-base64: ${AUTH_SESSION_HMAC_SECRET_BASE64}
-    # 固定 Refresh Token 使用三小时滑动空闲有效期，每次成功刷新或会话恢复后重新获得完整三小时，不设置绝对截止时间。
+    # 固定 Refresh Token 的 Redis Session 使用三小时滑动空闲有效期，H5 会话 Cookie 不复制该 TTL。
     refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:3h}
     # 单个用户最多保留十个并发刷新会话。
     max-sessions-per-user: ${AUTH_MAX_SESSIONS_PER_USER:10}
@@ -941,7 +945,7 @@ app:
     environment: ${APP_ENV:PROD}
     # 注册敏感标识使用的 HMAC 密钥必须由部署环境提供。
     hmac-secret-base64: ${AUTH_HMAC_SECRET_BASE64}
-    # 注册主流程使用十分钟空闲期限，仅白名单拦截器请求可续签且受三十分钟绝对期限约束。
+    # 注册服务端流程使用十分钟空闲期限且受三十分钟绝对期限约束，H5 会话 Cookie 不复制该 TTL。
     flow-ttl: ${REGISTRATION_FLOW_TTL:600s}
     # 冲突计数采用固定五分钟窗口，后续冲突不会重置窗口 TTL。
     conflict-window: ${REGISTRATION_CONFLICT_WINDOW:5m}

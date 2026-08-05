@@ -16,7 +16,6 @@ const PUBLIC_ROUTES = new Set([
 	'/pages/risk/challenge-complete',
 	'/pages/risk/challenge-failed',
 	'/pages/risk/blocked',
-	'/pages/risk/webrtc-probe',
 	'/pages/risk/webrtc-failed'
 ])
 

@@ -1,14 +1,14 @@
 -- 校验单 Hash 内活动 Challenge 后原子消费，并把当前快照提升为可信网络。
-if redis.call('HGET', KEYS[1], 'schemaVersion') ~= '4'
-  or redis.call('HGET', KEYS[1], 'deviceDigest') ~= ARGV[1]
-  or redis.call('HGET', KEYS[1], 'activeChallengeIpDigest') ~= ARGV[2]
-  or redis.call('HGET', KEYS[1], 'activeChallengeContextDigest') ~= ARGV[3]
-  or redis.call('HGET', KEYS[1], 'activeChallengeNonce') ~= ARGV[4] then
+if redis.call('HGET', KEYS[1], 'schemaVersion') ~= ARGV[1]
+  or redis.call('HGET', KEYS[1], 'deviceDigest') ~= ARGV[2]
+  or redis.call('HGET', KEYS[1], 'activeChallengeIpDigest') ~= ARGV[3]
+  or redis.call('HGET', KEYS[1], 'activeChallengeContextDigest') ~= ARGV[4]
+  or redis.call('HGET', KEYS[1], 'activeChallengeNonce') ~= ARGV[5] then
   return 0
 end
 
 local activeExpiresAt = redis.call('HGET', KEYS[1], 'activeChallengeExpiresAt')
-if not activeExpiresAt or activeExpiresAt == '' or activeExpiresAt <= ARGV[5] then
+if not activeExpiresAt or activeExpiresAt == '' or activeExpiresAt <= ARGV[6] then
   return 0
 end
 
@@ -20,22 +20,22 @@ if not current[1] or current[1] == '' then
 end
 
 redis.call('HSET', KEYS[1],
-  'lastSeenAt', ARGV[5],
+  'lastSeenAt', ARGV[6],
   'lastTrustedIpDigest', current[1],
   'lastTrustedCountryCode', current[2] or '',
   'lastTrustedAsn', current[3] or '',
   'lastTrustedLatitude', current[4] or '',
   'lastTrustedLongitude', current[5] or '',
-  'lastTrustedObservedAt', ARGV[5],
+  'lastTrustedObservedAt', ARGV[6],
   'lastDecision', 'ALLOW',
-  'lastDecisionAt', ARGV[5],
-  'lastDecisionContextDigest', ARGV[3],
+  'lastDecisionAt', ARGV[6],
+  'lastDecisionContextDigest', ARGV[4],
   'temporaryBlockUntil', '',
-  'challengeVerifiedUntil', ARGV[6],
+  'challengeVerifiedUntil', ARGV[7],
   'activeChallengeNonce', '',
   'activeChallengeIpDigest', '',
   'activeChallengeContextDigest', '',
   'activeChallengeExpiresAt', '')
 redis.call('HINCRBY', KEYS[1], 'challengePassedCount', 1)
-redis.call('PEXPIRE', KEYS[1], ARGV[7])
+redis.call('PEXPIRE', KEYS[1], ARGV[8])
 return 1

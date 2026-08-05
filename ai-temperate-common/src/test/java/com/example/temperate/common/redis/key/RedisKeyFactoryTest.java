@@ -228,7 +228,7 @@ final class RedisKeyFactoryTest {
     }
 
     @Test
-    void createsOnlyV4PreAuthKeysWithoutIndependentRiskStateKeys()
+    void createsOnlyV5PreAuthKeysWithoutIndependentRiskStateKeys()
             throws Exception {
         RedisKeyFactory factory = new RedisKeyFactory("prod");
         HmacIdentifier hmac = new HmacSha256Identifier(
@@ -237,10 +237,10 @@ final class RedisKeyFactoryTest {
                 .identify("preauth-token");
 
         assertEquals(
-                "ait:prod:risk:preauth-user:v4:token:" + hmac.value(),
+                "ait:prod:risk:preauth-user:v6:token:" + hmac.value(),
                 factory.userPreAuthKey(hmac));
         assertEquals(
-                "ait:prod:risk:preauth-admin:v4:token:" + hmac.value(),
+                "ait:prod:risk:preauth-admin:v6:token:" + hmac.value(),
                 factory.adminPreAuthKey(hmac));
         assertThrows(NoSuchMethodException.class, () ->
                 RedisKeyFactory.class.getMethod(

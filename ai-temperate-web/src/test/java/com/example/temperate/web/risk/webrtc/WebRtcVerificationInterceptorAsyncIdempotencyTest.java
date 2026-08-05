@@ -102,6 +102,42 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
                 .isEqualTo(1.0d);
     }
 
+    @Test
+    void pendingAdmissionIsNotRevokedWhenReportFailsDuringTheSameAsyncRequest()
+            throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        PreAuthAccess access = mock(PreAuthAccess.class);
+        when(fixture.service().inspect(access, HTTP_IP))
+                .thenReturn(
+                        WebRtcVerificationDecision.pending(
+                                7L,
+                                Instant.parse("2026-08-04T12:00:20Z")),
+                        WebRtcVerificationDecision.failed());
+        MockHttpServletRequest request = request(
+                "POST",
+                "/api/admin/auth/login/complete");
+        request.setAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE, access);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isTrue();
+        request.setDispatcherType(DispatcherType.ASYNC);
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isTrue();
+
+        verify(fixture.service(), times(1)).inspect(access, HTTP_IP);
+        assertThat(fixture.meterRegistry()
+                        .get("webrtc_interceptor_total")
+                        .tags(
+                                "scope", "admin",
+                                "decision", "pending_allowed",
+                                "platform", "h5",
+                                "mode", "enforce")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0d);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("securityBoundaryChanges")
     void doesNotReuseVerifiedResultAcrossSecurityBoundaryChanges(
@@ -127,8 +163,8 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
         change.apply(request);
         MockHttpServletResponse secondResponse = new MockHttpServletResponse();
         assertThat(fixture.interceptor().preHandle(request, secondResponse, new Object()))
-                .isFalse();
-        assertThat(secondResponse.getStatus()).isEqualTo(428);
+                .isTrue();
+        assertThat(secondResponse.getStatus()).isEqualTo(200);
 
         verify(fixture.contextResolver(), times(2)).resolve(request);
         verify(fixture.service(), times(2)).inspect(access, HTTP_IP);
@@ -148,9 +184,9 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         assertThat(fixture.interceptor().preHandle(request, response, new Object()))
-                .isFalse();
+                .isTrue();
 
-        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getStatus()).isEqualTo(200);
         verify(fixture.contextResolver(), times(1)).resolve(request);
         verify(fixture.service(), times(1)).inspect(access, HTTP_IP);
     }
@@ -239,9 +275,9 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
         request.setDispatcherType(DispatcherType.ASYNC);
         MockHttpServletResponse response = new MockHttpServletResponse();
         assertThat(webRtcFixture.interceptor().preHandle(request, response, new Object()))
-                .isFalse();
+                .isTrue();
 
-        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getStatus()).isEqualTo(200);
         verify(webRtcFixture.service(), times(1)).inspect(access, HTTP_IP);
     }
 
@@ -312,10 +348,6 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
     private static Stream<Arguments> failedVerificationCases() {
         return Stream.of(
                 Arguments.of(
-                        "尚未验证",
-                        WebRtcVerificationDecision.required(),
-                        428),
-                Arguments.of(
                         "未获取公网地址",
                         WebRtcVerificationDecision.failed(),
                         428),
@@ -330,7 +362,9 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
         when(properties.mode()).thenReturn(mode);
         when(properties.lookupTimeout()).thenReturn(Duration.ofSeconds(8));
         when(properties.webRtc()).thenReturn(new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(URI.create("stun:stun.cloudflare.com:3478")),
                 8,
                 ""));
@@ -344,7 +378,8 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
                 service,
                 contextResolver,
                 new ObjectMapper(),
-                new WebRtcMetrics(meterRegistry));
+                new WebRtcMetrics(meterRegistry),
+                new WebRtcVerificationTransport());
         return new Fixture(
                 interceptor,
                 service,

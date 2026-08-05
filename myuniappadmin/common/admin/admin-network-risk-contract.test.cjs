@@ -113,39 +113,52 @@ test('administrator secure vault carries the PreAuth token inside its AES-GCM pa
 	assert.doesNotMatch(vault, /uni\.setStorageSync\([^,]+,\s*state/)
 })
 
-test('administrator WebRTC verification uses isolated paths and an ephemeral Android bridge', () => {
+test('administrator WebRTC verification uses generation-scoped background work and an ephemeral Android bridge', () => {
 	const app = source('App.vue')
 	const verification = source('common/admin/admin-webrtc-verification.js')
 	const core = source('../shared-frontend/auth/webrtc-verification-core.js')
 	const http = source('common/admin/admin-http.js')
-	const probePage = source('pages/risk/webrtc-probe.vue')
+	const androidProbe = source('../shared-frontend/auth/android-webrtc-background-probe.js')
 	const localProbe = source('hybrid/html/webrtc-probe.js')
 	const failurePage = source('pages/risk/webrtc-failed.vue')
 	const pages = source('pages.json')
 	const backendConfig = source('../ai-temperate-web/src/main/resources/application.yml')
 	const presenter = verification.slice(
 		verification.indexOf('export function presentAdminWebRtcFailure'),
-		verification.indexOf('export function takeAdminAndroidWebRtcProbeConfiguration')
+		verification.indexOf('async function verify')
 	)
 
 	assert.match(verification, /\/api\/admin\/_edge\/webrtc\/start/)
-	assert.match(core, /15000/)
-	assert.match(verification, /verificationInFlight/)
+	assert.match(core, /12000/)
+	assert.match(verification, /preAuthEpoch/)
+	assert.match(verification, /verificationTasks\s*=\s*new Map/)
+	assert.match(verification, /activeEntry/)
+	assert.match(verification, /compareGeneration/)
+	assert.match(verification, /observeAdminWebRtcVerificationHeaders/)
+	assert.match(core, /X-AIT-WebRTC-State/i)
+	assert.match(core, /X-AIT-WebRTC-Generation/i)
 	assert.match(core, /RTCPeerConnection/)
 	assert.match(core, /candidateType\s*!==\s*'srflx'/)
-	assert.match(core, /WEBRTC_VERIFICATION_REQUIRED/)
-	assert.match(http, /retryState\.webRtc/)
-	assert.match(probePage, /createWebviewContext/)
-	assert.match(probePage, /evalJS/)
-	assert.match(localProbe, /uni\.postMessage/)
+	assert.match(core, /WEBRTC_VERIFICATION_PENDING/)
+	assert.doesNotMatch(http, /await ensureAdminWebRtcVerified\(\)/)
+	assert.doesNotMatch(http, /await recoverAdminWebRtc\(error\)/)
+	assert.match(http, /observeAdminWebRtcVerificationHeaders/)
+	assert.match(http, /void startAdminWebRtcVerificationInBackground/)
+	assert.match(verification, /probeGeneration/)
+	assert.match(androidProbe, /plus\.webview\.create/)
+	assert.match(androidProbe, /overrideUrlLoading/)
+	assert.match(androidProbe, /left:\s*'-10000px'/)
+	assert.match(androidProbe, /AES-GCM/)
+	assert.match(localProbe, /aitwebrtc:\/\/result/)
 	assert.match(localProbe, /nonce/)
+	assert.doesNotMatch(localProbe, /uni\.postMessage|localStorage|sessionStorage/)
 	assert.ok(localProbe.includes("split(/\\s+/)"))
 	assert.ok(localProbe.includes("/^stun:[a-z0-9.-]+:\\d{1,5}$/i"))
 	assert.doesNotMatch(verification, /timeoutMillis\s*\+\s*3000/)
 	assert.match(app, /presentAdminWebRtcFailure\(error\)/)
 	assert.match(presenter, /uni\.reLaunch\(\{[\s\S]*url:\s*FAILURE_PAGE/)
 	assert.doesNotMatch(presenter, /uni\.navigateTo/)
-	assert.match(failurePage, /重新检测/)
+	assert.doesNotMatch(failurePage, /重新检测|force:\s*true/)
 	assert.match(failurePage, /ADMIN_SAFE_ENTRY/)
 	assert.match(failurePage, /onBackPress\(\)[\s\S]*return\s+true/)
 	assert.match(failurePage, /window\.history\.pushState/)
@@ -159,7 +172,7 @@ test('administrator WebRTC verification uses isolated paths and an ephemeral And
 	assert.match(failurePage, /#39d6d2/i)
 	assert.match(failurePage, /#69d4e2/i)
 	assert.doesNotMatch(failurePage, /@\/components\/.*webrtc/i)
-	assert.match(pages, /pages\/risk\/webrtc-probe/)
+	assert.doesNotMatch(pages, /pages\/risk\/webrtc-probe/)
 	assert.match(pages, /pages\/risk\/webrtc-failed/)
 	assert.match(
 		pages,
@@ -189,34 +202,28 @@ test('administrator H5 uses one-shot WebRTC verification and on-demand recovery'
 
 	assert.match(
 		app,
-		/ensureAdminPreAuth\(\)[\s\S]*\.then\(\(\)\s*=>\s*ensureAdminWebRtcVerified\(\)\)/
+		/ensureAdminPreAuth\(\)[\s\S]*\.then\(\(\)\s*=>\s*startAdminWebRtcVerificationInBackground\(\)\)/
 	)
 	assert.doesNotMatch(
 		app,
 		/startAdminNetworkRevalidationMonitor|admin-network-revalidation/
 	)
 	assert.match(http, /await ensureAdminPreAuth\(\)/)
-	assert.match(http, /await ensureAdminWebRtcVerified\(\)/)
-	assert.match(http, /retryState\.webRtc/)
+	assert.doesNotMatch(http, /await ensureAdminWebRtcVerified\(\)/)
+	assert.doesNotMatch(http, /await recoverAdminWebRtc\(error\)/)
 	assert.match(http, /retryState\.preAuth/)
 	assert.match(http, /retryState\.migration/)
-	assert.match(
-		http,
-		/force:\s*error\.code\s*===\s*'WEBRTC_NETWORK_CHANGED'/
-	)
+	assert.doesNotMatch(http, /force:\s*error\.code\s*===\s*'WEBRTC_NETWORK_CHANGED'/)
 	assert.doesNotMatch(
 		http,
 		/ensureAdminNetworkTrusted|requestAdminNetworkRevalidation|admin-network-revalidation/
 	)
-	assert.match(
-		failurePage,
-		/ensureAdminWebRtcVerified\(\{\s*force:\s*true\s*\}\)/
-	)
+	assert.doesNotMatch(failurePage, /ensureAdminWebRtcVerified|force:\s*true/)
 	assert.doesNotMatch(
 		failurePage,
 		/requestAdminNetworkRevalidation|admin-network-revalidation/
 	)
-	assert.match(verification, /verificationInFlight/)
+	assert.match(verification, /verificationTasks/)
 	assert.match(verification, /error\.challengeRef/)
 	assert.match(verification, /error\.challengePath/)
 	assert.doesNotMatch(

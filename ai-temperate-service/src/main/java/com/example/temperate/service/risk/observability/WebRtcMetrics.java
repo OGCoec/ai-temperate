@@ -15,9 +15,18 @@ import org.springframework.stereotype.Component;
 public final class WebRtcMetrics {
 
     private static final Set<String> VERIFICATION_OUTCOMES = Set.of(
-            "matched", "mismatch", "empty", "invalid", "network_changed");
+            "matched", "mismatch", "empty", "pending", "timeout", "stale",
+            "invalid", "network_changed");
     private static final Set<String> INTERCEPTOR_DECISIONS = Set.of(
-            "allowed", "required", "failed", "blocked");
+            "allowed", "pending_allowed", "required_allowed", "required",
+            "failed", "blocked", "invalid");
+    private static final Set<String> TRANSITIONS = Set.of(
+            "required_created", "required_started", "required_timeout",
+            "pending_verified", "pending_failed", "stale_report",
+            "generation_changed");
+    private static final Set<String> TRANSITION_REASONS = Set.of(
+            "none", "start_timeout", "report_timeout", "no_public_candidate",
+            "ip_mismatch", "stale", "network_changed");
     private static final Set<String> PLATFORMS = Set.of("h5", "android");
 
     private final MeterRegistry meterRegistry;
@@ -50,6 +59,25 @@ public final class WebRtcMetrics {
                         "scope", scope(scope),
                         "decision", bounded(decision, INTERCEPTOR_DECISIONS),
                         "platform", bounded(platform, PLATFORMS),
+                        "mode", mode(mode))
+                .increment();
+    }
+
+    /**
+     * 记录 WebRTC v6 状态迁移；事件与原因均使用固定白名单，避免 generation 或敏感标识形成高基数标签。
+     */
+    public void transition(
+            RiskScope scope,
+            String transition,
+            String platform,
+            String reason,
+            NetworkRiskMode mode) {
+        meterRegistry.counter(
+                        "webrtc_state_transition_total",
+                        "scope", scope(scope),
+                        "transition", bounded(transition, TRANSITIONS),
+                        "platform", bounded(platform, PLATFORMS),
+                        "reason", bounded(reason, TRANSITION_REASONS),
                         "mode", mode(mode))
                 .increment();
     }

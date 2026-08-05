@@ -48,6 +48,7 @@ import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -110,6 +111,7 @@ public final class AdminAuthController {
     private final PreAuthTransport preAuthTransport;
     private final RiskRequestContextResolver riskContextResolver;
     private final NetworkRiskProperties networkRiskProperties;
+    private final WebRtcVerificationTransport webRtcTransport;
 
     public AdminAuthController(
             AdminConfigurationService configurationService,
@@ -125,7 +127,8 @@ public final class AdminAuthController {
             PreAuthService preAuthService,
             PreAuthTransport preAuthTransport,
             RiskRequestContextResolver riskContextResolver,
-            NetworkRiskProperties networkRiskProperties) {
+            NetworkRiskProperties networkRiskProperties,
+            WebRtcVerificationTransport webRtcTransport) {
         this.configurationService = Objects.requireNonNull(configurationService);
         this.registrationService = Objects.requireNonNull(registrationService);
         this.loginService = Objects.requireNonNull(loginService);
@@ -140,6 +143,7 @@ public final class AdminAuthController {
         this.preAuthTransport = Objects.requireNonNull(preAuthTransport);
         this.riskContextResolver = Objects.requireNonNull(riskContextResolver);
         this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
+        this.webRtcTransport = Objects.requireNonNull(webRtcTransport);
     }
 
     @GetMapping("/auth/state")
@@ -188,8 +192,7 @@ public final class AdminAuthController {
                     response,
                     result.registerToken(),
                     result.flowCsrf(),
-                    result.challengeHandle(),
-                    result.expiresAt());
+                    result.challengeHandle());
         }
         return new RegistrationStartResponse(
                 platform == AuthClientPlatform.ANDROID ? result.registerToken() : null,
@@ -330,8 +333,7 @@ public final class AdminAuthController {
                     response,
                     result.flowToken(),
                     result.flowCsrf(),
-                    result.challengeId(),
-                    result.expiresAt());
+                    result.challengeId());
         }
         return new LoginStartResponse(
                 platform == AuthClientPlatform.ANDROID ? result.flowToken() : null,
@@ -413,6 +415,7 @@ public final class AdminAuthController {
                 RiskScope.ADMIN,
                 preAuthTransport.read(request, RiskScope.ADMIN));
         cookieWriter.clearSession(response);
+        preAuthTransport.clearCookie(response, RiskScope.ADMIN);
         return new LogoutResponse(true, "CURRENT");
     }
 
@@ -427,6 +430,7 @@ public final class AdminAuthController {
                 RiskScope.ADMIN,
                 preAuthTransport.read(request, RiskScope.ADMIN));
         cookieWriter.clearSession(response);
+        preAuthTransport.clearCookie(response, RiskScope.ADMIN);
         return new LogoutResponse(true, "ALL");
     }
 
@@ -444,8 +448,7 @@ public final class AdminAuthController {
             cookieWriter.writeSession(
                     response,
                     issue.rawToken(),
-                    tokenGenerator.newFlowCsrf(),
-                    issue.profile().expiresAt());
+                    tokenGenerator.newFlowCsrf());
             cookieWriter.clearLogin(response);
         }
         return new LoginResponse(
@@ -481,13 +484,12 @@ public final class AdminAuthController {
                 RiskSessionType.ADMIN_SESSION,
                 sessionIssue.rawToken(),
                 observation.observedAt());
+        webRtcTransport.write(response, preAuthIssue);
         if (platform == AuthClientPlatform.H5) {
             preAuthTransport.writeCookie(
                     response,
                     RiskScope.ADMIN,
-                    preAuthIssue.rawToken(),
-                    preAuthIssue.expiresAt(),
-                    observation.observedAt());
+                    preAuthIssue.rawToken());
         }
         return preAuthIssue;
     }

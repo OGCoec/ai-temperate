@@ -25,7 +25,8 @@ class AdminIp2LocationCapacityExceptionHandlerTest {
                 Clock.fixed(Instant.parse("2026-07-25T12:00:00Z"), ZoneOffset.UTC),
                 mock(AdminCookieWriter.class),
                 mock(AdminClientPlatformResolver.class),
-                mock(AdminExceptionLogger.class));
+                mock(AdminExceptionLogger.class),
+                mock(com.example.temperate.web.risk.PreAuthTransport.class));
 
         ResponseEntity<ApiErrorResponse> response = handler.handleIp2LocationCapacity(
                 new Ip2LocationApiKeyCapacityExceededException());
