@@ -53,7 +53,7 @@ import reactor.core.publisher.Flux;
         name = "用户-AI 会话上下文",
         description = "供已认证 H5 和 Android 用户查询上下文占用、请求异步压缩并按需观察状态。"
                 + "接口执行会话资源级授权，不接受客户端提交 Token 总量或百分比。")
-public final class AiConversationContextController {
+public class AiConversationContextController {
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 

@@ -20,6 +20,7 @@ import com.example.temperate.service.user.aiconversation.context.usage.AiConvers
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.web.aiconversation.AiConversationPublicId;
 import com.example.temperate.web.user.aiconversation.api.AiConversationCompactionRequest;
+import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,13 @@ final class AiConversationContextControllerTest {
     private static final String MODEL_PUBLIC_ID = "AAAAAAAAAAE";
     private static final SessionPrincipal PRINCIPAL =
             new SessionPrincipal(7L, "user", "Alice");
+
+    @Test
+    void validatedControllerRemainsProxyableBySpring() {
+        assertThat(Modifier.isFinal(
+                AiConversationContextController.class.getModifiers()))
+                .isFalse();
+    }
 
     @Test
     void usageDelegatesOwnedLookupAndDisablesCaching() {
