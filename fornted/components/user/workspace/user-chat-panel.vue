@@ -11,8 +11,28 @@
 				<view class="chat-header-balance mobile-only" aria-hidden="true"></view>
 			</view>
 
-			<scroll-view class="message-scroll" scroll-y :scroll-into-view="scrollTarget">
-				<view class="message-shell">
+			<view class="message-stage">
+				<user-conversation-turn-rail
+					:turns="visibleTurnItems"
+					:active-turn-key="activeTurnKey"
+					:has-hidden-before="hasHiddenTurnsBefore"
+					:has-hidden-after="hasHiddenTurnsAfter"
+					:has-more-before="hasMoreMessages"
+					:positions-known="!hasMoreMessages"
+					:loading-before="messagesLoading"
+					:load-error="olderMessagesError"
+					@select-turn="selectConversationTurn"
+					@request-older="showEarlierTurnWindow"
+					@retry-older="loadOlderMessages({ preserveAnchor: true })"
+				/>
+				<scroll-view
+					ref="messageScroll"
+					class="message-scroll"
+					scroll-y
+					:scroll-into-view="scrollTarget"
+					@scroll="handleMessageScroll"
+				>
+					<view class="message-shell">
 					<view v-if="messagesLoading && !messages.length" class="chat-empty" role="status">
 						<text>正在读取历史消息…</text>
 					</view>
@@ -21,11 +41,30 @@
 						<text class="chat-empty-title">有什么可以帮你？</text>
 						<text class="chat-empty-copy">输入文字或添加附件。会话会在第一条完整回答成功后出现在最近列表。</text>
 					</view>
-					<button v-if="hasMoreMessages" class="history-more" type="button" :disabled="messagesLoading" @click="loadOlderMessages">
+					<button v-if="hasMoreMessages && !turnNavigationDesktop" class="history-more" type="button" :disabled="messagesLoading" @click="loadOlderMessages()">
 						{{ messagesLoading ? '加载中…' : '加载更早消息' }}
 					</button>
+					<button
+						v-if="turnNavigationDesktop && olderMessagesError"
+						class="history-more is-error"
+						type="button"
+						@click="loadOlderMessages({ preserveAnchor: true })"
+					>
+						更早消息加载失败，点击重试
+					</button>
+					<view
+						v-if="turnNavigationDesktop && topTurnSpacerHeight"
+						class="turn-window-spacer is-before"
+						:style="{ height: `${topTurnSpacerHeight}px` }"
+						aria-hidden="true"
+					></view>
 
-					<view v-for="message in messages" :id="message.localId || `message-${message.messagePublicId}`" :key="message.localId || message.messagePublicId" class="message-turn">
+					<view
+						v-for="(message, renderedIndex) in renderedMessages"
+						:id="messageElementId(message, renderedMessageIndex(renderedIndex))"
+						:key="messageTurnKey(message, renderedMessageIndex(renderedIndex))"
+						class="message-turn"
+					>
 						<view class="message-block user-message">
 							<text v-if="message.contentText" class="message-text">{{ message.contentText }}</text>
 							<view v-if="message.contentAttachments?.length" class="attachment-grid">
@@ -144,9 +183,16 @@
 							<text v-if="message.error" class="message-error" role="alert">{{ message.error }}</text>
 						</view>
 					</view>
+					<view
+						v-if="turnNavigationDesktop && bottomTurnSpacerHeight"
+						class="turn-window-spacer is-after"
+						:style="{ height: `${bottomTurnSpacerHeight}px` }"
+						aria-hidden="true"
+					></view>
 					<view id="message-bottom" class="message-bottom"></view>
-				</view>
-			</scroll-view>
+					</view>
+				</scroll-view>
+			</view>
 
 			<view class="composer-wrap">
 				<user-chat-attachment-list
@@ -303,6 +349,16 @@
 		normalizeAiConversationWebSearchMode
 	} from '@/common/aichat/ai-conversation-web-search.js'
 	import { aiConversationModelLevelOptions } from '@/common/aichat/ai-conversation-model-levels.js'
+	import {
+		centerTurnWindow,
+		createInitialTurnWindow,
+		createTurnNavigationItem,
+		messageTurnElementId,
+		messageTurnKey,
+		shiftTurnWindow,
+		sumTurnHeights,
+		windowAfterPrepend
+	} from '@/common/aichat/ai-conversation-turn-navigation.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
 	import {
 		ATTACHMENT_UPLOAD_STATES,
@@ -312,6 +368,7 @@
 		validateAttachmentSelection
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
+	import UserConversationTurnRail from './user-conversation-turn-rail.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserSourceChip from './user-source-chip.vue'
@@ -349,6 +406,10 @@
 	const GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX = 1080
 	const GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO = 0.7
 	const CANCEL_RETRY_DELAYS = Object.freeze([0, 250, 750])
+	const TURN_WINDOW_SIZE = 50
+	const TURN_WINDOW_SHIFT = 25
+	const TURN_WINDOW_EDGE_PX = 240
+	const TURN_FOLLOW_LATEST_PX = 320
 
 	function positiveFiniteNumber(value) {
 		const number = Number(value)
@@ -440,7 +501,7 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserImageOutputCountDialog, UserMarkdownMessage, UserSourceChip },
+		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserSourceChip },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -476,12 +537,25 @@
 				composerError: '',
 				scrollTarget: '',
 				historyResyncing: false,
-				modelsLoading: false
+				modelsLoading: false,
+				turnNavigationDesktop: false,
+				renderWindow: { start: 0, end: 0 },
+				activeTurnKey: '',
+				turnHeights: {},
+				turnScrollTop: 0,
+				turnViewportHeight: 0,
+				turnScrollFrame: null,
+				turnResizeObserver: null,
+				turnWindowMoving: false,
+				turnNavigationReady: false,
+				turnFollowLatest: true,
+				olderMessagesError: ''
 			}
 		},
 		mounted() {
 			void prewarmAiCodeHighlighter().catch(() => {})
 			this.refreshGeneratedResponseImageViewportHeight()
+			this.refreshTurnNavigationViewport()
 			if (typeof uni.onWindowResize === 'function') {
 				this.generatedResponseImageResizeListener = event =>
 					this.handleGeneratedResponseImageWindowResize(event)
@@ -489,6 +563,7 @@
 			}
 		},
 		beforeUnmount() {
+			this.releaseTurnNavigationObservers()
 			if (this.generatedResponseImageResizeListener
 				&& typeof uni.offWindowResize === 'function') {
 				uni.offWindowResize(this.generatedResponseImageResizeListener)
@@ -581,6 +656,34 @@
 			},
 			canSend() { return this.sendGate.allowed },
 			sendBlockedReason() { return this.sendGate.reason },
+			renderedMessages() {
+				if (!this.turnNavigationDesktop) return this.messages
+				return this.messages.slice(this.renderWindow.start, this.renderWindow.end)
+			},
+			visibleTurnItems() {
+				if (!this.turnNavigationDesktop) return []
+				return this.renderedMessages.map((message, index) =>
+					createTurnNavigationItem(message, this.renderedMessageIndex(index)))
+			},
+			topTurnSpacerHeight() {
+				if (!this.turnNavigationDesktop) return 0
+				return sumTurnHeights(this.messages, this.turnHeights, 0, this.renderWindow.start)
+			},
+			bottomTurnSpacerHeight() {
+				if (!this.turnNavigationDesktop) return 0
+				return sumTurnHeights(
+					this.messages,
+					this.turnHeights,
+					this.renderWindow.end,
+					this.messages.length
+				)
+			},
+			hasHiddenTurnsBefore() {
+				return this.turnNavigationDesktop && this.renderWindow.start > 0
+			},
+			hasHiddenTurnsAfter() {
+				return this.turnNavigationDesktop && this.renderWindow.end < this.messages.length
+			},
 			activeConversationTitle() {
 				if (!this.currentConversationPublicId) return '新聊天'
 				return this.conversations.find(item => item.conversationPublicId === this.currentConversationPublicId)?.title || '未命名对话'
@@ -600,6 +703,233 @@
 			},
 			syncStore() {
 				this.applyStore(readAiConversationStore())
+			},
+			refreshTurnNavigationViewport(viewportWidth) {
+				const width = Number(viewportWidth ?? (uni.getSystemInfoSync().windowWidth || 0))
+				const enabled = clientPlatform() === 'H5' && width >= 768
+				if (enabled === this.turnNavigationDesktop && (this.renderWindow.end || !this.messages.length)) return
+				this.turnNavigationDesktop = enabled
+				this.resetTurnNavigationWindow(enabled)
+			},
+			resetTurnNavigationWindow(followLatest = true) {
+				this.renderWindow = this.turnNavigationDesktop
+					? createInitialTurnWindow(this.messages.length, TURN_WINDOW_SIZE)
+					: { start: 0, end: this.messages.length }
+				this.activeTurnKey = this.messages.length
+					? messageTurnKey(this.messages[this.messages.length - 1], this.messages.length - 1)
+					: ''
+				this.turnNavigationReady = false
+				this.turnWindowMoving = false
+				this.turnFollowLatest = followLatest
+				this.olderMessagesError = ''
+				this.$nextTick(() => {
+					this.measureRenderedTurns()
+					if (followLatest && this.messages.length) this.setMessageScrollTarget('message-bottom')
+					// 初始 scroll-into-view 完成前不能把 scrollTop=0 误判成用户请求更早历史。
+					// #ifdef H5
+					requestAnimationFrame(() => requestAnimationFrame(() => {
+						this.turnNavigationReady = true
+					}))
+					// #endif
+					// #ifndef H5
+					this.turnNavigationReady = true
+					// #endif
+				})
+			},
+			releaseTurnNavigationObservers() {
+				this.turnResizeObserver?.disconnect?.()
+				this.turnResizeObserver = null
+				// #ifdef H5
+				if (this.turnScrollFrame != null) cancelAnimationFrame(this.turnScrollFrame)
+				// #endif
+				this.turnScrollFrame = null
+			},
+			renderedMessageIndex(renderedIndex) {
+				return this.turnNavigationDesktop
+					? this.renderWindow.start + renderedIndex
+					: renderedIndex
+			},
+			messageElementId(message, index) {
+				return messageTurnElementId(message, index)
+			},
+			setMessageScrollTarget(elementId) {
+				this.scrollTarget = ''
+				this.$nextTick(() => { this.scrollTarget = elementId })
+			},
+			turnScrollElement() {
+				// #ifdef H5
+				const host = this.$el?.querySelector?.('.message-scroll')
+				if (!host) return null
+				const preferred = host.querySelector?.('.uni-scroll-view')
+				if (preferred) return preferred
+				const candidates = [host, ...(host.querySelectorAll?.('*') || [])]
+				return candidates.find(element =>
+					element.scrollHeight > element.clientHeight + 1
+					&& ['auto', 'scroll'].includes(getComputedStyle(element).overflowY)) || host
+				// #endif
+				return null
+			},
+			turnElementHeight(element) {
+				// #ifdef H5
+				const marginBottom = Number.parseFloat(getComputedStyle(element).marginBottom) || 0
+				return Math.max(1, Math.round(element.offsetHeight + marginBottom))
+				// #endif
+				return 0
+			},
+			measureRenderedTurns() {
+				if (!this.turnNavigationDesktop) return
+				// #ifdef H5
+				const elements = Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])
+				const turnsByElementId = new Map(this.visibleTurnItems.map(turn => [turn.elementId, turn]))
+				const heights = { ...this.turnHeights }
+				for (const element of elements) {
+					const turn = turnsByElementId.get(element.id)
+					if (turn) heights[turn.key] = this.turnElementHeight(element)
+				}
+				this.turnHeights = heights
+				this.turnResizeObserver?.disconnect?.()
+				if (typeof ResizeObserver === 'function') {
+					this.turnResizeObserver = new ResizeObserver(entries => {
+						const nextHeights = { ...this.turnHeights }
+						let changed = false
+						for (const entry of entries) {
+							const turn = turnsByElementId.get(entry.target.id)
+							if (!turn) continue
+							const height = this.turnElementHeight(entry.target)
+							if (nextHeights[turn.key] !== height) {
+								nextHeights[turn.key] = height
+								changed = true
+							}
+						}
+						if (changed) this.turnHeights = nextHeights
+					})
+					for (const element of elements) this.turnResizeObserver.observe(element)
+				}
+				// #endif
+			},
+			captureTurnAnchor() {
+				if (!this.turnNavigationDesktop) return null
+				// #ifdef H5
+				const root = this.turnScrollElement()
+				if (!root) return null
+				const rootRect = root.getBoundingClientRect()
+				const visible = Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])
+					.map(element => ({ element, rect: element.getBoundingClientRect() }))
+					.filter(item => item.rect.bottom > rootRect.top && item.rect.top < rootRect.bottom)
+					.sort((left, right) => left.rect.top - right.rect.top)
+				const first = visible[0]
+				return first ? { elementId: first.element.id, offset: first.rect.top - rootRect.top } : null
+				// #endif
+				return null
+			},
+			restoreTurnAnchor(anchor) {
+				return new Promise(resolve => {
+					this.$nextTick(() => {
+						this.measureRenderedTurns()
+						// #ifdef H5
+						const root = this.turnScrollElement()
+						const element = Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])
+							.find(candidate => candidate.id === anchor?.elementId)
+						if (root && element && anchor) {
+							const offset = element.getBoundingClientRect().top - root.getBoundingClientRect().top
+							root.scrollTop += offset - anchor.offset
+						}
+						requestAnimationFrame(resolve)
+						// #endif
+						// #ifndef H5
+						resolve()
+						// #endif
+					})
+				})
+			},
+			async moveTurnWindow(direction) {
+				if (!this.turnNavigationDesktop || this.turnWindowMoving) return
+				const nextWindow = shiftTurnWindow(
+					this.renderWindow,
+					direction,
+					this.messages.length,
+					TURN_WINDOW_SHIFT,
+					TURN_WINDOW_SIZE
+				)
+				if (nextWindow.start === this.renderWindow.start) return
+				const anchor = this.captureTurnAnchor()
+				this.turnWindowMoving = true
+				try {
+					this.renderWindow = nextWindow
+					await this.restoreTurnAnchor(anchor)
+				} finally {
+					this.turnWindowMoving = false
+				}
+			},
+			showEarlierTurnWindow() {
+				if (this.renderWindow.start > 0) {
+					void this.moveTurnWindow('before')
+					return
+				}
+				void this.loadOlderMessages({ preserveAnchor: true })
+			},
+			handleMessageScroll(event) {
+				const detail = event?.detail || {}
+				this.turnScrollTop = Number(detail.scrollTop || 0)
+				const root = this.turnScrollElement()
+				this.turnViewportHeight = Number(root?.clientHeight || this.turnViewportHeight || 0)
+				const scrollHeight = Number(detail.scrollHeight || root?.scrollHeight || 0)
+				const distanceToBottom = Math.max(0, scrollHeight - this.turnScrollTop - this.turnViewportHeight)
+				const distanceToWindowTop = Math.max(0, this.turnScrollTop - this.topTurnSpacerHeight)
+				const distanceToWindowBottom = Math.max(
+					0,
+					scrollHeight - this.bottomTurnSpacerHeight - this.turnScrollTop - this.turnViewportHeight
+				)
+				this.turnFollowLatest = distanceToBottom <= TURN_FOLLOW_LATEST_PX
+				if (!this.turnNavigationDesktop || this.turnScrollFrame != null) return
+				// #ifdef H5
+				this.turnScrollFrame = requestAnimationFrame(() => {
+					this.turnScrollFrame = null
+					this.updateActiveTurnFromScroll()
+					if (!this.turnNavigationReady || this.turnWindowMoving || this.messagesLoading) return
+					if (distanceToWindowTop <= TURN_WINDOW_EDGE_PX) {
+						if (this.renderWindow.start > 0) void this.moveTurnWindow('before')
+						else if (this.hasMoreMessages) void this.loadOlderMessages({ preserveAnchor: true })
+					} else if (distanceToWindowBottom <= TURN_WINDOW_EDGE_PX && this.hasHiddenTurnsAfter) {
+						void this.moveTurnWindow('after')
+					}
+				})
+				// #endif
+			},
+			updateActiveTurnFromScroll() {
+				// #ifdef H5
+				const root = this.turnScrollElement()
+				if (!root) return
+				const rootRect = root.getBoundingClientRect()
+				const readingLine = rootRect.top + rootRect.height * .35
+				const turnsByElementId = new Map(this.visibleTurnItems.map(turn => [turn.elementId, turn]))
+				let closest = null
+				for (const element of Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])) {
+					const rect = element.getBoundingClientRect()
+					const distance = readingLine < rect.top
+						? rect.top - readingLine
+						: readingLine > rect.bottom ? readingLine - rect.bottom : 0
+					if (!closest || distance < closest.distance) closest = { element, distance }
+				}
+				const turn = closest ? turnsByElementId.get(closest.element.id) : null
+				if (turn && turn.key !== this.activeTurnKey) this.activeTurnKey = turn.key
+				// #endif
+			},
+			selectConversationTurn(turnKey) {
+				const targetIndex = this.messages.findIndex((message, index) =>
+					messageTurnKey(message, index) === turnKey)
+				if (targetIndex < 0) return
+				this.activeTurnKey = turnKey
+				const outsideWindow = targetIndex < this.renderWindow.start || targetIndex >= this.renderWindow.end
+				if (this.turnNavigationDesktop && outsideWindow) {
+					this.renderWindow = centerTurnWindow(targetIndex, this.messages.length, TURN_WINDOW_SIZE)
+					this.$nextTick(() => {
+						this.measureRenderedTurns()
+						this.setMessageScrollTarget(messageTurnElementId(this.messages[targetIndex], targetIndex))
+					})
+					return
+				}
+				this.setMessageScrollTarget(messageTurnElementId(this.messages[targetIndex], targetIndex))
 			},
 			async loadModels() {
 				if (this.modelsLoading || this.models.length) return
@@ -656,6 +986,8 @@
 				this.activeResearchSession?.close?.()
 				this.activeResearchSession = null
 				this.applyStore(resetCurrentConversation())
+				this.turnHeights = {}
+				this.resetTurnNavigationWindow(false)
 				this.draft = ''
 				this.pendingAttachments = []
 				this.composerError = ''
@@ -668,6 +1000,8 @@
 				this.activeResearchSession = null
 				this.releaseAllLocalPreviews()
 				this.applyStore(selectConversation(publicId))
+				this.turnHeights = {}
+				this.resetTurnNavigationWindow(false)
 				await this.reloadCurrentMessages()
 				if (!asyncGenerationEnabled()) this.restoreStoppedDraftForCurrentConversation()
 				if (asyncGenerationEnabled()) await this.resumeGenerationForConversation(publicId)
@@ -680,6 +1014,7 @@
 					const page = await aiConversationApi.messages(publicId)
 					if (publicId === this.currentConversationPublicId) {
 						this.applyStore(setMessagePage(page, false))
+						this.resetTurnNavigationWindow(true)
 						this.restoreResearchForCurrentConversation()
 					}
 					return true
@@ -702,11 +1037,39 @@
 					this.historyResyncing = false
 				}
 			},
-			async loadOlderMessages() {
+			async loadOlderMessages({ preserveAnchor = false } = {}) {
 				if (!this.currentConversationPublicId || !this.nextBefore || this.messagesLoading) return
+				const conversationPublicId = this.currentConversationPublicId
+				const previousWindow = { ...this.renderWindow }
+				const anchor = preserveAnchor ? this.captureTurnAnchor() : null
+				this.turnWindowMoving = preserveAnchor && this.turnNavigationDesktop
+				this.olderMessagesError = ''
 				this.applyStore(setMessagesLoading(true))
-				try { this.applyStore(setMessagePage(await aiConversationApi.messages(this.currentConversationPublicId, { before: this.nextBefore }), true)) }
-				catch (error) { this.composerError = error.message || '更早消息加载失败。'; this.applyStore(setMessagesLoading(false)) }
+				try {
+					const page = await aiConversationApi.messages(conversationPublicId, {
+						before: this.nextBefore,
+						pageSize: TURN_WINDOW_SIZE
+					})
+					if (conversationPublicId !== this.currentConversationPublicId) return
+					this.applyStore(setMessagePage(page, true))
+					if (this.turnNavigationDesktop) {
+						this.renderWindow = windowAfterPrepend(
+							previousWindow,
+							page.messages.length,
+							this.messages.length,
+							TURN_WINDOW_SHIFT,
+							TURN_WINDOW_SIZE
+						)
+						await this.restoreTurnAnchor(anchor)
+					}
+				} catch (error) {
+					const message = error.message || '更早消息加载失败。'
+					this.composerError = message
+					this.olderMessagesError = message
+					this.applyStore(setMessagesLoading(false))
+				} finally {
+					this.turnWindowMoving = false
+				}
 			},
 			selectModel(event) {
 				const model = this.models[Number(event.detail.value)]
@@ -973,7 +1336,9 @@
 					},
 					onDelta: chunk => this.textDrain?.push?.(chunk)
 				})
-				this.scrollBottom()
+				// 用户从旧轮次直接发送新问题时，先把可见窗口切回最新轮次；
+				// 后续流式增量仍由 turnFollowLatest 决定是否继续自动跟随。
+				this.scrollBottom({ force: true })
 				// 图片生成端点不接受联网工具，发送边界必须覆盖浏览器遗留的搜索状态。
 				const webSearchMode = this.imageGenerationAvailable
 					? AI_CONVERSATION_WEB_SEARCH_MODES.OFF
@@ -1476,7 +1841,16 @@
 				this.$nextTick(() =>
 					this.lifecycleDiagnostics?.finish?.('CANCEL'))
 			},
-			scrollBottom() { this.scrollTarget = ''; this.$nextTick(() => { this.scrollTarget = 'message-bottom' }) },
+			scrollBottom({ force = false } = {}) {
+				if (this.turnNavigationDesktop && !force && !this.turnFollowLatest) return
+				if (this.turnNavigationDesktop) {
+					this.renderWindow = createInitialTurnWindow(this.messages.length, TURN_WINDOW_SIZE)
+				}
+				this.$nextTick(() => {
+					this.measureRenderedTurns()
+					this.setMessageScrollTarget('message-bottom')
+				})
+			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
 			},
@@ -1519,11 +1893,13 @@
 					...this.generatedResponseImageNaturalSizes,
 					[key]: Object.freeze({ width: naturalWidth, height: naturalHeight })
 				}
+				this.$nextTick(() => this.measureRenderedTurns())
 			},
 			handleGeneratedResponseImageWindowResize(event) {
 				this.refreshGeneratedResponseImageViewportHeight(
 					event?.size?.windowHeight
 				)
+				this.refreshTurnNavigationViewport(event?.size?.windowWidth)
 			},
 			refreshGeneratedResponseImageViewportHeight(viewportHeight) {
 				this.generatedResponseImageViewportHeight =
@@ -1569,6 +1945,7 @@
 					stopped: true,
 					error: ''
 				}))
+				this.scrollBottom({ force: true })
 			},
 			handlePageUnload() {
 				if (this.activeStream && this.currentConversationPublicId) {
@@ -1652,6 +2029,7 @@
 						stopped: false,
 						error: ''
 					}))
+					this.scrollBottom({ force: true })
 				}
 				this.activeLocalId = localId
 				this.activeGenerationPublicId = task.generationPublicId
@@ -1721,8 +2099,10 @@
 	.chat-header-balance { width: 48px; height: 48px; flex: 0 0 48px; }
 	.chat-header-title { max-width: 100%; overflow: hidden; font-size: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 	.chat-header-subtitle { margin-top: 2px; color: #8b9690; font-size: 11px; }
+	.message-stage { min-width: 0; min-height: 0; position: relative; overflow: hidden; }
 	.message-scroll { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; overflow-x: hidden; }
 	.message-shell { width: min(100%, 780px); min-height: 100%; margin: 0 auto; padding: 28px 18px 22px; box-sizing: border-box; }
+	.turn-window-spacer { width: 1px; min-height: 0; pointer-events: none; }
 	.chat-empty { min-height: 48vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 	.chat-empty-mark { width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(55, 211, 154, .38); border-radius: 18px; background: rgba(55, 211, 154, .12); color: #72e1b8; font-weight: 800; }
 	.chat-empty-title { margin-top: 18px; font-size: 25px; font-weight: 750; }
@@ -1791,6 +2171,9 @@
 	@media screen and (min-width: 1024px) {
 		.message-shell { padding: 38px 28px 28px; }
 		.composer-wrap { padding-bottom: 18px; }
+	}
+	@media screen and (min-width: 768px) and (max-width: 1199px) {
+		.message-shell { padding-left: 62px; }
 	}
 	@media screen and (max-width: 520px) {
 		.composer-meta { align-items: flex-start; flex-direction: column; gap: 2px; }
