@@ -41,7 +41,9 @@ Generation、Control、Detach Check 和 Terminal 消息使用持久消息、Dura
 
 | Worker 事实 | 计费处理 |
 | --- | --- |
-| `COMPLETED` 且有最终 Usage | 按真实 Usage 结算 |
+| `COMPLETED` 且有完整 Token Usage | 按真实 Token 与倍率快照结算 |
+| xAI 图片 `COMPLETED` 且每张成功图有合法 `cost_in_usd_ticks` | 汇总成功图成本，换算额度后多退少补 |
+| xAI 图片有效但至少一张成功图缺少合法成本 | 图片照常持久化，保留全部预扣并进入 `RECONCILE_REQUIRED` |
 | `UPSTREAM_FAILED` | 无论有无部分文本均全额退款 |
 | `SYSTEM_FAILED` | 无论有无部分文本均全额退款 |
 | 用户、管理员或失联取消且无输出 | 全额退款 |
@@ -54,7 +56,7 @@ Generation、Control、Detach Check 和 Terminal 消息使用持久消息、Dura
 ## 数据保留与恢复
 
 - `SETTLED` 和 `REFUNDED` 的 Generation/Payload 保留 24 小时后，每分钟最多按既有批量上限清理一批。
-- 表间只使用逻辑关联：创建时先验证用户、会话、模型和 Usage，终态清理必须先批量删除 Payload、再按同一批 Generation ID 删除 Generation；中途失败由同一 PostgreSQL 事务回滚。
+- 表间只使用逻辑关联：创建时先验证用户、会话、模型和 Usage，冻结的 `vendor_snapshot` 与 `metering_basis` 必须在 Usage、Detail 和 Payload 间一致；终态清理必须先批量删除 Payload、再按同一批 Generation ID 删除 Generation，中途失败由同一 PostgreSQL 事务回滚。
 - `RECONCILE_REQUIRED` 不自动清理，避免丢失人工核对证据。
 - `QUEUED` 发布空窗、`CANCEL_REQUESTED` 控制消息空窗和 `TERMINAL_PENDING_BILLING` 终态消息空窗可被有界恢复补发。
 - `RUNNING` 超过 Worker 最大时限再加一个扫描周期仍无终态时，按 Owner 丢失冻结为系统失败。
@@ -66,6 +68,8 @@ Generation、Control、Detach Check 和 Terminal 消息使用持久消息、Dura
 
 - `sql/011_create_ai_conversation_generation.sql`
 - `sql/012_create_ai_conversation_generation_payload.sql`
+- `sql/migrations/024_add_ai_conversation_metering_basis.sql`
 - `sql/checks/ai_conversation_generation_orphans.sql`
+- `sql/checks/ai_model_usage_detail_orphans.sql`
 
-没有物理外键意味着数据库无法绝对阻止跨表孤儿，这是本方案明确接受的风险；发布前和异常恢复后必须运行四类逻辑关联孤儿检查，发现异常时保留证据并进入人工核对，禁止猜测扣费。
+没有物理外键意味着数据库无法绝对阻止跨表孤儿，这是本方案明确接受的风险；发布前和异常恢复后必须运行 Generation、Payload、Usage、Detail、消息以及计量依据一致性检查，发现异常时保留证据并进入人工核对，禁止猜测扣费。

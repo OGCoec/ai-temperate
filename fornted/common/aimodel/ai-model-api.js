@@ -100,7 +100,7 @@ function normalizedOptionalImageGenerationLevels(value) {
 		throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
 	}
 	const levels = value.map((level) => {
-		if (!Number.isSafeInteger(level) || level < 1 || level > 3) {
+		if (!Number.isSafeInteger(level) || level < 1 || level > 4) {
 			throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
 		}
 		return level

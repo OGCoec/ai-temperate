@@ -11,10 +11,12 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.aimodel.search.AiModelSearchCriteria;
 import com.example.temperate.service.aimodel.search.AiModelSearchService;
-import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
 import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
+import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfileService;
+import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelPageResult;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelResult;
 import com.example.temperate.service.user.aimodel.exception.UserAiModelCatalogErrorCode;
@@ -191,10 +193,10 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.cachedInputRatio(),
                 model.outputRatio(),
                 model.capabilities(),
-                AiConversationReasoningEffort.supportedLevels(),
+                reasoningLevels(model.vendor()),
                 AiConversationReasoningEffort.defaultLevel(),
-                imageLevels(model.modelName(), model.capabilities()),
-                imageAspects(model.modelName(), model.capabilities()));
+                imageLevels(model.vendor(), model.modelName(), model.capabilities()),
+                imageAspects(model.vendor(), model.modelName(), model.capabilities()));
     }
 
     private UserAiModelResult toResult(
@@ -218,30 +220,50 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.getCachedInputRatio(),
                 model.getOutputRatio(),
                 capabilities,
-                AiConversationReasoningEffort.supportedLevels(),
+                reasoningLevels(model.getVendor()),
                 AiConversationReasoningEffort.defaultLevel(),
-                imageLevels(model.getModelName(), capabilities),
-                imageAspects(model.getModelName(), capabilities));
+                imageLevels(model.getVendor(), model.getModelName(), capabilities),
+                imageAspects(model.getVendor(), model.getModelName(), capabilities));
     }
 
     private List<Short> imageLevels(
+            String vendor,
             String modelName,
             List<AiModelCapabilityCode> capabilities) {
+        AiModelProvider provider = providerOrNull(vendor);
         return imageProperties.enabled()
+                && provider != null
                 && capabilities.contains(AiModelCapabilityCode.IMAGE_GENERATION)
-                && imageProfileService.supports(modelName)
-                ? imageProfileService.supportedLevels(modelName)
+                && imageProfileService.supports(provider, modelName)
+                ? imageProfileService.supportedLevels(provider, modelName)
                 : List.of();
     }
 
     private List<AiConversationImageAspect> imageAspects(
+            String vendor,
             String modelName,
             List<AiModelCapabilityCode> capabilities) {
+        AiModelProvider provider = providerOrNull(vendor);
         return imageProperties.enabled()
+                && provider != null
                 && capabilities.contains(AiModelCapabilityCode.IMAGE_GENERATION)
-                && imageProfileService.supports(modelName)
-                ? imageProfileService.supportedAspects(modelName)
+                && imageProfileService.supports(provider, modelName)
+                ? imageProfileService.supportedAspects(provider, modelName)
                 : List.of();
+    }
+
+    private static List<Short> reasoningLevels(String vendor) {
+        AiModelProvider provider = providerOrNull(vendor);
+        return provider == null ? List.of() : provider.supportedReasoningLevels();
+    }
+
+    private static AiModelProvider providerOrNull(String vendor) {
+        try {
+            return AiModelProvider.fromVendor(vendor);
+        } catch (AiConversationException unsupported) {
+            // 目录仍可展示管理员配置的未实现供应商，但不给出可调用档位，真正调用继续返回受控错误。
+            return null;
+        }
     }
 
     private Map<Long, List<AiModelCapabilityCode>> loadCapabilities(List<AiModel> models) {

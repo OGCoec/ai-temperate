@@ -96,6 +96,16 @@ function inlineText(node) {
 		? node.children.map(inlineText).join('') : ''
 }
 
+function sourceDomainComparisonKey(value) {
+	const domain = typeof value === 'string'
+		? value.trim().toLowerCase().replace(/\.$/, '')
+		: ''
+
+	return domain.startsWith('www.')
+		? domain.slice(4)
+		: domain
+}
+
 function markdownDomainSource(link) {
 	if (link?.type !== 'link' || link.safe !== true) return null
 	const source = normalizeAiConversationSource({
@@ -104,8 +114,11 @@ function markdownDomainSource(link) {
 		url: link.href
 	})
 	if (!source) return null
-	const visibleDomain = inlineText(link).trim().toLowerCase().replace(/\.$/, '')
-	return visibleDomain === source.domain ? source : null
+	const visibleDomain = sourceDomainComparisonKey(inlineText(link))
+	const sourceDomain = sourceDomainComparisonKey(source.domain)
+	return visibleDomain && visibleDomain === sourceDomain
+		? source
+		: null
 }
 
 function removeMatchedSourceParentheses(children) {

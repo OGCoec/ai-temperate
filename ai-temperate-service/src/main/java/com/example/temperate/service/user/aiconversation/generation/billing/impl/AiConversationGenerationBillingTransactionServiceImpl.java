@@ -98,6 +98,11 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
             finalStatus = settlementResult.requiresReconciliation()
                     ? AiConversationGenerationStatus.RECONCILE_REQUIRED.code()
                     : AiConversationGenerationStatus.SETTLED.code();
+        } else if (command.mode()
+                == AiConversationGenerationBillingMode.COMPLETE_RECONCILE) {
+            settlementResult = settlementService.completeReconcile(
+                    command.settlementCommand(), command.failureCode());
+            finalStatus = AiConversationGenerationStatus.RECONCILE_REQUIRED.code();
         } else {
             settlementResult = settlementService.settleInterrupted(
                     command.settlementCommand());
@@ -111,6 +116,10 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
                 command.terminalVersion(),
                 AiConversationGenerationStatus.TERMINAL_PENDING_BILLING.code(),
                 finalStatus,
+                command.mode()
+                                == AiConversationGenerationBillingMode.COMPLETE_RECONCILE
+                        ? command.failureCode()
+                        : null,
                 now) != 1) {
             throw new IllegalStateException("AI Generation billing CAS did not affect one row.");
         }

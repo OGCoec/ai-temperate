@@ -10,10 +10,12 @@
         <result property="loginIdentityId" column="login_identity_id"/>
         <result property="aiModelId" column="ai_model_id"/>
         <result property="billingStatus" column="billing_status"/>
+        <result property="meteringBasis" column="metering_basis"/>
         <result property="promptTokens" column="prompt_tokens"/>
         <result property="completionTokens" column="completion_tokens"/>
         <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
         <result property="reasoningTokens" column="reasoning_tokens"/>
+        <result property="providerCostTicks" column="provider_cost_ticks"/>
         <result property="chargedQuotaMinor" column="charged_quota_minor"/>
         <result property="finishReason" column="finish_reason"/>
         <result property="failureCode" column="failure_code"/>
@@ -26,10 +28,12 @@
         login_identity_id,
         ai_model_id,
         billing_status,
+        metering_basis,
         prompt_tokens,
         completion_tokens,
         cached_prompt_tokens,
         reasoning_tokens,
+        provider_cost_ticks,
         charged_quota_minor,
         finish_reason,
         failure_code,
@@ -43,13 +47,15 @@
             id,
             login_identity_id,
             ai_model_id,
-            billing_status
+            billing_status,
+            metering_basis
         )
         VALUES (
             #{id,jdbcType=BINARY},
             #{loginIdentityId,jdbcType=BIGINT},
             #{aiModelId,jdbcType=BIGINT},
-            #{billingStatus,jdbcType=SMALLINT}
+            #{billingStatus,jdbcType=SMALLINT},
+            #{meteringBasis,jdbcType=SMALLINT}
         )
     </insert>
 
@@ -75,6 +81,7 @@
             completion_tokens = #{completionTokens,jdbcType=BIGINT},
             cached_prompt_tokens = #{cachedPromptTokens,jdbcType=BIGINT},
             reasoning_tokens = #{reasoningTokens,jdbcType=BIGINT},
+            provider_cost_ticks = #{providerCostTicks,jdbcType=BIGINT},
             charged_quota_minor = #{chargedQuotaMinor,jdbcType=BIGINT},
             finish_reason = #{finishReason,jdbcType=VARCHAR},
             failure_code = #{failureCode,jdbcType=VARCHAR},

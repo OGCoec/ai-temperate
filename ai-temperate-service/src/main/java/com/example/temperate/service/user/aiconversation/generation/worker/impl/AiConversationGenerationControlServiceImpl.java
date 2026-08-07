@@ -2,6 +2,7 @@ package com.example.temperate.service.user.aiconversation.generation.worker.impl
 
 import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
 import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
+import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
 import com.example.temperate.model.ai.entity.AiConversationGeneration;
 import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
@@ -30,16 +31,19 @@ public final class AiConversationGenerationControlServiceImpl
 
     private final AiConversationGenerationMapper generationMapper;
     private final AiConversationGenerationPayloadMapper payloadMapper;
+    private final AiModelUsageDetailMapper usageDetailMapper;
     private final AiConversationAsyncGenerationProperties properties;
     private final Clock clock;
 
     public AiConversationGenerationControlServiceImpl(
             AiConversationGenerationMapper generationMapper,
             AiConversationGenerationPayloadMapper payloadMapper,
+            AiModelUsageDetailMapper usageDetailMapper,
             AiConversationAsyncGenerationProperties properties,
             Clock clock) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.payloadMapper = Objects.requireNonNull(payloadMapper);
+        this.usageDetailMapper = Objects.requireNonNull(usageDetailMapper);
         this.properties = Objects.requireNonNull(properties);
         this.clock = Objects.requireNonNull(clock);
     }
@@ -103,7 +107,12 @@ public final class AiConversationGenerationControlServiceImpl
         if (payload == null) {
             throw new IllegalStateException("AI Generation payload is missing.");
         }
-        return new AiConversationGenerationWorkItem(generation, payload);
+        var usageDetail = usageDetailMapper.findByUsageId(generation.getUsageId());
+        if (usageDetail == null) {
+            throw new IllegalStateException("AI Generation usage detail is missing.");
+        }
+        return new AiConversationGenerationWorkItem(
+                generation, payload, usageDetail);
     }
 
     private static AiConversationGenerationStatus status(int code) {

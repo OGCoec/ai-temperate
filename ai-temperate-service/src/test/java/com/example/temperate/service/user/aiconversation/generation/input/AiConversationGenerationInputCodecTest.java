@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAction;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfile;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageQuality;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -43,8 +45,11 @@ final class AiConversationGenerationInputCodecTest {
         AiConversationGenerationInputSnapshot decoded = codec.decode(json);
 
         assertThat(json)
-                .contains("\"schemaVersion\":2")
+                .contains("\"schemaVersion\":4")
+                .contains("\"webSearchMode\":\"OFF\"")
                 .contains("\"kind\":\"IMAGE\"")
+                .contains("\"action\":\"GENERATE\"")
+                .contains("\"outputCount\":1")
                 .contains("\"profileVersion\":\"image-v2\"")
                 .contains("\"size\":\"1536x1024\"")
                 .doesNotContain("b64_json", "base64", "bytes");
@@ -80,6 +85,31 @@ final class AiConversationGenerationInputCodecTest {
                 .isEqualTo(AiConversationImageAspect.LANDSCAPE);
         assertThat(snapshot.imageGeneration().size())
                 .isEqualTo("2560x1440");
+        assertThat(snapshot.imageGeneration().action())
+                .isEqualTo(AiConversationImageAction.GENERATE);
+        assertThat(snapshot.imageGeneration().outputCount()).isEqualTo((short) 1);
+    }
+
+    @Test
+    void roundTripsEditActionAndMultipleOutputCount() {
+        AiConversationImageGenerationOptions options =
+                AiConversationImageGenerationOptions.from(
+                        AiConversationImageAspect.PORTRAIT,
+                        new AiConversationImageProfile(
+                                AiConversationImageQuality.MEDIUM,
+                                1024,
+                                1536,
+                                AiConversationReasoningEffort.MEDIUM),
+                        AiConversationImageAction.EDIT,
+                        (short) 10);
+
+        String json = codec.encode(List.of(), options);
+
+        assertThat(json)
+                .contains("\"action\":\"EDIT\"")
+                .contains("\"outputCount\":10")
+                .doesNotContain("signed", "base64", "b64_json", "bytes");
+        assertThat(codec.decode(json).imageGeneration()).isEqualTo(options);
     }
 
     @Test
@@ -89,5 +119,38 @@ final class AiConversationGenerationInputCodecTest {
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("schema version");
+    }
+
+    @Test
+    void freezesRequiredWebSearchWithoutImageOptions() {
+        String json = codec.encode(
+                List.of(),
+                null,
+                AiConversationWebSearchMode.REQUIRED);
+
+        AiConversationGenerationInputSnapshot snapshot = codec.decode(json);
+
+        assertThat(snapshot.imageGeneration()).isNull();
+        assertThat(snapshot.webSearchMode())
+                .isEqualTo(AiConversationWebSearchMode.REQUIRED);
+        assertThat(json).contains("\"webSearchMode\":\"REQUIRED\"");
+    }
+
+    @Test
+    void rejectsFractionalOutputCountInFrozenEnvelope() {
+        AiConversationImageGenerationOptions options =
+                AiConversationImageGenerationOptions.from(
+                        AiConversationImageAspect.SQUARE,
+                        new AiConversationImageProfile(
+                                AiConversationImageQuality.LOW,
+                                1024,
+                                1024,
+                                AiConversationReasoningEffort.LOW));
+        String malformed = codec.encode(List.of(), options)
+                .replace("\"outputCount\":1", "\"outputCount\":1.5");
+
+        assertThatThrownBy(() -> codec.decode(malformed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outputCount");
     }
 }

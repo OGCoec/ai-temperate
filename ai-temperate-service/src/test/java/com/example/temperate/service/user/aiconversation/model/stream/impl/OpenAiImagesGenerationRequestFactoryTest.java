@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAction;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageQuality;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
@@ -47,7 +48,32 @@ final class OpenAiImagesGenerationRequestFactoryTest {
         assertThat(body.toString()).doesNotContain("b64_json", "data:image");
     }
 
+    @Test
+    void buildsJsonEditRequestWithSignedReferencesForOneChildStream() {
+        AiConversationStreamingRequest request = request(
+                AiConversationImageAction.EDIT,
+                List.of("https://signed.example/input-1", "https://signed.example/input-2"),
+                (short) 3);
+
+        JsonNode body = factory.create(request);
+
+        assertThat(body.path("n").asInt()).isEqualTo(1);
+        assertThat(body.path("stream").asBoolean()).isTrue();
+        assertThat(body.path("images").isArray()).isTrue();
+        assertThat(body.path("images")).hasSize(2);
+        assertThat(body.path("images").get(0).path("image_url").asText())
+                .isEqualTo("https://signed.example/input-1");
+        assertThat(body.toString()).doesNotContain("base64", "b64_json");
+    }
+
     private static AiConversationStreamingRequest request() {
+        return request(AiConversationImageAction.GENERATE, List.of(), (short) 0);
+    }
+
+    private static AiConversationStreamingRequest request(
+            AiConversationImageAction action,
+            List<String> imageUrls,
+            short outputIndex) {
         AiConversationPromptSnapshot prompt = new AiConversationPromptSnapshot(
                 "system",
                 null,
@@ -67,14 +93,18 @@ final class OpenAiImagesGenerationRequestFactoryTest {
                         AiConversationReasoningEffort.HIGH,
                         "webp",
                         90,
-                        0);
+                        0,
+                        action,
+                        (short) 4);
         return new AiConversationStreamingRequest(
                 new AiConversationModelRequest(
                         "gpt-image-2",
                         1024,
                         AiConversationReasoningEffort.HIGH,
                         prompt,
-                        image),
+                        image,
+                        outputIndex,
+                        imageUrls),
                 AiConversationWebSearchMode.OFF);
     }
 }

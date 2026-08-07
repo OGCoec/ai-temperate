@@ -209,6 +209,8 @@
     <update id="completeBilling">
         UPDATE ai_conversation_generation
         SET generation_status = #{finalStatus,jdbcType=SMALLINT},
+            terminal_reason = COALESCE(
+                #{terminalReason,jdbcType=VARCHAR}, terminal_reason),
             settled_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         WHERE id = #{generationId,jdbcType=BINARY}

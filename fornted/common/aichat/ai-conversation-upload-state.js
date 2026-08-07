@@ -38,6 +38,14 @@ export function isAttachmentCompatible(file, model) {
 	return new Set(model.capabilities || []).has(required)
 }
 
+export function isImageEditAttachmentCompatible(file, model) {
+	const capabilities = new Set(model?.capabilities || [])
+	return capabilities.has('IMAGE_GENERATION')
+		&& capabilities.has('IMAGE_EDIT')
+		&& new Set(['image/png', 'image/jpeg', 'image/webp'])
+			.has(String(file?.contentType || '').toLowerCase())
+}
+
 export function validateAttachmentSelection(existingFiles, newFiles) {
 	const existing = Array.from(existingFiles || [])
 	const selected = Array.from(newFiles || [])
@@ -78,7 +86,7 @@ export function createPendingAttachment(file, localId) {
 	}
 }
 
-export function deriveSendGate({ model, text, attachments, generating }) {
+export function deriveSendGate({ model, text, attachments, generating, imageEditing = false }) {
 	if (generating) return Object.freeze({ allowed: false, reason: '正在生成回答。' })
 	if (!String(text || '').trim() && !attachments.length) {
 		return Object.freeze({ allowed: false, reason: '请输入消息或添加附件。' })
@@ -97,8 +105,16 @@ export function deriveSendGate({ model, text, attachments, generating }) {
 	const incomplete = attachments.find(file => file.state !== ATTACHMENT_UPLOAD_STATES.UPLOADED)
 	if (incomplete) return Object.freeze({ allowed: false, reason: `${incomplete.fileName} 尚未上传完成。` })
 	if (!model) return Object.freeze({ allowed: false, reason: '请先选择可用模型。' })
+	if (imageEditing) {
+		const incompatibleEditInput = attachments.find(file =>
+			!isImageEditAttachmentCompatible(file, model))
+		if (incompatibleEditInput) return Object.freeze({
+			allowed: false,
+			reason: '图片编辑只支持 PNG、JPEG 和 WebP 输入图片。'
+		})
+	}
 	const incompatible = attachments.find(file => !isAttachmentCompatible(file, model))
-	if (incompatible) {
+	if (incompatible && !imageEditing) {
 		return Object.freeze({
 			allowed: false,
 			reason: `${incompatible.fileName} 不受当前模型支持。`

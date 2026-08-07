@@ -27,11 +27,14 @@ test('chat page creates a conversation only on first send and refreshes the side
 	assert.match(page, /this\.activeStream\?\.close/)
 })
 
-test('chat page sends and remembers the selected five-level reasoning effort', () => {
+test('chat page sends and remembers the provider-specific reasoning effort', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
+	const modelLevels = read('common/aichat/ai-conversation-model-levels.js')
 
 	assert.match(page, /REASONING_EFFORT_STORAGE_KEY/)
-	assert.match(page, /Low[\s\S]*Medium[\s\S]*High[\s\S]*Extra High[\s\S]*Ultra/)
+	assert.match(page, /aiConversationModelLevelOptions/)
+	assert.match(modelLevels, /anthropic:[\s\S]*XHigh[\s\S]*Max/)
+	assert.match(modelLevels, /google:[\s\S]*Minimal[\s\S]*Low[\s\S]*Medium[\s\S]*High/)
 	assert.match(page, /selectedReasoningEffortLevel:\s*2/)
 	assert.match(page, /supportedReasoningEffortLevels/)
 	assert.match(page, /defaultReasoningEffortLevel/)
@@ -43,35 +46,73 @@ test('chat page sends and remembers the selected five-level reasoning effort', (
 	assert.match(page, /selectModel\(event\)[\s\S]*normalizeReasoningEffortForModel/)
 })
 
-test('image generation exposes only three quality levels and always disables web search', () => {
+test('image generation accepts the Google fourth tier and always disables web search', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 	const image = read('common/aichat/ai-conversation-image-generation.js')
 	const webSearch = read('common/aichat/ai-conversation-web-search.js')
 
-	assert.match(image, /level <= 3/)
+	assert.match(image, /level <= 4/)
 	assert.match(webSearch, /!capabilities\.has\('IMAGE_GENERATION'\)/)
 	assert.match(page,
 		/const webSearchMode = this\.imageGenerationAvailable[\s\S]*AI_CONVERSATION_WEB_SEARCH_MODES\.OFF[\s\S]*normalizeAiConversationWebSearchMode/)
 	assert.match(page, /profileControlLabel\(\)[\s\S]*'画质'/)
 })
 
-test('generated response images preserve their intrinsic ratio without changing uploaded media thumbnails', () => {
+test('multi image controls use capability checks, one downstream stream and bounded slots', () => {
+	const page = read('components/user/workspace/user-chat-panel.vue')
+	const image = read('common/aichat/ai-conversation-image-generation.js')
+	const stream = read('common/aichat/ai-conversation-stream.js')
+	const dialog = read('components/user/workspace/user-image-output-count-dialog.vue')
+
+	assert.match(image, /capabilities\.has\('IMAGE_GENERATION'\)[\s\S]*capabilities\.has\('IMAGE_EDIT'\)/)
+	assert.doesNotMatch(image, /gpt-image-2|gpt-image-1\.5/)
+	assert.match(page, /数量 · \{\{ selectedImageOutputCount \}\}/)
+	assert.match(page, /createImageOutputSlots\(requestedImageCount\)/)
+	assert.match(page, /imageGenerationRequest\([\s\S]{0,180}requestedImageCount/)
+	assert.match(dialog, /maxlength="2"/)
+	assert.match(dialog, /parseImageOutputCount/)
+	assert.match(stream, /previewImages:\s*upsertImageOutputAttachment/)
+	assert.match(stream, /image-output-status/)
+	assert.match(stream, /requestedImageCount/)
+	assert.match(page, /messagePublicId: event\.data\?\.messagePublicId/)
+	assert.match(page, /if \(!requestedImageCount\) this\.reloadCurrentMessages\(\)/)
+	assert.equal((stream.match(/openGenerationOnce\(/g) || []).length >= 1, true)
+})
+
+test('generated response images use responsive 1080px bounds without changing uploaded media thumbnails', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(page,
 		/message\.contentAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
 	assert.match(page,
-		/message\.responseAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image generated-response-image"[^>]*mode="widthFix"/)
+		/message\.responseAttachments\?\.length[\s\S]{0,900}<image[^>]*class="attachment-image generated-response-image"[^>]*:style="generatedResponseImageStyle\(attachment\)"[^>]*@load="handleGeneratedResponseImageLoad\(attachment, \$event\)"[^>]*mode="widthFix"/)
 	assert.match(page,
 		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
+	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*=\s*1080/)
+	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX\s*=\s*1080/)
+	assert.match(page, /GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO\s*=\s*0\.7/)
 	assert.match(page,
-		/\.attachment-image\.generated-response-image\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*height:\s*auto[^}]*display:\s*block[^}]*\}/)
+		/Math\.min\(\s*GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX,\s*validViewportHeight\s*\*\s*GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO\s*\)/)
+	assert.match(page,
+		/Math\.min\(\s*1,\s*GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*\/\s*naturalWidth,\s*maximumHeight\s*\/\s*naturalHeight\s*\)/)
+	assert.match(page, /Math\.max\(1,\s*Math\.floor\(naturalWidth\s*\*\s*scale\)\)/)
+	assert.match(page, /uni\.onWindowResize\(this\.generatedResponseImageResizeListener\)/)
+	assert.match(page, /uni\.offWindowResize\(this\.generatedResponseImageResizeListener\)/)
+	assert.match(page, /event\?\.detail\?\.width[\s\S]*event\?\.detail\?\.height/)
+	assert.match(page, /delete remainingSizes\[key\]/)
+	assert.match(page, /width:\s*'100%'/)
+	assert.match(page,
+		/\.attachment-image\.generated-response-image\s*\{[^}]*max-width:\s*100%[^}]*height:\s*auto[^}]*margin:\s*0 auto[^}]*display:\s*block[^}]*\}/)
+	assert.doesNotMatch(page,
+		/\.attachment-image\.generated-response-image\s*\{\s*(?:width:\s*100%|[^}]*;\s*width:\s*100%)/)
 })
 
 test('desktop chat uses one primary sidebar with new chat before navigation and recent after it', () => {
 	const workspace = read('components/user/user-workspace.vue')
 	const sidebar = read('components/user/user-workspace-sidebar.vue')
 	const navigation = read('components/user/user-primary-navigation.vue')
+	const recent = read('components/user/user-recent-conversations.vue')
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.equal((workspace.match(/<user-workspace-sidebar\b/g) || []).length, 1)
 	assert.match(sidebar, /<template #before-items>[\s\S]*workspace-new-chat/)
@@ -86,6 +127,17 @@ test('desktop chat uses one primary sidebar with new chat before navigation and 
 	)
 	assert.match(navigation, /this\.\$emit\('destination-click', destination\)/)
 	assert.doesNotMatch(navigation, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
+	assert.match(navigation, /--sidebar-inline-padding:\s*12px/)
+	assert.match(navigation, /--sidebar-inline-padding:\s*16px/)
+	assert.match(navigation,
+		/margin-right:\s*calc\(-1\s*\*\s*var\(--sidebar-inline-padding\)\)/)
+	assert.match(recent,
+		/padding-right:\s*calc\(12px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
+	assert.match(recent,
+		/margin-right:\s*calc\(4px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
+	assert.match(chatPanel,
+		/\.chat-main\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+	assert.match(chatPanel, /\.composer-controls\s*\{[^}]*flex-wrap:\s*wrap/)
 })
 
 test('recent conversations are collapsed by default, lazy loaded, and shared with the mobile drawer', () => {
@@ -98,7 +150,8 @@ test('recent conversations are collapsed by default, lazy loaded, and shared wit
 	assert.doesNotMatch(page, /onAuthenticatedPageReady\(\)[\s\S]{0,180}refreshConversations\(\)/)
 	assert.match(page, /ensureRecentConversations\(\)[\s\S]*this\.conversationsLoaded/)
 	assert.match(page, /toggleRecentConversations\(\)[\s\S]*this\.recentExpanded = !this\.recentExpanded[\s\S]*ensureRecentConversations\(\)/)
-	assert.match(page, /selectDestination\(destination\)[\s\S]*destination === this\.activeDestination[\s\S]*windowWidth < 1024[\s\S]*openConversationDrawer\(\)[\s\S]*toggleRecentConversations\(\)/)
+	assert.match(page, /DESKTOP_SIDEBAR_MIN_WIDTH\s*=\s*768/)
+	assert.match(page, /selectDestination\(destination\)[\s\S]*destination === this\.activeDestination[\s\S]*windowWidth < DESKTOP_SIDEBAR_MIN_WIDTH[\s\S]*openConversationDrawer\(\)[\s\S]*toggleRecentConversations\(\)/)
 	assert.equal(recentUsages.length, 2)
 	assert.match(recent, /:aria-expanded="String\(expanded\)"/)
 	assert.match(recent, /:aria-controls="contentId"/)
@@ -208,11 +261,12 @@ test('web search is capability gated and research events remain in session stora
 	assert.match(capability, /capabilities\.has\('RESPONSES'\)/)
 	assert.match(capability, /capabilities\.has\('WEB_SEARCH'\)/)
 	assert.match(page, /webSearchMode,/)
-	assert.match(page, /role="switch"/)
-	assert.match(page, /:aria-checked="String\(webSearchRequired\)"/)
-	assert.match(page, /AI_CONVERSATION_WEB_SEARCH_MODES\.REQUIRED/)
+	assert.match(page, /AI_CONVERSATION_WEB_SEARCH_OPTIONS/)
+	assert.match(page, /@change="selectWebSearchMode"/)
 	assert.match(page, /AI_CONVERSATION_WEB_SEARCH_MODES\.OFF/)
-	assert.doesNotMatch(page, /<picker[\s\S]{0,300}webSearchOptions/)
+	assert.match(page, /<picker[\s\S]{0,300}:range="webSearchOptions"/)
+	assert.match(page, /webSearchActive\(\)[\s\S]*selectedWebSearchMode !== AI_CONVERSATION_WEB_SEARCH_MODES\.OFF/)
+	assert.match(page, /const option = this\.webSearchOptions\[Number\(event\.detail\.value\)\][\s\S]*selectedWebSearchMode = option\.value/)
 	assert.match(page, /event\.type === 'activity'/)
 	assert.match(page, /event\.type === 'source'/)
 	assert.match(page, /event\.type === 'reasoning_summary'/)

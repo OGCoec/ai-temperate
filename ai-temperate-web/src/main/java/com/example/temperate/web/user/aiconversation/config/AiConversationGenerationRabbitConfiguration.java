@@ -76,6 +76,13 @@ public class AiConversationGenerationRabbitConfiguration {
     }
 
     @Bean
+    Queue aiConversationGenerationWorkerV2Queue(
+            AiConversationAsyncGenerationProperties properties) {
+        return reliableQueue(AiConversationGenerationRabbitNames.workerQueueV2(
+                properties.instanceId()));
+    }
+
+    @Bean
     Queue aiConversationGenerationControlQueue(
             AiConversationAsyncGenerationProperties properties) {
         return reliableQueue(AiConversationGenerationRabbitNames.controlQueue(
@@ -93,6 +100,11 @@ public class AiConversationGenerationRabbitConfiguration {
     }
 
     @Bean
+    Queue aiConversationGenerationTerminalV2Queue() {
+        return reliableQueue(AiConversationGenerationRabbitNames.TERMINAL_QUEUE_V2);
+    }
+
+    @Bean
     Queue aiConversationGenerationDeadLetterQueue() {
         return QueueBuilder.durable(AiConversationGenerationRabbitNames.DEAD_LETTER_QUEUE)
                 .quorum()
@@ -107,6 +119,19 @@ public class AiConversationGenerationRabbitConfiguration {
         return BindingBuilder.bind(aiConversationGenerationQueue)
                 .to(aiConversationGenerationExchange)
                 .with(AiConversationGenerationRabbitNames.GENERATION_ROUTING_KEY);
+    }
+
+    @Bean
+    Binding aiConversationGenerationWorkerV2Binding(
+            @Qualifier("aiConversationGenerationWorkerV2Queue")
+                    Queue workerQueue,
+            @Qualifier("aiConversationGenerationExchange")
+                    DirectExchange generationExchange,
+            AiConversationAsyncGenerationProperties properties) {
+        return BindingBuilder.bind(workerQueue)
+                .to(generationExchange)
+                .with(AiConversationGenerationRabbitNames.workerRoutingKeyV2(
+                        properties.instanceId()));
     }
 
     @Bean
@@ -143,6 +168,17 @@ public class AiConversationGenerationRabbitConfiguration {
         return BindingBuilder.bind(aiConversationGenerationTerminalQueue)
                 .to(aiConversationGenerationTerminalExchange)
                 .with(AiConversationGenerationRabbitNames.TERMINAL_ROUTING_KEY);
+    }
+
+    @Bean
+    Binding aiConversationGenerationTerminalV2Binding(
+            @Qualifier("aiConversationGenerationTerminalV2Queue")
+                    Queue terminalQueue,
+            @Qualifier("aiConversationGenerationTerminalExchange")
+                    DirectExchange terminalExchange) {
+        return BindingBuilder.bind(terminalQueue)
+                .to(terminalExchange)
+                .with(AiConversationGenerationRabbitNames.TERMINAL_ROUTING_KEY_V2);
     }
 
     @Bean

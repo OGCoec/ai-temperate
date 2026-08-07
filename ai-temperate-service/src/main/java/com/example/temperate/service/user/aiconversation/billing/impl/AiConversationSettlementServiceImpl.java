@@ -17,8 +17,11 @@ import com.example.temperate.service.user.aiconversation.diagnostic.AiConversati
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleEvent;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTimed;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTraceContext;
-import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
+import com.example.temperate.service.user.aiconversation.model.AiConversationProviderCostUsage;
+import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
+import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -48,6 +51,7 @@ public final class AiConversationSettlementServiceImpl
     private final AiConversationMapper conversationMapper;
     private final UserMembershipQuotaMapper quotaMapper;
     private final AiConversationQuotaCalculator quotaCalculator;
+    private final AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator;
     private final UserProfileCacheInvalidationExecutor cacheInvalidationExecutor;
     private final ObjectMapper objectMapper;
     private final Clock clock;
@@ -61,6 +65,7 @@ public final class AiConversationSettlementServiceImpl
             AiConversationMapper conversationMapper,
             UserMembershipQuotaMapper quotaMapper,
             AiConversationQuotaCalculator quotaCalculator,
+            AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator,
             UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
             ObjectMapper objectMapper,
             Clock clock,
@@ -72,6 +77,8 @@ public final class AiConversationSettlementServiceImpl
         this.conversationMapper = Objects.requireNonNull(conversationMapper);
         this.quotaMapper = Objects.requireNonNull(quotaMapper);
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
+        this.providerCostQuotaCalculator =
+                Objects.requireNonNull(providerCostQuotaCalculator);
         this.cacheInvalidationExecutor =
                 Objects.requireNonNull(cacheInvalidationExecutor);
         this.objectMapper = Objects.requireNonNull(objectMapper);
@@ -103,30 +110,7 @@ public final class AiConversationSettlementServiceImpl
                 settleQuota(usage, detail, command);
         diagnostics.record(traceContext, "QUOTA_UPDATE_COMPLETED");
 
-        AiConversationMessage message = new AiConversationMessage();
-        if (command.messageId() == null || command.messageId() <= 0L) {
-            throw new IllegalArgumentException(
-                    "Successful settlement requires a reserved message ID.");
-        }
-        message.setId(command.messageId());
-        message.setConversationId(detail.getConversationId());
-        message.setContentText(command.user().text());
-        message.setContentAttachmentsJson(json(command.user().attachments()));
-        message.setContentPartsJson(json(command.userSearchTokens()));
-        message.setQuestionTokens(command.assistant().text());
-        message.setResponseAttachmentsJson(json(command.assistant().attachments()));
-        if (messageMapper.insert(message) != 1) {
-            throw new IllegalStateException(
-                    "AI conversation message insert did not affect one row.");
-        }
-        // 消息、计费与侧栏快照必须在同一事务提交，避免侧栏指向尚未存在或未结算的消息。
-        if (conversationMapper.updateAfterPersistedMessage(
-                detail.getConversationId(),
-                message.getId(),
-                initialTitle(command.user().text())) != 1) {
-            throw new IllegalStateException(
-                    "AI conversation last message update did not affect one row.");
-        }
+        AiConversationMessage message = persistMessage(detail, command);
 
         AiModelBillingStatus finalStatus = quotaSettlement.settled()
                 ? AiModelBillingStatus.SETTLED
@@ -167,6 +151,63 @@ public final class AiConversationSettlementServiceImpl
                 chargedQuota,
                 quotaSettlement.delta(),
                 !quotaSettlement.settled());
+    }
+
+    @Override
+    @Transactional
+    @AiConversationLifecycleTimed(stage = "SETTLEMENT_COMPLETE_RECONCILE")
+    public AiConversationSettlementResult completeReconcile(
+            AiConversationSettlementCommand command,
+            String failureCode) {
+        AiConversationLifecycleTraceContext traceContext =
+                effectiveContext(command.traceContext());
+        TransactionObservation transaction = observeTransaction(traceContext);
+        AiModelUsage usage = requiredReservedUsage(command.usageId());
+        AiModelUsageDetail detail = requiredDetail(command.usageId());
+        if (usage.getMeteringBasis() == null
+                || detail.getMeteringBasis() == null
+                || usage.getMeteringBasis()
+                != AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()
+                || detail.getMeteringBasis()
+                != AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()
+                || command.usage() != null
+                || !"AI_IMAGE_COST_EVIDENCE_MISSING".equals(failureCode)) {
+            throw new IllegalArgumentException(
+                    "Cost-evidence reconciliation requires a provider-cost reservation without fabricated usage.");
+        }
+        AiConversationMessage message = persistMessage(detail, command);
+        OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        if (usageMapper.settle(
+                usage.getId(),
+                AiModelBillingStatus.RESERVED.code(),
+                AiModelBillingStatus.RECONCILE_REQUIRED.code(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                detail.getReservedQuotaMinor(),
+                command.finishReason(),
+                failureCode,
+                now) != 1) {
+            throw new IllegalStateException(
+                    "AI reconciliation usage update did not affect one row.");
+        }
+        // 成本证据不完整时保留全部预扣，delta 必须保持 NULL，避免被历史退款流程误认成可退余额。
+        finalizeDetail(
+                detail,
+                message.getId(),
+                command.upstreamRequestId(),
+                null);
+        cacheInvalidationExecutor.evictAfterCommit(usage.getLoginIdentityId());
+        metrics.billing("reconcile", "success");
+        diagnostics.record(traceContext, "RECONCILE_REQUIRED_MARKED");
+        transaction.complete(AiModelBillingStatus.RECONCILE_REQUIRED.name());
+        return new AiConversationSettlementResult(
+                message.getId(),
+                detail.getReservedQuotaMinor(),
+                0L,
+                true);
     }
 
     @Override
@@ -270,6 +311,7 @@ public final class AiConversationSettlementServiceImpl
                 null,
                 null,
                 null,
+                null,
                 0L,
                 finishReason,
                 failureCode,
@@ -303,6 +345,7 @@ public final class AiConversationSettlementServiceImpl
                 usageId,
                 AiModelBillingStatus.RESERVED.code(),
                 AiModelBillingStatus.RECONCILE_REQUIRED.code(),
+                null,
                 null,
                 null,
                 null,
@@ -435,14 +478,22 @@ public final class AiConversationSettlementServiceImpl
             Long chargedQuota,
             String failureCode) {
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+        AiConversationUsage tokenUsage = command.usage() instanceof AiConversationUsage value
+                ? value
+                : null;
+        AiConversationProviderCostUsage providerUsage =
+                command.usage() instanceof AiConversationProviderCostUsage value
+                        ? value
+                        : null;
         if (usageMapper.settle(
                 usage.getId(),
                 AiModelBillingStatus.RESERVED.code(),
                 status.code(),
-                command.promptTokens(),
-                command.completionTokens(),
-                command.cachedPromptTokens(),
-                command.reasoningTokens(),
+                tokenUsage == null ? null : tokenUsage.promptTokens(),
+                tokenUsage == null ? null : tokenUsage.completionTokens(),
+                tokenUsage == null ? null : tokenUsage.cachedPromptTokens(),
+                tokenUsage == null ? null : tokenUsage.reasoningTokens(),
+                providerUsage == null ? null : providerUsage.costInUsdTicks(),
                 chargedQuota,
                 command.finishReason(),
                 failureCode,
@@ -456,19 +507,36 @@ public final class AiConversationSettlementServiceImpl
             AiModelUsage usage,
             AiModelUsageDetail detail,
             AiConversationSettlementCommand command) {
+        if (command.usage() == null
+                || usage.getMeteringBasis() == null
+                || detail.getMeteringBasis() == null
+                || usage.getMeteringBasis() != command.usage().basis().code()
+                || detail.getMeteringBasis() != command.usage().basis().code()) {
+            throw new IllegalArgumentException(
+                    "Settlement usage does not match the reserved metering basis.");
+        }
         UserMembershipQuota quota =
                 quotaMapper.findByLoginIdentityIdForUpdate(
                         usage.getLoginIdentityId());
         if (quota == null) {
             throw new IllegalStateException("AI settlement quota row is missing.");
         }
-        long actualQuota = quotaCalculator.actualQuota(
-                command.promptTokens(),
-                command.cachedPromptTokens(),
-                command.completionTokens(),
-                detail.getInputRatioSnapshot(),
-                detail.getCachedInputRatioSnapshot(),
-                detail.getOutputRatioSnapshot());
+        long actualQuota;
+        if (command.usage() instanceof AiConversationUsage tokenUsage) {
+            actualQuota = quotaCalculator.actualQuota(
+                    tokenUsage.promptTokens(),
+                    tokenUsage.cachedPromptTokens(),
+                    tokenUsage.completionTokens(),
+                    detail.getInputRatioSnapshot(),
+                    detail.getCachedInputRatioSnapshot(),
+                    detail.getOutputRatioSnapshot());
+        } else if (command.usage() instanceof AiConversationProviderCostUsage providerUsage) {
+            actualQuota = providerCostQuotaCalculator.actualQuotaMinor(
+                    providerUsage.costInUsdTicks());
+        } else {
+            throw new IllegalArgumentException(
+                    "Settlement usage basis is unsupported.");
+        }
         long delta = Math.subtractExact(
                 actualQuota, detail.getReservedQuotaMinor());
         long newBalance = Math.subtractExact(
@@ -489,7 +557,7 @@ public final class AiConversationSettlementServiceImpl
             AiModelUsageDetail detail,
             Long messageId,
             String upstreamRequestId,
-            long delta) {
+            Long delta) {
         if (detailMapper.finalizeDetail(
                 detail.getUsageId(),
                 messageId,
@@ -498,6 +566,36 @@ public final class AiConversationSettlementServiceImpl
             throw new IllegalStateException(
                     "AI model usage detail finalization did not affect one row.");
         }
+    }
+
+    private AiConversationMessage persistMessage(
+            AiModelUsageDetail detail,
+            AiConversationSettlementCommand command) {
+        if (command.messageId() == null || command.messageId() <= 0L) {
+            throw new IllegalArgumentException(
+                    "Successful settlement requires a reserved message ID.");
+        }
+        AiConversationMessage message = new AiConversationMessage();
+        message.setId(command.messageId());
+        message.setConversationId(detail.getConversationId());
+        message.setContentText(command.user().text());
+        message.setContentAttachmentsJson(json(command.user().attachments()));
+        message.setContentPartsJson(json(command.userSearchTokens()));
+        message.setQuestionTokens(command.assistant().text());
+        message.setResponseAttachmentsJson(json(command.assistant().attachments()));
+        if (messageMapper.insert(message) != 1) {
+            throw new IllegalStateException(
+                    "AI conversation message insert did not affect one row.");
+        }
+        // 消息、计费与会话游标必须同事务提交，避免会话引用尚未完成账务状态的消息。
+        if (conversationMapper.updateAfterPersistedMessage(
+                detail.getConversationId(),
+                message.getId(),
+                initialTitle(command.user().text())) != 1) {
+            throw new IllegalStateException(
+                    "AI conversation last message update did not affect one row.");
+        }
+        return message;
     }
 
     private String json(Object value) {

@@ -4,11 +4,14 @@ import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
 import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
 import com.example.temperate.model.ai.entity.AiConversationGeneration;
+import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationCancelSource;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStatus;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalCommand;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalEvent;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalResult;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalService;
+import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalType;
+import com.example.temperate.service.user.aiconversation.model.AiConversationProviderCostUsage;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -68,33 +71,41 @@ public final class AiConversationGenerationTerminalServiceImpl
         if (generation.getTerminalType() != null) {
             return result(false, generation);
         }
+        AiConversationGenerationTerminalCommand effectiveCommand = cancellationWins(
+                generation, command);
         OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
-        AiConversationUsage usage = command.usage();
+        AiConversationUsage tokenUsage = effectiveCommand.usage()
+                instanceof AiConversationUsage value ? value : null;
+        AiConversationProviderCostUsage providerCostUsage = effectiveCommand.usage()
+                instanceof AiConversationProviderCostUsage value ? value : null;
         if (payloadMapper.freezeTerminalEvidence(
-                command.generationId(),
-                command.assistantText(),
-                command.assistantAttachmentsJson(),
-                usage == null ? null : usage.promptTokens(),
-                usage == null ? null : usage.completionTokens(),
-                usage == null ? null : usage.cachedPromptTokens(),
-                usage == null ? null : usage.reasoningTokens(),
-                command.modelFinishReason(),
-                command.upstreamRequestId(),
+                effectiveCommand.generationId(),
+                effectiveCommand.assistantText(),
+                effectiveCommand.assistantAttachmentsJson(),
+                tokenUsage == null ? null : tokenUsage.promptTokens(),
+                tokenUsage == null ? null : tokenUsage.completionTokens(),
+                tokenUsage == null ? null : tokenUsage.cachedPromptTokens(),
+                tokenUsage == null ? null : tokenUsage.reasoningTokens(),
+                providerCostUsage == null
+                        ? null : providerCostUsage.costInUsdTicks(),
+                effectiveCommand.meteringEvidenceJson(),
+                effectiveCommand.modelFinishReason(),
+                effectiveCommand.upstreamRequestId(),
                 now) != 1) {
             throw new IllegalStateException("AI Generation terminal evidence was already frozen.");
         }
         if (generationMapper.freezeTerminal(
-                command.generationId(),
+                effectiveCommand.generationId(),
                 FREEZABLE_STATUSES,
                 generation.getTerminalVersion(),
                 AiConversationGenerationStatus.TERMINAL_PENDING_BILLING.code(),
-                command.terminalType().name(),
-                command.terminalReason(),
+                effectiveCommand.terminalType().name(),
+                effectiveCommand.terminalReason(),
                 now) != 1) {
             throw new IllegalStateException("AI Generation terminal CAS did not affect one row.");
         }
-        generation.setTerminalType(command.terminalType().name());
-        generation.setTerminalReason(command.terminalReason());
+        generation.setTerminalType(effectiveCommand.terminalType().name());
+        generation.setTerminalReason(effectiveCommand.terminalReason());
         generation.setTerminalVersion(generation.getTerminalVersion() + 1);
         AiConversationGenerationTerminalResult result = result(true, generation);
         eventPublisher.publishEvent(new AiConversationGenerationTerminalEvent(
@@ -103,8 +114,37 @@ public final class AiConversationGenerationTerminalServiceImpl
                 result.terminalType(),
                 result.terminalReason(),
                 result.terminalVersion(),
-                command.traceId()));
+                effectiveCommand.traceId()));
         return result;
+    }
+
+    private static AiConversationGenerationTerminalCommand cancellationWins(
+            AiConversationGeneration generation,
+            AiConversationGenerationTerminalCommand command) {
+        if (generation.getGenerationStatus()
+                        != AiConversationGenerationStatus.CANCEL_REQUESTED.code()
+                || command.terminalType()
+                        == AiConversationGenerationTerminalType.CLIENT_CANCELLED
+                || command.terminalType()
+                        == AiConversationGenerationTerminalType.ADMIN_CANCELLED) {
+            return command;
+        }
+        String source = generation.getCancelSource();
+        var terminalType = AiConversationGenerationCancelSource.ADMIN_CANCEL.name().equals(source)
+                ? AiConversationGenerationTerminalType.ADMIN_CANCELLED
+                : AiConversationGenerationTerminalType.CLIENT_CANCELLED;
+        // 行锁内再次决定优先级，封住 Worker 最后一次状态读取与终态 CAS 之间的 Stop 竞态。
+        return new AiConversationGenerationTerminalCommand(
+                command.generationId(),
+                terminalType,
+                Objects.requireNonNullElse(source, "CLIENT_EXIT_TIMEOUT"),
+                command.assistantText(),
+                "[]",
+                command.usage(),
+                command.meteringEvidenceJson(),
+                "CLIENT_CANCELLED",
+                null,
+                command.traceId());
     }
 
     private AiConversationGenerationTerminalResult result(

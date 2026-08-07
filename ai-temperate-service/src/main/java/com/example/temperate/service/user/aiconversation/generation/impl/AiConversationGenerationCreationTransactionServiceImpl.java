@@ -81,7 +81,7 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
                         command.conversationId(),
                         command.model(),
                         command.idempotencyDigest(),
-                        command.estimatedPromptTokens()));
+                        command.metering()));
         if (reservation.replay()) {
             AiConversationGeneration existing = generationMapper
                     .findOwnedByIdempotencyDigest(
@@ -140,8 +140,11 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
         payload.setInputText(command.input().text());
         // 图片控制参数与附件共用现有 JSONB 版本化信封，禁止为媒体内容新增字段或把 Base64 写入数据库。
         payload.setInputAttachmentsJson(inputCodec.encode(
-                command.input().attachments(), command.imageGeneration()));
+                command.input().attachments(),
+                command.imageGeneration(),
+                command.webSearchMode()));
         payload.setReasoningEffort(command.reasoningEffort());
+        payload.setMeteringBasis(command.metering().basis().code());
         payload.setUpdatedAt(now);
         if (payloadMapper.insert(payload) != 1) {
             throw new IllegalStateException("AI Generation payload insert did not affect one row.");

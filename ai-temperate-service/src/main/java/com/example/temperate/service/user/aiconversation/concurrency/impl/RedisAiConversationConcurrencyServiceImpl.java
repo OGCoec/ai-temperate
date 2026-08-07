@@ -56,7 +56,13 @@ public final class RedisAiConversationConcurrencyServiceImpl
     }
 
     @Override
-    public Optional<AiConversationConcurrencyPermit> tryAcquire(long userId) {
+    public Optional<AiConversationConcurrencyPermit> tryAcquire(
+            long userId,
+            short weight) {
+        if (weight < 1 || weight > 10) {
+            throw new IllegalArgumentException(
+                    "AI concurrency weight must be between 1 and 10.");
+        }
         HmacIdentifier userIdentifier = hasher.concurrencyUserIdentifier(userId);
         String owner = UUID.randomUUID().toString();
         long now = clock.millis();
@@ -72,11 +78,12 @@ public final class RedisAiConversationConcurrencyServiceImpl
                     Integer.toString(properties.maxConcurrentPerUser()),
                     owner,
                     Long.toString(Math.addExact(
-                            expiresAt, EXPIRY_GRACE_MILLIS)));
+                            expiresAt, EXPIRY_GRACE_MILLIS)),
+                    Short.toString(weight));
             if (Long.valueOf(1L).equals(result)) {
                 metrics.concurrency("acquired");
                 return Optional.of(new AiConversationConcurrencyPermit(
-                        userIdentifier, owner));
+                        userIdentifier, owner, weight));
             }
             metrics.concurrency(Long.valueOf(2L).equals(result)
                     ? "global_rejected" : "user_rejected");
@@ -96,6 +103,7 @@ public final class RedisAiConversationConcurrencyServiceImpl
                     RENEW_SCRIPT,
                     keys(permit.userIdentifier()),
                     permit.owner(),
+                    Short.toString(permit.weight()),
                     Long.toString(expiresAt),
                     Long.toString(Math.addExact(
                             expiresAt, EXPIRY_GRACE_MILLIS)));
@@ -116,7 +124,8 @@ public final class RedisAiConversationConcurrencyServiceImpl
             redisTemplate.execute(
                     RELEASE_SCRIPT,
                     keys(permit.userIdentifier()),
-                    permit.owner());
+                    permit.owner(),
+                    Short.toString(permit.weight()));
         } catch (RuntimeException ignoredFailure) {
             // 释放失败由 ZSET score 和 Key 的绝对过期时间收敛，业务结果不能被覆盖。
         }

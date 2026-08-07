@@ -78,6 +78,7 @@
 <script>
 	import {
 		attachmentCategory,
+		isImageEditAttachmentCompatible,
 		isAttachmentCompatible
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 
@@ -85,6 +86,7 @@
 		props: {
 			attachments: { type: Array, default: () => [] },
 			model: { type: Object, default: null },
+			imageEditing: { type: Boolean, default: false },
 			generating: { type: Boolean, default: false }
 		},
 		emits: ['remove', 'retry'],
@@ -95,7 +97,9 @@
 					&& Boolean(file.path)
 			},
 			compatible(file) {
-				return isAttachmentCompatible(file, this.model)
+				return this.imageEditing
+					? isImageEditAttachmentCompatible(file, this.model)
+					: isAttachmentCompatible(file, this.model)
 			},
 			kindIcon(file) {
 				return ({

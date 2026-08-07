@@ -105,17 +105,35 @@
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
 							<view v-if="message.responseAttachments?.length" class="attachment-grid">
 								<view v-for="attachment in message.responseAttachments" :key="attachment.attachmentId" class="attachment-card">
-									<image v-if="previewImage(attachment)" class="attachment-image generated-response-image" :src="attachment.url" mode="widthFix" />
+									<view
+										v-if="attachment.imageSlot && !attachment.url"
+										class="image-output-slot"
+										:class="`is-${String(attachment.status || 'QUEUED').toLowerCase()}`"
+										role="status"
+									>
+										<uni-icons :type="attachment.status === 'FAILED' ? 'info' : 'image'" size="24" :color="attachment.status === 'FAILED' ? '#ff9b94' : '#8fdcbe'" aria-hidden="true" />
+										<text>图片 {{ Number(attachment.outputIndex) + 1 }}</text>
+										<text>{{ imageOutputStatusLabel(attachment) }}</text>
+									</view>
+									<image
+										v-else-if="previewImage(attachment)"
+										class="attachment-image generated-response-image"
+										:src="attachment.url"
+										:style="generatedResponseImageStyle(attachment)"
+										@load="handleGeneratedResponseImageLoad(attachment, $event)"
+										mode="widthFix"
+									/>
 									<video v-else-if="previewVideo(attachment)" class="attachment-video" :src="attachment.url" controls />
 									<button v-else class="attachment-file" type="button" :disabled="attachment.state !== 'AVAILABLE'" @click="openAttachment(attachment)">
 										<uni-icons type="download" size="20" color="#37d39a" />
 										<text>{{ attachment.state === 'AVAILABLE' ? attachment.fileName : '生成内容保存失败' }}</text>
 									</button>
-									<text v-if="attachment.volatilePreview" class="image-preview-state">
+									<text v-if="attachment.volatilePreview && attachment.url" class="image-preview-state">
 										{{ attachment.phase === 'FINAL' ? '最终图片正在保存到 OSS…' : '生成中的完整预览，仅最终图片会保存' }}
 									</text>
 								</view>
 							</view>
+							<text v-if="message.imageOutputSummary" class="image-output-summary" role="status">{{ message.imageOutputSummary }}</text>
 							<text
 								v-if="message.warnings?.includes('ATTACHMENT_STORAGE_PARTIAL')"
 								class="message-warning"
@@ -134,12 +152,13 @@
 				<user-chat-attachment-list
 					:attachments="pendingAttachments"
 					:model="selectedModel"
+					:image-editing="imageGenerationAvailable && pendingAttachments.length > 0"
 					:generating="generating"
 					@remove="removePending"
 					@retry="retryAttachment"
 				/>
 				<view class="composer">
-					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || imageGenerationAvailable || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
+					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
 						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
 					</button>
 					<textarea v-model="draft" class="composer-input" auto-height :maxlength="65536" placeholder="输入消息" :disabled="generating" @confirm="send" />
@@ -155,6 +174,17 @@
 						<picker :range="models" range-key="modelName" :value="selectedModelIndex" :disabled="generating || !models.length" @change="selectModel">
 							<view class="model-picker"><text>{{ selectedModel?.modelName || '选择模型' }}</text><uni-icons type="down" size="14" color="#9ba6a0" /></view>
 						</picker>
+						<button
+							v-if="multipleImageOutputsAvailable"
+							ref="imageOutputCountTrigger"
+							class="image-count-picker"
+							type="button"
+							:disabled="generating"
+							aria-haspopup="dialog"
+							@click="openImageOutputCountDialog"
+						>
+							<text>数量 · {{ selectedImageOutputCount }}</text>
+						</button>
 						<picker
 							:range="reasoningEffortOptions"
 							range-key="label"
@@ -180,27 +210,33 @@
 								<uni-icons type="down" size="14" color="#9ba6a0" />
 							</view>
 						</picker>
-						<button
+						<picker
 							v-if="webSearchAvailable"
-							class="web-search-toggle"
-							:class="{ 'is-active': webSearchRequired }"
-							type="button"
-							role="switch"
-							:aria-checked="String(webSearchRequired)"
+							:range="webSearchOptions"
+							range-key="label"
+							:value="selectedWebSearchModeIndex"
 							:disabled="generating"
-							@click="toggleWebSearch"
+							@change="selectWebSearchMode"
 						>
-							<text>联网搜索</text>
-							<view class="web-search-track" aria-hidden="true">
-								<view class="web-search-thumb"></view>
+							<view
+								class="web-search-toggle"
+								:class="{ 'is-active': webSearchActive }"
+							>
+								<text>{{ selectedWebSearchModeLabel }}</text>
+								<uni-icons type="down" size="14" color="#9bc8ec" />
 							</view>
-						</button>
+						</picker>
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
 				</view>
 				<text v-if="pendingAttachments.length && !canSend" class="composer-blocker" role="status">{{ sendBlockedReason }}</text>
 				<text v-if="composerError" class="composer-error" role="alert">{{ composerError }}</text>
 			</view>
+			<user-image-output-count-dialog
+				ref="imageOutputCountDialog"
+				@confirm="selectImageOutputCount"
+				@close="restoreImageOutputCountFocus"
+			/>
 		</view>
 </template>
 
@@ -239,10 +275,16 @@
 		imageGenerationProfileLevels,
 		imageGenerationRequest,
 		imagePreviewAttachment,
+		createImageOutputSlots,
+		failImageOutputAttachment,
+		mergeCompletedImageOutputs,
 		modelSupportsImageGeneration,
+		modelSupportsMultipleImageOutputs,
 		normalizeImageGenerationAspect,
+		normalizeImageOutputCount,
 		persistedImageAttachments,
-		supportedImageAspectOptions
+		supportedImageAspectOptions,
+		upsertImageOutputAttachment
 	} from '@/common/aichat/ai-conversation-image-generation.js'
 	import {
 		createAiConversationResearchSession,
@@ -255,10 +297,12 @@
 	import { mergeAiConversationSources } from '@/common/aichat/ai-conversation-source-presentation.js'
 	import {
 		AI_CONVERSATION_WEB_SEARCH_MODES,
+		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
 		aiConversationWebSearchEnabled,
 		modelSupportsAiConversationWebSearch,
 		normalizeAiConversationWebSearchMode
 	} from '@/common/aichat/ai-conversation-web-search.js'
+	import { aiConversationModelLevelOptions } from '@/common/aichat/ai-conversation-model-levels.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
 	import {
 		ATTACHMENT_UPLOAD_STATES,
@@ -268,6 +312,7 @@
 		validateAttachmentSelection
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
+	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserSourceChip from './user-source-chip.vue'
 	import {
@@ -299,14 +344,52 @@
 	const MODEL_STORAGE_KEY = 'ait.user.ai.selected-model.v1'
 	const REASONING_EFFORT_STORAGE_KEY = 'ait.user.ai.reasoning-effort.v1'
 	const IMAGE_ASPECT_STORAGE_KEY = 'ait.user.ai.image-aspect.v1'
-	const REASONING_EFFORT_OPTIONS = Object.freeze([
-		Object.freeze({ value: 1, label: 'Low' }),
-		Object.freeze({ value: 2, label: 'Medium' }),
-		Object.freeze({ value: 3, label: 'High' }),
-		Object.freeze({ value: 4, label: 'Extra High' }),
-		Object.freeze({ value: 5, label: 'Ultra' })
-	])
+	const IMAGE_OUTPUT_COUNT_STORAGE_KEY = 'ait.user.ai.image-output-count.v1'
+	const GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX = 1080
+	const GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX = 1080
+	const GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO = 0.7
 	const CANCEL_RETRY_DELAYS = Object.freeze([0, 250, 750])
+
+	function positiveFiniteNumber(value) {
+		const number = Number(value)
+		return Number.isFinite(number) && number > 0 ? number : null
+	}
+
+	function generatedResponseImageMaximumHeight(viewportHeight) {
+		const validViewportHeight = positiveFiniteNumber(viewportHeight)
+		return validViewportHeight == null
+			? GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX
+			: Math.min(
+				GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX,
+				validViewportHeight * GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO
+			)
+	}
+
+	function generatedResponseImageDisplayWidth(naturalSize, viewportHeight) {
+		const naturalWidth = positiveFiniteNumber(naturalSize?.width)
+		const naturalHeight = positiveFiniteNumber(naturalSize?.height)
+		if (naturalWidth == null || naturalHeight == null) return null
+
+		const maximumHeight = generatedResponseImageMaximumHeight(viewportHeight)
+		const scale = Math.min(
+			1,
+			GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX / naturalWidth,
+			maximumHeight / naturalHeight
+		)
+		return Math.max(1, Math.floor(naturalWidth * scale))
+	}
+
+	function currentWindowHeight() {
+		try {
+			const windowHeight = positiveFiniteNumber(uni.getWindowInfo?.()?.windowHeight)
+			if (windowHeight != null) return windowHeight
+		} catch (_) {}
+		try {
+			return positiveFiniteNumber(uni.getSystemInfoSync?.()?.windowHeight)
+		} catch (_) {
+			return null
+		}
+	}
 
 	function uuidV4() {
 		if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -357,7 +440,7 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserMarkdownMessage, UserSourceChip },
+		components: { UserChatAttachmentList, UserImageOutputCountDialog, UserMarkdownMessage, UserSourceChip },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -366,10 +449,14 @@
 				selectedModelPublicId: '',
 				selectedReasoningEffortLevel: 2,
 				selectedImageAspect: 'SQUARE',
+				selectedImageOutputCount: 1,
 				selectedWebSearchMode: AI_CONVERSATION_WEB_SEARCH_MODES.OFF,
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
+				generatedResponseImageNaturalSizes: {},
+				generatedResponseImageViewportHeight: null,
+				generatedResponseImageResizeListener: null,
 				generating: false,
 				activeStream: null,
 				transportCancelRequested: false,
@@ -394,8 +481,19 @@
 		},
 		mounted() {
 			void prewarmAiCodeHighlighter().catch(() => {})
+			this.refreshGeneratedResponseImageViewportHeight()
+			if (typeof uni.onWindowResize === 'function') {
+				this.generatedResponseImageResizeListener = event =>
+					this.handleGeneratedResponseImageWindowResize(event)
+				uni.onWindowResize(this.generatedResponseImageResizeListener)
+			}
 		},
 		beforeUnmount() {
+			if (this.generatedResponseImageResizeListener
+				&& typeof uni.offWindowResize === 'function') {
+				uni.offWindowResize(this.generatedResponseImageResizeListener)
+			}
+			this.generatedResponseImageResizeListener = null
 			const current = this.messages.find(message =>
 				message.localId === this.activeLocalId)
 			if (asyncGenerationEnabled()) {
@@ -421,6 +519,9 @@
 			imageGenerationAvailable() {
 				return modelSupportsImageGeneration(this.selectedModel)
 			},
+			multipleImageOutputsAvailable() {
+				return modelSupportsMultipleImageOutputs(this.selectedModel)
+			},
 			imageAspectOptions() {
 				return supportedImageAspectOptions(this.selectedModel)
 			},
@@ -436,12 +537,9 @@
 				return this.imageGenerationAvailable ? '画质' : '推理'
 			},
 			reasoningEffortOptions() {
-				const levels = this.imageGenerationAvailable
-					? imageGenerationProfileLevels(this.selectedModel)
-					: this.selectedModel?.supportedReasoningEffortLevels || []
-				const supported = new Set(levels)
-				return REASONING_EFFORT_OPTIONS.filter(option =>
-					supported.has(option.value))
+				return aiConversationModelLevelOptions(
+					this.selectedModel,
+					this.imageGenerationAvailable)
 			},
 			selectedReasoningEffortIndex() {
 				return Math.max(0, this.reasoningEffortOptions.findIndex(option =>
@@ -454,17 +552,21 @@
 			webSearchAvailable() {
 				return modelSupportsAiConversationWebSearch(this.selectedModel)
 			},
-			webSearchRequired() {
-				return this.selectedWebSearchMode
-					=== AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
+			webSearchOptions() {
+				return AI_CONVERSATION_WEB_SEARCH_OPTIONS
+			},
+			selectedWebSearchModeIndex() {
+				return Math.max(0, this.webSearchOptions.findIndex(option =>
+					option.value === this.selectedWebSearchMode))
+			},
+			selectedWebSearchModeLabel() {
+				return this.webSearchOptions.find(option =>
+					option.value === this.selectedWebSearchMode)?.label || '联网 · 关闭'
+			},
+			webSearchActive() {
+				return this.selectedWebSearchMode !== AI_CONVERSATION_WEB_SEARCH_MODES.OFF
 			},
 			sendGate() {
-				if (this.imageGenerationAvailable && this.pendingAttachments.length) {
-					return Object.freeze({
-						allowed: false,
-						reason: '第一版图片生成只支持文字提示词，请先删除附件。'
-					})
-				}
 				if (this.imageGenerationAvailable && !String(this.draft || '').trim()) {
 					return Object.freeze({ allowed: false, reason: '请输入图片生成提示词。' })
 				}
@@ -472,7 +574,9 @@
 					model: this.selectedModel,
 					text: this.draft,
 					attachments: this.pendingAttachments,
-					generating: this.generating
+					generating: this.generating,
+					imageEditing: this.imageGenerationAvailable
+						&& this.pendingAttachments.length > 0
 				})
 			},
 			canSend() { return this.sendGate.allowed },
@@ -515,6 +619,10 @@
 					this.selectedImageAspect = normalizeImageGenerationAspect(
 						this.selectedModel,
 						uni.getStorageSync(IMAGE_ASPECT_STORAGE_KEY))
+					this.selectedImageOutputCount = this.multipleImageOutputsAvailable
+						? normalizeImageOutputCount(
+							uni.getStorageSync(IMAGE_OUTPUT_COUNT_STORAGE_KEY))
+						: 1
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 						this.selectedWebSearchMode, this.selectedModel)
@@ -610,6 +718,14 @@
 				this.selectedImageAspect = normalizeImageGenerationAspect(
 					model, this.selectedImageAspect)
 				uni.setStorageSync(IMAGE_ASPECT_STORAGE_KEY, this.selectedImageAspect)
+				if (!modelSupportsMultipleImageOutputs(model)) {
+					this.selectedImageOutputCount = 1
+					this.$refs.imageOutputCountDialog?.close?.()
+				} else {
+					this.selectedImageOutputCount = normalizeImageOutputCount(
+						uni.getStorageSync(IMAGE_OUTPUT_COUNT_STORAGE_KEY),
+						this.selectedImageOutputCount)
+				}
 				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 					this.selectedWebSearchMode, model)
 			},
@@ -635,6 +751,28 @@
 				this.selectedImageAspect = option.value
 				uni.setStorageSync(IMAGE_ASPECT_STORAGE_KEY, option.value)
 			},
+			openImageOutputCountDialog() {
+				if (this.generating || !this.multipleImageOutputsAvailable) return
+				this.$refs.imageOutputCountDialog?.open?.(
+					this.selectedImageOutputCount)
+			},
+			selectImageOutputCount(value) {
+				if (!this.multipleImageOutputsAvailable) {
+					this.selectedImageOutputCount = 1
+					return
+				}
+				this.selectedImageOutputCount = normalizeImageOutputCount(value)
+				uni.setStorageSync(
+					IMAGE_OUTPUT_COUNT_STORAGE_KEY,
+					this.selectedImageOutputCount)
+			},
+			restoreImageOutputCountFocus() {
+				this.$nextTick(() => {
+					const trigger = this.$refs.imageOutputCountTrigger
+					trigger?.focus?.()
+					trigger?.$el?.focus?.()
+				})
+			},
 			selectReasoningEffort(event) {
 				const option =
 					this.reasoningEffortOptions[Number(event.detail.value)]
@@ -643,14 +781,13 @@
 				this.selectedReasoningEffortLevel = level
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 			},
-			toggleWebSearch() {
+			selectWebSearchMode(event) {
 				if (this.generating || !this.webSearchAvailable) return
-				this.selectedWebSearchMode = this.webSearchRequired
-					? AI_CONVERSATION_WEB_SEARCH_MODES.OFF
-					: AI_CONVERSATION_WEB_SEARCH_MODES.REQUIRED
+				const option = this.webSearchOptions[Number(event.detail.value)]
+				if (option) this.selectedWebSearchMode = option.value
 			},
 			async chooseAttachments() {
-				if (this.attachmentPickerBusy || this.imageGenerationAvailable) return
+				if (this.attachmentPickerBusy) return
 				this.attachmentPickerBusy = true
 				this.composerError = ''
 				try {
@@ -763,6 +900,11 @@
 				const attachmentRefs = selectedAttachments.map(file => file.uploaded)
 				const text = this.draft.trim()
 				const localId = uuidV4()
+				const requestedImageCount = this.imageGenerationAvailable
+					? this.multipleImageOutputsAvailable
+						? normalizeImageOutputCount(this.selectedImageOutputCount)
+						: 1
+					: 0
 				if (selectedAttachments.length) {
 					this.localPreviewUrls.set(
 						localId,
@@ -781,7 +923,13 @@
 						url: file.path,
 						state: 'AVAILABLE'
 					})),
-					responseText: '', responseAttachments: [], streaming: true, saving: false,
+					responseText: '',
+					responseAttachments: requestedImageCount
+						? createImageOutputSlots(requestedImageCount)
+						: [],
+					requestedImageCount,
+					imageOutputSummary: '',
+					streaming: true, saving: false,
 					stopped: false, error: '', modelActivity: null,
 					research: null, researchExpanded: false
 				}))
@@ -836,6 +984,7 @@
 					idempotencyKey: uuidV4(),
 					localId,
 					inputText: text,
+					requestedImageCount,
 					body: {
 						modelPublicId: this.selectedModelPublicId,
 						reasoningEffortLevel: this.selectedReasoningEffortLevel,
@@ -843,7 +992,9 @@
 						input: { text, attachments: attachmentRefs },
 						...(this.imageGenerationAvailable
 							? { image: imageGenerationRequest(
-								this.selectedModel, this.selectedImageAspect) }
+								this.selectedModel,
+								this.selectedImageAspect,
+								requestedImageCount) }
 							: {})
 					}
 				}
@@ -862,7 +1013,11 @@
 					idempotencyKey: command.idempotencyKey,
 					conversationPublicId: command.conversationPublicId,
 					localId: command.localId,
-					inputText: command.inputText
+					inputText: command.inputText,
+					requestedImageCount,
+					previewImages: requestedImageCount
+						? createImageOutputSlots(requestedImageCount)
+						: []
 				})
 				try {
 					this.activeStream = await openAiConversationStream(command, {
@@ -951,12 +1106,25 @@
 				} else if (event.type === 'image-preview') {
 					const previewImage = imagePreviewAttachment(event.data)
 					if (!previewImage) return
+					const current = this.messages.find(message => message.localId === localId)
+					const responseAttachments = upsertImageOutputAttachment(
+						current?.responseAttachments || [], previewImage)
 					this.applyStore(patchLocalMessage(localId, {
-						responseAttachments: [previewImage],
+						responseAttachments,
 						streaming: true,
-						saving: previewImage.phase === 'FINAL'
+						saving: responseAttachments.some(attachment =>
+							attachment?.status === 'FINALIZING')
 					}))
 					this.scrollBottom()
+				} else if (event.type === 'image-output-status') {
+					const current = this.messages.find(message => message.localId === localId)
+					const responseAttachments = failImageOutputAttachment(
+						current?.responseAttachments || [], event.data)
+					this.applyStore(patchLocalMessage(localId, {
+						responseAttachments,
+						saving: responseAttachments.some(attachment =>
+							attachment?.status === 'FINALIZING')
+					}))
 				} else if (event.type === 'snapshot') {
 					this.markdownRenderState?.applySnapshot?.({
 						revision: Number(event.data?.revision || 0),
@@ -982,7 +1150,21 @@
 					})
 				} else if (event.type === 'completed' && event.data?.generationPublicId) {
 					const generationPublicId = event.data.generationPublicId
-					const responseAttachments = persistedImageAttachments(event.data)
+					const terminalAttachmentEvidenceComplete =
+						Array.isArray(event.data?.attachments)
+					const persistedAttachments = persistedImageAttachments(event.data)
+					const current = this.messages.find(message => message.localId === localId)
+					const requestedImageCount = Number(
+						event.data?.requestedImageCount
+							|| current?.requestedImageCount || 0)
+					const responseAttachments = mergeCompletedImageOutputs(
+						current?.responseAttachments,
+						persistedAttachments,
+						terminalAttachmentEvidenceComplete
+							? requestedImageCount : 0)
+					const imageOutputSummary = requestedImageCount > 1
+						? `请求 ${requestedImageCount} 张，成功 ${persistedAttachments.length} 张`
+						: ''
 					const warnings = event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 					markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
@@ -990,7 +1172,10 @@
 						const failed = event.data.terminalType
 							&& event.data.terminalType !== 'COMPLETED'
 						this.applyStore(patchLocalMessage(localId, {
+							messagePublicId: event.data?.messagePublicId || '',
 							responseAttachments,
+							requestedImageCount,
+							imageOutputSummary,
 							streaming: false,
 							saving: false,
 							stopped: String(event.data.terminalType || '').includes('CANCELLED'),
@@ -999,7 +1184,7 @@
 								? '模型响应未能完成，预扣额度已按终态处理。' : ''
 						}))
 						this.$emit('conversation-completed')
-						this.reloadCurrentMessages()
+						if (!requestedImageCount) this.reloadCurrentMessages()
 						this.streamDiagnostics?.finish?.('COMPLETE')
 						this.$nextTick(() =>
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
@@ -1292,6 +1477,58 @@
 					this.lifecycleDiagnostics?.finish?.('CANCEL'))
 			},
 			scrollBottom() { this.scrollTarget = ''; this.$nextTick(() => { this.scrollTarget = 'message-bottom' }) },
+			generatedResponseImageKey(attachment) {
+				return String(attachment?.attachmentId || '')
+			},
+			imageOutputStatusLabel(attachment) {
+				return ({
+					QUEUED: '等待开始',
+					GENERATING: '正在生成',
+					FINALIZING: '正在保存',
+					COMPLETED: '已完成',
+					FAILED: '生成失败'
+				})[String(attachment?.status || 'QUEUED').toUpperCase()] || '等待开始'
+			},
+			generatedResponseImageStyle(attachment) {
+				const key = this.generatedResponseImageKey(attachment)
+				const naturalSize = key
+					? this.generatedResponseImageNaturalSizes[key]
+					: null
+				const displayWidth = generatedResponseImageDisplayWidth(
+					naturalSize,
+					this.generatedResponseImageViewportHeight
+				)
+				return displayWidth == null
+					? { width: '100%' }
+					: { width: `${displayWidth}px` }
+			},
+			handleGeneratedResponseImageLoad(attachment, event) {
+				const key = this.generatedResponseImageKey(attachment)
+				if (!key) return
+
+				const naturalWidth = positiveFiniteNumber(event?.detail?.width)
+				const naturalHeight = positiveFiniteNumber(event?.detail?.height)
+				if (naturalWidth == null || naturalHeight == null) {
+					const remainingSizes = { ...this.generatedResponseImageNaturalSizes }
+					delete remainingSizes[key]
+					this.generatedResponseImageNaturalSizes = remainingSizes
+					return
+				}
+
+				this.generatedResponseImageNaturalSizes = {
+					...this.generatedResponseImageNaturalSizes,
+					[key]: Object.freeze({ width: naturalWidth, height: naturalHeight })
+				}
+			},
+			handleGeneratedResponseImageWindowResize(event) {
+				this.refreshGeneratedResponseImageViewportHeight(
+					event?.size?.windowHeight
+				)
+			},
+			refreshGeneratedResponseImageViewportHeight(viewportHeight) {
+				this.generatedResponseImageViewportHeight =
+					positiveFiniteNumber(viewportHeight) ?? currentWindowHeight()
+			},
 			previewImage(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('image/') && attachment.contentType !== 'image/svg+xml' && attachment.url },
 			previewVideo(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('video/') && attachment.url },
 			openAttachment(attachment) {
@@ -1434,21 +1671,37 @@
 					generationPublicId, task => {
 						if (!task || this.activeGenerationPublicId !== generationPublicId) return
 						this.applyStore(patchLocalMessage(localId, {
+							messagePublicId: task.messagePublicId || '',
 							responseText: task.responseText || '',
-							...(task.previewImage
-								? { responseAttachments: [task.previewImage] }
+							...(Array.isArray(task.previewImages) && task.previewImages.length
+								? { responseAttachments: task.previewImages }
+								: task.previewImage
+									? { responseAttachments: [task.previewImage] }
 								: Array.isArray(task.responseAttachments)
 									? { responseAttachments: task.responseAttachments }
 									: {}),
 							streaming: !['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status),
-							saving: task.status === 'CANCEL_REQUESTED',
+							saving: task.status === 'CANCEL_REQUESTED'
+								|| (task.previewImages || []).some(attachment =>
+									attachment?.status === 'FINALIZING'),
 							stopped: String(task.terminalType || '').includes('CANCELLED'),
-							warnings: task.warnings || []
+							warnings: task.warnings || [],
+							requestedImageCount: Number(task.requestedImageCount || 0),
+							imageOutputSummary: Number(task.requestedImageCount || 0) > 1
+								&& Array.isArray(task.responseAttachments)
+								? `请求 ${task.requestedImageCount} 张，成功 ${Number(task.successfulImageCount ?? task.responseAttachments.filter(item => item?.state === 'AVAILABLE').length)} 张`
+								: ''
 						}))
 						if (['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status)) {
 							this.generating = false
+							if (task.terminalAttachmentEvidenceComplete === false) {
+								updateGeneration(generationPublicId, {
+									terminalAttachmentEvidenceComplete: null
+								})
+								void this.reloadCurrentMessages()
+							}
 						}
 					})
 			}
@@ -1459,16 +1712,16 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .web-search-toggle { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
-	.chat-main { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
-	.chat-header { min-height: 68px; padding: max(8px, env(safe-area-inset-top)) 14px 8px; gap: 10px; border-bottom: 1px solid #29302c; background: rgba(11, 13, 12, .88); backdrop-filter: blur(16px); box-sizing: border-box; }
+	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
+	.chat-header { max-width: 100%; min-width: 0; min-height: 68px; padding: max(8px, env(safe-area-inset-top)) 14px 8px; gap: 10px; border-bottom: 1px solid #29302c; background: rgba(11, 13, 12, .88); backdrop-filter: blur(16px); box-sizing: border-box; }
 	.chat-header-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: center; }
 	.chat-header-balance { width: 48px; height: 48px; flex: 0 0 48px; }
 	.chat-header-title { max-width: 100%; overflow: hidden; font-size: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 	.chat-header-subtitle { margin-top: 2px; color: #8b9690; font-size: 11px; }
-	.message-scroll { min-height: 0; height: 100%; }
+	.message-scroll { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; overflow-x: hidden; }
 	.message-shell { width: min(100%, 780px); min-height: 100%; margin: 0 auto; padding: 28px 18px 22px; box-sizing: border-box; }
 	.chat-empty { min-height: 48vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 	.chat-empty-mark { width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(55, 211, 154, .38); border-radius: 18px; background: rgba(55, 211, 154, .12); color: #72e1b8; font-weight: 800; }
@@ -1477,7 +1730,7 @@
 	.message-turn { margin-bottom: 30px; }
 	.message-block { max-width: 92%; padding: 14px 16px; border-radius: 16px; box-sizing: border-box; }
 	.user-message { margin-left: auto; background: #1b211e; border: 1px solid #303a35; }
-	.assistant-message { margin-top: 12px; padding-left: 2px; background: transparent; }
+	.assistant-message { width: 100%; max-width: 100%; min-width: 0; margin-top: 12px; padding-left: 2px; background: transparent; }
 	.assistant-label { gap: 8px; margin-bottom: 8px; color: #37d39a; font-size: 12px; font-weight: 800; letter-spacing: .8px; }
 	.stopped-label { color: #f2a24d; font-weight: 600; letter-spacing: 0; }
 	.model-activity { min-height: 28px; margin: 2px 0 8px; display: flex; align-items: center; gap: 8px; color: #9faaa4; font-size: 12px; }
@@ -1496,21 +1749,25 @@
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 	.attachment-card { min-width: 0; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
+	.image-output-slot { min-height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #8fdcbe; font-size: 12px; text-align: center; }
+	.image-output-slot.is-failed { color: #ff9b94; background: rgba(125, 43, 39, .12); }
+	.image-output-summary { display: block; margin-top: 9px; color: #a9b5af; font-size: 12px; }
 	.attachment-image, .attachment-video { width: 100%; height: 180px; display: block; }
-	.attachment-image.generated-response-image { width: 100%; max-width: 100%; height: auto; display: block; }
+	.attachment-image.generated-response-image { width: auto; max-width: 100%; height: auto; margin: 0 auto; display: block; }
 	.image-preview-state { display: block; padding: 8px 10px; color: #8fdcbe; font-size: 11px; line-height: 1.45; }
+	.image-count-picker { min-height: 34px; margin: 0; padding: 0 10px; border-radius: 10px; color: #cbd4cf; font-size: 12px; }
 	.attachment-file { width: 100%; min-height: 54px; margin: 0; padding: 10px 12px; justify-content: flex-start; gap: 9px; border: 0; border-radius: 0; color: #dce5e0; text-align: left; }
 	.attachment-file text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.message-bottom { height: 1px; }
-	.composer-wrap { width: min(100%, 820px); margin: 0 auto; padding: 8px 14px calc(10px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+	.composer-wrap { width: min(100%, 820px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px 14px calc(10px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.composer { min-height: 58px; padding: 7px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid rgba(99, 117, 107, .55); border-radius: 18px; background: rgba(30, 35, 32, .84); box-shadow: inset 0 1px rgba(255, 255, 255, .05); backdrop-filter: blur(20px) saturate(115%); }
 	.composer-icon, .send-button { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 13px; }
 	.composer-input { min-height: 42px; max-height: 160px; flex: 1; padding: 10px 6px; color: #f3f5f4; font-size: 15px; line-height: 1.45; box-sizing: border-box; }
 	.send-button { border-color: #37d39a; background: #37d39a; }
 	.stop-button { background: rgba(55, 211, 154, .18); }
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
-	.composer-meta { justify-content: space-between; gap: 12px; margin-top: 7px; padding: 0 4px; }
-	.composer-controls { min-width: 0; gap: 4px; }
+	.composer-meta { justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 7px; padding: 0 4px; }
+	.composer-controls { min-width: 0; flex-wrap: wrap; gap: 4px; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.reasoning-effort-picker, .image-aspect-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
@@ -1527,9 +1784,11 @@
 	.composer-note { color: #64706a; font-size: 10px; text-align: right; }
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #8ba198; font-size: 11px; }
 	.composer-error { display: block; padding: 5px 6px 0; }
-	@media screen and (min-width: 1024px) {
+	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
 		.mobile-only { display: none !important; }
+	}
+	@media screen and (min-width: 1024px) {
 		.message-shell { padding: 38px 28px 28px; }
 		.composer-wrap { padding-bottom: 18px; }
 	}

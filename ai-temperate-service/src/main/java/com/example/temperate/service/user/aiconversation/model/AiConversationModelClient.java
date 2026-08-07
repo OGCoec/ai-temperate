@@ -9,5 +9,12 @@ public interface AiConversationModelClient {
 
     Flux<AiConversationModelChunk> stream(AiConversationModelRequest request);
 
-    String compact(String modelName, String compactionPrompt);
+    String compact(
+            AiModelProvider provider,
+            String modelName,
+            String compactionPrompt);
+
+    default String compact(String modelName, String compactionPrompt) {
+        return compact(AiModelProvider.OPENAI, modelName, compactionPrompt);
+    }
 }

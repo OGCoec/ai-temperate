@@ -93,6 +93,7 @@ public interface AiConversationGenerationMapper {
             @Param("expectedTerminalVersion") int expectedTerminalVersion,
             @Param("terminalPendingStatus") int terminalPendingStatus,
             @Param("finalStatus") int finalStatus,
+            @Param("terminalReason") String terminalReason,
             @Param("now") OffsetDateTime now);
 
     int markReconcileRequired(

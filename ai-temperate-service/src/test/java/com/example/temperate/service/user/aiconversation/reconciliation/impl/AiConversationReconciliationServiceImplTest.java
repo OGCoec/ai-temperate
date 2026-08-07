@@ -25,6 +25,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 /**
  * 验证遗留 RESERVED 只在最大流时长和安全缓冲之后批量转为待对账。
@@ -152,6 +153,15 @@ final class AiConversationReconciliationServiceImplTest {
                         new AiConversationMetrics(new SimpleMeterRegistry()));
 
         assertThat(service.refundHistoricalSystemFailures()).isEqualTo(2);
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<List<String>> failureCodes = (ArgumentCaptor)
+                ArgumentCaptor.forClass(List.class);
+        verify(usageMapper).findSystemFailureRefundCandidatesForUpdate(
+                eq(AiModelBillingStatus.RECONCILE_REQUIRED.code()),
+                failureCodes.capture(),
+                eq(500));
+        assertThat(failureCodes.getValue())
+                .doesNotContain("AI_IMAGE_COST_EVIDENCE_MISSING");
         verify(cacheInvalidation).evictAfterCommit(List.of(9L));
     }
 

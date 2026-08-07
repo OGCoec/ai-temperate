@@ -172,6 +172,22 @@ final class UserAiModelCatalogServiceImplTest {
     }
 
     @Test
+    void exposesXaiReasoningAndImageLevelsFromVendorWithoutModelNameGuessing() {
+        when(cacheService.getOrLoadEnabledSnapshot()).thenReturn(snapshot(
+                entry(53L, "custom-admin-name", "xai",
+                        List.of(AiModelCapabilityCode.IMAGE_GENERATION))));
+        UserAiModelCatalogServiceImpl service = service();
+
+        var result = service.detail(publicIdCodec.encode(53L));
+
+        assertThat(result.supportedReasoningEffortLevels())
+                .containsExactly((short) 1, (short) 2, (short) 3);
+        assertThat(result.defaultReasoningEffortLevel()).isEqualTo((short) 2);
+        assertThat(result.supportedImageGenerationLevels())
+                .containsExactly((short) 1, (short) 3);
+    }
+
+    @Test
     void rejectsInvalidPaginationBeforeReadingCache() {
         UserAiModelCatalogServiceImpl service = service();
 
@@ -206,10 +222,18 @@ final class UserAiModelCatalogServiceImplTest {
             long id,
             String name,
             List<AiModelCapabilityCode> capabilities) {
+        return entry(id, name, "openai", capabilities);
+    }
+
+    private static AiModelCacheEntry entry(
+            long id,
+            String name,
+            String vendor,
+            List<AiModelCapabilityCode> capabilities) {
         return new AiModelCacheEntry(
                 id,
                 name,
-                "openai",
+                vendor,
                 "完整模型描述",
                 "https://example.test/model.svg",
                 List.of("代码", "推理"),
@@ -231,7 +255,11 @@ final class UserAiModelCatalogServiceImplTest {
                 new ObjectMapper(),
                 new AiConversationImageProfileServiceImpl(),
                 new AiConversationImageGenerationProperties(
-                        true, "/v1/images/generations", 33_554_432));
+                        true,
+                        "/v1/images/generations",
+                        "/v1/images/edits",
+                        33_554_432,
+                        268_435_456L));
     }
 
     private static AiModelSearchCriteria emptyCriteria() {

@@ -9,7 +9,14 @@ import java.util.Objects;
  */
 public record AiConversationStreamingRequest(
         AiConversationModelRequest modelRequest,
-        AiConversationWebSearchMode webSearchMode) {
+        AiConversationWebSearchMode webSearchMode,
+        AiConversationStreamingDiagnosticContext diagnosticContext) {
+
+    public AiConversationStreamingRequest(
+            AiConversationModelRequest modelRequest,
+            AiConversationWebSearchMode webSearchMode) {
+        this(modelRequest, webSearchMode, null);
+    }
 
     public AiConversationStreamingRequest {
         modelRequest = Objects.requireNonNull(modelRequest);

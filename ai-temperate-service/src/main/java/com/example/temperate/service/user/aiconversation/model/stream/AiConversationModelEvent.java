@@ -2,6 +2,8 @@ package com.example.temperate.service.user.aiconversation.model.stream;
 
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelChunk;
 import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImage;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageMeteringEvidence;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteredUsage;
 import java.util.Objects;
 
 /**
@@ -13,6 +15,9 @@ import java.util.Objects;
 public sealed interface AiConversationModelEvent permits
         AiConversationModelEvent.Chunk,
         AiConversationModelEvent.Image,
+        AiConversationModelEvent.ImageUsage,
+        AiConversationModelEvent.ImageCostEvidence,
+        AiConversationModelEvent.ImageFailure,
         AiConversationModelEvent.Activity,
         AiConversationModelEvent.Source,
         AiConversationModelEvent.ReasoningSummaryDelta,
@@ -31,6 +36,48 @@ public sealed interface AiConversationModelEvent permits
 
         public Image {
             value = Objects.requireNonNull(value);
+        }
+    }
+
+    /**
+     * 将每个图片子流的权威用量和代表请求 ID 绑定到稳定输出序号，防止乱序完成时重复计费。
+     */
+    record ImageUsage(
+            short outputIndex,
+            AiConversationMeteredUsage usage,
+            String upstreamRequestId,
+            String finishReason) implements AiConversationModelEvent {
+
+        public ImageUsage {
+            if (outputIndex < 0 || outputIndex > 9) {
+                throw new IllegalArgumentException("Image output index is out of range.");
+            }
+            usage = Objects.requireNonNull(usage);
+        }
+    }
+
+    /**
+     * 表示图片已经生成但供应商成本证据缺失或非法；该事件保留图片并把整个任务转入待对账。
+     */
+    record ImageCostEvidence(AiConversationImageMeteringEvidence evidence)
+            implements AiConversationModelEvent {
+
+        public ImageCostEvidence {
+            evidence = Objects.requireNonNull(evidence);
+        }
+    }
+
+    /**
+     * 表示单路图片上游失败；外层任务保留该槽位失败事实，同时允许其他子流继续完成。
+     */
+    record ImageFailure(short outputIndex, Throwable cause)
+            implements AiConversationModelEvent {
+
+        public ImageFailure {
+            if (outputIndex < 0 || outputIndex > 9) {
+                throw new IllegalArgumentException("Image output index is out of range.");
+            }
+            cause = Objects.requireNonNull(cause);
         }
     }
 

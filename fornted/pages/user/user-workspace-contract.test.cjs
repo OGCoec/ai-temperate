@@ -46,6 +46,17 @@ test('workspace owns one sidebar and switches already-mounted content panels wit
 	assert.doesNotMatch(workspace, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
 })
 
+test('workspace reserves only the remaining flex width for protected page content', () => {
+	const workspace = read('components/user/user-workspace.vue')
+
+	assert.match(workspace, /DESKTOP_SIDEBAR_MIN_WIDTH\s*=\s*768/)
+	assert.match(workspace, /windowWidth\s*<\s*DESKTOP_SIDEBAR_MIN_WIDTH/)
+	assert.match(workspace,
+		/\.user-workspace\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%[^}]*flex-direction:\s*row/)
+	assert.match(workspace,
+		/\.user-workspace-content\s*\{[^}]*width:\s*0[^}]*max-width:\s*100%[^}]*min-width:\s*0[^}]*flex:\s*1 1 0%/)
+})
+
 test('workspace keeps navigation visible while authentication and panel data are pending', () => {
 	const workspace = read('components/user/user-workspace.vue')
 	const profilePanel = read('components/user/workspace/user-profile-panel.vue')

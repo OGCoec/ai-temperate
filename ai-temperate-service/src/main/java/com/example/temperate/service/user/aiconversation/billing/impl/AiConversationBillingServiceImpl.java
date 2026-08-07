@@ -13,10 +13,14 @@ import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationBillingService;
+import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservation;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationCommand;
+import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.membership.MembershipQuotaPlan;
 import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
@@ -44,6 +48,7 @@ public final class AiConversationBillingServiceImpl
     private final UserMembershipQuotaMapper quotaMapper;
     private final HybridSemaphoreIdWorker idWorker;
     private final AiConversationQuotaCalculator quotaCalculator;
+    private final AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator;
     private final MembershipQuotaPlanService quotaPlanService;
     private final UserProfileCacheInvalidationExecutor cacheInvalidationExecutor;
     private final Clock clock;
@@ -56,6 +61,7 @@ public final class AiConversationBillingServiceImpl
             UserMembershipQuotaMapper quotaMapper,
             HybridSemaphoreIdWorker idWorker,
             AiConversationQuotaCalculator quotaCalculator,
+            AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator,
             MembershipQuotaPlanService quotaPlanService,
             UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
             Clock clock,
@@ -66,6 +72,8 @@ public final class AiConversationBillingServiceImpl
         this.quotaMapper = Objects.requireNonNull(quotaMapper);
         this.idWorker = Objects.requireNonNull(idWorker);
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
+        this.providerCostQuotaCalculator =
+                Objects.requireNonNull(providerCostQuotaCalculator);
         this.quotaPlanService = Objects.requireNonNull(quotaPlanService);
         this.cacheInvalidationExecutor =
                 Objects.requireNonNull(cacheInvalidationExecutor);
@@ -108,11 +116,7 @@ public final class AiConversationBillingServiceImpl
         }
 
         AiModelCacheEntry model = command.model();
-        long reservedQuota = quotaCalculator.reservedQuota(
-                command.estimatedPromptTokens(),
-                model.maxOutputTokens(),
-                model.inputRatio(),
-                model.outputRatio());
+        long reservedQuota = reservedQuota(command.metering());
         UserMembershipQuota quota =
                 quotaMapper.findByLoginIdentityIdForUpdate(command.userId());
         if (quota == null) {
@@ -141,6 +145,7 @@ public final class AiConversationBillingServiceImpl
         usage.setLoginIdentityId(command.userId());
         usage.setAiModelId(model.id());
         usage.setBillingStatus(AiModelBillingStatus.RESERVED.code());
+        usage.setMeteringBasis(command.metering().basis().code());
         if (usageMapper.insert(usage) != 1) {
             throw new IllegalStateException(
                     "AI model usage insert did not affect one row.");
@@ -150,13 +155,12 @@ public final class AiConversationBillingServiceImpl
         detail.setUsageId(usageId);
         detail.setConversationId(conversationId);
         detail.setIdempotencyKeyDigest(command.idempotencyDigest());
-        detail.setVendorSnapshot(model.vendor());
+        // 快照必须在预扣事务中冻结为稳定协议键，排队期间管理员修改实时 vendor 也不能改变 Worker 路由。
+        detail.setVendorSnapshot(
+                AiModelProvider.fromVendor(model.vendor()).vendor());
         detail.setStream(true);
-        detail.setEstimatedPromptTokens(command.estimatedPromptTokens());
-        detail.setMaxOutputTokens(model.maxOutputTokens());
-        detail.setInputRatioSnapshot(model.inputRatio());
-        detail.setCachedInputRatioSnapshot(model.cachedInputRatio());
-        detail.setOutputRatioSnapshot(model.outputRatio());
+        detail.setMeteringBasis(command.metering().basis().code());
+        applyReservationMetering(detail, command.metering());
         detail.setReservedQuotaMinor(reservedQuota);
         if (detailMapper.insert(detail) != 1) {
             throw new IllegalStateException(
@@ -170,11 +174,7 @@ public final class AiConversationBillingServiceImpl
                 null,
                 AiModelBillingStatus.RESERVED.code(),
                 reservedQuota,
-                command.estimatedPromptTokens(),
-                model.maxOutputTokens(),
-                model.inputRatio(),
-                model.cachedInputRatio(),
-                model.outputRatio(),
+                command.metering(),
                 newConversation,
                 false);
     }
@@ -186,6 +186,11 @@ public final class AiConversationBillingServiceImpl
         if (usage == null
                 || usage.getLoginIdentityId() != command.userId()
                 || usage.getAiModelId() != command.model().id()
+                || usage.getMeteringBasis() == null
+                || usage.getMeteringBasis() != command.metering().basis().code()
+                || detail.getMeteringBasis() == null
+                || detail.getMeteringBasis()
+                != command.metering().basis().code()
                 || (command.conversationId() != null
                 && !java.util.Arrays.equals(
                         command.conversationId(), detail.getConversationId()))) {
@@ -200,13 +205,64 @@ public final class AiConversationBillingServiceImpl
                 detail.getConversationMessageId(),
                 usage.getBillingStatus(),
                 detail.getReservedQuotaMinor(),
-                detail.getEstimatedPromptTokens(),
-                detail.getMaxOutputTokens(),
-                detail.getInputRatioSnapshot(),
-                detail.getCachedInputRatioSnapshot(),
-                detail.getOutputRatioSnapshot(),
+                reservationMetering(detail),
                 false,
                 true);
+    }
+
+    private long reservedQuota(AiConversationReservationMetering metering) {
+        if (metering instanceof TokenReservationMetering token) {
+            return quotaCalculator.reservedQuota(
+                    token.estimatedPromptTokens(),
+                    token.maxOutputTokens(),
+                    token.inputRatio(),
+                    token.outputRatio());
+        }
+        if (metering instanceof ProviderCostReservationMetering providerCost) {
+            return providerCostQuotaCalculator.reservedQuotaMinor(
+                    providerCost.requestedOutputCount());
+        }
+        throw new IllegalArgumentException("Unsupported reservation metering basis.");
+    }
+
+    private static void applyReservationMetering(
+            AiModelUsageDetail detail,
+            AiConversationReservationMetering metering) {
+        if (metering instanceof TokenReservationMetering token) {
+            detail.setEstimatedPromptTokens(token.estimatedPromptTokens());
+            detail.setMaxOutputTokens(token.maxOutputTokens());
+            detail.setInputRatioSnapshot(token.inputRatio());
+            detail.setCachedInputRatioSnapshot(token.cachedInputRatio());
+            detail.setOutputRatioSnapshot(token.outputRatio());
+            detail.setRequestedOutputCount(null);
+            return;
+        }
+        if (metering instanceof ProviderCostReservationMetering providerCost) {
+            // 供应商成本预扣只冻结输出槽数量，严禁伪造零 Token 或读取模型倍率。
+            detail.setEstimatedPromptTokens(null);
+            detail.setMaxOutputTokens(null);
+            detail.setInputRatioSnapshot(null);
+            detail.setCachedInputRatioSnapshot(null);
+            detail.setOutputRatioSnapshot(null);
+            detail.setRequestedOutputCount(providerCost.requestedOutputCount());
+            return;
+        }
+        throw new IllegalArgumentException("Unsupported reservation metering basis.");
+    }
+
+    private static AiConversationReservationMetering reservationMetering(
+            AiModelUsageDetail detail) {
+        if (detail.getMeteringBasis()
+                == com.example.temperate.service.user.aiconversation.model
+                        .AiConversationMeteringBasis.TOKEN.code()) {
+            return new TokenReservationMetering(
+                    detail.getEstimatedPromptTokens(),
+                    detail.getMaxOutputTokens(),
+                    detail.getInputRatioSnapshot(),
+                    detail.getCachedInputRatioSnapshot(),
+                    detail.getOutputRatioSnapshot());
+        }
+        return new ProviderCostReservationMetering(detail.getRequestedOutputCount());
     }
 
     void activateExpiredPeriod(UserMembershipQuota quota) {

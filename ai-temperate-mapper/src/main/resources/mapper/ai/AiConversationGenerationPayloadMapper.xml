@@ -10,6 +10,7 @@
         <result property="inputText" column="input_text"/>
         <result property="inputAttachmentsJson" column="input_attachments"/>
         <result property="reasoningEffort" column="reasoning_effort"/>
+        <result property="meteringBasis" column="metering_basis"/>
         <result property="assistantText" column="assistant_text"/>
         <result property="assistantAttachmentsJson" column="assistant_attachments"/>
         <result property="conversationMessageId" column="conversation_message_id"/>
@@ -19,6 +20,8 @@
         <result property="completionTokens" column="completion_tokens"/>
         <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
         <result property="reasoningTokens" column="reasoning_tokens"/>
+        <result property="providerCostTicks" column="provider_cost_ticks"/>
+        <result property="meteringEvidenceJson" column="metering_evidence"/>
         <result property="modelFinishReason" column="model_finish_reason"/>
         <result property="upstreamRequestId" column="upstream_request_id"/>
         <result property="updatedAt" column="updated_at"/>
@@ -27,30 +30,34 @@
     <insert id="insert"
             parameterType="com.example.temperate.model.ai.entity.AiConversationGenerationPayload">
         INSERT INTO ai_conversation_generation_payload (
-            generation_id, input_text, input_attachments, reasoning_effort, updated_at
+            generation_id, input_text, input_attachments, reasoning_effort,
+            metering_basis, updated_at
         ) VALUES (
             #{generationId,jdbcType=BINARY}, #{inputText,jdbcType=LONGVARCHAR},
             CAST(#{inputAttachmentsJson,jdbcType=LONGVARCHAR} AS JSONB),
             #{reasoningEffort,jdbcType=SMALLINT},
+            #{meteringBasis,jdbcType=SMALLINT},
             #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         )
     </insert>
 
     <select id="findByGenerationId" resultMap="PayloadResultMap">
-        SELECT generation_id, input_text, input_attachments, reasoning_effort,
+        SELECT generation_id, input_text, input_attachments, reasoning_effort, metering_basis,
                assistant_text, assistant_attachments, conversation_message_id,
                context_generation, ephemeral_ordinal, prompt_tokens,
                completion_tokens, cached_prompt_tokens, reasoning_tokens,
+               provider_cost_ticks, metering_evidence,
                model_finish_reason, upstream_request_id, updated_at
         FROM ai_conversation_generation_payload
         WHERE generation_id = #{generationId,jdbcType=BINARY}
     </select>
 
     <select id="findByGenerationIdForUpdate" resultMap="PayloadResultMap">
-        SELECT generation_id, input_text, input_attachments, reasoning_effort,
+        SELECT generation_id, input_text, input_attachments, reasoning_effort, metering_basis,
                assistant_text, assistant_attachments, conversation_message_id,
                context_generation, ephemeral_ordinal, prompt_tokens,
                completion_tokens, cached_prompt_tokens, reasoning_tokens,
+               provider_cost_ticks, metering_evidence,
                model_finish_reason, upstream_request_id, updated_at
         FROM ai_conversation_generation_payload
         WHERE generation_id = #{generationId,jdbcType=BINARY}
@@ -91,6 +98,11 @@
             completion_tokens = #{completionTokens,jdbcType=BIGINT},
             cached_prompt_tokens = #{cachedPromptTokens,jdbcType=BIGINT},
             reasoning_tokens = #{reasoningTokens,jdbcType=BIGINT},
+            provider_cost_ticks = #{providerCostTicks,jdbcType=BIGINT},
+            metering_evidence = CASE
+                WHEN #{meteringEvidenceJson,jdbcType=LONGVARCHAR} IS NULL THEN NULL
+                ELSE CAST(#{meteringEvidenceJson,jdbcType=LONGVARCHAR} AS JSONB)
+            END,
             model_finish_reason = #{modelFinishReason,jdbcType=VARCHAR},
             upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR},
             updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}

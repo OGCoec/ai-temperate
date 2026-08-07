@@ -24,6 +24,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
         AiConversationAsyncGenerationProperties.class,
         AiConversationWebSearchProperties.class,
         AiConversationImageGenerationProperties.class,
+        AiConversationAnthropicProperties.class,
+        AiConversationGeminiProperties.class,
         AiConversationAttachmentProperties.class,
         AiConversationSecurityProperties.class,
         AiInferenceProperties.class
@@ -77,6 +79,26 @@ public class AiConversationConfiguration {
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(128);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * 最终图片上传会阻塞等待 OSS 响应，使用三条独立工作线程限制单实例外部写入并发和排队内存。
+     *
+     * @return 图片附件最终化执行器
+     */
+    @Bean
+    @Qualifier("aiConversationAttachmentFinalizationExecutor")
+    Executor aiConversationAttachmentFinalizationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("ai-conversation-attachment-finalize-");
+        executor.setCorePoolSize(3);
+        executor.setMaxPoolSize(3);
+        executor.setQueueCapacity(40);
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setRejectedExecutionHandler(
                 new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());

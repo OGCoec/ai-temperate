@@ -32,7 +32,7 @@ function persist() {
 		storage()?.setItem(STORAGE_KEY, JSON.stringify({
 			// 中间图只属于当前页面内存，禁止把完整 Base64 写进 sessionStorage。
 			tasks: [...tasks.values()].map(task => {
-				const { previewImage, ...persisted } = task
+				const { previewImage, previewImages, ...persisted } = task
 				return persisted
 			}),
 			pendingRequests: [...pendingRequests.values()]
@@ -150,7 +150,8 @@ export function markGenerationTerminal(generationPublicId, status) {
 		status,
 		observerAttached: false,
 		idempotencyKey: null,
-		previewImage: null
+		previewImage: null,
+		previewImages: []
 	})
 }
 

@@ -18,6 +18,8 @@ import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservation;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationCommand;
+import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
@@ -31,6 +33,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -110,6 +113,31 @@ class AiConversationBillingServiceImplTest {
         verify(fixture.detailMapper(), never()).insert(any());
     }
 
+    @Test
+    void providerCostReservationUsesOutputCountWithoutTokenRatios() {
+        BillingFixture fixture = fixture(50_000L);
+        AiConversationReservationCommand command = new AiConversationReservationCommand(
+                7L,
+                null,
+                reservationCommand().model(),
+                new byte[32],
+                new ProviderCostReservationMetering((short) 3));
+
+        AiConversationReservation reservation = fixture.service().reserve(command);
+
+        assertThat(reservation.reservedQuotaMinor()).isEqualTo(300L);
+        assertThat(fixture.quota().getQuotaBalanceMinor()).isEqualTo(49_700L);
+        assertThat(reservation.metering().basis())
+                .isEqualTo(AiConversationMeteringBasis.PROVIDER_COST_TICKS);
+        ArgumentCaptor<com.example.temperate.model.ai.entity.AiModelUsageDetail>
+                detail = ArgumentCaptor.forClass(
+                        com.example.temperate.model.ai.entity.AiModelUsageDetail.class);
+        verify(fixture.detailMapper()).insert(detail.capture());
+        assertThat(detail.getValue().getRequestedOutputCount()).isEqualTo((short) 3);
+        assertThat(detail.getValue().getEstimatedPromptTokens()).isNull();
+        assertThat(detail.getValue().getOutputRatioSnapshot()).isNull();
+    }
+
     private static AiConversationBillingServiceImpl service() {
         return new AiConversationBillingServiceImpl(
                 mock(AiConversationMapper.class),
@@ -118,6 +146,7 @@ class AiConversationBillingServiceImplTest {
                 mock(UserMembershipQuotaMapper.class),
                 mock(HybridSemaphoreIdWorker.class),
                 new AiConversationQuotaCalculator(),
+                new AiConversationProviderCostQuotaCalculator(),
                 tier -> new MembershipQuotaPlan(
                         tier == MembershipTier.PLUS ? 200_000L : 5_000L,
                         Duration.ofDays(7)),
@@ -152,6 +181,7 @@ class AiConversationBillingServiceImplTest {
                         quotaMapper,
                         idWorker,
                         new AiConversationQuotaCalculator(),
+                        new AiConversationProviderCostQuotaCalculator(),
                         tier -> new MembershipQuotaPlan(
                                 5_000L,
                                 Duration.ofDays(7)),
@@ -170,7 +200,7 @@ class AiConversationBillingServiceImplTest {
         AiModelCacheEntry model = new AiModelCacheEntry(
                 9L,
                 "test-model",
-                "test-vendor",
+                "openai",
                 "test model",
                 "",
                 List.of(),

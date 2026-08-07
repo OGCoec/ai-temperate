@@ -8,7 +8,10 @@ import com.example.temperate.service.user.aiconversation.diagnostic.AiConversati
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationStreamFailureReason;
+import com.example.temperate.service.user.aiconversation.exception.AiUpstreamHttpStatusException;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategy;
@@ -25,7 +28,6 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -44,6 +46,7 @@ public final class ResponsesWebSearchStreamingStrategy
     private final AiConversationAttachmentService attachmentService;
     private final OpenAiResponsesRequestFactory requestFactory;
     private final OpenAiResponsesEventMapper eventMapper;
+    private final AiUpstreamErrorCapture upstreamErrorCapture;
     private final AiConversationStreamFailureClassifier failureClassifier;
 
     public ResponsesWebSearchStreamingStrategy(
@@ -59,7 +62,13 @@ public final class ResponsesWebSearchStreamingStrategy
         this.attachmentService = Objects.requireNonNull(attachmentService);
         this.requestFactory = new OpenAiResponsesRequestFactory(objectMapper);
         this.eventMapper = new OpenAiResponsesEventMapper(objectMapper);
+        this.upstreamErrorCapture = new AiUpstreamErrorCapture(objectMapper);
         this.failureClassifier = Objects.requireNonNull(failureClassifier);
+    }
+
+    @Override
+    public AiModelProvider provider() {
+        return AiModelProvider.OPENAI;
     }
 
     @Override
@@ -68,8 +77,21 @@ public final class ResponsesWebSearchStreamingStrategy
     }
 
     @Override
+    public AiConversationMeteringBasis meteringBasis() {
+        return AiConversationMeteringBasis.TOKEN;
+    }
+
+    @Override
     public Flux<AiConversationModelEvent> stream(
             AiConversationStreamingRequest request) {
+        if (request.modelRequest().provider() != provider()) {
+            return Flux.error(new AiConversationException(
+                    AiConversationErrorCode.AI_REQUEST_INVALID,
+                    "OpenAI 联网策略收到不匹配的模型供应商",
+                    false));
+        }
+        provider().validateReasoningEffort(
+                request.modelRequest().reasoningEffort());
         if (!inferenceProperties.enabled() || !webSearchProperties.enabled()) {
             return Flux.error(new AiConversationException(
                     AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
@@ -111,11 +133,12 @@ public final class ResponsesWebSearchStreamingStrategy
     private Flux<AiConversationModelEvent> decodeResponse(
             ClientResponse response) {
         if (!response.statusCode().is2xxSuccessful()) {
-            // 非成功响应正文可能包含供应商敏感诊断，只释放缓冲并保留状态码用于安全分类。
-            return response.releaseBody().thenMany(Flux.error(
-                    new ResponseStatusException(
-                            response.statusCode(),
-                            "AI upstream returned a non-success status")));
+            // 正文必须先在固定内存边界内完成脱敏；异常链只携带安全字段，原始内容不得进入 AOP 或用户响应。
+            return upstreamErrorCapture.capture(response)
+                    .flatMapMany(diagnostic -> Flux.error(
+                            new AiUpstreamHttpStatusException(
+                                    response.statusCode(),
+                                    diagnostic)));
         }
         boolean eventStream = response.headers().contentType()
                 .filter(MediaType.TEXT_EVENT_STREAM::isCompatibleWith)

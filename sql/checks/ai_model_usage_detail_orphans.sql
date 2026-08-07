@@ -51,3 +51,25 @@ INNER JOIN ai_conversation_message message
 WHERE detail.conversation_message_id IS NOT NULL
   AND message.conversation_id <> detail.conversation_id
 ORDER BY detail.id;
+
+-- 检查核心用量、详情与预扣字段的计量依据不一致；正常结果必须为空集。
+SELECT
+    detail.id AS ai_model_usage_detail_id,
+    usage.metering_basis AS usage_metering_basis,
+    detail.metering_basis AS detail_metering_basis
+FROM ai_model_usage_detail detail
+INNER JOIN ai_model_usage usage
+    ON usage.id = detail.usage_id
+WHERE usage.metering_basis <> detail.metering_basis
+   OR (detail.metering_basis = 0
+       AND detail.requested_output_count IS NOT NULL)
+   OR (detail.metering_basis = 1
+       AND (
+           detail.requested_output_count IS NULL
+           OR detail.estimated_prompt_tokens IS NOT NULL
+           OR detail.max_output_tokens IS NOT NULL
+           OR detail.input_ratio_snapshot IS NOT NULL
+           OR detail.cached_input_ratio_snapshot IS NOT NULL
+           OR detail.output_ratio_snapshot IS NOT NULL
+       ))
+ORDER BY detail.id;

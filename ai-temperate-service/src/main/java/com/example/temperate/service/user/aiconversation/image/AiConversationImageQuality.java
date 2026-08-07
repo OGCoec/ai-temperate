@@ -6,7 +6,8 @@ package com.example.temperate.service.user.aiconversation.image;
 public enum AiConversationImageQuality {
     LOW("low"),
     MEDIUM("medium"),
-    HIGH("high");
+    HIGH("high"),
+    ULTRA("ultra");
 
     private final String upstreamValue;
 

@@ -179,6 +179,8 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
                                 "/api/health",
+                                "/actuator/health/liveness",
+                                "/actuator/health/readiness",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",

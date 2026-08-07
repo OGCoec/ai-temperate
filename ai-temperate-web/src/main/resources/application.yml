@@ -169,6 +169,29 @@ spring:
         # 消费失败后禁止无限重新入队。
         default-requeue-rejected: false
 
+# Actuator 只对部署编排公开不含内部细节的存活与就绪探针。
+management:
+  # 单个健康端点禁止返回组件、异常、类路径或其他内部诊断信息。
+  endpoint:
+    # 健康端点同时承载 liveness 与 readiness 分组。
+    health:
+      # 匿名探针响应只保留整体状态，不展示任何组件详情。
+      show-details: never
+      # 即使未展示详情也禁止返回组件名称，避免泄露内部基础设施拓扑。
+      show-components: never
+      # Spring Boot 可用性探针必须显式启用，供实例摘流与重启编排使用。
+      probes:
+        # 类链接故障发布 REFUSING_TRAFFIC 后 readiness 立即返回非健康状态。
+        enabled: true
+  # Web 端点仅暴露健康检查，禁止通过默认配置扩大管理面。
+  endpoints:
+    # Actuator 的 HTTP 暴露边界配置。
+    web:
+      # 仅将 health 端点加入 Web 暴露集合。
+      exposure:
+        # liveness 与 readiness 是 health 的分组路径，不需要暴露其他端点。
+        include: health
+
 # MyBatis 持久化框架配置。
 mybatis:
   # Mapper XML 使用 classpath* 扫描所有模块资源，确保 mapper 子模块中的 SQL 映射被加载。
@@ -250,8 +273,8 @@ app:
     max-hash-fields: ${AI_CONVERSATION_MAX_HASH_FIELDS:5000}
     # 单个会话 Hash 达到一千字段时开始触发临时上下文压缩。
     compaction-hash-field-threshold: ${AI_CONVERSATION_COMPACTION_HASH_FIELD_THRESHOLD:1000}
-    # 单用户同时活跃生成上限为四个不同会话。
-    max-concurrent-per-user: ${AI_CONVERSATION_MAX_CONCURRENT_PER_USER:4}
+    # 单用户上游并发按真实流数量计权，默认允许一次最多十路图片子流原子占用。
+    max-concurrent-per-user: ${AI_CONVERSATION_MAX_CONCURRENT_PER_USER:10}
     # 全部应用实例共享的活跃生成总上限为一百二十八。
     max-concurrent-global: ${AI_CONVERSATION_MAX_CONCURRENT_GLOBAL:128}
     # 图片缺少厂商精确计数规则时采用保守固定 Token 估算。
@@ -276,11 +299,23 @@ app:
       enabled: ${AI_CONVERSATION_WEB_SEARCH_ENABLED:true}
       # 专用客户端只允许在既有 CLIProxyAPI 基础地址下调用固定相对路径。
       responses-path: ${AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH:/v1/responses}
+    # Anthropic 原生 Messages 客户端复用 CLIProxyAPI 主机和认证信息，只维护供应商协议元数据。
+    anthropic:
+      # Messages 端点必须是 CLIProxyAPI 主机下的受控相对路径。
+      messages-path: ${AI_CONVERSATION_ANTHROPIC_MESSAGES_PATH:/v1/messages}
+      # Anthropic 协议版本使用官方稳定日期，便于部署时显式覆盖。
+      api-version: ${AI_CONVERSATION_ANTHROPIC_API_VERSION:2023-06-01}
+    # Google 原生 Interactions 客户端复用 CLIProxyAPI 主机和认证信息，只维护供应商协议元数据。
+    google:
+      # Interactions 端点必须是 CLIProxyAPI 主机下的受控相对路径。
+      interactions-path: ${AI_CONVERSATION_GOOGLE_INTERACTIONS_PATH:/v1beta/interactions}
+      # API 修订日期固定在配置中，禁止由用户请求控制请求头。
+      api-revision: ${AI_CONVERSATION_GOOGLE_API_REVISION:2026-05-20}
     # 后台异步 Generation 默认启用，为图片生成提供任务执行、预览事件和最终持久化链路。
     async-generation:
       # 新链路总开关默认开启；部署环境仍可显式设为 false 关闭异步 Generation。
       enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}
-      # 每个生产实例必须使用部署系统注入的唯一标识以定向路由取消命令。
+      # 每个生产实例必须使用部署系统注入的稳定唯一标识，以定向路由生成与取消；生产负载均衡还必须保持 SSE 重连会话粘性。
       instance-id: ${AI_CONVERSATION_INSTANCE_ID:local-single-instance}
       # SSE 失联允许三十秒重连，期间模型生成不得被观察者断开取消。
       detach-grace: ${AI_CONVERSATION_DETACH_GRACE:30s}
@@ -322,8 +357,12 @@ app:
       enabled: ${AI_CONVERSATION_IMAGE_GENERATION_ENABLED:true}
       # 图片生成通过 CLIProxyAPI Images Generation 端点请求最终图和中间预览。
       generations-path: ${AI_CONVERSATION_IMAGE_GENERATIONS_PATH:/v1/images/generations}
+      # 图片编辑通过兼容的 Images Edit JSON 端点复用短期签名输入图片引用。
+      edits-path: ${AI_CONVERSATION_IMAGE_EDITS_PATH:/v1/images/edits}
       # 单张上游图片解码后最多三十二 MiB，超限事件直接作为协议失败处理。
       maximum-decoded-image-bytes: ${AI_CONVERSATION_IMAGE_MAX_DECODED_BYTES:33554432}
+      # 单实例 Broker 最多常驻二百五十六 MiB 解码预览，超限槽位仍可实时发送但不进入重连缓存。
+      maximum-preview-retained-bytes: ${AI_CONVERSATION_IMAGE_MAX_PREVIEW_RETAINED_BYTES:268435456}
     # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
     attachments:
       # 会话附件沿用现有公共读 Bucket，真实 Bucket 名允许按部署环境覆盖。
@@ -340,7 +379,7 @@ app:
       signed-get-ttl: ${AI_CONVERSATION_ATTACHMENT_SIGNED_GET_TTL:10m}
       # 单个用户附件和单个模型生成媒体最大一百 MiB。
       max-file-bytes: ${AI_CONVERSATION_ATTACHMENT_MAX_FILE_BYTES:104857600}
-      # 单条用户输入或模型输出最多保留八个附件。
+      # 单条用户输入最多八个附件；模型生成输出在服务端使用独立的十张上限。
       max-files-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_FILES:8}
       # 单条用户输入或模型输出的附件总大小最多二百 MiB。
       max-total-bytes-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:209715200}

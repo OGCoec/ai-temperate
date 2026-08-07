@@ -73,10 +73,13 @@ test('keeps image previews in page memory without persisting Base64 to session s
 	manager.clearGenerationManager()
 	manager.registerGeneration({ generationPublicId: 'generation-image' })
 	manager.updateGeneration('generation-image', {
-		previewImage: { url: 'data:image/webp;base64,YWJj', volatilePreview: true }
+		previewImages: [
+			{ outputIndex: 0, url: 'data:image/webp;base64,YWJj', volatilePreview: true },
+			{ outputIndex: 1, url: 'data:image/webp;base64,REVG', volatilePreview: true }
+		]
 	})
 
-	assert.equal(manager.getGeneration('generation-image').previewImage.volatilePreview, true)
-	assert.equal([...values.values()].some(value => value.includes('YWJj')), false)
+	assert.equal(manager.getGeneration('generation-image').previewImages.length, 2)
+	assert.equal([...values.values()].some(value => value.includes('YWJj') || value.includes('REVG')), false)
 	delete globalThis.sessionStorage
 })

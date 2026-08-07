@@ -9,6 +9,24 @@ function readComponent(name) {
 	return fs.readFileSync(path.join(componentRoot, name), 'utf8')
 }
 
+function sourceUrl(source) {
+	return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
+}
+
+async function loadTableLayout() {
+	const layoutPath = path.join(__dirname, 'ai-markdown-table-layout.js')
+	return import(sourceUrl(fs.readFileSync(layoutPath, 'utf8')) + '#' + Date.now() + '-' + Math.random())
+}
+
+function tableCell(value, type = 'text') {
+	return {
+		type: 'tableCell',
+		header: false,
+		alignment: null,
+		children: value === '' ? [] : [{ type, value }]
+	}
+}
+
 test('markdown renderer uses an explicit component whitelist and never injects HTML', () => {
 	const source = [
 		'user-markdown-message.vue',
@@ -45,6 +63,129 @@ test('code and table components keep Markdown control syntax out of visible UI',
 	assert.equal(table.includes('alignments'), true)
 	assert.equal(table.includes('setClipboardData'), true)
 	assert.equal(table.includes('TSV'), true)
+})
+
+test('wide Markdown tables keep every column inside an accessible horizontal scroller', () => {
+	const table = readComponent('user-markdown-table.vue')
+	const panel = readComponent('user-chat-panel.vue')
+	const layout = fs.readFileSync(path.join(__dirname, 'ai-markdown-table-layout.js'), 'utf8')
+
+	assert.equal(table.includes('scroll-x'), true)
+	assert.equal(table.includes(':show-scrollbar="true"'), true)
+	assert.equal(table.includes(':show-scrollbar="false"'), false)
+	assert.equal(table.includes(':style="tableStyle"'), true)
+	assert.equal(table.includes('columnProfiles'), true)
+	assert.equal(table.includes('tableMinWidth'), true)
+	assert.equal(layout.includes('[112, 160, 224, 320]'), true)
+	assert.equal(table.includes('overflow-wrap: anywhere'), true)
+	assert.equal(table.includes('word-break: break-word'), true)
+	assert.equal(table.includes('表格可左右滑动查看更多内容'), true)
+	assert.equal(table.includes(':class="cellClass(cell, index, true)"'), true)
+	assert.equal(table.includes("'is-numeric': Boolean(profile.numeric && !header)"), true)
+	assert.match(panel, /\.assistant-message\s*\{[^}]*width:\s*100%/)
+	assert.match(panel, /\.assistant-message\s*\{[^}]*max-width:\s*100%/)
+	assert.match(panel, /\.assistant-message\s*\{[^}]*min-width:\s*0/)
+})
+
+test('table layout measures Unicode content and preserves every responsive column', async () => {
+	const {
+		aiMarkdownDisplayUnits,
+		createAiMarkdownTableLayout
+	} = await loadTableLayout()
+
+	assert.equal(aiMarkdownDisplayUnits('ABCDEFGH'), 8)
+	assert.equal(aiMarkdownDisplayUnits('中文ＡＢ'), 8)
+	assert.equal(aiMarkdownDisplayUnits('❤️❤️❤️❤️❤️'), 10)
+	assert.equal(aiMarkdownDisplayUnits('👨‍👩‍👧‍👦'), 2)
+	assert.equal(aiMarkdownDisplayUnits('1️⃣#️⃣*️⃣'), 6)
+	assert.equal(aiMarkdownDisplayUnits(String.fromCodePoint(
+		0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f
+	)), 2)
+
+	for (const columnCount of [2, 6, 12]) {
+		const headers = Array.from({ length: columnCount }, (_, index) => tableCell('C' + index))
+		const rows = [Array.from({ length: columnCount }, (_, index) => tableCell(String(index)))]
+		const layout = createAiMarkdownTableLayout(headers, rows, [])
+		assert.equal(layout.columnProfiles.length, columnCount)
+		assert.equal(layout.tableMinWidth, columnCount * 112)
+	}
+})
+
+test('table layout gives identifiers and code room while keeping numeric alignment stable', async () => {
+	const { createAiMarkdownTableLayout } = await loadTableLayout()
+	const headers = [
+		tableCell('Request'),
+		tableCell('Code'),
+		tableCell('Tokens'),
+		tableCell('Forced'),
+		tableCell('Relative URL'),
+		tableCell('Embedded ID'),
+		tableCell('Ratio')
+	]
+	const rows = [[
+		tableCell('req_abc123'),
+		tableCell('x'),
+		tableCell('128K'),
+		tableCell('1M'),
+		tableCell('See /api/v1/users'),
+		tableCell('ID: req_abc123 (primary)'),
+		tableCell('ratio 5/10')
+	]]
+	rows[0][1] = tableCell('model-identifier', 'inlineCode')
+
+	const layout = createAiMarkdownTableLayout(headers, rows, [null, null, null, 'left'])
+	assert.equal(layout.columnProfiles[0].width, 224)
+	assert.equal(layout.columnProfiles[1].width, 224)
+	assert.equal(layout.columnProfiles[2].width, 112)
+	assert.equal(layout.columnProfiles[2].alignment, 'right')
+	assert.equal(layout.columnProfiles[3].alignment, 'left')
+	assert.equal(layout.columnProfiles[4].width, 224)
+	assert.equal(layout.columnProfiles[5].width, 224)
+	assert.equal(layout.columnProfiles[6].width, 160)
+})
+
+test('numeric body cells stay compact without forcing long headers onto one line', async () => {
+	const { createAiMarkdownTableLayout } = await loadTableLayout()
+	const layout = createAiMarkdownTableLayout(
+		[tableCell('Average response duration')],
+		[[tableCell('12ms')]],
+		[]
+	)
+
+	assert.equal(layout.columnProfiles[0].width, 112)
+	assert.equal(layout.columnProfiles[0].numeric, true)
+	assert.equal(layout.columnProfiles[0].alignment, 'right')
+})
+
+test('table layout exercises every content-width bucket', async () => {
+	const { createAiMarkdownTableLayout } = await loadTableLayout()
+	const headers = [tableCell('A'), tableCell('B'), tableCell('C'), tableCell('D')]
+	const rows = [[
+		tableCell('short'),
+		tableCell('abcdefghij'),
+		tableCell('abcdefghijklmnopqrst'),
+		tableCell('x'.repeat(29))
+	]]
+	const layout = createAiMarkdownTableLayout(headers, rows, [])
+
+	assert.deepEqual(layout.columnProfiles.map(profile => profile.width), [112, 160, 224, 320])
+})
+
+test('table TSV serialization includes off-screen and trailing empty cells', async () => {
+	const { aiMarkdownTableAsTsv } = await loadTableLayout()
+	const value = aiMarkdownTableAsTsv(
+		[tableCell('Name'), tableCell('Score'), tableCell('Notes')],
+		[
+			[tableCell('Ada'), tableCell('10'), tableCell('ready')],
+			[tableCell('Lin'), tableCell('9'), tableCell('')],
+			[tableCell('Eve'), tableCell('8'), tableCell('line 1\r\nline "2"\tvalue')]
+		]
+	)
+
+	assert.equal(
+		value,
+		'Name\tScore\tNotes\nAda\t10\tready\nLin\t9\t\nEve\t8\t"line 1\nline ""2""\tvalue"'
+	)
 })
 
 test('code blocks receive a stable AST path key and never render arbitrary token styles', () => {

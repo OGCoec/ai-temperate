@@ -23,6 +23,7 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationR
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementCommand;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementResult;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementService;
+import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
@@ -54,14 +55,17 @@ import com.example.temperate.service.user.aiconversation.lease.AiConversationLea
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseService;
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseType;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelChunk;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityPhase;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityStatus;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategyRegistry;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategy;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationActivityData;
@@ -298,6 +302,15 @@ public final class AiConversationResponseServiceImpl
             AiConversationLifecycleTraceContext requestTraceContext) {
         AiModelCacheEntry model = requiredModel(
                 publicIdCodec.decode(command.modelPublicId()));
+        AiModelProvider provider = AiModelProvider.fromVendor(model.vendor());
+        provider.validateReasoningEffort(command.reasoningEffort());
+        AiConversationStreamingProtocol protocol = command.webSearchMode()
+                        == AiConversationWebSearchMode.OFF
+                ? AiConversationStreamingProtocol.CHAT_COMPLETIONS
+                : AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH;
+        // 供应商、协议和推理等级必须在预扣前完成验证，避免不支持的请求先占用用户额度。
+        AiConversationStreamingStrategy streamingStrategy =
+                streamingStrategies.getRequired(provider, protocol);
         validateProtocolCapabilities(model, command.webSearchMode());
         validateWebSearchEnabled(command.webSearchMode());
         AiConversationLifecycleTraceContext validatedTraceContext =
@@ -319,6 +332,13 @@ public final class AiConversationResponseServiceImpl
         lifecycleDiagnosticService.record(
                 validatedTraceContext, "RESERVATION_STARTED");
         try {
+            if (streamingStrategy.meteringBasis()
+                    != AiConversationMeteringBasis.TOKEN) {
+                throw new AiConversationException(
+                        AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
+                        "当前同步会话链路不支持该模型计量方式",
+                        false);
+            }
             reservation = billingService.reserve(
                     new AiConversationReservationCommand(
                             command.userId(),
@@ -326,7 +346,12 @@ public final class AiConversationResponseServiceImpl
                             model,
                             idempotencyHasher.digest(
                                     command.userId(), command.idempotencyKey()),
-                            preliminary.estimatedPromptTokens()));
+                            new TokenReservationMetering(
+                                    preliminary.estimatedPromptTokens(),
+                                    model.maxOutputTokens(),
+                                    model.inputRatio(),
+                                    model.cachedInputRatio(),
+                                    model.outputRatio())));
         } catch (RuntimeException failure) {
             lifecycleDiagnosticService.record(
                     validatedTraceContext,
@@ -458,6 +483,8 @@ public final class AiConversationResponseServiceImpl
         Flux<AiConversationStreamEvent> core = generation(
                 command,
                 model,
+                provider,
+                streamingStrategy,
                 reservation,
                 activePrompt,
                 conversationPublicId,
@@ -474,6 +501,8 @@ public final class AiConversationResponseServiceImpl
     private Flux<AiConversationStreamEvent> generation(
             AiConversationResponseCommand command,
             AiModelCacheEntry model,
+            AiModelProvider provider,
+            AiConversationStreamingStrategy streamingStrategy,
             AiConversationReservation reservation,
             AiConversationPromptSnapshot prompt,
             String conversationPublicId,
@@ -523,16 +552,10 @@ public final class AiConversationResponseServiceImpl
                     lifecycle.markConnecting();
                     lifecycleDiagnosticService.record(
                             traceContext, "UPSTREAM_SUBSCRIBE_STARTED");
-                    AiConversationStreamingProtocol protocol =
-                            command.webSearchMode()
-                                            == AiConversationWebSearchMode.OFF
-                                    ? AiConversationStreamingProtocol
-                                            .CHAT_COMPLETIONS
-                                    : AiConversationStreamingProtocol
-                                            .RESPONSES_WEB_SEARCH;
                     AiConversationStreamingRequest streamingRequest =
                             new AiConversationStreamingRequest(
                                     new AiConversationModelRequest(
+                                            provider,
                                             model.modelName(),
                                             model.maxOutputTokens(),
                                             command.reasoningEffort(),
@@ -540,8 +563,7 @@ public final class AiConversationResponseServiceImpl
                                     command.webSearchMode());
                     return lifecycleDiagnosticService.withContext(
                             traceContext,
-                            () -> streamingStrategies.required(protocol)
-                                    .stream(streamingRequest))
+                            () -> streamingStrategy.stream(streamingRequest))
                             .doOnNext(ignored -> {
                                 if (state.firstByteRecorded.compareAndSet(
                                         false, true)) {

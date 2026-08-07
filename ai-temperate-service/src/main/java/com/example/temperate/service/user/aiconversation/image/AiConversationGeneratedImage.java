@@ -1,5 +1,6 @@
 package com.example.temperate.service.user.aiconversation.image;
 
+import java.util.Base64;
 import java.util.Objects;
 
 /**
@@ -8,7 +9,8 @@ import java.util.Objects;
 public record AiConversationGeneratedImage(
         String imageId,
         AiConversationGeneratedImagePhase phase,
-        int index,
+        short outputIndex,
+        Short partialImageIndex,
         String contentType,
         int width,
         int height,
@@ -18,7 +20,13 @@ public record AiConversationGeneratedImage(
         imageId = requireText(imageId, "imageId");
         phase = Objects.requireNonNull(phase);
         contentType = requireText(contentType, "contentType");
-        if (index < 0 || index > 3 || width <= 0 || height <= 0
+        if (outputIndex < 0 || outputIndex > 9
+                || (phase == AiConversationGeneratedImagePhase.PARTIAL
+                        && (partialImageIndex == null
+                        || partialImageIndex < 0 || partialImageIndex > 2))
+                || (phase == AiConversationGeneratedImagePhase.FINAL
+                        && partialImageIndex != null)
+                || width <= 0 || height <= 0
                 || bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("Generated image metadata is invalid.");
         }
@@ -28,6 +36,17 @@ public record AiConversationGeneratedImage(
     @Override
     public byte[] bytes() {
         return bytes.clone();
+    }
+
+    /**
+     * 直接从内部不可变快照编码预览，避免为了只读编码额外复制整张图片。
+     */
+    public String base64() {
+        return Base64.getEncoder().encodeToString(bytes);
+    }
+
+    public int sizeBytes() {
+        return bytes.length;
     }
 
     private static String requireText(String value, String name) {

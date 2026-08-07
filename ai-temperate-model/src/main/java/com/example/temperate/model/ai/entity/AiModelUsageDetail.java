@@ -6,7 +6,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * 保存模型调用的幂等摘要、会话关联、预扣依据、倍率快照和最终结算差额。
+ * 保存模型调用的幂等摘要、会话关联、强类型预扣依据、可选倍率快照和最终结算差额。
  */
 @Getter
 @Setter
@@ -21,11 +21,13 @@ public class AiModelUsageDetail {
     private String upstreamRequestId;
     private String vendorSnapshot;
     private Boolean stream;
+    private Integer meteringBasis;
     private Long estimatedPromptTokens;
     private Long maxOutputTokens;
     private BigDecimal inputRatioSnapshot;
     private BigDecimal cachedInputRatioSnapshot;
     private BigDecimal outputRatioSnapshot;
+    private Short requestedOutputCount;
     private Long reservedQuotaMinor;
     private Long settlementDeltaMinor;
 }

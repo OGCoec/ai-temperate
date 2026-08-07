@@ -14,6 +14,8 @@ import com.example.temperate.service.user.aiconversation.attachment.AiConversati
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservation;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementCommand;
+import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextSnapshot;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
@@ -30,8 +32,12 @@ import com.example.temperate.service.user.aiconversation.generation.rabbit.AiCon
 import com.example.temperate.service.user.aiconversation.generation.rabbit.AiConversationGenerationMessageRejectedException;
 import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
 import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputSnapshot;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
 import com.example.temperate.service.user.aiconversation.image.AiConversationPersistedGeneratedAttachmentCodec;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteredUsage;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
+import com.example.temperate.service.user.aiconversation.model.AiConversationProviderCostUsage;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingAction;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingDecision;
@@ -40,10 +46,10 @@ import com.example.temperate.service.user.aiconversation.text.AiConversationText
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.time.Duration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -77,6 +83,7 @@ public final class AiConversationGenerationBillingConsumerImpl
     private final AiConversationMetrics metrics;
     private final AiConversationGenerationInputCodec inputCodec;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
+    private final AiConversationImagePreviewBroker previewBroker;
 
     public AiConversationGenerationBillingConsumerImpl(
             AiConversationGenerationMapper generationMapper,
@@ -93,7 +100,8 @@ public final class AiConversationGenerationBillingConsumerImpl
             AiConversationMetrics metrics,
             AiConversationGenerationInputCodec inputCodec,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher,
+            AiConversationImagePreviewBroker previewBroker) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.payloadMapper = Objects.requireNonNull(payloadMapper);
         this.detailMapper = Objects.requireNonNull(detailMapper);
@@ -109,6 +117,7 @@ public final class AiConversationGenerationBillingConsumerImpl
         this.inputCodec = Objects.requireNonNull(inputCodec);
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
         this.eventPublisher = Objects.requireNonNull(eventPublisher);
+        this.previewBroker = Objects.requireNonNull(previewBroker);
     }
 
     @Override
@@ -125,7 +134,37 @@ public final class AiConversationGenerationBillingConsumerImpl
                     generation.getGenerationStatus());
             if (existing.terminal()) {
                 // 资金事务已提交但 Redis 终态通知失败时，Rabbit 重投只补发展示事件，绝不重复结算。
-                publishBilled(terminal, existing.name(), List.of());
+                AiConversationGenerationPayload frozenPayload =
+                        payloadMapper.findByGenerationId(generationId);
+                long messageId = frozenPayload == null
+                        || frozenPayload.getConversationMessageId() == null
+                                ? 0L
+                                : frozenPayload.getConversationMessageId();
+                short requestedImageCount = 0;
+                List<AiConversationAttachment> responseAttachments = List.of();
+                if (frozenPayload != null) {
+                    AiConversationGenerationInputSnapshot frozenInput =
+                            inputCodec.decode(frozenPayload.getInputAttachmentsJson());
+                    if (frozenInput.imageGeneration() != null) {
+                        requestedImageCount =
+                                frozenInput.imageGeneration().outputCount();
+                        if (AiConversationGenerationTerminalType.COMPLETED.name()
+                                .equals(terminal.terminalType())
+                                && frozenPayload.getAssistantAttachmentsJson() != null
+                                && frozenPayload.getAssistantAttachmentsJson()
+                                        .stripLeading().startsWith("{")) {
+                            // 图片 Worker 已把正式 URL 信封冻结在 Payload；幂等补发只解码元数据，禁止再次触发 OSS。
+                            responseAttachments = generatedAttachmentCodec.decode(
+                                    frozenPayload.getAssistantAttachmentsJson());
+                        }
+                    }
+                }
+                publishBilled(
+                        terminal,
+                        existing.name(),
+                        messageId,
+                        requestedImageCount,
+                        responseAttachments);
             }
             return;
         }
@@ -141,13 +180,20 @@ public final class AiConversationGenerationBillingConsumerImpl
                 inputCodec.decode(payload.getInputAttachmentsJson());
         AiConversationContent user = new AiConversationContent(
                 payload.getInputText(), inputSnapshot.attachments());
-        AiConversationUsage usage = reportedUsage(payload);
+        AiConversationMeteredUsage usage = reportedUsage(payload);
         AiConversationGenerationTerminalType type = AiConversationGenerationTerminalType.valueOf(
                 terminal.terminalType());
+        boolean costEvidenceMissing = type
+                == AiConversationGenerationTerminalType.COMPLETED
+                && payload.getMeteringBasis()
+                        == AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()
+                && payload.getProviderCostTicks() == null
+                && payload.getMeteringEvidenceJson() != null;
 
         AiConversationGenerationBillingCommand command;
         AiConversationAttachmentFinalization finalized = null;
-        if (type == AiConversationGenerationTerminalType.COMPLETED && usage != null) {
+        if (type == AiConversationGenerationTerminalType.COMPLETED
+                && (usage != null || costEvidenceMissing)) {
             // 消息 ID 先原子绑定到 Payload，Rabbit 重投时附件对象路径保持稳定，避免重复创建不同对象。
             long messageId = transactionService.getOrReserveMessageId(generationId);
             String conversationPublicId = idCodec.encode(generation.getConversationId());
@@ -181,7 +227,9 @@ public final class AiConversationGenerationBillingConsumerImpl
             command = new AiConversationGenerationBillingCommand(
                     generationId,
                     terminal.terminalVersion(),
-                    AiConversationGenerationBillingMode.COMPLETE,
+                    costEvidenceMissing
+                            ? AiConversationGenerationBillingMode.COMPLETE_RECONCILE
+                            : AiConversationGenerationBillingMode.COMPLETE,
                     settlementCommand(
                             generation,
                             payload,
@@ -193,7 +241,9 @@ public final class AiConversationGenerationBillingConsumerImpl
                                     ? "STOP" : payload.getModelFinishReason(),
                             traceId),
                     terminal.terminalType(),
-                    terminal.terminalReason());
+                    costEvidenceMissing
+                            ? "AI_IMAGE_COST_EVIDENCE_MISSING"
+                            : terminal.terminalReason());
         } else if (type == AiConversationGenerationTerminalType.UPSTREAM_FAILED
                 || type == AiConversationGenerationTerminalType.SYSTEM_FAILED
                 || type == AiConversationGenerationTerminalType.COMPLETED) {
@@ -210,10 +260,8 @@ public final class AiConversationGenerationBillingConsumerImpl
                     finishReason,
                     failureCode);
         } else {
-            AiConversationReservation reservation = reservation(generation, detail);
-            AiConversationTerminalBillingDecision decision = billingPolicy.clientCancellation(
-                    reservation, usage, payload.getAssistantText());
-            if (decision.action() == AiConversationTerminalBillingAction.REFUND_FULL) {
+            if (payload.getMeteringBasis()
+                    == AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()) {
                 command = new AiConversationGenerationBillingCommand(
                         generationId,
                         terminal.terminalVersion(),
@@ -221,25 +269,43 @@ public final class AiConversationGenerationBillingConsumerImpl
                         null,
                         type == AiConversationGenerationTerminalType.ADMIN_CANCELLED
                                 ? "ADMIN_CANCELLED" : "CLIENT_CANCELLED",
-                        decision.failureCode());
+                        terminal.terminalReason());
             } else {
-                AiConversationUsage billableUsage = decision.usage();
-                command = new AiConversationGenerationBillingCommand(
-                        generationId,
-                        terminal.terminalVersion(),
-                        AiConversationGenerationBillingMode.INTERRUPTED,
-                        settlementCommand(
-                                generation,
-                                payload,
-                                null,
-                                user,
-                                new AiConversationContent(payload.getAssistantText(), List.of()),
-                                billableUsage,
-                                type == AiConversationGenerationTerminalType.ADMIN_CANCELLED
-                                        ? "ADMIN_CANCELLED" : "CLIENT_CANCELLED",
-                                traceId),
-                        type.name(),
-                        decision.failureCode());
+                AiConversationReservation reservation = reservation(generation, detail);
+                AiConversationUsage tokenUsage = usage instanceof AiConversationUsage value
+                        ? value : null;
+                AiConversationTerminalBillingDecision decision =
+                        billingPolicy.clientCancellation(
+                                reservation, tokenUsage, payload.getAssistantText());
+                if (decision.action() == AiConversationTerminalBillingAction.REFUND_FULL) {
+                    command = new AiConversationGenerationBillingCommand(
+                            generationId,
+                            terminal.terminalVersion(),
+                            AiConversationGenerationBillingMode.REFUND_FULL,
+                            null,
+                            type == AiConversationGenerationTerminalType.ADMIN_CANCELLED
+                                    ? "ADMIN_CANCELLED" : "CLIENT_CANCELLED",
+                            decision.failureCode());
+                } else {
+                    AiConversationUsage billableUsage = decision.usage();
+                    command = new AiConversationGenerationBillingCommand(
+                            generationId,
+                            terminal.terminalVersion(),
+                            AiConversationGenerationBillingMode.INTERRUPTED,
+                            settlementCommand(
+                                    generation,
+                                    payload,
+                                    null,
+                                    user,
+                                    new AiConversationContent(
+                                            payload.getAssistantText(), List.of()),
+                                    billableUsage,
+                                    type == AiConversationGenerationTerminalType.ADMIN_CANCELLED
+                                            ? "ADMIN_CANCELLED" : "CLIENT_CANCELLED",
+                                    traceId),
+                            type.name(),
+                            decision.failureCode());
+                }
             }
         }
 
@@ -249,7 +315,9 @@ public final class AiConversationGenerationBillingConsumerImpl
             AiConversationGenerationBillingResult result = transactionService.settle(command);
             transactionCommitted = true;
             if (result.applied()) {
-                if (command.mode() == AiConversationGenerationBillingMode.COMPLETE) {
+                if (command.mode() == AiConversationGenerationBillingMode.COMPLETE
+                        || command.mode()
+                                == AiConversationGenerationBillingMode.COMPLETE_RECONCILE) {
                     commitPersistedContext(
                             generation,
                             payload,
@@ -257,12 +325,20 @@ public final class AiConversationGenerationBillingConsumerImpl
                             command.settlementCommand());
                 }
                 List<AiConversationAttachment> responseAttachments =
-                        command.mode() == AiConversationGenerationBillingMode.COMPLETE
+                        (command.mode() == AiConversationGenerationBillingMode.COMPLETE
+                                || command.mode()
+                                        == AiConversationGenerationBillingMode.COMPLETE_RECONCILE)
                                 && command.settlementCommand() != null
                                 ? command.settlementCommand().assistant().attachments()
                                 : List.of();
                 publishBilled(
-                        terminal, result.finalStatus(), responseAttachments);
+                        terminal,
+                        result.finalStatus(),
+                        result.messageId(),
+                        inputSnapshot.imageGeneration() == null
+                                ? (short) 0
+                                : inputSnapshot.imageGeneration().outputCount(),
+                        responseAttachments);
             }
             metrics.generationBilling(
                     Duration.ofNanos(System.nanoTime() - billingStarted), "success");
@@ -279,18 +355,27 @@ public final class AiConversationGenerationBillingConsumerImpl
     private void publishBilled(
             AiConversationGenerationTerminated terminal,
             String finalStatus,
+            long messageId,
+            short requestedImageCount,
             List<AiConversationAttachment> responseAttachments) {
+        // 图片字节已经在 Worker 中释放；终态只发送正式附件、请求数量和可选消息 ID，供浏览器重建缺失槽位。
         eventPublisher.publishEvent(new AiConversationGenerationBilledEvent(
                 terminal.generationPublicId(),
                 "completed",
                 json(Map.of(
                         "generationPublicId", terminal.generationPublicId(),
                         "usagePublicId", terminal.usagePublicId(),
+                        "messagePublicId", messageId > 0L
+                                ? publicIdCodec.encode(messageId)
+                                : "",
                         "status", finalStatus,
                         "terminalType", terminal.terminalType(),
                         "terminalReason", Objects.requireNonNullElse(
                                 terminal.terminalReason(), "unavailable"),
+                        "requestedImageCount", requestedImageCount,
                         "attachments", List.copyOf(responseAttachments)))));
+        // 终态事件已经进入既有输出通道后统一释放所有预览槽位；没有浏览器观察者时也不会等 TTL 才回收大图。
+        previewBroker.release(terminal.generationPublicId());
     }
 
     private AiConversationSettlementCommand settlementCommand(
@@ -299,7 +384,7 @@ public final class AiConversationGenerationBillingConsumerImpl
             Long messageId,
             AiConversationContent user,
             AiConversationContent assistant,
-            AiConversationUsage usage,
+            AiConversationMeteredUsage usage,
             String finishReason,
             String traceId) {
         return new AiConversationSettlementCommand(
@@ -308,10 +393,7 @@ public final class AiConversationGenerationBillingConsumerImpl
                 user,
                 assistant,
                 tokenizer.tokenize(user.text()),
-                usage.promptTokens(),
-                usage.cachedPromptTokens(),
-                usage.completionTokens(),
-                usage.reasoningTokens(),
+                usage,
                 payload.getUpstreamRequestId(),
                 finishReason,
                 new com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTraceContext(
@@ -326,6 +408,19 @@ public final class AiConversationGenerationBillingConsumerImpl
     private AiConversationReservation reservation(
             AiConversationGeneration generation,
             AiModelUsageDetail detail) {
+        if (detail.getMeteringBasis()
+                == AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()) {
+            return new AiConversationReservation(
+                    generation.getConversationId(),
+                    generation.getUsageId(),
+                    detail.getConversationMessageId(),
+                    0,
+                    detail.getReservedQuotaMinor(),
+                    new ProviderCostReservationMetering(
+                            detail.getRequestedOutputCount()),
+                    false,
+                    false);
+        }
         return new AiConversationReservation(
                 generation.getConversationId(),
                 generation.getUsageId(),
@@ -341,7 +436,15 @@ public final class AiConversationGenerationBillingConsumerImpl
                 false);
     }
 
-    private AiConversationUsage reportedUsage(AiConversationGenerationPayload payload) {
+    private AiConversationMeteredUsage reportedUsage(
+            AiConversationGenerationPayload payload) {
+        if (payload.getMeteringBasis()
+                == AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()) {
+            return payload.getProviderCostTicks() == null
+                    ? null
+                    : new AiConversationProviderCostUsage(
+                            payload.getProviderCostTicks());
+        }
         if (payload.getPromptTokens() == null
                 || payload.getCompletionTokens() == null
                 || payload.getCachedPromptTokens() == null

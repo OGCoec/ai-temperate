@@ -214,7 +214,8 @@ public final class AiConversationResponseController {
                         request.image() == null
                                 ? null
                                 : new AiConversationImageGenerationRequest(
-                                        request.image().aspect()),
+                                        request.image().aspect(),
+                                        request.image().outputCount()),
                         idempotencyUuid,
                         new AiConversationContent(
                                 request.input().text(),

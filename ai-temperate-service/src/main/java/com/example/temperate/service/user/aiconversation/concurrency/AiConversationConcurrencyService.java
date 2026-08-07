@@ -7,7 +7,13 @@ import java.util.Optional;
  */
 public interface AiConversationConcurrencyService {
 
-    Optional<AiConversationConcurrencyPermit> tryAcquire(long userId);
+    default Optional<AiConversationConcurrencyPermit> tryAcquire(long userId) {
+        return tryAcquire(userId, (short) 1);
+    }
+
+    Optional<AiConversationConcurrencyPermit> tryAcquire(
+            long userId,
+            short weight);
 
     boolean renew(AiConversationConcurrencyPermit permit);
 

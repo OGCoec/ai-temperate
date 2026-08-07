@@ -96,12 +96,25 @@ test('normalizes image generation profile levels and supported aspects', async (
 	delete globalThis.__requestAiModels
 })
 
-test('rejects image generation levels above High', async () => {
+test('accepts the fourth Google image generation level', async () => {
 	const module = await loadAiModelApi(async () => ({
 		...PAGE_RESPONSE.models[0],
 		capabilities: ['IMAGE_GENERATION'],
 		supportedImageGenerationLevels: [1, 2, 3, 4],
 		supportedImageAspects: ['SQUARE', 'LANDSCAPE', 'PORTRAIT']
+	}))
+
+	const model = await module.aiModelApi.detail('AAABi0VWeJ8')
+	assert.deepEqual(model.supportedImageGenerationLevels, [1, 2, 3, 4])
+	delete globalThis.__requestAiModels
+})
+
+test('rejects image generation levels above the Google fourth tier', async () => {
+	const module = await loadAiModelApi(async () => ({
+		...PAGE_RESPONSE.models[0],
+		capabilities: ['IMAGE_GENERATION'],
+		supportedImageGenerationLevels: [1, 2, 3, 4, 5],
+		supportedImageAspects: ['SQUARE']
 	}))
 
 	await assert.rejects(

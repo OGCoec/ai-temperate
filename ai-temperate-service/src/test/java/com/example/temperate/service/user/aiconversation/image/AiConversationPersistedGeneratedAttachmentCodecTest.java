@@ -30,8 +30,31 @@ final class AiConversationPersistedGeneratedAttachmentCodecTest {
         String json = codec.encode(List.of(attachment));
 
         assertThat(codec.decode(json)).containsExactly(attachment);
-        assertThat(json).contains("\"schemaVersion\":1", "https://cdn.example/");
+        assertThat(json).contains("\"schemaVersion\":2", "https://cdn.example/");
         assertThat(json).doesNotContain("base64", "b64_json", "bytes");
+    }
+
+    @Test
+    void roundTripsTenGeneratedImagesAndReadsLegacySingleImageEnvelope()
+            throws Exception {
+        List<AiConversationAttachment> attachments = java.util.stream.IntStream
+                .range(0, 10)
+                .mapToObj(index -> AiConversationAttachment.available(
+                        "image-attachment-" + index,
+                        "generated-" + (index + 1) + ".webp",
+                        "image/webp",
+                        4096,
+                        AiConversationAttachmentCategory.IMAGE,
+                        "https://cdn.example/generated-" + index + ".webp"))
+                .toList();
+
+        assertThat(codec.decode(codec.encode(attachments)))
+                .containsExactlyElementsOf(attachments);
+
+        String legacy = new ObjectMapper().writeValueAsString(java.util.Map.of(
+                "schemaVersion", 1,
+                "attachments", List.of(attachments.get(0))));
+        assertThat(codec.decode(legacy)).containsExactly(attachments.get(0));
     }
 
     @Test
@@ -47,5 +70,23 @@ final class AiConversationPersistedGeneratedAttachmentCodecTest {
         assertThatThrownBy(() -> codec.encode(List.of(attachment)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("HTTPS");
+    }
+
+    @Test
+    void rejectsMoreThanTenPersistedOutputs() {
+        List<AiConversationAttachment> attachments = java.util.stream.IntStream
+                .range(0, 11)
+                .mapToObj(index -> AiConversationAttachment.available(
+                        "image-attachment-" + index,
+                        "generated-" + (index + 1) + ".webp",
+                        "image/webp",
+                        4096,
+                        AiConversationAttachmentCategory.IMAGE,
+                        "https://cdn.example/generated-" + index + ".webp"))
+                .toList();
+
+        assertThatThrownBy(() -> codec.encode(attachments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ten");
     }
 }

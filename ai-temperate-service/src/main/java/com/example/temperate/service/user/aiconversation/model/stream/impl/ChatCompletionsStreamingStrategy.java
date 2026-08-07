@@ -1,6 +1,10 @@
 package com.example.temperate.service.user.aiconversation.model.stream.impl;
 
+import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
+import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelClient;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
@@ -24,14 +28,34 @@ public final class ChatCompletionsStreamingStrategy
     }
 
     @Override
+    public AiModelProvider provider() {
+        return AiModelProvider.OPENAI;
+    }
+
+    @Override
     public AiConversationStreamingProtocol protocol() {
         return AiConversationStreamingProtocol.CHAT_COMPLETIONS;
     }
 
     @Override
+    public AiConversationMeteringBasis meteringBasis() {
+        return AiConversationMeteringBasis.TOKEN;
+    }
+
+    @Override
     public Flux<AiConversationModelEvent> stream(
             AiConversationStreamingRequest request) {
-        return modelClient.stream(request.modelRequest())
-                .map(AiConversationModelEvent.Chunk::new);
+        if (request.modelRequest().provider() != provider()) {
+            return Flux.error(new AiConversationException(
+                    AiConversationErrorCode.AI_REQUEST_INVALID,
+                    "OpenAI 对话策略收到不匹配的模型供应商",
+                    false));
+        }
+        return Flux.defer(() -> {
+            provider().validateReasoningEffort(
+                    request.modelRequest().reasoningEffort());
+            return modelClient.stream(request.modelRequest())
+                    .map(AiConversationModelEvent.Chunk::new);
+        });
     }
 }

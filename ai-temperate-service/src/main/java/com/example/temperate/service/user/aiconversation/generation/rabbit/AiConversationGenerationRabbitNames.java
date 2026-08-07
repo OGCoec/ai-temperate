@@ -13,10 +13,12 @@ public final class AiConversationGenerationRabbitNames {
     public static final String GENERATION_QUEUE = "ait.ai.generation.worker.v1";
     public static final String DETACH_QUEUE = "ait.ai.generation.detach-check.v1";
     public static final String TERMINAL_QUEUE = "ait.ai.generation.billing.v1";
+    public static final String TERMINAL_QUEUE_V2 = "ait.ai.generation.billing.v2";
     public static final String DEAD_LETTER_QUEUE = "ait.ai.generation.dead.v1";
     public static final String GENERATION_ROUTING_KEY = "generation.requested";
     public static final String DETACH_ROUTING_KEY = "generation.detach-check";
     public static final String TERMINAL_ROUTING_KEY = "generation.terminated";
+    public static final String TERMINAL_ROUTING_KEY_V2 = "generation.terminated.v2";
     public static final String DEAD_LETTER_ROUTING_KEY = "generation.dead";
 
     private AiConversationGenerationRabbitNames() {
@@ -24,6 +26,14 @@ public final class AiConversationGenerationRabbitNames {
 
     public static String controlQueue(String instanceId) {
         return "ait.ai.generation.control.v1." + safeInstanceId(instanceId);
+    }
+
+    public static String workerQueueV2(String instanceId) {
+        return "ait.ai.generation.worker.v2." + safeInstanceId(instanceId);
+    }
+
+    public static String workerRoutingKeyV2(String instanceId) {
+        return "generation.requested.v2." + safeInstanceId(instanceId);
     }
 
     public static String controlRoutingKey(String instanceId) {

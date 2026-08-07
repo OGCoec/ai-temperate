@@ -5,6 +5,7 @@ package com.example.temperate.service.user.aiconversation.generation.billing;
  */
 public enum AiConversationGenerationBillingMode {
     COMPLETE,
+    COMPLETE_RECONCILE,
     INTERRUPTED,
     REFUND_FULL
 }

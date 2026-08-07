@@ -42,6 +42,8 @@ public interface AiConversationGenerationPayloadMapper {
             @Param("completionTokens") Long completionTokens,
             @Param("cachedPromptTokens") Long cachedPromptTokens,
             @Param("reasoningTokens") Long reasoningTokens,
+            @Param("providerCostTicks") Long providerCostTicks,
+            @Param("meteringEvidenceJson") String meteringEvidenceJson,
             @Param("modelFinishReason") String modelFinishReason,
             @Param("upstreamRequestId") String upstreamRequestId,
             @Param("now") OffsetDateTime now);

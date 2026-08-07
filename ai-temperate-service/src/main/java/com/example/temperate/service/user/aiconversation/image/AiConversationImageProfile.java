@@ -14,14 +14,14 @@ public record AiConversationImageProfile(
         int height,
         AiConversationReasoningEffort reasoningEffort) {
 
-    private static final long MAXIMUM_PIXELS = 8_294_400L;
+    private static final long MAXIMUM_PIXELS = 20_000_000L;
 
     public AiConversationImageProfile {
         quality = Objects.requireNonNull(quality);
         reasoningEffort = Objects.requireNonNull(reasoningEffort);
         long pixels = (long) width * height;
         if (width <= 0 || height <= 0
-                || width % 16 != 0 || height % 16 != 0
+                || width % 8 != 0 || height % 8 != 0
                 || pixels > MAXIMUM_PIXELS
                 || Math.max(width, height) > 3L * Math.min(width, height)) {
             throw new IllegalArgumentException("Image dimensions violate the supported boundary.");

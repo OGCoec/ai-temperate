@@ -9,11 +9,13 @@ CREATE TABLE ai_model_usage_detail (
     upstream_request_id VARCHAR(128),
     vendor_snapshot VARCHAR(128) NOT NULL,
     is_stream BOOLEAN NOT NULL,
-    estimated_prompt_tokens BIGINT NOT NULL,
-    max_output_tokens BIGINT NOT NULL,
-    input_ratio_snapshot NUMERIC(20, 8) NOT NULL,
-    cached_input_ratio_snapshot NUMERIC(20, 8) NOT NULL,
-    output_ratio_snapshot NUMERIC(20, 8) NOT NULL,
+    metering_basis SMALLINT NOT NULL DEFAULT 0,
+    estimated_prompt_tokens BIGINT,
+    max_output_tokens BIGINT,
+    input_ratio_snapshot NUMERIC(20, 8),
+    cached_input_ratio_snapshot NUMERIC(20, 8),
+    output_ratio_snapshot NUMERIC(20, 8),
+    requested_output_count SMALLINT,
     reserved_quota_minor BIGINT NOT NULL,
     settlement_delta_minor BIGINT,
 
@@ -47,16 +49,41 @@ CREATE TABLE ai_model_usage_detail (
             vendor_snapshot = BTRIM(vendor_snapshot)
             AND LENGTH(vendor_snapshot) > 0
         ),
+    CONSTRAINT chk_ai_model_usage_detail_metering_basis
+        CHECK (metering_basis IN (0, 1)),
     CONSTRAINT chk_ai_model_usage_detail_estimated_prompt_tokens
-        CHECK (estimated_prompt_tokens >= 0),
+        CHECK (estimated_prompt_tokens IS NULL OR estimated_prompt_tokens >= 0),
     CONSTRAINT chk_ai_model_usage_detail_max_output_tokens
-        CHECK (max_output_tokens > 0),
+        CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),
     CONSTRAINT chk_ai_model_usage_detail_input_ratio
-        CHECK (input_ratio_snapshot >= 0),
+        CHECK (input_ratio_snapshot IS NULL OR input_ratio_snapshot >= 0),
     CONSTRAINT chk_ai_model_usage_detail_cached_input_ratio
-        CHECK (cached_input_ratio_snapshot >= 0),
+        CHECK (cached_input_ratio_snapshot IS NULL OR cached_input_ratio_snapshot >= 0),
     CONSTRAINT chk_ai_model_usage_detail_output_ratio
-        CHECK (output_ratio_snapshot >= 0),
+        CHECK (output_ratio_snapshot IS NULL OR output_ratio_snapshot >= 0),
+    CONSTRAINT chk_ai_model_usage_detail_requested_output_count
+        CHECK (requested_output_count IS NULL OR requested_output_count BETWEEN 1 AND 10),
+    CONSTRAINT chk_ai_model_usage_detail_metering_fields
+        CHECK (
+            (
+                metering_basis = 0
+                AND estimated_prompt_tokens IS NOT NULL
+                AND max_output_tokens IS NOT NULL
+                AND input_ratio_snapshot IS NOT NULL
+                AND cached_input_ratio_snapshot IS NOT NULL
+                AND output_ratio_snapshot IS NOT NULL
+                AND requested_output_count IS NULL
+            )
+            OR (
+                metering_basis = 1
+                AND estimated_prompt_tokens IS NULL
+                AND max_output_tokens IS NULL
+                AND input_ratio_snapshot IS NULL
+                AND cached_input_ratio_snapshot IS NULL
+                AND output_ratio_snapshot IS NULL
+                AND requested_output_count BETWEEN 1 AND 10
+            )
+        ),
     CONSTRAINT chk_ai_model_usage_detail_reserved_quota
         CHECK (reserved_quota_minor >= 0)
 );
@@ -86,6 +113,8 @@ COMMENT ON COLUMN ai_model_usage_detail.vendor_snapshot IS
     '发生调用时的模型厂商快照，用于历史计费审计';
 COMMENT ON COLUMN ai_model_usage_detail.is_stream IS
     'TRUE 表示 SSE 流式调用，FALSE 表示普通非流式 HTTP 响应';
+COMMENT ON COLUMN ai_model_usage_detail.metering_basis IS
+    '预扣计量依据：0=TOKEN，1=PROVIDER_COST_TICKS；必须与核心 usage 记录一致';
 COMMENT ON COLUMN ai_model_usage_detail.estimated_prompt_tokens IS
     '预扣前由本地计数器估算的输入 Token';
 COMMENT ON COLUMN ai_model_usage_detail.max_output_tokens IS
@@ -96,6 +125,8 @@ COMMENT ON COLUMN ai_model_usage_detail.cached_input_ratio_snapshot IS
     '预扣或结算时采用的上游缓存输入 Token 计费倍率快照';
 COMMENT ON COLUMN ai_model_usage_detail.output_ratio_snapshot IS
     '预扣时采用的输出 Token 计费倍率快照';
+COMMENT ON COLUMN ai_model_usage_detail.requested_output_count IS
+    '成本计量图片请求冻结的输出槽数量；Token 计量记录必须为空';
 COMMENT ON COLUMN ai_model_usage_detail.reserved_quota_minor IS
     '模型调用前已经成功预扣的额度最小单位整数值';
 COMMENT ON COLUMN ai_model_usage_detail.settlement_delta_minor IS

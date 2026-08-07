@@ -1,8 +1,12 @@
 package com.example.temperate.service.user.aiconversation.model.stream;
 
+import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
+import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
@@ -11,34 +15,93 @@ import org.springframework.stereotype.Component;
 @Component
 public final class AiConversationStreamingStrategyRegistry {
 
-    private final Map<AiConversationStreamingProtocol, AiConversationStreamingStrategy>
-            strategies;
+    private static final Map<AiModelProvider,
+            Set<AiConversationStreamingProtocol>> REQUIRED_STRATEGIES =
+            requiredStrategies();
+
+    private final Map<AiModelProvider,
+            Map<AiConversationStreamingProtocol, AiConversationStreamingStrategy>> strategies;
 
     public AiConversationStreamingStrategyRegistry(
             Map<String, AiConversationStreamingStrategy> strategyBeans) {
-        EnumMap<AiConversationStreamingProtocol, AiConversationStreamingStrategy>
-                registered = new EnumMap<>(AiConversationStreamingProtocol.class);
+        EnumMap<AiModelProvider,
+                EnumMap<AiConversationStreamingProtocol,
+                        AiConversationStreamingStrategy>> registered =
+                new EnumMap<>(AiModelProvider.class);
         for (AiConversationStreamingStrategy strategy : strategyBeans.values()) {
-            AiConversationStreamingStrategy previous = registered.put(
+            Set<AiConversationStreamingProtocol> supported =
+                    REQUIRED_STRATEGIES.get(strategy.provider());
+            if (supported == null || !supported.contains(strategy.protocol())) {
+                throw new IllegalStateException(
+                        "Unsupported AI conversation streaming strategy: "
+                                + strategy.provider() + "/" + strategy.protocol());
+            }
+            EnumMap<AiConversationStreamingProtocol, AiConversationStreamingStrategy>
+                    providerStrategies = registered.computeIfAbsent(
+                            strategy.provider(),
+                            ignored -> new EnumMap<>(
+                                    AiConversationStreamingProtocol.class));
+            AiConversationStreamingStrategy previous = providerStrategies.put(
                     strategy.protocol(), strategy);
             if (previous != null) {
                 throw new IllegalStateException(
                         "Duplicate AI conversation streaming strategy: "
-                                + strategy.protocol());
+                                + strategy.provider() + "/" + strategy.protocol());
             }
         }
-        for (AiConversationStreamingProtocol protocol
-                : AiConversationStreamingProtocol.values()) {
-            if (!registered.containsKey(protocol)) {
-                throw new IllegalStateException(
-                        "Missing AI conversation streaming strategy: " + protocol);
+        EnumMap<AiModelProvider,
+                Map<AiConversationStreamingProtocol,
+                        AiConversationStreamingStrategy>> immutable =
+                new EnumMap<>(AiModelProvider.class);
+        for (Map.Entry<AiModelProvider, Set<AiConversationStreamingProtocol>> entry
+                : REQUIRED_STRATEGIES.entrySet()) {
+            AiModelProvider provider = entry.getKey();
+            EnumMap<AiConversationStreamingProtocol, AiConversationStreamingStrategy>
+                    providerStrategies = registered.get(provider);
+            for (AiConversationStreamingProtocol protocol : entry.getValue()) {
+                if (providerStrategies == null
+                        || !providerStrategies.containsKey(protocol)) {
+                    throw new IllegalStateException(
+                            "Missing AI conversation streaming strategy: "
+                                    + provider + "/" + protocol);
+                }
             }
+            immutable.put(provider, Map.copyOf(providerStrategies));
         }
-        strategies = Map.copyOf(registered);
+        strategies = Map.copyOf(immutable);
     }
 
-    public AiConversationStreamingStrategy required(
+    public AiConversationStreamingStrategy getRequired(
+            AiModelProvider provider,
             AiConversationStreamingProtocol protocol) {
-        return Objects.requireNonNull(strategies.get(protocol));
+        Map<AiConversationStreamingProtocol, AiConversationStreamingStrategy>
+                providerStrategies = strategies.get(provider);
+        AiConversationStreamingStrategy strategy = providerStrategies == null
+                ? null
+                : providerStrategies.get(protocol);
+        if (strategy == null) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
+                    "所选模型供应商不支持该会话协议",
+                    false);
+        }
+        return strategy;
+    }
+
+    private static Map<AiModelProvider, Set<AiConversationStreamingProtocol>>
+            requiredStrategies() {
+        EnumMap<AiModelProvider, Set<AiConversationStreamingProtocol>> matrix =
+                new EnumMap<>(AiModelProvider.class);
+        matrix.put(AiModelProvider.OPENAI,
+                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
+        matrix.put(AiModelProvider.XAI,
+                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
+        matrix.put(AiModelProvider.ANTHROPIC, Set.copyOf(EnumSet.of(
+                AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+                AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH)));
+        matrix.put(AiModelProvider.GOOGLE,
+                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
+        // 支持矩阵是启动期唯一真相，禁止通过 Bean 是否存在静默扩大供应商能力。
+        return Map.copyOf(matrix);
     }
 }

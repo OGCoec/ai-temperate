@@ -47,6 +47,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -155,6 +157,43 @@ class AiTemperateApplicationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.application").value("ai-temperate"))
                 .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void actuatorProbesArePublicAndHideInternalDetails() throws Exception {
+        mockMvc.perform(get("/actuator/health/liveness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist());
+        mockMvc.perform(get("/actuator/health/readiness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist());
+    }
+
+    @Test
+    void refusingTrafficChangesReadinessButKeepsLivenessUp() throws Exception {
+        IllegalStateException cause = new IllegalStateException(
+                "test-only-readiness-transition");
+        AvailabilityChangeEvent.publish(
+                applicationContext,
+                cause,
+                ReadinessState.REFUSING_TRAFFIC);
+        try {
+            mockMvc.perform(get("/actuator/health/readiness"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.status").value("OUT_OF_SERVICE"))
+                    .andExpect(jsonPath("$.components").doesNotExist());
+            mockMvc.perform(get("/actuator/health/liveness"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("UP"));
+        } finally {
+            // 测试上下文会被同一测试类复用，必须恢复就绪状态，避免污染后续无关用例。
+            AvailabilityChangeEvent.publish(
+                    applicationContext,
+                    cause,
+                    ReadinessState.ACCEPTING_TRAFFIC);
+        }
     }
 
     @Test

@@ -8,18 +8,40 @@ import reactor.core.publisher.Flux;
  */
 public interface AiConversationImagePreviewBroker {
 
-    void publish(String generationPublicId, AiConversationGeneratedImage image);
+    AiConversationImagePreviewPublishResult publish(
+            String generationPublicId,
+            AiConversationGeneratedImage image);
+
+    void publishFailure(
+            String generationPublicId,
+            short outputIndex,
+            String reasonCode);
 
     Flux<AiConversationStreamEvent> events(String generationPublicId);
+
+    /**
+     * 标记本实例 Worker 已经结束，并在重连宽限后释放本机临时预览。
+     *
+     * @param generationPublicId Generation 公共 ID
+     */
+    void seal(String generationPublicId);
 
     void release(String generationPublicId);
 
     static AiConversationImagePreviewBroker noOp() {
         return new AiConversationImagePreviewBroker() {
             @Override
-            public void publish(
+            public AiConversationImagePreviewPublishResult publish(
                     String generationPublicId,
                     AiConversationGeneratedImage image) {
+                return AiConversationImagePreviewPublishResult.ignored();
+            }
+
+            @Override
+            public void publishFailure(
+                    String generationPublicId,
+                    short outputIndex,
+                    String reasonCode) {
             }
 
             @Override
@@ -30,6 +52,10 @@ public interface AiConversationImagePreviewBroker {
 
             @Override
             public void release(String generationPublicId) {
+            }
+
+            @Override
+            public void seal(String generationPublicId) {
             }
         };
     }

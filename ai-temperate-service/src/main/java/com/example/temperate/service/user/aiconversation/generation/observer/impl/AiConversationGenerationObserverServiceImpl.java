@@ -24,6 +24,7 @@ import com.example.temperate.service.user.aiconversation.generation.observer.AiC
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputSubscriber;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationSnapshotData;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -201,7 +202,7 @@ public final class AiConversationGenerationObserverServiceImpl
         final AutoCloseable subscription;
         try {
             subscription = outputSubscriber.subscribe(generationPublicId, event -> {
-                transportDiagnosticService.record(
+                transportDiagnosticService.recordSafely(
                         timingContext,
                         "ai_stream_redis_observer_received",
                         Map.of(
@@ -252,13 +253,60 @@ public final class AiConversationGenerationObserverServiceImpl
         Flux<AiConversationStreamEvent> heartbeat = Flux.interval(asyncProperties.observerHeartbeat())
                 .map(ignored -> AiConversationStreamEvent.heartbeat());
         Flux<AiConversationStreamEvent> imagePreviews =
-                previewBroker.events(generationPublicId);
+                Flux.defer(() -> previewBroker.events(generationPublicId))
+                        .onErrorResume(RuntimeException.class, ignored -> Flux.empty())
+                        .doOnNext(event -> recordImagePreviewCheckpoint(
+                                timingContext,
+                                generationPublicId,
+                                event,
+                                "P6_OBSERVER_RECEIVED"));
         return Flux.merge(sink.asFlux(), heartbeat, imagePreviews)
                 .takeUntil(event -> terminalEvent(event.name()))
+                // 浏览器断线只分离观察者，不能清空仍在生成的多槽位预览；只有业务终态才释放 Broker。
+                .doOnNext(event -> {
+                    recordImagePreviewCheckpoint(
+                            timingContext,
+                            generationPublicId,
+                            event,
+                            "P7_SSE_READY");
+                    if (terminalEvent(event.name())) {
+                        releasePreviewSafely(generationPublicId);
+                    }
+                })
                 .doFinally(ignored -> {
                     closeQuietly(subscription);
-                    previewBroker.release(generationPublicId);
                 });
+    }
+
+    private void recordImagePreviewCheckpoint(
+            AiConversationStreamTimingContext timingContext,
+            String generationPublicId,
+            AiConversationStreamEvent event,
+            String checkpoint) {
+        if (!"image-preview".equals(event.name())
+                || !(event.data() instanceof AiConversationImagePreviewData data)) {
+            return;
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("generationPublicId", generationPublicId);
+        details.put("checkpoint", checkpoint);
+        details.put("outputIndex", data.outputIndex());
+        details.put("mappedPhase", data.phase());
+        if (data.partialImageIndex() != null) {
+            details.put("partialImageIndex", data.partialImageIndex());
+        }
+        transportDiagnosticService.recordSafely(
+                timingContext,
+                "ai_image_stream_checkpoint",
+                details);
+    }
+
+    private void releasePreviewSafely(String generationPublicId) {
+        try {
+            previewBroker.release(generationPublicId);
+        } catch (RuntimeException ignored) {
+            // Broker 是本机临时预览旁路，释放失败由其生命周期上限兜底，不能破坏已准备写出的终态 SSE。
+        }
     }
 
     private void emitIfNew(

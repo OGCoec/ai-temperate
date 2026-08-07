@@ -19,7 +19,7 @@ public record AiConversationResponseRequest(
         @Min(1)
         @Max(5)
         @Schema(
-                description = "普通模型推理强度或图片模型产品档位：1=Low、2=Medium、3=High、4=Extra High、5=Ultra；GPT Image 1.5 只允许 1 至 3",
+                description = "普通模型推理强度或图片模型产品档位：1=Low、2=Medium、3=High、4=Extra High、5=Ultra；具有图片生成能力的模型只允许 1 至 3",
                 minimum = "1",
                 maximum = "5",
                 defaultValue = "2",
@@ -31,7 +31,7 @@ public record AiConversationResponseRequest(
                 allowableValues = {"OFF", "AUTO", "REQUIRED"})
         AiConversationWebSearchMode webSearchMode,
         @Valid
-        @Schema(description = "文字生成图片参数；普通文字模型请求必须省略")
+        @Schema(description = "图片生成或编辑参数；普通文字模型请求必须省略")
         AiConversationImageRequest image,
         @NotNull
         @Valid

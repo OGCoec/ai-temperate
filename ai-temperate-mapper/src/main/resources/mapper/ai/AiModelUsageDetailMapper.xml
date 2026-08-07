@@ -22,11 +22,13 @@
         <result property="upstreamRequestId" column="upstream_request_id"/>
         <result property="vendorSnapshot" column="vendor_snapshot"/>
         <result property="stream" column="is_stream"/>
+        <result property="meteringBasis" column="metering_basis"/>
         <result property="estimatedPromptTokens" column="estimated_prompt_tokens"/>
         <result property="maxOutputTokens" column="max_output_tokens"/>
         <result property="inputRatioSnapshot" column="input_ratio_snapshot"/>
         <result property="cachedInputRatioSnapshot" column="cached_input_ratio_snapshot"/>
         <result property="outputRatioSnapshot" column="output_ratio_snapshot"/>
+        <result property="requestedOutputCount" column="requested_output_count"/>
         <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
         <result property="settlementDeltaMinor" column="settlement_delta_minor"/>
     </resultMap>
@@ -40,11 +42,13 @@
         upstream_request_id,
         vendor_snapshot,
         is_stream,
+        metering_basis,
         estimated_prompt_tokens,
         max_output_tokens,
         input_ratio_snapshot,
         cached_input_ratio_snapshot,
         output_ratio_snapshot,
+        requested_output_count,
         reserved_quota_minor,
         settlement_delta_minor
     </sql>
@@ -62,11 +66,13 @@
             upstream_request_id,
             vendor_snapshot,
             is_stream,
+            metering_basis,
             estimated_prompt_tokens,
             max_output_tokens,
             input_ratio_snapshot,
             cached_input_ratio_snapshot,
             output_ratio_snapshot,
+            requested_output_count,
             reserved_quota_minor,
             settlement_delta_minor
         )
@@ -78,11 +84,13 @@
             #{upstreamRequestId,jdbcType=VARCHAR},
             #{vendorSnapshot,jdbcType=VARCHAR},
             #{stream,jdbcType=BOOLEAN},
+            #{meteringBasis,jdbcType=SMALLINT},
             #{estimatedPromptTokens,jdbcType=BIGINT},
             #{maxOutputTokens,jdbcType=BIGINT},
             #{inputRatioSnapshot,jdbcType=NUMERIC},
             #{cachedInputRatioSnapshot,jdbcType=NUMERIC},
             #{outputRatioSnapshot,jdbcType=NUMERIC},
+            #{requestedOutputCount,jdbcType=SMALLINT},
             #{reservedQuotaMinor,jdbcType=BIGINT},
             #{settlementDeltaMinor,jdbcType=BIGINT}
         )

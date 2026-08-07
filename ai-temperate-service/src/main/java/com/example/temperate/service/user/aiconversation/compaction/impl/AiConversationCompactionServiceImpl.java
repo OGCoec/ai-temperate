@@ -206,6 +206,7 @@ public final class AiConversationCompactionServiceImpl
             }
             // 每页独立生成滚动摘要，禁止把全部历史再次聚合成一个无界模型请求。
             String pageSummary = modelClient.compact(
+                    selectedModel.provider(),
                     selectedModel.modelName(),
                     compactionPrompt(rollingCompaction, page));
             cursor = page.get(page.size() - 1).getId();
@@ -297,6 +298,7 @@ public final class AiConversationCompactionServiceImpl
             AiConversationCompactionModelRef selectedModel =
                     modelSelector.selectRequired(conversationPublicId);
             String summary = modelClient.compact(
+                    selectedModel.provider(),
                     selectedModel.modelName(),
                     ephemeralCompactionPrompt(
                             snapshot.ephemeralCompactionJson(),

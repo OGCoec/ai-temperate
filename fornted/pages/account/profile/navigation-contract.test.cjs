@@ -95,7 +95,12 @@ test('shared primary navigation switches top-level pages and adapts from bottom 
 	assert.match(workspace, /selectDestination\(destination\)/)
 	assert.match(navigation, /@include user-frosted-navigation/)
 	assert.match(material, /@mixin user-frosted-navigation[\s\S]*backdrop-filter:\s*blur/)
+	assert.match(navigation, /min-width:\s*768px/)
 	assert.match(navigation, /min-width:\s*1024px/)
+	assert.match(navigation,
+		/@media screen and \(min-width:\s*768px\)[\s\S]*\.user-primary-navigation\.is-chat-sidebar\s*\{[^}]*width:\s*240px/)
+	assert.match(navigation,
+		/@media screen and \(min-width:\s*1024px\)[\s\S]*\.user-primary-navigation\.is-chat-sidebar\s*\{[^}]*width:\s*280px/)
 	assert.match(navigation, /prefers-reduced-motion:\s*reduce/)
 })
 

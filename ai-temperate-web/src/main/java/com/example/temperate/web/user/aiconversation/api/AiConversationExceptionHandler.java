@@ -95,9 +95,14 @@ public final class AiConversationExceptionHandler {
                     HttpStatus.CONFLICT;
             case AI_QUOTA_INSUFFICIENT -> HttpStatus.PAYMENT_REQUIRED;
             case AI_CONTEXT_TOO_LARGE, AI_MODEL_LIMITS_MISSING,
-                    AI_QUOTA_RULE_MISSING -> HttpStatus.UNPROCESSABLE_ENTITY;
+                    AI_QUOTA_RULE_MISSING,
+                    AI_MODEL_REASONING_LEVEL_UNSUPPORTED,
+                    AI_IMAGE_RESOLUTION_UNSUPPORTED,
+                    AI_PROVIDER_TOOL_UNSUPPORTED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case AI_UPSTREAM_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
-            case AI_UPSTREAM_UNAVAILABLE, AI_CONTEXT_CACHE_UNAVAILABLE ->
+            case AI_UPSTREAM_UNAVAILABLE,
+                    AI_CONTEXT_CACHE_UNAVAILABLE,
+                    AI_RUNTIME_LINKAGE_FAILED ->
                     HttpStatus.SERVICE_UNAVAILABLE;
             case AI_CONCURRENCY_LIMIT_REACHED -> HttpStatus.SERVICE_UNAVAILABLE;
             case AI_CONTEXT_COMPACTION_FAILED,
