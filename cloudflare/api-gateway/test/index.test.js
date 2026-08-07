@@ -356,6 +356,94 @@ test('root host forwards conversation history and attachment preupload without s
 	])
 })
 
+test('root host forwards context usage snapshots and asynchronous compaction requests', async () => {
+	const conversationId = 'AZ-vpV3kfag70-0EMMUETQ'
+	const modelPublicId = 'AAABi0VWeJ8'
+	const idempotencyKey = '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6'
+	const forwarded = []
+	const fetchImpl = async upstream => {
+		forwarded.push({
+			url: upstream.url,
+			method: upstream.method,
+			idempotencyKey: upstream.headers.get('Idempotency-Key'),
+			body: upstream.method === 'POST' ? await upstream.text() : null
+		})
+		return Response.json({ status: 'ok' }, {
+			status: upstream.method === 'POST' ? 202 : 200
+		})
+	}
+	const usage = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/${conversationId}/context-usage?modelPublicId=${modelPublicId}`),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const compaction = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/${conversationId}/compactions`,
+			{
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Idempotency-Key': idempotencyKey
+				},
+				body: JSON.stringify({ modelPublicId })
+			}),
+		ENV,
+		runtime(fetchImpl)
+	)
+
+	assert.equal(usage.status, 200)
+	assert.equal(compaction.status, 202)
+	assert.deepEqual(forwarded, [
+		{
+			url: `https://api.niko000o.site/api/ai/conversations/${conversationId}/context-usage?modelPublicId=${modelPublicId}`,
+			method: 'GET',
+			idempotencyKey: null,
+			body: null
+		},
+		{
+			url: `https://api.niko000o.site/api/ai/conversations/${conversationId}/compactions`,
+			method: 'POST',
+			idempotencyKey,
+			body: JSON.stringify({ modelPublicId })
+		}
+	])
+})
+
+test('root host streams conversation context events without buffering', async () => {
+	const conversationId = 'AZ-vpV3kfag70-0EMMUETQ'
+	const modelPublicId = 'AAABi0VWeJ8'
+	let captured
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/ai/conversations/${conversationId}/context/events?modelPublicId=${modelPublicId}&afterRevision=12`,
+			{ headers: { Accept: 'text/event-stream' } }),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('event: context_snapshot\ndata: {}\n\n', {
+				headers: { 'Content-Type': 'text/event-stream' }
+			})
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(
+		captured.url,
+		`https://api.niko000o.site/api/ai/conversations/${conversationId}/context/events?modelPublicId=${modelPublicId}&afterRevision=12`
+	)
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+	assert.match(response.headers.get('Cache-Control'), /no-transform/)
+	assert.equal(
+		await response.text(),
+		'event: context_snapshot\ndata: {}\n\n'
+	)
+})
+
 test('administrator host rejects ordinary conversation history and attachment APIs', async () => {
 	const fetchImpl = () => {
 		throw new Error('upstream must not be called')
