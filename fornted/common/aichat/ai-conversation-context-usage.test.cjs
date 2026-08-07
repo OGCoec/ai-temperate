@@ -26,10 +26,14 @@ test('model switch uses an inclusive 80 percent threshold', async () => {
 	}, model).thresholdReached, true)
 })
 
-test('formats K, M and one-decimal percentages without a meaningless zero', async () => {
+test('formats every context token value in K and keeps percentages concise', async () => {
 	const module = await loadModule()
+	assert.equal(module.formatAiConversationContextTokens(0), '0K')
+	assert.equal(module.formatAiConversationContextTokens(500), '0.5K')
+	assert.equal(module.formatAiConversationContextTokens(3000), '3K')
 	assert.equal(module.formatAiConversationContextTokens(200000), '200K')
-	assert.equal(module.formatAiConversationContextTokens(1000000), '1M')
+	assert.equal(module.formatAiConversationContextTokens(1000000), '1000K')
+	assert.equal(module.formatAiConversationContextTokens(1100000), '1100K')
 	assert.equal(module.formatAiConversationContextPercent(20), '20')
 	assert.equal(module.formatAiConversationContextPercent(20.04), '20')
 	assert.equal(module.formatAiConversationContextPercent(20.06), '20.1')

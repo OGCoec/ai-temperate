@@ -1,14 +1,7 @@
 export function formatAiConversationContextTokens(value) {
 	const tokens = Math.max(0, Number(value) || 0)
-	if (tokens >= 1_000_000) {
-		const millions = Math.round(tokens / 100_000) / 10
-		return `${Number.isInteger(millions) ? millions.toFixed(0) : millions}M`
-	}
-	if (tokens >= 1_000) {
-		const thousands = Math.round(tokens / 100) / 10
-		return `${Number.isInteger(thousands) ? thousands.toFixed(0) : thousands}K`
-	}
-	return String(Math.round(tokens))
+	const thousands = Math.round(tokens / 100) / 10
+	return `${Number.isInteger(thousands) ? thousands.toFixed(0) : thousands}K`
 }
 
 export function formatAiConversationContextPercent(value) {
