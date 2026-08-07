@@ -188,6 +188,33 @@ public final class AuthSessionSecretProtector {
         return identify("auth:session:csrf", token);
     }
 
+    /**
+     * 保护一次性语音票据，规范格式与 32 字节 CSRF 相同但使用独立用途域。
+     */
+    public HmacIdentifier voiceTicket(String rawTicket) {
+        String ticket = requireCanonicalBase64Url32("voice ticket", rawTicket);
+        return identify("voice:session:ticket:v1", ticket);
+    }
+
+    /**
+     * 保护语音票据的用户限流标识，避免内部用户 ID 出现在 Redis Key 中。
+     */
+    public HmacIdentifier voiceTicketUser(long userId) {
+        if (userId <= 0) {
+            throw invalid("Voice ticket user ID must be positive.");
+        }
+        return identify("voice:ticket-limit:user:v1", Long.toString(userId));
+    }
+
+    /**
+     * 保护语音票据的设备限流标识，使设备安装 ID 只在短期票据 Value 中存在。
+     */
+    public HmacIdentifier voiceTicketDevice(String deviceInstallationId) {
+        return identify(
+                "voice:ticket-limit:device:v1",
+                requireDevice(deviceInstallationId));
+    }
+
     private HmacIdentifier identify(String domain, String... values) {
         // 域前缀与不可出现在受校验字段中的 NUL 分隔符共同定义 HMAC 输入边界，避免字段拼接歧义。
         String[] parts = new String[values.length + 1];
@@ -209,6 +236,23 @@ public final class AuthSessionSecretProtector {
             throw invalid("Device installation ID must be a canonical UUID v4.");
         }
         return value;
+    }
+
+    private static String requireCanonicalBase64Url32(String name, String value) {
+        String token = requireText(name, value, 43);
+        if (!CSRF.matcher(token).matches()) {
+            throw invalid(name + " must be 32-byte Base64URL without padding.");
+        }
+        byte[] decoded;
+        try {
+            decoded = BASE64_URL_DECODER.decode(token);
+        } catch (IllegalArgumentException exception) {
+            throw invalid(name + " must be 32-byte Base64URL without padding.");
+        }
+        if (decoded.length != 32 || !BASE64_URL_ENCODER.encodeToString(decoded).equals(token)) {
+            throw invalid(name + " must be 32-byte Base64URL without padding.");
+        }
+        return token;
     }
 
 

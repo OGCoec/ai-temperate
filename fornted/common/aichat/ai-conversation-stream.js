@@ -12,7 +12,9 @@ import {
 	createImageOutputSlots,
 	failImageOutputAttachment,
 	mergeCompletedImageOutputs,
-	upsertImageOutputAttachment,
+	mergeImagePreviewOutput,
+	mergePersistedImageOutput,
+	persistedImageOutputAttachment,
 	persistedImageAttachments
 } from './ai-conversation-image-generation.js'
 import {
@@ -119,6 +121,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 			handlers.onGenerationId?.(value)
 		},
 		onEvent(event) {
+			let terminalStatus = null
 			if (event.type === 'accepted') {
 				accepted = true
 				diagnostics.bindUsagePublicId?.(event.data?.usagePublicId)
@@ -165,8 +168,18 @@ export async function openAiConversationStream(command, handlers = {}) {
 				if (previewImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
-						previewImages: upsertImageOutputAttachment(
+						previewImages: mergeImagePreviewOutput(
 							current?.previewImages || [], previewImage)
+					})
+				}
+			}
+			if (event.type === 'image-persisted' && generationPublicId) {
+				const persistedImage = persistedImageOutputAttachment(event.data)
+				if (persistedImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergePersistedImageOutput(
+							current?.previewImages || [], persistedImage)
 					})
 				}
 			}
@@ -189,6 +202,11 @@ export async function openAiConversationStream(command, handlers = {}) {
 				const requestedImageCount = Number(
 					event.data?.requestedImageCount
 						|| current?.requestedImageCount || 0)
+				const displayAttachments = mergeCompletedImageOutputs(
+					current?.previewImages,
+					persisted,
+					terminalAttachmentEvidenceComplete
+						? requestedImageCount : 0)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data.terminalType,
 					terminalReason: event.data.terminalReason,
@@ -197,6 +215,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 						persisted,
 						terminalAttachmentEvidenceComplete
 							? requestedImageCount : 0),
+					previewImages: displayAttachments,
 					requestedImageCount,
 					messagePublicId: event.data?.messagePublicId || '',
 					terminalAttachmentEvidenceComplete,
@@ -204,7 +223,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 					warnings: event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
-				markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
+				terminalStatus = event.data.status || 'COMPLETED'
 			}
 			if (event.type === 'delta' && event.data?.type === 'TEXT'
 				&& String(event.data?.text || '').length > 0) {
@@ -226,7 +245,12 @@ export async function openAiConversationStream(command, handlers = {}) {
 					? String(event.data?.text || '').length
 					: 0
 			})
-			handlers.onEvent?.(event)
+			try {
+				handlers.onEvent?.(event)
+			} finally {
+				if (terminalStatus) markGenerationTerminal(
+					generationPublicId, terminalStatus)
+			}
 		}
 	}
 
@@ -307,6 +331,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		diagnostics,
 		lifecycleDiagnostics,
 		onEvent(event) {
+			let terminalStatus = null
 			if (event.type === 'snapshot') {
 				updateGeneration(generationPublicId, {
 					revision: Number(event.data?.revision || 0),
@@ -326,8 +351,18 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 				if (previewImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
-						previewImages: upsertImageOutputAttachment(
+						previewImages: mergeImagePreviewOutput(
 							current?.previewImages || [], previewImage)
+					})
+				}
+			}
+			if (event.type === 'image-persisted') {
+				const persistedImage = persistedImageOutputAttachment(event.data)
+				if (persistedImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergePersistedImageOutput(
+							current?.previewImages || [], persistedImage)
 					})
 				}
 			}
@@ -349,6 +384,11 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 				const requestedImageCount = Number(
 					event.data?.requestedImageCount
 						|| current?.requestedImageCount || 0)
+				const displayAttachments = mergeCompletedImageOutputs(
+					current?.previewImages,
+					persisted,
+					terminalAttachmentEvidenceComplete
+						? requestedImageCount : 0)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data?.terminalType,
 					terminalReason: event.data?.terminalReason,
@@ -357,6 +397,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 						persisted,
 						terminalAttachmentEvidenceComplete
 							? requestedImageCount : 0),
+					previewImages: displayAttachments,
 					requestedImageCount,
 					messagePublicId: event.data?.messagePublicId || '',
 					terminalAttachmentEvidenceComplete,
@@ -364,7 +405,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					warnings: event.data?.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
-				markGenerationTerminal(generationPublicId, event.data?.status || 'COMPLETED')
+				terminalStatus = event.data?.status || 'COMPLETED'
 			}
 			diagnostics.record?.('BROWSER_SSE_PARSED', {
 				eventType: event.type,
@@ -373,7 +414,12 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					? String(event.data?.text || '').length
 					: 0
 			})
-			handlers.onEvent?.(event)
+			try {
+				handlers.onEvent?.(event)
+			} finally {
+				if (terminalStatus) markGenerationTerminal(
+					generationPublicId, terminalStatus)
+			}
 		}
 	}
 	let active = await openGenerationOnce(generationPublicId, wrapped, lifecycleDiagnostics)

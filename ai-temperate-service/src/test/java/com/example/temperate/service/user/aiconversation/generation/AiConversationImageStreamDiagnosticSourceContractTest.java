@@ -9,7 +9,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证异步图片 Worker 显式传递诊断上下文，并在 Broker 发布前后保留双索引检查点。
+ * 验证异步图片 Worker 显式传递诊断上下文，并在预览派生与 Broker 发布边界保留双索引检查点。
  */
 final class AiConversationImageStreamDiagnosticSourceContractTest {
 
@@ -26,10 +26,13 @@ final class AiConversationImageStreamDiagnosticSourceContractTest {
                 .contains("new AiConversationStreamingDiagnosticContext(")
                 .contains("timingContext,")
                 .contains("generationPublicId)))")
-                .contains("P4_BROKER_PUBLISH_ATTEMPT")
-                .contains("P5_BROKER_PUBLISH_RESULT")
+                .contains("P4_PREVIEW_PREPARATION_ATTEMPT")
+                .contains("P5_PREVIEW_PUBLISH_RESULT")
                 .contains("recordSafely(")
+                .contains("preparePreviewSafely(")
                 .contains("publishPreviewSafely(")
+                .contains("isLatestPreview(")
+                .contains("invalidatePreview(")
                 .contains("publishResult.accepted()")
                 .contains("publishResult.retained()")
                 .contains("publishResult.observerCount()")

@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * 绑定 Images Generation/Edit 开关、相对路径和单张图片内存上限，避免 Base64 SSE 形成无界缓冲。
+ * 绑定 Images Generation/Edit 路径、原图解码上限和自适应预览参数，避免 Base64 SSE 形成无界缓冲。
  */
 @Validated
 @ConfigurationProperties(prefix = "app.ai-conversation.image-generation")
@@ -17,6 +17,9 @@ public record AiConversationImageGenerationProperties(
         @NotBlank String generationsPath,
         @NotBlank String editsPath,
         @Min(1) @Max(104857600) int maximumDecodedImageBytes,
+        @Min(1024) @Max(10485760) int maximumInlinePreviewBytes,
+        @Min(128) @Max(4096) int thumbnailMaxEdgePixels,
+        @Min(1) @Max(100) int thumbnailJpegQuality,
         @Min(1048576) @Max(1073741824) long maximumPreviewRetainedBytes) {
 
     @AssertTrue(message = "Image generations path must be normalized")

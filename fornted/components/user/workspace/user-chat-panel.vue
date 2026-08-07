@@ -191,16 +191,42 @@
 					@retry="retryAttachment"
 				/>
 				<view class="composer">
-					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
+					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || voiceInteractionActive || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
 						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
 					</button>
-					<textarea v-model="draft" class="composer-input" auto-height :maxlength="65536" placeholder="输入消息" :disabled="generating" @confirm="send" />
+					<textarea v-model="draft" class="composer-input" auto-height :maxlength="65536" placeholder="输入消息" aria-label="聊天消息" :disabled="generating || voiceInteractionActive" @confirm="send" />
+					<button
+						class="voice-button"
+						:class="{ 'is-recording': voiceRecording, 'is-finalizing': voiceFinalizing }"
+						type="button"
+						:aria-label="voiceButtonLabel"
+						:aria-pressed="String(voiceRecording)"
+						:disabled="voiceButtonDisabled"
+						@click="toggleVoiceInput"
+					>
+						<uni-icons :type="voiceRecording ? 'micoff-filled' : 'mic-filled'" size="21" :color="voiceRecording ? '#fff4f2' : '#dce5e0'" aria-hidden="true" />
+					</button>
 					<button v-if="generating" class="send-button stop-button" type="button" aria-label="停止生成" @click="stop">
 						<view class="stop-square"></view>
 					</button>
 					<button v-else class="send-button" type="button" aria-label="发送消息" :disabled="!canSend" @click="send">
 						<uni-icons type="arrow-up" size="22" color="#07110d" aria-hidden="true" />
 					</button>
+				</view>
+				<view v-if="voiceInteractionActive || voicePartialText" class="voice-status" :class="{ 'is-finalizing': voiceFinalizing, 'is-queued': voiceQueued }" :aria-busy="String(voiceInteractionActive)">
+					<view class="voice-status-heading">
+						<view class="voice-status-dot" aria-hidden="true"></view>
+						<text>{{ voiceStatusLabel }}</text>
+						<text v-if="voiceRecording" class="voice-duration">{{ voiceDurationLabel }}</text>
+						<button
+							v-if="voiceQueued"
+							class="voice-queue-cancel"
+							type="button"
+							aria-label="取消语音识别排队"
+							@click="cancelVoiceQueue"
+						>取消排队</button>
+					</view>
+					<text v-if="voicePartialText" class="voice-preview">{{ voicePartialText }}</text>
 				</view>
 				<view class="composer-meta">
 					<view class="composer-controls">
@@ -286,6 +312,7 @@
 				</view>
 				<text v-if="pendingAttachments.length && !canSend" class="composer-blocker" role="status">{{ sendBlockedReason }}</text>
 				<text v-if="composerError" class="composer-error" role="alert">{{ composerError }}</text>
+				<text class="visually-hidden" role="status" aria-live="polite">{{ voiceAnnouncement }}</text>
 			</view>
 			<user-image-output-count-dialog
 				ref="imageOutputCountDialog"
@@ -296,6 +323,7 @@
 </template>
 
 <script>
+	import { markRaw } from 'vue'
 	import { aiModelApi } from '@/common/aimodel/ai-model-api.js'
 	import { clientPlatform } from '@/common/auth/config.js'
 	import {
@@ -318,7 +346,6 @@
 		asyncGenerationEnabled,
 		listActiveGenerations,
 		listPendingGenerationRequests,
-		markGenerationTerminal,
 		registerPendingGeneration,
 		registerGeneration,
 		subscribeGeneration,
@@ -342,14 +369,18 @@
 		createImageOutputSlots,
 		failImageOutputAttachment,
 		mergeCompletedImageOutputs,
+		mergeImagePreviewOutput,
+		mergePersistedImageOutput,
 		modelSupportsImageGeneration,
 		modelSupportsMultipleImageOutputs,
 		normalizeImageGenerationAspect,
 		normalizeImageOutputCount,
 		persistedImageAttachments,
+		persistedImageOutputAttachment,
 		supportedImageAspectOptions,
 		upsertImageOutputAttachment
 	} from '@/common/aichat/ai-conversation-image-generation.js'
+	import { preloadConversationImage } from '@/common/aichat/ai-conversation-image-preloader.js'
 	import {
 		createAiConversationResearchSession,
 		findAiConversationResearchSession
@@ -379,6 +410,12 @@
 		windowAfterPrepend
 	} from '@/common/aichat/ai-conversation-turn-navigation.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
+	import { createVoiceRecorder } from '@/common/voice/voice-recorder.js'
+	import {
+		createVoiceWebSocketSession,
+		voiceErrorMessage
+	} from '@/common/voice/voice-websocket-session.js'
+	import { issueVoiceSessionTicket } from '@/common/voice/voice-ticket-api.js'
 	import {
 		ATTACHMENT_UPLOAD_STATES,
 		attachmentCategory,
@@ -430,6 +467,26 @@
 	const TURN_WINDOW_EDGE_ENTER_PX = 96
 	const TURN_WINDOW_EDGE_RELEASE_PX = 180
 	const TURN_FOLLOW_LATEST_PX = 320
+	const VOICE_ACTIVE_STATES = Object.freeze([
+		'REQUESTING_PERMISSION',
+		'ISSUING_TICKET',
+		'CONNECTING',
+		'QUEUED',
+		'RECORDING',
+		'FINALIZING'
+	])
+
+	function appendTranscriptToDraft(draft, transcript) {
+		const existing = String(draft || '')
+		const text = String(transcript || '').trim()
+		if (!text) return existing
+		if (!existing) return text
+		if (/\s$/.test(existing) || /^[,.;:!?，。；：！？]/.test(text)) return existing + text
+		const previous = existing[existing.length - 1]
+		const first = text[0]
+		const bothCjk = /[\u3400-\u9fff]/.test(previous) && /[\u3400-\u9fff]/.test(first)
+		return `${existing}${bothCjk ? '' : ' '}${text}`
+	}
 
 	function positiveFiniteNumber(value) {
 		const number = Number(value)
@@ -541,6 +598,7 @@
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
+				imageUpgradeTokens: markRaw(new Map()),
 				generatedResponseImageNaturalSizes: {},
 				generatedResponseImageViewportHeight: null,
 				generatedResponseImageResizeListener: null,
@@ -561,6 +619,18 @@
 				activeLocalId: '',
 				activeIdempotencyKey: '',
 				composerError: '',
+				voiceState: 'IDLE',
+				voicePartialText: '',
+				voiceElapsedMs: 0,
+				voiceMaximumDurationMs: 300000,
+				voiceLimitReached: false,
+				voiceQueuePosition: 0,
+				voiceQueueCapacity: 5,
+				voiceAnnouncement: '',
+				voiceSession: null,
+				voiceRecorder: null,
+				voiceTimer: null,
+				voiceStartedAt: 0,
 				scrollTarget: '',
 				historyResyncing: false,
 				modelsLoading: false,
@@ -588,6 +658,8 @@
 			}
 		},
 		beforeUnmount() {
+			void this.cancelVoiceInput('COMPONENT_UNMOUNT')
+			this.clearCompletedImageUpgrades()
 			this.closeContextObserver()
 			this.releaseTurnNavigationFrame()
 			if (this.generatedResponseImageResizeListener
@@ -680,8 +752,35 @@
 						&& this.pendingAttachments.length > 0
 				})
 			},
-			canSend() { return this.sendGate.allowed },
-			sendBlockedReason() { return this.sendGate.reason },
+			canSend() { return this.sendGate.allowed && !this.voiceInteractionActive },
+			sendBlockedReason() {
+				return this.voiceInteractionActive ? '请先结束当前语音输入。' : this.sendGate.reason
+			},
+			voiceInteractionActive() { return VOICE_ACTIVE_STATES.includes(this.voiceState) },
+			voiceRecording() { return this.voiceState === 'RECORDING' },
+			voiceQueued() { return this.voiceState === 'QUEUED' },
+			voiceFinalizing() { return this.voiceState === 'FINALIZING' },
+			voiceButtonDisabled() {
+				return this.generating || !['IDLE', 'ERROR', 'RECORDING'].includes(this.voiceState)
+			},
+			voiceButtonLabel() {
+				return this.voiceRecording ? '结束语音输入' : '开始语音输入'
+			},
+			voiceStatusLabel() {
+				const labels = {
+					REQUESTING_PERMISSION: '正在请求麦克风权限',
+					ISSUING_TICKET: '正在准备安全语音连接',
+					CONNECTING: '正在连接本地语音识别',
+					QUEUED: `正在排队，第 ${this.voiceQueuePosition} / ${this.voiceQueueCapacity} 位`,
+					RECORDING: '正在听写',
+					FINALIZING: this.voiceLimitReached ? '已达到 5 分钟上限，正在生成最终文字' : '正在生成最终文字'
+				}
+				return labels[this.voiceState] || ''
+			},
+			voiceDurationLabel() {
+				const seconds = Math.max(0, Math.floor(this.voiceElapsedMs / 1000))
+				return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+			},
 			contextCompactionActive() {
 				return this.contextUsage?.compactionStatus === 'QUEUED'
 					|| this.contextUsage?.compactionStatus === 'RUNNING'
@@ -724,6 +823,180 @@
 			}
 		},
 		methods: {
+			async toggleVoiceInput() {
+				if (this.voiceRecording) {
+					await this.finalizeVoiceInput(false)
+					return
+				}
+				if (this.voiceState === 'IDLE' || this.voiceState === 'ERROR') {
+					await this.startVoiceInput()
+				}
+			},
+			async startVoiceInput() {
+				if (this.generating || this.voiceInteractionActive) return
+				this.composerError = ''
+				this.voiceAnnouncement = ''
+				this.voicePartialText = ''
+				this.voiceLimitReached = false
+				this.voiceQueuePosition = 0
+				this.voiceQueueCapacity = 5
+				this.voiceElapsedMs = 0
+				const recorder = markRaw(createVoiceRecorder())
+				this.voiceRecorder = recorder
+				try {
+					this.voiceState = 'REQUESTING_PERMISSION'
+					await recorder.requestPermission()
+					if (this.voiceRecorder !== recorder) {
+						try { await recorder.destroy() } catch (_) {}
+						return
+					}
+					this.voiceState = 'ISSUING_TICKET'
+					const ticket = await issueVoiceSessionTicket()
+					if (this.voiceRecorder !== recorder) {
+						try { await recorder.destroy() } catch (_) {}
+						return
+					}
+					this.voiceMaximumDurationMs = ticket.maxDurationMs
+					this.voiceState = 'CONNECTING'
+					let session = null
+					session = markRaw(createVoiceWebSocketSession({
+						language: 'auto',
+						onEvent: event => {
+							if (this.voiceSession === session) void this.handleVoiceEvent(event)
+						},
+						onError: error => {
+							if (this.voiceSession === session) void this.handleVoiceFailure(error)
+						}
+					}))
+					this.voiceSession = session
+					await session.connect(ticket)
+					if (this.voiceSession !== session || this.voiceRecorder !== recorder) {
+						try { await recorder.destroy() } catch (_) {}
+						try { await session.stop() } catch (_) {}
+						return
+					}
+					this.voiceState = 'RECORDING'
+					this.voiceQueuePosition = 0
+					await recorder.start(frame => {
+						if (this.voiceSession !== session
+							|| this.voiceLimitReached
+							|| !['RECORDING', 'FINALIZING'].includes(this.voiceState)) return
+						void session.sendAudio(frame).catch(error => this.handleVoiceFailure(error))
+					}, error => { void this.handleVoiceFailure(error) })
+					this.voiceStartedAt = Date.now()
+					this.startVoiceTimer()
+				} catch (error) {
+					await this.handleVoiceFailure(error)
+				}
+			},
+			startVoiceTimer() {
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = setInterval(() => {
+					if (!this.voiceRecording) return
+					this.voiceElapsedMs = Math.min(
+						Date.now() - this.voiceStartedAt,
+						this.voiceMaximumDurationMs)
+					if (this.voiceElapsedMs >= this.voiceMaximumDurationMs) {
+						void this.finalizeVoiceInput(true)
+					}
+				}, 250)
+			},
+			async finalizeVoiceInput(limitReached) {
+				if (!this.voiceRecording) return
+				this.voiceState = 'FINALIZING'
+				this.voiceLimitReached = limitReached === true
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = null
+				const recorder = this.voiceRecorder
+				this.voiceRecorder = null
+				try {
+					await recorder?.stop?.()
+					await this.voiceSession?.commit?.()
+				} catch (error) {
+					await this.handleVoiceFailure(error)
+				}
+			},
+			async handleVoiceEvent(event) {
+				if (event?.type === 'session.queued') {
+					this.voiceQueuePosition = Number(event.position)
+					this.voiceQueueCapacity = Number(event.queueCapacity)
+					this.voiceState = 'QUEUED'
+					this.voiceAnnouncement = this.voiceStatusLabel
+					return
+				}
+				if (event?.type === 'transcript.partial') {
+					this.voicePartialText = String(event.text || '')
+					return
+				}
+				if (event?.type === 'input.limit_reached') {
+					this.voiceLimitReached = true
+					this.voiceState = 'FINALIZING'
+					clearInterval(this.voiceTimer)
+					this.voiceTimer = null
+					const recorder = this.voiceRecorder
+					this.voiceRecorder = null
+					await recorder?.stop?.()
+					return
+				}
+				if (event?.type === 'transcript.final') {
+					await this.acceptVoiceTranscript(event.text)
+				}
+			},
+			async acceptVoiceTranscript(text) {
+				const transcript = String(text || '').trim()
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = null
+				this.voicePartialText = ''
+				if (transcript) {
+					this.draft = appendTranscriptToDraft(this.draft, transcript)
+					this.voiceAnnouncement = this.voiceLimitReached
+						? '已达到 5 分钟上限，最终文字已加入输入框。'
+						: '语音识别完成，最终文字已加入输入框。'
+				} else {
+					this.voiceAnnouncement = '未识别到有效语音。'
+					uni.showToast?.({ title: '未识别到有效语音', icon: 'none' })
+				}
+				await this.releaseVoiceResources(false)
+				this.voiceState = 'IDLE'
+			},
+			async handleVoiceFailure(error) {
+				if (this.voiceState === 'ERROR' && !this.voiceSession && !this.voiceRecorder) return
+				if (!this.voiceInteractionActive && this.voiceState !== 'ERROR') return
+				const message = voiceErrorMessage(error)
+				this.composerError = message
+				this.voiceAnnouncement = message
+				this.voicePartialText = ''
+				this.voiceQueuePosition = 0
+				await this.releaseVoiceResources(true)
+				this.voiceState = 'ERROR'
+			},
+			async cancelVoiceInput() {
+				if (!this.voiceInteractionActive && !this.voiceSession && !this.voiceRecorder) return
+				await this.releaseVoiceResources(true)
+				this.voicePartialText = ''
+				this.voiceQueuePosition = 0
+				this.voiceState = 'IDLE'
+			},
+			async cancelVoiceQueue() {
+				if (!this.voiceQueued) return
+				await this.releaseVoiceResources(true)
+				this.voiceQueuePosition = 0
+				this.voicePartialText = ''
+				this.voiceAnnouncement = '已取消语音识别排队。'
+				this.voiceState = 'IDLE'
+			},
+			async releaseVoiceResources(sendStop) {
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = null
+				const recorder = this.voiceRecorder
+				const session = this.voiceSession
+				this.voiceRecorder = null
+				this.voiceSession = null
+				try { await recorder?.destroy?.() } catch (_) {}
+				if (sendStop) {
+					try { await session?.stop?.() } catch (_) {}
+				}
+			},
 			onAuthenticatedPageReady() {
 				this.applyStore(readAiConversationStore())
 				if (!this.models.length && !this.modelsLoading) this.loadModels()
@@ -1222,6 +1495,7 @@
 				}
 			},
 			newChat() {
+				this.clearCompletedImageUpgrades()
 				if (this.generating) {
 					if (asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 					else this.stop()
@@ -1240,6 +1514,7 @@
 			},
 			async openConversation(publicId) {
 				if (publicId === this.currentConversationPublicId) return
+				this.clearCompletedImageUpgrades()
 				if (this.generating && asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 				else if (this.generating) return
 				this.activeResearchSession?.close?.()
@@ -1403,7 +1678,7 @@
 				if (option) this.selectedWebSearchMode = option.value
 			},
 			async chooseAttachments() {
-				if (this.attachmentPickerBusy) return
+				if (this.attachmentPickerBusy || this.voiceInteractionActive) return
 				this.attachmentPickerBusy = true
 				this.composerError = ''
 				try {
@@ -1725,7 +2000,7 @@
 					const previewImage = imagePreviewAttachment(event.data)
 					if (!previewImage) return
 					const current = this.messages.find(message => message.localId === localId)
-					const responseAttachments = upsertImageOutputAttachment(
+					const responseAttachments = mergeImagePreviewOutput(
 						current?.responseAttachments || [], previewImage)
 					this.applyStore(patchLocalMessage(localId, {
 						responseAttachments,
@@ -1734,6 +2009,22 @@
 							attachment?.status === 'FINALIZING')
 					}))
 					this.scrollBottom()
+				} else if (event.type === 'image-persisted') {
+					const persistedImage = persistedImageOutputAttachment(event.data)
+					if (!persistedImage) return
+					const current = this.messages.find(message => message.localId === localId)
+					const responseAttachments = mergePersistedImageOutput(
+						current?.responseAttachments || [], persistedImage)
+					this.applyStore(patchLocalMessage(localId, {
+						responseAttachments,
+						streaming: true,
+						saving: responseAttachments.some(attachment =>
+							attachment?.status === 'FINALIZING')
+					}))
+					this.beginImageUpgrade(
+						localId,
+						responseAttachments.find(attachment =>
+							Number(attachment?.outputIndex) === persistedImage.outputIndex))
 				} else if (event.type === 'image-output-status') {
 					const current = this.messages.find(message => message.localId === localId)
 					const responseAttachments = failImageOutputAttachment(
@@ -1768,7 +2059,6 @@
 					})
 				} else if (event.type === 'completed' && event.data?.generationPublicId) {
 					this.acceptTerminalContextUsage(event.data)
-					const generationPublicId = event.data.generationPublicId
 					const terminalAttachmentEvidenceComplete =
 						Array.isArray(event.data?.attachments)
 					const persistedAttachments = persistedImageAttachments(event.data)
@@ -1786,13 +2076,16 @@
 						: ''
 					const warnings = event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
-					markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
+					// 先把当前 data URL 快照留在页面消息中，再解除 Manager 订阅；终态清理 Base64 时不会把 UI 换回 OSS。
+					this.applyStore(patchLocalMessage(localId, { responseAttachments }))
+					this.activeGenerationSubscription?.()
+					this.activeGenerationSubscription = null
+					this.beginCompletedImageUpgrades(localId, responseAttachments)
 					this.finishTextPresentation(() => {
 						const failed = event.data.terminalType
 							&& event.data.terminalType !== 'COMPLETED'
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: event.data?.messagePublicId || '',
-							responseAttachments,
 							requestedImageCount,
 							imageOutputSummary,
 							streaming: false,
@@ -2111,11 +2404,90 @@
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
 			},
+			clearCompletedImageUpgrades() {
+				this.imageUpgradeTokens.clear()
+			},
+			beginCompletedImageUpgrades(localId, attachments) {
+				for (const attachment of attachments || []) {
+					this.beginImageUpgrade(localId, attachment)
+				}
+			},
+			beginImageUpgrade(localId, attachment) {
+				if (attachment?.requiresUpgrade !== true || !attachment?.persistedUrl
+					|| attachment?.upgradeFailed === true) return
+				const outputIndex = Number(attachment.outputIndex)
+				const key = `${localId}:${outputIndex}`
+				const activeToken = this.imageUpgradeTokens.get(key)
+				if (activeToken?.persistedUrl === attachment.persistedUrl) return
+				// 同一槽位出现更新 URL 时立即换 Token；旧预加载即使晚到，也不能覆盖较新的正式附件。
+				const token = Object.freeze({ persistedUrl: attachment.persistedUrl })
+				this.imageUpgradeTokens.set(key, token)
+				preloadConversationImage(attachment.persistedUrl, {
+					platform: clientPlatform()
+				}).then(result => {
+					if (this.imageUpgradeTokens.get(key) !== token) return
+					this.imageUpgradeTokens.delete(key)
+					this.completeImageUpgrade(
+						localId,
+						outputIndex,
+						attachment.persistedUrl,
+						result)
+				}).catch(() => {
+					if (this.imageUpgradeTokens.get(key) !== token) return
+					this.imageUpgradeTokens.delete(key)
+					this.failImageUpgrade(
+						localId,
+						outputIndex,
+						attachment.persistedUrl)
+				})
+			},
+			completeImageUpgrade(localId, outputIndex, persistedUrl, result) {
+				const message = this.messages.find(item => item.localId === localId)
+				const current = (message?.responseAttachments || []).find(item =>
+					Number(item?.outputIndex) === outputIndex)
+				if (!current || current.persistedUrl !== persistedUrl
+					|| current.requiresUpgrade !== true) return
+				const upgraded = Object.freeze({
+					...current,
+					url: result.displayUrl,
+					contentType: current.persistedContentType || current.contentType,
+					width: Number(result.width || current.width || 0),
+					height: Number(result.height || current.height || 0),
+					phase: 'FINAL',
+					status: 'COMPLETED',
+					previewKind: 'FULL',
+					requiresUpgrade: false,
+					volatilePreview: false,
+					upgradeFailed: false
+				})
+				this.applyStore(patchLocalMessage(localId, {
+					responseAttachments: upsertImageOutputAttachment(
+						message.responseAttachments, upgraded)
+				}))
+			},
+			failImageUpgrade(localId, outputIndex, persistedUrl) {
+				const message = this.messages.find(item => item.localId === localId)
+				const current = (message?.responseAttachments || []).find(item =>
+					Number(item?.outputIndex) === outputIndex)
+				if (!current || current.persistedUrl !== persistedUrl
+					|| current.requiresUpgrade !== true) return
+				// 高清资源失败时保留已经可见的缩略图，不切成空白、错误图或未完成的远端地址。
+				this.applyStore(patchLocalMessage(localId, {
+					responseAttachments: upsertImageOutputAttachment(
+						message.responseAttachments,
+						Object.freeze({
+							...current,
+							status: 'COMPLETED',
+							upgradeFailed: true
+						}))
+				}))
+			},
 			imageOutputStatusLabel(attachment) {
 				return ({
 					QUEUED: '等待开始',
 					GENERATING: '正在生成',
 					FINALIZING: '正在保存',
+					UPGRADING: '正在加载高清图片',
 					COMPLETED: '已完成',
 					FAILED: '生成失败'
 				})[String(attachment?.status || 'QUEUED').toUpperCase()] || '等待开始'
@@ -2204,6 +2576,7 @@
 				this.scrollBottom({ force: true })
 			},
 			handlePageUnload() {
+				this.clearCompletedImageUpgrades()
 				if (this.activeStream && this.currentConversationPublicId) {
 					this.applyStore(markAiConversationHistoryStale())
 				}
@@ -2346,7 +2719,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .send-button, .attachment-file, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .send-button, .attachment-file, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -2396,8 +2769,24 @@
 	.message-bottom { height: 1px; }
 	.composer-wrap { width: min(100%, 820px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px 14px calc(10px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.composer { min-height: 58px; padding: 7px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid rgba(99, 117, 107, .55); border-radius: 18px; background: rgba(30, 35, 32, .84); box-shadow: inset 0 1px rgba(255, 255, 255, .05); backdrop-filter: blur(20px) saturate(115%); }
-	.composer-icon, .send-button { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 13px; }
+	.composer-icon, .voice-button, .send-button { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 13px; }
 	.composer-input { min-height: 42px; max-height: 160px; flex: 1; padding: 10px 6px; color: #f3f5f4; font-size: 15px; line-height: 1.45; box-sizing: border-box; }
+	.voice-button { border-color: rgba(111, 133, 122, .62); background: rgba(25, 31, 28, .9); }
+	.voice-button.is-recording { border-color: #ff746b; background: rgba(183, 57, 49, .72); box-shadow: 0 0 0 3px rgba(255, 116, 107, .13); }
+	.voice-button.is-finalizing { border-color: rgba(242, 162, 77, .5); opacity: .72; }
+	.voice-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
+	.voice-status { margin-top: 7px; padding: 9px 12px; border: 1px solid rgba(255, 116, 107, .28); border-radius: 12px; background: rgba(76, 28, 25, .3); color: #f4c2be; }
+	.voice-status.is-finalizing { border-color: rgba(242, 162, 77, .3); background: rgba(75, 51, 24, .28); color: #f2c997; }
+	.voice-status.is-queued { border-color: rgba(77, 156, 242, .34); background: rgba(24, 48, 75, .3); color: #c8def8; }
+	.voice-status-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+	.voice-status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #ff746b; box-shadow: 0 0 0 4px rgba(255, 116, 107, .12); }
+	.voice-status.is-finalizing .voice-status-dot { background: #f2a24d; box-shadow: 0 0 0 4px rgba(242, 162, 77, .12); }
+	.voice-status.is-queued .voice-status-dot { background: #66aef7; box-shadow: 0 0 0 4px rgba(102, 174, 247, .13); }
+	.voice-queue-cancel { min-height: 32px; margin: 0 0 0 auto; padding: 0 12px; border: 1px solid rgba(200, 222, 248, .42); border-radius: 9px; background: rgba(14, 30, 48, .72); color: #e5f1ff; font-size: 12px; font-weight: 700; line-height: 30px; }
+	.voice-queue-cancel:focus-visible { outline: 2px solid rgba(102, 174, 247, .9); outline-offset: 2px; }
+	.voice-duration { margin-left: auto; color: inherit; font-variant-numeric: tabular-nums; }
+	.voice-preview { display: block; max-height: 68px; margin-top: 8px; overflow: hidden; color: #e7eeea; font-size: 13px; line-height: 1.55; }
+	.visually-hidden { width: 1px; height: 1px; position: absolute; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 	.send-button { border-color: #37d39a; background: #37d39a; }
 	.stop-button { background: rgba(55, 211, 154, .18); }
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }

@@ -2,11 +2,15 @@ package com.example.temperate.service.user.aiconversation.image.impl;
 
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
-import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImage;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentState;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePersistedData;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewData;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewPublishResult;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageOutputStatusData;
+import com.example.temperate.service.user.aiconversation.image.AiConversationPreparedImagePreview;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -69,22 +73,24 @@ public final class AiConversationImagePreviewBrokerImpl
     @Override
     public AiConversationImagePreviewPublishResult publish(
             String generationPublicId,
-            AiConversationGeneratedImage image) {
-        Objects.requireNonNull(image);
-        return entry(generationPublicId).publishImage(image);
+            AiConversationPreparedImagePreview preview) {
+        Objects.requireNonNull(preview);
+        return entry(generationPublicId).publishImage(preview);
     }
 
     private static AiConversationStreamEvent previewEvent(
-            AiConversationGeneratedImage image) {
+            AiConversationPreparedImagePreview preview) {
         AiConversationImagePreviewData data = new AiConversationImagePreviewData(
-                image.imageId(),
-                image.phase().name(),
-                image.outputIndex(),
-                image.partialImageIndex(),
-                image.contentType(),
-                image.width(),
-                image.height(),
-                image.base64());
+                preview.imageId(),
+                preview.phase().name(),
+                preview.outputIndex(),
+                preview.partialImageIndex(),
+                preview.contentType(),
+                preview.width(),
+                preview.height(),
+                preview.previewKind().name(),
+                preview.requiresUpgrade(),
+                preview.base64());
         return new AiConversationStreamEvent("image-preview", data);
     }
 
@@ -105,6 +111,30 @@ public final class AiConversationImagePreviewBrokerImpl
                         "image-output-status",
                         new AiConversationImageOutputStatusData(
                                 outputIndex, "FAILED", safeReason)));
+    }
+
+    @Override
+    public void publishPersisted(
+            String generationPublicId,
+            short outputIndex,
+            AiConversationAttachment attachment) {
+        if (outputIndex < 0 || outputIndex > 9) {
+            throw new IllegalArgumentException("Image output index is out of range.");
+        }
+        AiConversationAttachment safeAttachment = Objects.requireNonNull(attachment);
+        if (safeAttachment.state() != AiConversationAttachmentState.AVAILABLE
+                || (safeAttachment.category() != AiConversationAttachmentCategory.IMAGE
+                && !safeAttachment.contentType().toLowerCase(java.util.Locale.ROOT)
+                        .startsWith("image/"))) {
+            throw new IllegalArgumentException(
+                    "Persisted image event requires an available image attachment.");
+        }
+        entry(generationPublicId).publish(
+                outputIndex,
+                new AiConversationStreamEvent(
+                        "image-persisted",
+                        new AiConversationImagePersistedData(
+                                outputIndex, safeAttachment)));
     }
 
     @Override
@@ -134,7 +164,7 @@ public final class AiConversationImagePreviewBrokerImpl
         String id = requireGenerationId(generationPublicId);
         return entries.computeIfAbsent(id, ignored -> {
             Entry created = new Entry(this);
-            // 没有观察者或浏览器异常退出时仍必须自动释放大图片，防止本地预览通道长期占用堆内存。
+            // 没有观察者或浏览器异常退出时仍必须自动释放预览字节，防止本地通道长期占用堆内存。
             Mono.delay(maximumLifetime).subscribe(unused -> {
                 if (entries.remove(id, created)) {
                     releaseRetained(created.complete());
@@ -200,7 +230,7 @@ public final class AiConversationImagePreviewBrokerImpl
         }
 
         private AiConversationImagePreviewPublishResult publishImage(
-                AiConversationGeneratedImage image) {
+                AiConversationPreparedImagePreview preview) {
             List<FluxSink<AiConversationStreamEvent>> snapshot;
             boolean retained;
             synchronized (this) {
@@ -208,7 +238,7 @@ public final class AiConversationImagePreviewBrokerImpl
                     return AiConversationImagePreviewPublishResult.ignored();
                 }
                 retained = replaceRetained(
-                        image.outputIndex(), image, image.sizeBytes());
+                        preview.outputIndex(), preview, preview.sizeBytes());
                 snapshot = List.copyOf(observers);
             }
             if (snapshot.isEmpty()) {
@@ -216,7 +246,7 @@ public final class AiConversationImagePreviewBrokerImpl
                         true, retained, 0);
             }
             // 无观察者时不创建 Base64；实时分发只在锁外编码一次并复用给当前观察者。
-            AiConversationStreamEvent event = previewEvent(image);
+            AiConversationStreamEvent event = previewEvent(preview);
             for (FluxSink<AiConversationStreamEvent> observer : snapshot) {
                 observer.next(event);
             }
@@ -283,7 +313,7 @@ public final class AiConversationImagePreviewBrokerImpl
                 long valueBytes) {
             Object previous = latest.remove(outputIndex);
             owner.releaseRetained(retainedSize(previous));
-            // 达到全实例硬上限时仍向当前观察者实时发送，但不把该大图留在重连缓存中。
+            // 达到全实例硬上限时仍向当前观察者实时发送，但不把该预览留在重连缓存中。
             if (valueBytes == 0L || owner.reserveRetained(valueBytes)) {
                 latest.put(outputIndex, value);
             }
@@ -291,14 +321,14 @@ public final class AiConversationImagePreviewBrokerImpl
         }
 
         private static long retainedSize(Object value) {
-            return value instanceof AiConversationGeneratedImage image
-                    ? image.sizeBytes()
+            return value instanceof AiConversationPreparedImagePreview preview
+                    ? preview.sizeBytes()
                     : 0L;
         }
 
         private static AiConversationStreamEvent streamEvent(Object value) {
-            if (value instanceof AiConversationGeneratedImage image) {
-                return previewEvent(image);
+            if (value instanceof AiConversationPreparedImagePreview preview) {
+                return previewEvent(preview);
             }
             return (AiConversationStreamEvent) value;
         }

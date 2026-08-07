@@ -71,7 +71,7 @@ test('multi image controls use capability checks, one downstream stream and boun
 	assert.match(page, /imageGenerationRequest\([\s\S]{0,180}requestedImageCount/)
 	assert.match(dialog, /maxlength="2"/)
 	assert.match(dialog, /parseImageOutputCount/)
-	assert.match(stream, /previewImages:\s*upsertImageOutputAttachment/)
+	assert.match(stream, /previewImages:\s*mergeImagePreviewOutput/)
 	assert.match(stream, /image-output-status/)
 	assert.match(stream, /requestedImageCount/)
 	assert.match(page, /messagePublicId: event\.data\?\.messagePublicId/)

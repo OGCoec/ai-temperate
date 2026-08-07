@@ -25,6 +25,7 @@ import com.example.temperate.service.user.aiconversation.generation.observer.AiC
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationSnapshotData;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewData;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePersistedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -283,6 +284,23 @@ public final class AiConversationGenerationObserverServiceImpl
             String generationPublicId,
             AiConversationStreamEvent event,
             String checkpoint) {
+        if ("image-persisted".equals(event.name())
+                && event.data() instanceof AiConversationImagePersistedData data) {
+            long elapsedNanos = Math.max(
+                    0L, timingClock.nanoTime() - timingContext.startedNanos());
+            transportDiagnosticService.recordSafely(
+                    timingContext,
+                    "ai_image_stream_checkpoint",
+                    Map.of(
+                            "checkpoint", checkpoint,
+                            "outputIndex", data.outputIndex(),
+                            "mappedPhase", "PERSISTED",
+                            "durationMillis",
+                                    java.util.concurrent.TimeUnit.NANOSECONDS
+                                            .toMillis(elapsedNanos),
+                            "outcome", "ready"));
+            return;
+        }
         if (!"image-preview".equals(event.name())
                 || !(event.data() instanceof AiConversationImagePreviewData data)) {
             return;

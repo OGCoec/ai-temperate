@@ -15,6 +15,7 @@ import java.util.Objects;
 public sealed interface AiConversationModelEvent permits
         AiConversationModelEvent.Chunk,
         AiConversationModelEvent.Image,
+        AiConversationModelEvent.ImageOutputReady,
         AiConversationModelEvent.ImageUsage,
         AiConversationModelEvent.ImageCostEvidence,
         AiConversationModelEvent.ImageFailure,
@@ -36,6 +37,19 @@ public sealed interface AiConversationModelEvent permits
 
         public Image {
             value = Objects.requireNonNull(value);
+        }
+    }
+
+    /**
+     * 表示一个图片子流已经同时交付最终字节和计量闭环，可以独立进入 OSS 持久化而无需等待兄弟槽位。
+     */
+    record ImageOutputReady(short outputIndex)
+            implements AiConversationModelEvent {
+
+        public ImageOutputReady {
+            if (outputIndex < 0 || outputIndex > 9) {
+                throw new IllegalArgumentException("Image output index is out of range.");
+            }
         }
     }
 

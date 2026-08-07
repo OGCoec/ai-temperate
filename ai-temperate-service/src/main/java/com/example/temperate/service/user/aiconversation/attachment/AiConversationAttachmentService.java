@@ -19,6 +19,19 @@ public interface AiConversationAttachmentService {
 
     String resolveModelUrl(AiConversationAttachment attachment);
 
+    /**
+     * 为一次图片 Generation 打开流式上传会话，使已经完成的槽位无需等待兄弟槽位即可进入有界 OSS 执行器。
+     *
+     * @param userPublicId 用户公共 ID
+     * @param conversationPublicId 会话公共 ID
+     * @param messagePublicId 预留消息公共 ID
+     * @return 只能由当前 Worker 使用并在终态后提交或补偿的上传会话
+     */
+    AiConversationGeneratedUploadSession openGeneratedUploadSession(
+            String userPublicId,
+            String conversationPublicId,
+            String messagePublicId);
+
     AiConversationAttachmentFinalization finalizeAttachments(
             String userPublicId,
             String conversationPublicId,

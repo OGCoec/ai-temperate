@@ -1,0 +1,6 @@
+{
+  "id": "ait-voice-recorder",
+  "displayName": "AI Temperate Android PCM Recorder",
+  "version": "1.0.0",
+  "description": "Android AudioRecord PCM 16 kHz mono streaming recorder"
+}

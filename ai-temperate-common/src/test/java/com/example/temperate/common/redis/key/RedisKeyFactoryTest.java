@@ -228,6 +228,25 @@ final class RedisKeyFactoryTest {
     }
 
     @Test
+    void createsVoiceTicketAndRateLimitKeysOnlyFromProtectedIdentifiers() {
+        RedisKeyFactory factory = new RedisKeyFactory("test");
+        HmacSha256Identifier hmac = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));
+        HmacIdentifier ticket = hmac.identify("voice-ticket");
+        HmacIdentifier user = hmac.identify("voice-user");
+        HmacIdentifier device = hmac.identify("voice-device");
+
+        assertEquals("ait:test:voice:session-ticket:v1:ticket:" + ticket.value(),
+                factory.voiceSessionTicketKey(ticket));
+        assertEquals("ait:test:voice:ticket-limit:v1:user:" + user.value(),
+                factory.voiceTicketUserRateKey(user));
+        assertEquals("ait:test:voice:ticket-limit:v1:device:" + device.value(),
+                factory.voiceTicketDeviceRateKey(device));
+        assertThrows(NoSuchMethodException.class,
+                () -> RedisKeyFactory.class.getMethod("voiceSessionTicketKey", String.class));
+    }
+
+    @Test
     void createsOnlyV5PreAuthKeysWithoutIndependentRiskStateKeys()
             throws Exception {
         RedisKeyFactory factory = new RedisKeyFactory("prod");

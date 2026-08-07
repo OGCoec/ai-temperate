@@ -108,6 +108,26 @@ public class AiConversationConfiguration {
     }
 
     /**
+     * 大图预览解码与缩放使用独立小型有界池，避免占用模型流线程或 OSS 上传线程并限制瞬时堆内存。
+     *
+     * @return 图片预览派生执行器
+     */
+    @Bean
+    @Qualifier("aiConversationImagePreviewExecutor")
+    Executor aiConversationImagePreviewExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("ai-conversation-image-preview-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(16);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
      * 推理关闭时不要求创建模型客户端；显式启用后则在接收请求前验证 Spring AI 边界完整。
      *
      * @param properties 推理配置

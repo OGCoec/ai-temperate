@@ -145,6 +145,8 @@ final class AiConversationGenerationObserverTimingTest {
                 "image/webp",
                 1024,
                 1024,
+                "THUMBNAIL",
+                true,
                 "preview-must-not-enter-diagnostics");
         when(previewBroker.events(any())).thenReturn(Flux.just(
                 new AiConversationStreamEvent("image-preview", previewData)));

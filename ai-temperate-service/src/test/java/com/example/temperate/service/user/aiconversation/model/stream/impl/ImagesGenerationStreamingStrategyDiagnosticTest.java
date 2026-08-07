@@ -294,6 +294,9 @@ final class ImagesGenerationStreamingStrategyDiagnosticTest {
                 "/v1/images/generations",
                 "/v1/images/edits",
                 1024 * 1024,
+                384_000,
+                768,
+                70,
                 16 * 1024 * 1024L);
     }
 

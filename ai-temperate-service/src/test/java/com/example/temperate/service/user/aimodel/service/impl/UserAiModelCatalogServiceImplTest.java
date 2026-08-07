@@ -263,6 +263,9 @@ final class UserAiModelCatalogServiceImplTest {
                         "/v1/images/generations",
                         "/v1/images/edits",
                         33_554_432,
+                        384_000,
+                        768,
+                        70,
                         268_435_456L));
     }
 

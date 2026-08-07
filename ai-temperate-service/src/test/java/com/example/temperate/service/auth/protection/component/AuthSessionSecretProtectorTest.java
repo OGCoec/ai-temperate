@@ -91,4 +91,19 @@ class AuthSessionSecretProtectorTest {
         assertThat(protector.toString())
                 .doesNotContain("auth-session-test-secret");
     }
+
+    @Test
+    void protectsVoiceTicketUserAndDeviceWithSeparatePurposes() {
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]);
+
+        HmacIdentifier ticketHash = protector.voiceTicket(ticket);
+        HmacIdentifier userHash = protector.voiceTicketUser(10001L);
+        HmacIdentifier deviceHash = protector.voiceTicketDevice(DEVICE_ID);
+
+        assertThat(Set.of(ticketHash.value(), userHash.value(), deviceHash.value())).hasSize(3);
+        assertThatThrownBy(() -> protector.voiceTicket(ticket + "="))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> protector.voiceTicketUser(0L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

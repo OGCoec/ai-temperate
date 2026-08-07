@@ -1,0 +1,30 @@
+export type AitVoiceRecorderFailure = {
+  code: string
+  message: string
+}
+
+export type AitVoicePermissionOptions = {
+  onGranted: () => void
+  onDenied: (permanent: boolean) => void
+}
+
+export type AitVoiceRecorderOptions = {
+  onFrame: (frame: ArrayBuffer) => void
+  onStarted: () => void
+  onStopped: () => void
+  onError: (failure: AitVoiceRecorderFailure) => void
+}
+
+export type AitVoiceRecorderSession = {
+  stop: () => void
+}
+
+/**
+ * 请求 Android 录音权限，永久拒绝与普通拒绝通过独立布尔值返回。
+ */
+export function requestRecordPermission(options: AitVoicePermissionOptions): void
+
+/**
+ * 启动固定十六千赫兹、单声道、十六位小端 PCM 录音并按约一百毫秒回调。
+ */
+export function startRecording(options: AitVoiceRecorderOptions): AitVoiceRecorderSession

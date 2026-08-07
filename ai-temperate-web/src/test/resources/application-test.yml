@@ -177,8 +177,18 @@ app:
       enabled: true
       # 测试绑定正式 Images Generation 相对路径，但不会连接真实上游。
       generations-path: /v1/images/generations
+      # 测试绑定正式 Images Edit 相对路径，但不会连接真实上游。
+      edits-path: /v1/images/edits
       # 测试沿用三十二 MiB 单图解码上限以覆盖安全绑定。
       maximum-decoded-image-bytes: 33554432
+      # 测试固定三十八万四千字节内联预览边界以覆盖大小图分流。
+      maximum-inline-preview-bytes: 384000
+      # 测试固定七百六十八像素缩略图最长边以覆盖配置绑定。
+      thumbnail-max-edge-pixels: 768
+      # 测试固定百分之七十 JPEG 预览质量以覆盖配置绑定。
+      thumbnail-jpeg-quality: 70
+      # 测试允许 Broker 最多保留二百五十六 MiB 有界预览，不连接外部存储。
+      maximum-preview-retained-bytes: 268435456
     # 测试系统提示不包含任何生产业务数据。
     system-prompt: 你是测试环境中的可靠 AI 助手。
     # 测试会话附件使用完全虚构的 OSS 边界，不执行任何外部请求。

@@ -11,5 +11,7 @@ public record AiConversationImagePreviewData(
         String contentType,
         int width,
         int height,
+        String previewKind,
+        boolean requiresUpgrade,
         String base64) {
 }

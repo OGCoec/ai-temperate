@@ -69,6 +69,8 @@ test('creates bounded slots and replaces only the matching output index', async 
 		partialImageIndex: 1,
 		phase: 'PARTIAL',
 		contentType: 'image/webp',
+		previewKind: 'THUMBNAIL',
+		requiresUpgrade: true,
 		base64: 'YWJj'
 	})
 	const updated = module.upsertImageOutputAttachment(slots, preview)
@@ -117,6 +119,8 @@ test('turns a complete partial image into a volatile browser attachment', async 
 		outputIndex: 3,
 		partialImageIndex: 1,
 		contentType: 'image/webp',
+		previewKind: 'THUMBNAIL',
+		requiresUpgrade: true,
 		width: 1280,
 		height: 720,
 		base64: 'YWJj'
@@ -128,6 +132,205 @@ test('turns a complete partial image into a volatile browser attachment', async 
 	assert.equal(attachment.volatilePreview, true)
 	assert.equal(attachment.outputIndex, 3)
 	assert.equal(attachment.partialImageIndex, 1)
+	assert.equal(attachment.previewKind, 'THUMBNAIL')
+	assert.equal(attachment.requiresUpgrade, true)
+})
+
+test('keeps a small full preview visible after OSS persistence without reloading it', async () => {
+	const module = await loadModule()
+	const preview = module.imagePreviewAttachment({
+		imageId: 'small-final',
+		phase: 'FINAL',
+		outputIndex: 0,
+		partialImageIndex: null,
+		contentType: 'image/png',
+		previewKind: 'FULL',
+		requiresUpgrade: false,
+		width: 512,
+		height: 512,
+		base64: 'YWJj'
+	})
+	const persisted = module.persistedImageAttachments({ attachments: [{
+		attachmentId: 'stored-small',
+		fileName: 'generated-1.png',
+		category: 'IMAGE',
+		contentType: 'image/png',
+		url: 'https://oss.example.test/small.png',
+		state: 'AVAILABLE'
+	}] })
+
+	const [merged] = module.mergeCompletedImageOutputs([preview], persisted, 1)
+
+	assert.equal(merged.url, 'data:image/png;base64,YWJj')
+	assert.equal(merged.persistedUrl, 'https://oss.example.test/small.png')
+	assert.equal(merged.requiresUpgrade, false)
+	assert.equal(merged.status, 'COMPLETED')
+})
+
+test('keeps a large thumbnail until its persisted original is preloaded', async () => {
+	const module = await loadModule()
+	const preview = module.imagePreviewAttachment({
+		imageId: 'large-final',
+		phase: 'FINAL',
+		outputIndex: 0,
+		partialImageIndex: null,
+		contentType: 'image/jpeg',
+		previewKind: 'THUMBNAIL',
+		requiresUpgrade: true,
+		width: 768,
+		height: 512,
+		base64: 'REVG'
+	})
+	const persisted = module.persistedImageAttachments({ attachments: [{
+		attachmentId: 'stored-large',
+		fileName: 'generated-1.png',
+		category: 'IMAGE',
+		contentType: 'image/png',
+		url: 'https://oss.example.test/large.png',
+		state: 'AVAILABLE'
+	}] })
+
+	const [merged] = module.mergeCompletedImageOutputs([preview], persisted, 1)
+
+	assert.equal(merged.url, 'data:image/jpeg;base64,REVG')
+	assert.equal(merged.persistedUrl, 'https://oss.example.test/large.png')
+	assert.equal(merged.requiresUpgrade, true)
+	assert.equal(merged.status, 'UPGRADING')
+})
+
+test('merges an early persisted event into a small preview without changing its source', async () => {
+	const module = await loadModule()
+	const preview = module.imagePreviewAttachment({
+		imageId: 'small-final', phase: 'FINAL', outputIndex: 0,
+		partialImageIndex: null, contentType: 'image/png',
+		previewKind: 'FULL', requiresUpgrade: false,
+		width: 512, height: 512, base64: 'YWJj'
+	})
+	const persisted = module.persistedImageOutputAttachment({
+		outputIndex: 0,
+		attachment: {
+			schemaVersion: 1,
+			attachmentId: 'stored-small', fileName: 'generated-1.png',
+			category: 'IMAGE', contentType: 'image/png', sizeBytes: '3',
+			url: 'https://oss.example.test/small.png', state: 'AVAILABLE'
+		}
+	})
+
+	const [merged] = module.mergePersistedImageOutput([preview], persisted)
+
+	assert.equal(merged.url, 'data:image/png;base64,YWJj')
+	assert.equal(merged.persistedUrl, 'https://oss.example.test/small.png')
+	assert.equal(merged.status, 'COMPLETED')
+})
+
+test('merges an early persisted event into a large thumbnail for one-time upgrade', async () => {
+	const module = await loadModule()
+	const preview = module.imagePreviewAttachment({
+		imageId: 'large-final', phase: 'FINAL', outputIndex: 2,
+		partialImageIndex: null, contentType: 'image/jpeg',
+		previewKind: 'THUMBNAIL', requiresUpgrade: true,
+		width: 768, height: 512, base64: 'REVG'
+	})
+	const persisted = module.persistedImageOutputAttachment({
+		outputIndex: 2,
+		attachment: {
+			schemaVersion: 1,
+			attachmentId: 'stored-large', fileName: 'generated-3.png',
+			category: 'IMAGE', contentType: 'image/png', sizeBytes: '999',
+			url: 'https://oss.example.test/large.png', state: 'AVAILABLE'
+		}
+	})
+
+	const [merged] = module.mergePersistedImageOutput([preview], persisted)
+
+	assert.equal(merged.url, 'data:image/jpeg;base64,REVG')
+	assert.equal(merged.persistedUrl, 'https://oss.example.test/large.png')
+	assert.equal(merged.status, 'UPGRADING')
+	assert.equal(merged.requiresUpgrade, true)
+})
+
+test('rejects unsafe early persisted image URLs', async () => {
+	const module = await loadModule()
+
+	assert.equal(module.persistedImageOutputAttachment({
+		outputIndex: 0,
+		attachment: {
+			schemaVersion: 1,
+			attachmentId: 'unsafe', fileName: 'generated-1.svg',
+			category: 'IMAGE', contentType: 'image/svg+xml', sizeBytes: '1',
+			url: 'javascript:alert(1)', state: 'AVAILABLE'
+		}
+	}), null)
+})
+
+test('does not let a late preview replace an already persisted slot', async () => {
+	const module = await loadModule()
+	const persisted = {
+		attachmentId: 'stored', fileName: 'generated-1.png',
+		category: 'IMAGE', contentType: 'image/png', sizeBytes: '3',
+		url: 'https://oss.example.test/final.png', state: 'AVAILABLE',
+		outputIndex: 0, phase: 'FINAL', status: 'COMPLETED',
+		volatilePreview: false, imageSlot: true
+	}
+	const preview = module.imagePreviewAttachment({
+		phase: 'FINAL', outputIndex: 0, partialImageIndex: null,
+		contentType: 'image/png', previewKind: 'FULL',
+		requiresUpgrade: false, width: 10, height: 10, base64: 'YWJj'
+	})
+
+	const [merged] = module.mergeImagePreviewOutput([persisted], preview)
+
+	assert.equal(merged.url, 'https://oss.example.test/final.png')
+	assert.equal(merged.volatilePreview, false)
+})
+
+test('shows an early persisted image directly when no base64 preview exists', async () => {
+	const module = await loadModule()
+	const persisted = module.persistedImageOutputAttachment({
+		outputIndex: 4,
+		attachment: {
+			schemaVersion: 1,
+			attachmentId: 'stored-direct', fileName: 'generated-5.webp',
+			category: 'IMAGE', contentType: 'image/webp', sizeBytes: '42',
+			url: 'https://oss.example.test/direct.webp', state: 'AVAILABLE'
+		}
+	})
+
+	const [merged] = module.mergePersistedImageOutput([], persisted)
+
+	assert.equal(merged.outputIndex, 4)
+	assert.equal(merged.url, 'https://oss.example.test/direct.webp')
+	assert.equal(merged.status, 'COMPLETED')
+	assert.equal(merged.volatilePreview, false)
+})
+
+test('does not restart a finished or failed large-image upgrade for duplicate evidence', async () => {
+	const module = await loadModule()
+	const persisted = module.persistedImageOutputAttachment({
+		outputIndex: 0,
+		attachment: {
+			schemaVersion: 1,
+			attachmentId: 'stored-large', fileName: 'generated-1.png',
+			category: 'IMAGE', contentType: 'image/png', sizeBytes: '999',
+			url: 'https://oss.example.test/large.png', state: 'AVAILABLE'
+		}
+	})
+	const upgraded = {
+		...persisted,
+		persistedUrl: persisted.url,
+		requiresUpgrade: false,
+		upgradeFailed: false
+	}
+	const failed = {
+		...persisted,
+		url: 'data:image/jpeg;base64,REVG',
+		persistedUrl: persisted.url,
+		requiresUpgrade: true,
+		upgradeFailed: true
+	}
+
+	assert.deepEqual(module.mergePersistedImageOutput([upgraded], persisted), [upgraded])
+	assert.deepEqual(module.mergePersistedImageOutput([failed], persisted), [failed])
 })
 
 test('replaces matching preview slots with persisted URLs in output order', async () => {

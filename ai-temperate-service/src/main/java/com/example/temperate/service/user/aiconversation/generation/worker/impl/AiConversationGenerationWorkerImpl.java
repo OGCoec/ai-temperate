@@ -7,9 +7,10 @@ import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
-import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
-import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentFinalization;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadResult;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadSession;
 import com.example.temperate.service.user.aiconversation.attachment.config.AiConversationAttachmentProperties;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyPermit;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
@@ -66,7 +67,9 @@ import com.example.temperate.service.user.aiconversation.image.AiConversationGen
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageAction;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewProcessor;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewPublishResult;
+import com.example.temperate.service.user.aiconversation.image.AiConversationPreparedImagePreview;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageMeteringEvidence;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageMeteringStatus;
 import com.example.temperate.service.user.aiconversation.image.AiConversationPersistedGeneratedAttachmentCodec;
@@ -83,17 +86,20 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -141,6 +147,7 @@ public final class AiConversationGenerationWorkerImpl
     private final AiConversationStreamingStrategyRegistry streamingStrategyRegistry;
     private final AiConversationAttachmentService attachmentService;
     private final AiConversationGenerationBillingTransactionService billingTransactionService;
+    private final AiConversationImagePreviewProcessor imagePreviewProcessor;
     private final AiConversationImagePreviewBroker imagePreviewBroker;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
     private final AiConversationCompactionCoordinator compactionCoordinator;
@@ -189,6 +196,7 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 null,
                 null,
+                AiConversationImagePreviewProcessor.noOp(),
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
                 null,
@@ -239,6 +247,7 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 null,
                 null,
+                AiConversationImagePreviewProcessor.noOp(),
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
                 null,
@@ -269,6 +278,7 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationStreamingStrategyRegistry streamingStrategyRegistry,
             AiConversationAttachmentService attachmentService,
             AiConversationGenerationBillingTransactionService billingTransactionService,
+            AiConversationImagePreviewProcessor imagePreviewProcessor,
             AiConversationImagePreviewBroker imagePreviewBroker,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
             AiConversationAttachmentProperties attachmentProperties,
@@ -296,6 +306,7 @@ public final class AiConversationGenerationWorkerImpl
         this.streamingStrategyRegistry = streamingStrategyRegistry;
         this.attachmentService = attachmentService;
         this.billingTransactionService = billingTransactionService;
+        this.imagePreviewProcessor = Objects.requireNonNull(imagePreviewProcessor);
         this.imagePreviewBroker = Objects.requireNonNull(imagePreviewBroker);
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
         this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
@@ -399,6 +410,19 @@ public final class AiConversationGenerationWorkerImpl
                 markInterrupted(beforeUpstream, conversationPublicId, state);
                 freezeCancellation(beforeUpstream, state.answer.toString(), state.usage.get(), traceId);
                 return;
+            }
+
+            if (imageGeneration != null) {
+                AiConversationGenerationBillingTransactionService billing =
+                        requiredImageDependency(billingTransactionService);
+                AiConversationAttachmentService attachments =
+                        requiredImageDependency(attachmentService);
+                // 正式 Object Key 依赖稳定消息 ID；在上游订阅前只预留 ID，不提前创建消息或冻结计费终态。
+                long messageId = billing.getOrReserveMessageId(generation.getId());
+                state.imageUploadSession = attachments.openGeneratedUploadSession(
+                        publicIdCodec.encode(generation.getLoginIdentityId()),
+                        conversationPublicId,
+                        publicIdCodec.encode(messageId));
             }
 
             // Worker 与 SSE Observer 是被 Redis 分隔的两次订阅；此处必须在最终订阅外层建立 Context，
@@ -640,6 +664,7 @@ public final class AiConversationGenerationWorkerImpl
                 throw failure;
             }
         } finally {
+            abortImageUploadsSafely(state);
             try {
                 // Billing 可能由其他实例消费；本机 Worker 必须自行安排预览宽限释放，避免依赖远端 release。
                 imagePreviewBroker.seal(generationPublicId);
@@ -760,12 +785,14 @@ public final class AiConversationGenerationWorkerImpl
                             })
                             // 子流必须同时交付最终图片与权威计量事件；成本缺失由专用证据事件进入待对账，而不是丢弃图片。
                             .concatWith(Flux.defer(() -> finalSeen.get() && meteringSeen.get()
-                                    ? Flux.<AiConversationModelEvent>empty()
+                                    ? Flux.<AiConversationModelEvent>just(
+                                            new AiConversationModelEvent.ImageOutputReady(
+                                                    childIndex))
                                     : Flux.<AiConversationModelEvent>just(
                                             new AiConversationModelEvent.ImageFailure(
-                                            childIndex,
-                                            new IllegalStateException(
-                                                    "Image child stream completed without a final image.")))))
+                                                    childIndex,
+                                                    new IllegalStateException(
+                                                            "Image child stream completed without a final image or metering evidence.")))))
                             // 普通上游失败只冻结单槽位；本机 LinkageError 说明整个实例不可信，必须取消同批所有子流并立即退款。
                             .onErrorResume(failure ->
                                     recoverImageChildFailure(childIndex, failure));
@@ -795,7 +822,7 @@ public final class AiConversationGenerationWorkerImpl
             state.removeFinalImage(outputIndex);
             state.imageFailures.put(outputIndex, failure);
             publishPreviewFailureSafely(
-                    generationPublicId, outputIndex, reasonCode);
+                    state, generationPublicId, outputIndex, reasonCode);
         }
     }
 
@@ -837,6 +864,7 @@ public final class AiConversationGenerationWorkerImpl
                             image.outputIndex(),
                             duplicateFailure);
                     publishPreviewFailureSafely(
+                            state,
                             generationPublicId,
                             image.outputIndex(),
                             failureCode(duplicateFailure));
@@ -848,27 +876,27 @@ public final class AiConversationGenerationWorkerImpl
                             "Image batch decoded bytes exceed the configured limit.");
                     state.imageFailures.putIfAbsent(image.outputIndex(), sizeFailure);
                     publishPreviewFailureSafely(
+                            state,
                             generationPublicId,
                             image.outputIndex(),
                             failureCode(sizeFailure));
                     return;
                 }
             }
-            recordImagePublishCheckpoint(
+            state.imagePreviewTasks.put(image.outputIndex(), preparePreviewSafely(
+                    state,
                     timingContext,
                     generationPublicId,
-                    image,
-                    "P4_BROKER_PUBLISH_ATTEMPT",
-                    null);
-            AiConversationImagePreviewPublishResult publishResult =
-                    publishPreviewSafely(generationPublicId, image);
-            recordImagePublishCheckpoint(
-                    timingContext,
-                    generationPublicId,
-                    image,
-                    "P5_BROKER_PUBLISH_RESULT",
-                    publishResult);
+                    image));
             metrics.imagePreview(image.phase().name());
+            return;
+        }
+        if (event instanceof AiConversationModelEvent.ImageOutputReady ready) {
+            submitImageUpload(
+                    state,
+                    timingContext,
+                    generationPublicId,
+                    ready.outputIndex());
             return;
         }
         if (event instanceof AiConversationModelEvent.ImageUsage imageUsage) {
@@ -884,6 +912,7 @@ public final class AiConversationGenerationWorkerImpl
                         imageUsage.outputIndex(),
                         duplicateFailure);
                 publishPreviewFailureSafely(
+                        state,
                         generationPublicId,
                         imageUsage.outputIndex(),
                         failureCode(duplicateFailure));
@@ -941,6 +970,7 @@ public final class AiConversationGenerationWorkerImpl
             state.imageFailures.putIfAbsent(
                     imageFailure.outputIndex(), imageFailure.cause());
             publishPreviewFailureSafely(
+                    state,
                     generationPublicId,
                     imageFailure.outputIndex(),
                     failureCode(imageFailure.cause()));
@@ -948,6 +978,117 @@ public final class AiConversationGenerationWorkerImpl
         }
         if (event instanceof AiConversationModelEvent.Failure failure) {
             sink.error(new IllegalStateException(failure.reasonCode()));
+        }
+    }
+
+    private void submitImageUpload(
+            WorkerState state,
+            AiConversationStreamTimingContext timingContext,
+            String generationPublicId,
+            short outputIndex) {
+        if (state.imageFailures.containsKey(outputIndex)) {
+            return;
+        }
+        AiConversationGeneratedImage image = state.finalImages.get(outputIndex);
+        if (image == null) {
+            throw new IllegalStateException(
+                    "Image output became ready without a retained final image.");
+        }
+        AiConversationGeneratedUploadSession uploadSession = Objects.requireNonNull(
+                state.imageUploadSession,
+                "Image upload session is unavailable");
+        String extension = AiConversationGeneratedImageFormat
+                .fromContentType(image.contentType())
+                .extension();
+        AiConversationGeneratedMedia media = new AiConversationGeneratedMedia(
+                "generated-" + (outputIndex + 1) + "." + extension,
+                image.contentType(),
+                image.bytes());
+        long startedNanos = System.nanoTime();
+        CompletableFuture<AiConversationGeneratedUploadResult> task = uploadSession
+                .submit(outputIndex, media)
+                .whenComplete((result, failure) -> {
+                    Duration uploadDuration = Duration.ofNanos(
+                            System.nanoTime() - startedNanos);
+                    if (failure != null) {
+                        state.failure.compareAndSet(
+                                null,
+                                new IllegalStateException(
+                                        "Generated image upload task failed.",
+                                        failure));
+                        publishPreviewFailureSafely(
+                                state,
+                                generationPublicId,
+                                outputIndex,
+                                AiConversationAttachment.STORAGE_FAILURE_CODE);
+                        metrics.imagePersistence(uploadDuration, "failed");
+                        recordImagePersistenceDiagnostic(
+                                timingContext,
+                                outputIndex,
+                                uploadDuration,
+                                "failed");
+                        return;
+                    }
+                    if (result.successful()) {
+                        state.persistedImages.put(outputIndex, result);
+                        // OSS 已成为该槽位的最新事实；晚到的压缩任务不得把 Broker 和页面降级回临时预览。
+                        state.invalidatePreview(outputIndex);
+                        publishPersistedSafely(
+                                generationPublicId,
+                                outputIndex,
+                                result.attachment());
+                        metrics.imagePersistence(uploadDuration, "success");
+                    } else {
+                        state.removeFinalImage(outputIndex);
+                        state.imageUsages.remove(outputIndex);
+                        state.imageMeteringEvidence.remove(outputIndex);
+                        state.imageFailures.putIfAbsent(
+                                outputIndex,
+                                new IllegalStateException(
+                                        AiConversationAttachment.STORAGE_FAILURE_CODE));
+                        publishPreviewFailureSafely(
+                                state,
+                                generationPublicId,
+                                outputIndex,
+                                AiConversationAttachment.STORAGE_FAILURE_CODE);
+                        metrics.imagePersistence(uploadDuration, "dropped");
+                    }
+                    recordImagePersistenceDiagnostic(
+                            timingContext,
+                            outputIndex,
+                            uploadDuration,
+                            result.successful() ? "success" : "dropped");
+                });
+        if (state.imageUploadTasks.putIfAbsent(outputIndex, task) != null) {
+            throw new IllegalStateException(
+                    "Image output attempted to submit a duplicate upload task.");
+        }
+    }
+
+    private void recordImagePersistenceDiagnostic(
+            AiConversationStreamTimingContext timingContext,
+            short outputIndex,
+            Duration duration,
+            String outcome) {
+        transportDiagnosticService.recordSafely(
+                timingContext,
+                "ai_image_oss_persistence",
+                Map.of(
+                        "outputIndex", outputIndex,
+                        "phase", "OSS_PERSISTENCE",
+                        "durationMillis", duration.toMillis(),
+                        "outcome", outcome));
+    }
+
+    private void publishPersistedSafely(
+            String generationPublicId,
+            short outputIndex,
+            AiConversationAttachment attachment) {
+        try {
+            imagePreviewBroker.publishPersisted(
+                    generationPublicId, outputIndex, attachment);
+        } catch (RuntimeException ignored) {
+            // 正式附件仍会进入 completed；本机易失事件失败不得回滚已经完成的 OSS 上传。
         }
     }
 
@@ -977,21 +1118,98 @@ public final class AiConversationGenerationWorkerImpl
                 details);
     }
 
-    private AiConversationImagePreviewPublishResult publishPreviewSafely(
+    private CompletableFuture<Void> preparePreviewSafely(
+            WorkerState state,
+            AiConversationStreamTimingContext timingContext,
             String generationPublicId,
             AiConversationGeneratedImage image) {
+        long previewSequence = state.registerPreview(image.outputIndex());
+        recordImagePublishCheckpoint(
+                timingContext,
+                generationPublicId,
+                image,
+                "P4_PREVIEW_PREPARATION_ATTEMPT",
+                null);
         try {
-            return imagePreviewBroker.publish(generationPublicId, image);
+            return imagePreviewProcessor.prepare(image)
+                    .thenAccept(prepared -> {
+                        AiConversationImagePreviewPublishResult publishResult =
+                                prepared.filter(ignored -> state.isLatestPreview(
+                                                image.outputIndex(), previewSequence))
+                                        .map(preview -> publishPreviewSafely(
+                                                generationPublicId, preview))
+                                        .orElseGet(
+                                                AiConversationImagePreviewPublishResult::ignored);
+                        recordImagePublishCheckpoint(
+                                timingContext,
+                                generationPublicId,
+                                image,
+                                "P5_PREVIEW_PUBLISH_RESULT",
+                                publishResult);
+                    })
+                    .exceptionally(ignored -> {
+                        recordImagePublishCheckpoint(
+                                timingContext,
+                                generationPublicId,
+                                image,
+                                "P5_PREVIEW_PUBLISH_RESULT",
+                                AiConversationImagePreviewPublishResult.ignored());
+                        return null;
+                    });
+        } catch (RuntimeException ignored) {
+            recordImagePublishCheckpoint(
+                    timingContext,
+                    generationPublicId,
+                    image,
+                    "P5_PREVIEW_PUBLISH_RESULT",
+                    AiConversationImagePreviewPublishResult.ignored());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private AiConversationImagePreviewPublishResult publishPreviewSafely(
+            String generationPublicId,
+            AiConversationPreparedImagePreview preview) {
+        try {
+            return imagePreviewBroker.publish(generationPublicId, preview);
         } catch (RuntimeException ignored) {
             // Broker 只承载本机临时预览，发布失败不能把已经收到的模型图片改判为业务失败。
             return AiConversationImagePreviewPublishResult.ignored();
         }
     }
 
+    private static void awaitImagePreviewTasks(
+            WorkerState state,
+            long workerDeadlineNanos) throws InterruptedException {
+        CompletableFuture<?>[] tasks = state.imagePreviewTasks.values().toArray(
+                CompletableFuture[]::new);
+        if (tasks.length == 0) {
+            return;
+        }
+        long remaining = remainingNanos(workerDeadlineNanos);
+        long available = remaining == Long.MAX_VALUE
+                ? TimeUnit.SECONDS.toNanos(3)
+                : Math.max(0L, remaining - TimeUnit.SECONDS.toNanos(1));
+        long waitNanos = Math.min(
+                available,
+                TimeUnit.SECONDS.toNanos(3));
+        if (waitNanos <= 0L) {
+            return;
+        }
+        try {
+            // 只给易失预览一个很短的收敛窗口，不能让压缩失败阻塞权威 OSS 持久化和终态结算。
+            CompletableFuture.allOf(tasks).get(waitNanos, TimeUnit.NANOSECONDS);
+        } catch (ExecutionException | TimeoutException ignored) {
+            // 未完成任务仍可在 Broker 宽限期内发布；超时不会升级为生成失败。
+        }
+    }
+
     private void publishPreviewFailureSafely(
+            WorkerState state,
             String generationPublicId,
             short outputIndex,
             String reasonCode) {
+        state.invalidatePreview(outputIndex);
         try {
             imagePreviewBroker.publishFailure(
                     generationPublicId, outputIndex, reasonCode);
@@ -1007,50 +1225,19 @@ public final class AiConversationGenerationWorkerImpl
             WorkerState state,
             short requestedOutputCount,
             long workerDeadlineNanos,
-            String traceId) {
-        List<AiConversationGeneratedImage> finalImages = List.copyOf(
-                state.finalImages.values());
-        if (finalImages.isEmpty()) {
+            String traceId) throws InterruptedException {
+        if (state.finalImages.isEmpty()) {
             throw new IllegalStateException(
                     "AI image stream completed without a final image");
         }
-        AiConversationGenerationBillingTransactionService billing =
-                requiredImageDependency(billingTransactionService);
-        AiConversationAttachmentService attachments =
-                requiredImageDependency(attachmentService);
-        long messageId = billing.getOrReserveMessageId(generation.getId());
-        long persistenceStarted = System.nanoTime();
-        AiConversationAttachmentFinalization finalized;
-        try {
-            // 文件名携带稳定输出序号，真实 MIME 仍由解码后的字节签名决定，确保部分成功后的顺序可追踪。
-            List<AiConversationGeneratedMedia> generatedMedia = finalImages.stream()
-                    .map(image -> {
-                        String extension = AiConversationGeneratedImageFormat
-                                .fromContentType(image.contentType())
-                                .extension();
-                        return new AiConversationGeneratedMedia(
-                                "generated-" + (image.outputIndex() + 1)
-                                        + "." + extension,
-                                image.contentType(),
-                                image.bytes());
-                    })
-                    .toList();
-            finalized = attachments.finalizeAttachments(
-                    publicIdCodec.encode(generation.getLoginIdentityId()),
-                    conversationPublicId,
-                    publicIdCodec.encode(messageId),
-                    List.of(),
-                    generatedMedia,
-                    remainingDuration(workerDeadlineNanos));
-        } catch (RuntimeException failure) {
-            metrics.imagePersistence(
-                    Duration.ofNanos(System.nanoTime() - persistenceStarted),
-                    "failed");
-            throw failure;
-        }
+        AiConversationGeneratedUploadSession uploadSession = Objects.requireNonNull(
+                state.imageUploadSession,
+                "Image upload session is unavailable");
+        List<AiConversationGeneratedUploadResult> uploadResults = uploadSession.finish(
+                remainingDuration(workerDeadlineNanos));
+        awaitImageUploadTasks(state, workerDeadlineNanos);
         Throwable lifecycleFailure = state.failure.get();
         if (lifecycleFailure != null) {
-            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
             throw lifecycleFailure instanceof RuntimeException runtimeFailure
                     ? runtimeFailure
                     : new IllegalStateException(
@@ -1058,57 +1245,26 @@ public final class AiConversationGenerationWorkerImpl
                             lifecycleFailure);
         }
         if (remainingNanos(workerDeadlineNanos) <= 0L) {
-            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
             throw new IllegalStateException("AI Generation worker deadline expired during OSS finalization.");
         }
         AiConversationGenerationWorkItem beforeTerminal = controlService.load(generation.getId());
         if (isCancellationRequested(beforeTerminal)) {
             // Stop 在 OSS 上传期间到达时，刚创建的对象尚无数据库引用，必须先补偿再冻结取消事实。
-            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+            abortImageUploadsSafely(state);
             markInterrupted(beforeTerminal, conversationPublicId, state);
             freezeCancellation(beforeTerminal, "", state.usage.get(), traceId);
             return;
         }
-        List<AiConversationAttachment> persisted = finalized.responseAttachments().stream()
-                .filter(item -> item.state()
-                        == com.example.temperate.service.user.aiconversation.attachment
-                                .AiConversationAttachmentState.AVAILABLE)
+        List<AiConversationAttachment> persisted = uploadResults.stream()
+                .filter(AiConversationGeneratedUploadResult::successful)
+                .map(AiConversationGeneratedUploadResult::attachment)
                 .limit(10)
                 .toList();
-        for (int index = 0;
-                index < finalized.responseAttachments().size()
-                        && index < finalImages.size();
-                index++) {
-            AiConversationAttachment attachment =
-                    finalized.responseAttachments().get(index);
-            if (attachment.state()
-                    != com.example.temperate.service.user.aiconversation.attachment
-                            .AiConversationAttachmentState.AVAILABLE) {
-                short outputIndex = finalImages.get(index).outputIndex();
-                state.removeFinalImage(outputIndex);
-                state.imageUsages.remove(outputIndex);
-                state.imageMeteringEvidence.remove(outputIndex);
-                publishPreviewFailureSafely(
-                        generationPublicId,
-                        outputIndex,
-                        AiConversationAttachment.STORAGE_FAILURE_CODE);
-            }
-        }
-        for (int index = finalized.responseAttachments().size();
-                index < finalImages.size();
-                index++) {
-            short outputIndex = finalImages.get(index).outputIndex();
-            state.removeFinalImage(outputIndex);
-            state.imageUsages.remove(outputIndex);
-            state.imageMeteringEvidence.remove(outputIndex);
-        }
-        metrics.imagePersistence(
-                Duration.ofNanos(System.nanoTime() - persistenceStarted),
-                persisted.isEmpty() ? "dropped" : "success");
         if (persisted.isEmpty()) {
-            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
             throw new IllegalStateException("AI image OSS finalization produced no persistent output.");
         }
+        // 缩略图派生与原图上传并行；只在冻结 completed 前短暂收敛，避免终态先清空页面预览通道。
+        awaitImagePreviewTasks(state, workerDeadlineNanos);
         state.usage.set(state.aggregateImageUsage());
         try {
             AiConversationGenerationTerminalResult terminal = terminalService.freeze(
@@ -1125,17 +1281,55 @@ public final class AiConversationGenerationWorkerImpl
                             state.finishReason.get(),
                             state.upstreamRequestId.get(),
                             traceId));
-            if ((!terminal.claimed()
-                            || !AiConversationGenerationTerminalType.COMPLETED.name()
-                                    .equals(terminal.terminalType()))
-                    && !finalized.createdObjectKeys().isEmpty()) {
+            if (terminal.claimed()
+                    && AiConversationGenerationTerminalType.COMPLETED.name()
+                            .equals(terminal.terminalType())) {
+                // 只有 URL 已经进入权威终态证据后才能解除 Session 的补偿责任。
+                uploadSession.commit();
+            } else {
                 // 取消请求或另一个终态赢得行锁时，本 Worker 创建的对象没有数据库引用，必须立即补偿删除。
-                attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+                abortImageUploadsSafely(state);
             }
         } catch (RuntimeException failure) {
             // 终态事务回滚后 URL 不会进入结算证据，刚上传的对象同样必须丢弃。
-            attachments.compensateCreatedObjects(finalized.createdObjectKeys());
+            abortImageUploadsSafely(state);
             throw failure;
+        }
+    }
+
+    private static void awaitImageUploadTasks(
+            WorkerState state,
+            long workerDeadlineNanos) throws InterruptedException {
+        CompletableFuture<?>[] tasks = state.imageUploadTasks.values().toArray(
+                CompletableFuture[]::new);
+        if (tasks.length == 0) {
+            return;
+        }
+        long remaining = remainingNanos(workerDeadlineNanos);
+        if (remaining <= 0L) {
+            throw new IllegalStateException(
+                    "AI Generation worker deadline expired during image upload callbacks.");
+        }
+        try {
+            CompletableFuture.allOf(tasks).get(remaining, TimeUnit.NANOSECONDS);
+        } catch (ExecutionException exception) {
+            throw new IllegalStateException(
+                    "Generated image upload callback failed.", exception.getCause());
+        } catch (TimeoutException exception) {
+            throw new IllegalStateException(
+                    "Generated image upload callbacks timed out.", exception);
+        }
+    }
+
+    private static void abortImageUploadsSafely(WorkerState state) {
+        AiConversationGeneratedUploadSession uploadSession = state.imageUploadSession;
+        if (uploadSession == null) {
+            return;
+        }
+        try {
+            uploadSession.abortAndCompensate();
+        } catch (RuntimeException ignored) {
+            // OSS 补偿已有独立失败指标；finally 兜底不得覆盖已经冻结或即将冻结的业务终态。
         }
     }
 
@@ -1472,14 +1666,41 @@ public final class AiConversationGenerationWorkerImpl
                 new ConcurrentHashMap<>();
         private final ConcurrentSkipListMap<Short, String> upstreamRequestIds =
                 new ConcurrentSkipListMap<>();
+        private final ConcurrentMap<Short, CompletableFuture<Void>> imagePreviewTasks =
+                new ConcurrentHashMap<>();
+        private final ConcurrentMap<Short, CompletableFuture<AiConversationGeneratedUploadResult>>
+                imageUploadTasks = new ConcurrentHashMap<>();
+        private final ConcurrentSkipListMap<Short, AiConversationGeneratedUploadResult>
+                persistedImages = new ConcurrentSkipListMap<>();
+        private final ConcurrentMap<Short, Long> latestPreviewSequences =
+                new ConcurrentHashMap<>();
+        private final AtomicLong previewSequence = new AtomicLong();
         private final AtomicLong finalImageBytes = new AtomicLong();
         private final long maximumFinalImageBytes;
+        private AiConversationGeneratedUploadSession imageUploadSession;
         private String cacheGeneration;
         private long ephemeralOrdinal;
         private int answerBytes;
 
         private WorkerState(long maximumFinalImageBytes) {
             this.maximumFinalImageBytes = maximumFinalImageBytes;
+        }
+
+        /**
+         * 每个槽位记录全局单调序号，确保异步完成顺序不能让旧 PARTIAL 覆盖新 FINAL 或失败状态。
+         */
+        private long registerPreview(short outputIndex) {
+            long sequence = previewSequence.incrementAndGet();
+            latestPreviewSequences.put(outputIndex, sequence);
+            return sequence;
+        }
+
+        private boolean isLatestPreview(short outputIndex, long sequence) {
+            return Objects.equals(latestPreviewSequences.get(outputIndex), sequence);
+        }
+
+        private void invalidatePreview(short outputIndex) {
+            latestPreviewSequences.put(outputIndex, previewSequence.incrementAndGet());
         }
 
         private boolean reserveFinalBytes(AiConversationGeneratedImage image) {

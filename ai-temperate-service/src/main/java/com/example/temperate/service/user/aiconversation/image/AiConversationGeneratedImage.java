@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.aiconversation.image;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.util.Base64;
 import java.util.Objects;
 
@@ -43,6 +45,15 @@ public record AiConversationGeneratedImage(
      */
     public String base64() {
         return Base64.getEncoder().encodeToString(bytes);
+    }
+
+    /**
+     * 为只读解码器打开内部快照流，避免大图压缩前再复制一份完整原始字节数组。
+     *
+     * @return 不能修改底层快照的只读字节输入流
+     */
+    public InputStream openStream() {
+        return new ByteArrayInputStream(bytes);
     }
 
     public int sizeBytes() {

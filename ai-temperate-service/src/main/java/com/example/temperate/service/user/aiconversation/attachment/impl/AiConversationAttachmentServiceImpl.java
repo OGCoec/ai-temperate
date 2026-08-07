@@ -9,6 +9,8 @@ import com.example.temperate.service.user.aiconversation.attachment.AiConversati
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentUploadReference;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadResult;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadSession;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreupload;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreuploadBatch;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreuploadFile;
@@ -23,8 +25,10 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -225,142 +229,108 @@ public final class AiConversationAttachmentServiceImpl
                     "附件最终化可用时间不足。",
                     new IllegalStateException("Attachment finalization deadline expired"));
         }
-        List<AiConversationAttachment> finalizedInput = new ArrayList<>();
+        GeneratedUploadSession uploadSession = new GeneratedUploadSession(
+                userPublicId, conversationPublicId, messagePublicId);
         List<String> createdKeys = new ArrayList<>();
-        boolean partial = false;
-        for (AiConversationAttachment attachment : safe(inputAttachments)) {
-            String finalKey = keyFactory.finalKey(
-                    userPublicId,
-                    conversationPublicId,
-                    messagePublicId,
-                    attachment.attachmentId(),
-                    attachment.fileName());
-            try {
-                String sourceKey = keyFactory.objectKeyFromTemporaryLocator(attachment.url());
-                String publicUrl = retry(() -> storage.copyToPublic(
-                        sourceKey,
-                        finalKey,
-                        attachment.contentType()));
-                createdKeys.add(finalKey);
-                finalizedInput.add(AiConversationAttachment.available(
+        try {
+            List<AiConversationAttachment> finalizedInput = new ArrayList<>();
+            boolean partial = false;
+            for (AiConversationAttachment attachment : safe(inputAttachments)) {
+                String finalKey = keyFactory.finalKey(
+                        userPublicId,
+                        conversationPublicId,
+                        messagePublicId,
                         attachment.attachmentId(),
-                        attachment.fileName(),
-                        attachment.contentType(),
-                        attachment.sizeBytesAsLong(),
-                        attachment.category(),
-                        publicUrl));
-            } catch (RuntimeException exception) {
+                        attachment.fileName());
+                try {
+                    String sourceKey = keyFactory.objectKeyFromTemporaryLocator(attachment.url());
+                    String publicUrl = retry(() -> storage.copyToPublic(
+                            sourceKey,
+                            finalKey,
+                            attachment.contentType()));
+                    createdKeys.add(finalKey);
+                    finalizedInput.add(AiConversationAttachment.available(
+                            attachment.attachmentId(),
+                            attachment.fileName(),
+                            attachment.contentType(),
+                            attachment.sizeBytesAsLong(),
+                            attachment.category(),
+                            publicUrl));
+                } catch (RuntimeException exception) {
+                    partial = true;
+                    finalizedInput.add(AiConversationAttachment.storageFailed(
+                            attachment.attachmentId(),
+                            attachment.fileName(),
+                            attachment.contentType(),
+                            attachment.sizeBytesAsLong(),
+                            attachment.category()));
+                    recordStorageFailure("input");
+                }
+            }
+            List<AiConversationGeneratedMedia> safeGeneratedMedia = safeMedia(generatedMedia);
+            int submitted = Math.min(
+                    safeGeneratedMedia.size(), MAXIMUM_GENERATED_IMAGE_OUTPUTS);
+            for (int index = 0; index < submitted; index++) {
+                uploadSession.submit((short) index, safeGeneratedMedia.get(index));
+            }
+            List<AiConversationGeneratedUploadResult> generatedResults =
+                    uploadSession.finish(timeout);
+            List<AiConversationAttachment> finalizedResponse =
+                    new ArrayList<>(safeGeneratedMedia.size());
+            for (AiConversationGeneratedUploadResult result : generatedResults) {
+                finalizedResponse.add(result.attachment());
+                if (result.createdObjectKey() != null) {
+                    createdKeys.add(result.createdObjectKey());
+                }
+                partial |= !result.successful();
+            }
+            for (int index = submitted; index < safeGeneratedMedia.size(); index++) {
+                finalizedResponse.add(failedGeneratedAttachment(
+                        safeGeneratedMedia.get(index)));
                 partial = true;
-                finalizedInput.add(AiConversationAttachment.storageFailed(
-                        attachment.attachmentId(),
-                        attachment.fileName(),
-                        attachment.contentType(),
-                        attachment.sizeBytesAsLong(),
-                        attachment.category()));
-                recordStorageFailure("input");
             }
-        }
-        List<AiConversationGeneratedMedia> safeGeneratedMedia = safeMedia(generatedMedia);
-        List<GeneratedUploadPlan> uploadPlans = new ArrayList<>(safeGeneratedMedia.size());
-        long generatedTotal = 0L;
-        for (int index = 0; index < safeGeneratedMedia.size(); index++) {
-            AiConversationGeneratedMedia media = safeGeneratedMedia.get(index);
-            String attachmentId = NanoId.randomNanoId(ATTACHMENT_ID_LENGTH);
-            String fileName = keyFactory.sanitizeFileName(media.fileName());
-            String contentType = normalizeContentType(media.contentType());
-            byte[] bytes = media.bytes();
-            // 用户输入仍受八个附件限制；模型生成输出使用独立的十张上限，二者不得混用。
-            boolean withinCount = index < MAXIMUM_GENERATED_IMAGE_OUTPUTS;
-            boolean withinTotal = bytes.length <= properties.maxTotalBytesPerMessage()
-                    - generatedTotal;
-            if (withinCount && withinTotal) {
-                generatedTotal += bytes.length;
-            }
-            String finalKey = keyFactory.finalKey(
-                    userPublicId,
-                    conversationPublicId,
-                    messagePublicId,
-                    attachmentId,
-                    fileName);
-            AiConversationAttachmentCategory category = classify(fileName, contentType);
-            uploadPlans.add(new GeneratedUploadPlan(
-                    attachmentId,
-                    fileName,
-                    contentType,
-                    bytes,
-                    category,
-                    finalKey,
-                    withinCount
-                            && withinTotal
-                            && bytes.length > 0
-                            && bytes.length <= properties.maxFileBytes()));
-        }
-        GeneratedUploadGuard uploadGuard = new GeneratedUploadGuard();
-        List<CompletableFuture<GeneratedUploadResult>> futures =
-                new ArrayList<>(uploadPlans.size());
-        try {
-            for (GeneratedUploadPlan plan : uploadPlans) {
-                // 这里只提交内存任务，不在循环中执行 OSS I/O；结果仍按计划顺序保存。
-                futures.add(CompletableFuture.supplyAsync(
-                        () -> uploadGenerated(plan, uploadGuard),
-                        finalizationExecutor));
-            }
-        } catch (RuntimeException rejected) {
-            List<String> generatedKeys = uploadGuard.closeAndSnapshot();
-            futures.forEach(future -> future.cancel(true));
-            List<String> cleanup = new ArrayList<>(createdKeys.size() + generatedKeys.size());
-            cleanup.addAll(createdKeys);
-            cleanup.addAll(generatedKeys);
-            compensateCreatedObjects(cleanup);
-            throw storageUnavailable(
-                    "附件最终化队列繁忙。",
-                    new IllegalStateException("Attachment finalization executor rejected task", rejected));
-        }
-        List<GeneratedUploadResult> generatedResults;
-        try {
-            generatedResults = awaitGeneratedUploads(futures, timeout);
+            // 兼容 API 把补偿责任连同 createdObjectKeys 交给既有调用方；这不是数据库终态后的 Session commit。
+            uploadSession.handoffCompensationToCaller();
+            return new AiConversationAttachmentFinalization(
+                    finalizedInput,
+                    finalizedResponse,
+                    createdKeys,
+                    partial);
         } catch (RuntimeException failure) {
-            List<String> generatedKeys = uploadGuard.closeAndSnapshot();
-            futures.forEach(future -> future.cancel(true));
-            List<String> cleanup = new ArrayList<>(createdKeys.size() + generatedKeys.size());
-            cleanup.addAll(createdKeys);
-            cleanup.addAll(generatedKeys);
-            compensateCreatedObjects(cleanup);
+            uploadSession.abortAndCompensate();
+            compensateCreatedObjects(createdKeys);
             throw failure;
         }
-        List<AiConversationAttachment> finalizedResponse = new ArrayList<>(generatedResults.size());
-        for (GeneratedUploadResult result : generatedResults) {
-            finalizedResponse.add(result.attachment());
-            if (result.createdObjectKey() != null) {
-                createdKeys.add(result.createdObjectKey());
-            }
-            partial |= result.failed();
-        }
-        return new AiConversationAttachmentFinalization(
-                finalizedInput,
-                finalizedResponse,
-                createdKeys,
-                partial);
     }
 
-    private GeneratedUploadResult uploadGenerated(
+    @Override
+    public AiConversationGeneratedUploadSession openGeneratedUploadSession(
+            String userPublicId,
+            String conversationPublicId,
+            String messagePublicId) {
+        return new GeneratedUploadSession(
+                userPublicId, conversationPublicId, messagePublicId);
+    }
+
+    private AiConversationGeneratedUploadResult uploadGenerated(
             GeneratedUploadPlan plan,
-            GeneratedUploadGuard uploadGuard) {
+            GeneratedUploadSession session) {
         if (!plan.valid()) {
             recordStorageFailure("generated");
-            return GeneratedUploadResult.failed(plan);
+            return failedGeneratedResult(plan);
         }
         try {
             String publicUrl = retry(() -> storage.putPublic(
                     plan.finalKey(),
                     plan.bytes(),
                     plan.contentType()));
-            // 超时线程先关闭 Guard；晚到的 OSS 成功不得逃逸为无人引用对象。
-            if (!uploadGuard.accept(plan.finalKey())) {
+            // Session 进入中止态后不再接纳对象；晚到的 OSS 成功必须立即补偿，避免留下无人引用对象。
+            if (!session.acceptCreated(plan.finalKey())) {
                 compensateCreatedObjects(List.of(plan.finalKey()));
-                return GeneratedUploadResult.failed(plan);
+                return failedGeneratedResult(plan);
             }
-            return new GeneratedUploadResult(
+            return new AiConversationGeneratedUploadResult(
+                    plan.outputIndex(),
                     AiConversationAttachment.available(
                             plan.attachmentId(),
                             plan.fileName(),
@@ -368,42 +338,37 @@ public final class AiConversationAttachmentServiceImpl
                             plan.bytes().length,
                             plan.category(),
                             publicUrl),
-                    plan.finalKey(),
-                    false);
+                    plan.finalKey());
         } catch (RuntimeException exception) {
             recordStorageFailure("generated");
-            return GeneratedUploadResult.failed(plan);
+            return failedGeneratedResult(plan);
         }
     }
 
-    private List<GeneratedUploadResult> awaitGeneratedUploads(
-            List<CompletableFuture<GeneratedUploadResult>> futures,
-            Duration timeout) {
-        long deadline = deadlineAfter(timeout);
-        List<GeneratedUploadResult> results = new ArrayList<>(futures.size());
-        try {
-            for (CompletableFuture<GeneratedUploadResult> future : futures) {
-                long remaining = deadline - System.nanoTime();
-                if (remaining <= 0L) {
-                    throw new TimeoutException("Attachment finalization deadline expired");
-                }
-                results.add(future.get(remaining, TimeUnit.NANOSECONDS));
-            }
-            return List.copyOf(results);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw storageUnavailable(
-                    "附件最终化被中断。",
-                    new IllegalStateException("Attachment finalization interrupted", exception));
-        } catch (TimeoutException exception) {
-            throw storageUnavailable(
-                    "附件最终化超时。",
-                    new IllegalStateException("Attachment finalization timed out", exception));
-        } catch (ExecutionException exception) {
-            throw storageUnavailable(
-                    "附件最终化执行失败。",
-                    new IllegalStateException("Attachment finalization task failed", exception));
-        }
+    private AiConversationGeneratedUploadResult failedGeneratedResult(
+            GeneratedUploadPlan plan) {
+        return new AiConversationGeneratedUploadResult(
+                plan.outputIndex(),
+                AiConversationAttachment.storageFailed(
+                        plan.attachmentId(),
+                        plan.fileName(),
+                        plan.contentType(),
+                        plan.bytes().length,
+                        plan.category()),
+                null);
+    }
+
+    private AiConversationAttachment failedGeneratedAttachment(
+            AiConversationGeneratedMedia media) {
+        String fileName = keyFactory.sanitizeFileName(media.fileName());
+        String contentType = normalizeContentType(media.contentType());
+        byte[] bytes = media.bytes();
+        return AiConversationAttachment.storageFailed(
+                NanoId.randomNanoId(ATTACHMENT_ID_LENGTH),
+                fileName,
+                contentType,
+                bytes.length,
+                classify(fileName, contentType));
     }
 
     private Duration defaultFinalizationTimeout() {
@@ -584,6 +549,7 @@ public final class AiConversationAttachmentServiceImpl
      * 保存单个生成媒体在进入并发执行器前已经确定的路径、格式和边界校验结果。
      */
     private record GeneratedUploadPlan(
+            short outputIndex,
             String attachmentId,
             String fileName,
             String contentType,
@@ -594,46 +560,209 @@ public final class AiConversationAttachmentServiceImpl
     }
 
     /**
-     * 把并发完成结果恢复成请求顺序，同时显式标记该槽位是否需要进入部分失败统计。
+     * 把一次 Generation 的槽位提交、共同截止时间和晚到 OSS 成功纳入同一补偿边界。
      */
-    private record GeneratedUploadResult(
-            AiConversationAttachment attachment,
-            String createdObjectKey,
-            boolean failed) {
+    private final class GeneratedUploadSession
+            implements AiConversationGeneratedUploadSession {
 
-        private static GeneratedUploadResult failed(GeneratedUploadPlan plan) {
-            return new GeneratedUploadResult(
-                    AiConversationAttachment.storageFailed(
-                            plan.attachmentId(),
-                            plan.fileName(),
-                            plan.contentType(),
-                            plan.bytes().length,
-                            plan.category()),
-                    null,
-                    true);
-        }
-    }
-
-    /**
-     * 在最终化超时与晚到 OSS 成功之间建立互斥边界，保证每个已创建对象要么被返回，要么被补偿。
-     */
-    private static final class GeneratedUploadGuard {
-
+        private final String userPublicId;
+        private final String conversationPublicId;
+        private final String messagePublicId;
+        private final Map<Short, CompletableFuture<AiConversationGeneratedUploadResult>>
+                futures = new TreeMap<>();
         private final List<String> acceptedKeys = new ArrayList<>();
-        private boolean closed;
+        private GeneratedUploadSessionState state = GeneratedUploadSessionState.OPEN;
+        private long reservedBytes;
 
-        private synchronized boolean accept(String objectKey) {
-            if (closed) {
+        private GeneratedUploadSession(
+                String userPublicId,
+                String conversationPublicId,
+                String messagePublicId) {
+            this.userPublicId = Objects.requireNonNull(userPublicId);
+            this.conversationPublicId = Objects.requireNonNull(conversationPublicId);
+            this.messagePublicId = Objects.requireNonNull(messagePublicId);
+        }
+
+        @Override
+        public synchronized CompletableFuture<AiConversationGeneratedUploadResult> submit(
+                short outputIndex,
+                AiConversationGeneratedMedia media) {
+            if (state != GeneratedUploadSessionState.OPEN) {
+                throw new IllegalStateException("Generated upload session is not open.");
+            }
+            if (outputIndex < 0 || outputIndex >= MAXIMUM_GENERATED_IMAGE_OUTPUTS) {
+                throw new IllegalArgumentException("Image output index is out of range.");
+            }
+            if (futures.containsKey(outputIndex)) {
+                throw new IllegalStateException("Generated upload output index is duplicated.");
+            }
+            AiConversationGeneratedMedia safeMedia = Objects.requireNonNull(media);
+            String attachmentId = NanoId.randomNanoId(ATTACHMENT_ID_LENGTH);
+            String fileName = keyFactory.sanitizeFileName(safeMedia.fileName());
+            String contentType = normalizeContentType(safeMedia.contentType());
+            byte[] bytes = safeMedia.bytes();
+            boolean withinTotal = bytes.length <= properties.maxTotalBytesPerMessage()
+                    - reservedBytes;
+            boolean valid = bytes.length > 0
+                    && bytes.length <= properties.maxFileBytes()
+                    && withinTotal;
+            if (valid) {
+                reservedBytes += bytes.length;
+            }
+            String finalKey = keyFactory.finalKey(
+                    userPublicId,
+                    conversationPublicId,
+                    messagePublicId,
+                    attachmentId,
+                    fileName);
+            GeneratedUploadPlan plan = new GeneratedUploadPlan(
+                    outputIndex,
+                    attachmentId,
+                    fileName,
+                    contentType,
+                    bytes,
+                    classify(fileName, contentType),
+                    finalKey,
+                    valid);
+            if (!valid) {
+                // 边界超限是单槽位可预期失败，不应占用 OSS 线程，也不能因全局队列繁忙升级为整批故障。
+                recordStorageFailure("generated");
+                CompletableFuture<AiConversationGeneratedUploadResult> failed =
+                        CompletableFuture.completedFuture(failedGeneratedResult(plan));
+                futures.put(outputIndex, failed);
+                return failed;
+            }
+            try {
+                // supplyAsync 只向单实例有界池提交任务；此处不等待 OSS，允许兄弟图片继续生成。
+                CompletableFuture<AiConversationGeneratedUploadResult> future =
+                        CompletableFuture.supplyAsync(
+                                () -> uploadGenerated(plan, this),
+                                finalizationExecutor);
+                futures.put(outputIndex, future);
+                return future;
+            } catch (RuntimeException rejected) {
+                if (valid) {
+                    reservedBytes -= bytes.length;
+                }
+                throw storageUnavailable(
+                        "附件最终化队列繁忙。",
+                        new IllegalStateException(
+                                "Attachment finalization executor rejected task",
+                                rejected));
+            }
+        }
+
+        @Override
+        public List<AiConversationGeneratedUploadResult> finish(Duration timeout) {
+            Map<Short, CompletableFuture<AiConversationGeneratedUploadResult>> snapshot;
+            synchronized (this) {
+                if (state != GeneratedUploadSessionState.OPEN) {
+                    throw new IllegalStateException(
+                            "Generated upload session cannot be finished twice.");
+                }
+                if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+                    throw storageUnavailable(
+                            "附件最终化可用时间不足。",
+                            new IllegalStateException(
+                                    "Attachment finalization deadline expired"));
+                }
+                state = GeneratedUploadSessionState.SEALED;
+                snapshot = new TreeMap<>(futures);
+            }
+            long deadline = deadlineAfter(timeout);
+            List<AiConversationGeneratedUploadResult> results =
+                    new ArrayList<>(snapshot.size());
+            try {
+                for (CompletableFuture<AiConversationGeneratedUploadResult> future
+                        : snapshot.values()) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0L) {
+                        throw new TimeoutException(
+                                "Attachment finalization deadline expired");
+                    }
+                    results.add(future.get(remaining, TimeUnit.NANOSECONDS));
+                }
+                return List.copyOf(results);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                abortAndCompensate();
+                throw storageUnavailable(
+                        "附件最终化被中断。",
+                        new IllegalStateException(
+                                "Attachment finalization interrupted", exception));
+            } catch (TimeoutException exception) {
+                abortAndCompensate();
+                throw storageUnavailable(
+                        "附件最终化超时。",
+                        new IllegalStateException(
+                                "Attachment finalization timed out", exception));
+            } catch (ExecutionException exception) {
+                abortAndCompensate();
+                throw storageUnavailable(
+                        "附件最终化执行失败。",
+                        new IllegalStateException(
+                                "Attachment finalization task failed", exception));
+            }
+        }
+
+        @Override
+        public synchronized void commit() {
+            if (state == GeneratedUploadSessionState.COMMITTED) {
+                return;
+            }
+            if (state != GeneratedUploadSessionState.SEALED) {
+                throw new IllegalStateException(
+                        "Generated upload session is not ready to commit.");
+            }
+            state = GeneratedUploadSessionState.COMMITTED;
+            acceptedKeys.clear();
+        }
+
+        @Override
+        public void abortAndCompensate() {
+            List<CompletableFuture<AiConversationGeneratedUploadResult>> pending;
+            List<String> cleanup;
+            synchronized (this) {
+                if (state == GeneratedUploadSessionState.ABORTED
+                        || state == GeneratedUploadSessionState.COMMITTED) {
+                    return;
+                }
+                state = GeneratedUploadSessionState.ABORTED;
+                pending = List.copyOf(futures.values());
+                cleanup = List.copyOf(acceptedKeys);
+                acceptedKeys.clear();
+            }
+            pending.forEach(future -> future.cancel(true));
+            compensateCreatedObjects(cleanup);
+        }
+
+        private synchronized boolean acceptCreated(String objectKey) {
+            if (state == GeneratedUploadSessionState.ABORTED
+                    || state == GeneratedUploadSessionState.COMMITTED) {
                 return false;
             }
             acceptedKeys.add(objectKey);
             return true;
         }
 
-        private synchronized List<String> closeAndSnapshot() {
-            closed = true;
-            return List.copyOf(acceptedKeys);
+        private synchronized void handoffCompensationToCaller() {
+            if (state != GeneratedUploadSessionState.SEALED) {
+                throw new IllegalStateException(
+                        "Generated upload session is not ready for handoff.");
+            }
+            state = GeneratedUploadSessionState.COMMITTED;
+            acceptedKeys.clear();
         }
+    }
+
+    /**
+     * 区分仍可接收槽位、等待终态、已经交权和必须补偿四个互斥阶段。
+     */
+    private enum GeneratedUploadSessionState {
+        OPEN,
+        SEALED,
+        COMMITTED,
+        ABORTED
     }
 
     @FunctionalInterface

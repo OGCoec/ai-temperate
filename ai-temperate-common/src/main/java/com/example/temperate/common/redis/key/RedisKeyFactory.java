@@ -467,6 +467,42 @@ public final class RedisKeyFactory {
     }
 
     /**
+     * 生成一次性语音 WebSocket 票据 Key，原始票据不得进入 Redis 命名空间。
+     */
+    public String voiceSessionTicketKey(HmacIdentifier ticketIdentifier) {
+        return create(
+                "voice",
+                "session-ticket",
+                "v1",
+                IdentifierType.VOICE_TICKET,
+                requireHmacIdentifier(ticketIdentifier));
+    }
+
+    /**
+     * 生成用户维度语音票据签发限流 Key，内部用户 ID 必须先经过用途隔离 HMAC。
+     */
+    public String voiceTicketUserRateKey(HmacIdentifier userIdentifier) {
+        return create(
+                "voice",
+                "ticket-limit",
+                "v1",
+                IdentifierType.VOICE_RATE_USER,
+                requireHmacIdentifier(userIdentifier));
+    }
+
+    /**
+     * 生成设备维度语音票据签发限流 Key，设备安装 ID 不得以明文进入 Redis。
+     */
+    public String voiceTicketDeviceRateKey(HmacIdentifier deviceIdentifier) {
+        return create(
+                "voice",
+                "ticket-limit",
+                "v1",
+                IdentifierType.VOICE_RATE_DEVICE,
+                requireHmacIdentifier(deviceIdentifier));
+    }
+
+    /**
      * 生成普通用户资料快照 Key，内部用户 ID 必须先经过专用 AES-256 保护器转换。
      */
     public String userProfileKey(EncryptedRedisId encryptedId) {
@@ -870,6 +906,9 @@ public final class RedisKeyFactory {
         AI_DIRECT_RESPONSE_CANCEL("cancel"),
         AI_GENERATION_SNAPSHOT("snapshot"),
         AI_GENERATION_BROWSER_DIAGNOSTIC("browser-diagnostic"),
+        VOICE_TICKET("ticket"),
+        VOICE_RATE_USER("user"),
+        VOICE_RATE_DEVICE("device"),
         MAIL_JOB("job");
 
         private final String segment;

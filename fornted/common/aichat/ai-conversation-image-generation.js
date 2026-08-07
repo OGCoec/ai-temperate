@@ -84,13 +84,18 @@ export function imagePreviewAttachment(value) {
 		|| !base64) return null
 	const outputIndex = Number(value?.outputIndex)
 	const phase = String(value?.phase || 'PARTIAL').toUpperCase()
+	const previewKind = String(value?.previewKind || '').toUpperCase()
+	const requiresUpgrade = value?.requiresUpgrade === true
 	const partialImageIndex = value?.partialImageIndex == null
 		? null
 		: Number(value.partialImageIndex)
 	if (!Number.isSafeInteger(outputIndex) || outputIndex < 0 || outputIndex > 9
 		|| !new Set(['PARTIAL', 'FINAL']).has(phase)
+		|| !new Set(['FULL', 'THUMBNAIL']).has(previewKind)
 		|| (phase === 'PARTIAL' && partialImageIndex == null)
 		|| (phase === 'FINAL' && partialImageIndex != null)
+		|| (previewKind === 'FULL' && (phase !== 'FINAL' || requiresUpgrade))
+		|| (previewKind === 'THUMBNAIL' && !requiresUpgrade)
 		|| (partialImageIndex != null
 			&& (!Number.isSafeInteger(partialImageIndex)
 				|| partialImageIndex < 0 || partialImageIndex > 2))) return null
@@ -109,6 +114,8 @@ export function imagePreviewAttachment(value) {
 		partialImageIndex,
 		width: Number(value?.width || 0),
 		height: Number(value?.height || 0),
+		previewKind,
+		requiresUpgrade,
 		volatilePreview: true,
 		imageSlot: true
 	})
@@ -126,6 +133,16 @@ export function upsertImageOutputAttachment(attachments, next) {
 	else values.push(next)
 	return values.sort((left, right) =>
 		Number(left?.outputIndex ?? 99) - Number(right?.outputIndex ?? 99))
+}
+
+export function mergeImagePreviewOutput(attachments, preview) {
+	const outputIndex = Number(preview?.outputIndex)
+	const current = [...(attachments || [])].find(item =>
+		Number(item?.outputIndex) === outputIndex)
+	// 正式 URL 已经到达后，任何晚到的压缩或 PARTIAL 预览都不能把槽位降级回临时状态。
+	if (current?.persistedUrl || (current?.volatilePreview === false
+		&& current?.status === 'COMPLETED')) return [...(attachments || [])]
+	return upsertImageOutputAttachment(attachments, preview)
 }
 
 export function failImageOutputAttachment(attachments, value) {
@@ -178,18 +195,95 @@ export function persistedImageAttachments(value) {
 	})
 }
 
+export function persistedImageOutputAttachment(value) {
+	const outputIndex = Number(value?.outputIndex)
+	const attachment = value?.attachment
+	const category = String(attachment?.category || '').toUpperCase()
+	const contentType = String(attachment?.contentType || '').toLowerCase()
+	const url = String(attachment?.url || '').trim()
+	const sizeBytes = String(attachment?.sizeBytes || '').trim()
+	if (!Number.isSafeInteger(outputIndex) || outputIndex < 0 || outputIndex > 9
+		|| Number(attachment?.schemaVersion) !== 1
+		|| String(attachment?.state || '').toUpperCase() !== 'AVAILABLE'
+		|| attachment?.failureCode != null
+		|| (category !== 'IMAGE' && !contentType.startsWith('image/'))
+		|| !new Set(['image/webp', 'image/png', 'image/jpeg']).has(contentType)
+		|| !/^https:\/\/[^\s]+$/i.test(url)
+		|| !/^[1-9]\d*$/.test(sizeBytes)
+		|| !String(attachment?.attachmentId || '').trim()
+		|| !String(attachment?.fileName || '').trim()) return null
+	return Object.freeze({
+		...attachment,
+		category: 'IMAGE',
+		contentType,
+		sizeBytes,
+		url,
+		outputIndex,
+		phase: 'FINAL',
+		status: 'COMPLETED',
+		volatilePreview: false,
+		imageSlot: true
+	})
+}
+
+export function mergePersistedImageOutput(currentAttachments, persistedAttachment) {
+	const outputIndex = Number(persistedAttachment?.outputIndex)
+	if (!Number.isSafeInteger(outputIndex) || outputIndex < 0 || outputIndex > 9) {
+		return [...(currentAttachments || [])]
+	}
+	const current = [...(currentAttachments || [])].find(item =>
+		Number(item?.outputIndex) === outputIndex)
+	if (!current) {
+		return upsertImageOutputAttachment(currentAttachments, persistedAttachment)
+	}
+	if (current.persistedUrl === persistedAttachment.url
+		&& (current.url === persistedAttachment.url
+			|| current.upgradeFailed === true
+			|| current.status === 'UPGRADING')) {
+		return [...(currentAttachments || [])]
+	}
+	const dataPreview = typeof current.url === 'string'
+		&& current.url.startsWith('data:image/')
+	if (!dataPreview) {
+		return upsertImageOutputAttachment(currentAttachments, Object.freeze({
+			...persistedAttachment,
+			attachmentId: current.attachmentId || persistedAttachment.attachmentId
+		}))
+	}
+	const requiresUpgrade = current.requiresUpgrade === true
+	return upsertImageOutputAttachment(currentAttachments, Object.freeze({
+		...persistedAttachment,
+		attachmentId: current.attachmentId,
+		imageId: current.imageId,
+		contentType: current.contentType,
+		persistedContentType: persistedAttachment.contentType,
+		url: current.url,
+		persistedUrl: persistedAttachment.url,
+		phase: 'FINAL',
+		status: requiresUpgrade ? 'UPGRADING' : 'COMPLETED',
+		previewKind: current.previewKind,
+		requiresUpgrade,
+		volatilePreview: true,
+		imageSlot: true,
+		upgradeFailed: false
+	}))
+}
+
 export function mergeCompletedImageOutputs(current, persisted, requestedCount = 0) {
 	const count = parseImageOutputCount(requestedCount)
 	if (count == null) return [...(persisted || [])]
 
 	let merged = [...(current || [])]
-		.filter(attachment => attachment?.status === 'FAILED')
+	const persistedIndexes = new Set()
 	for (const attachment of persisted || []) {
-		merged = upsertImageOutputAttachment(merged, attachment)
+		persistedIndexes.add(Number(attachment?.outputIndex))
+		merged = mergePersistedImageOutput(merged, attachment)
 	}
 	for (let outputIndex = 0; outputIndex < count; outputIndex++) {
-		if (!merged.some(attachment =>
-			Number(attachment?.outputIndex) === outputIndex)) {
+		const currentSlot = merged.find(attachment =>
+			Number(attachment?.outputIndex) === outputIndex)
+		if (!persistedIndexes.has(outputIndex)
+			&& currentSlot?.status !== 'FAILED') {
 			merged = failImageOutputAttachment(merged, {
 				outputIndex,
 				reasonCode: 'IMAGE_OUTPUT_MISSING'

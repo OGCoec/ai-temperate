@@ -373,7 +373,13 @@ app:
       edits-path: ${AI_CONVERSATION_IMAGE_EDITS_PATH:/v1/images/edits}
       # 单张上游图片解码后最多三十二 MiB，超限事件直接作为协议失败处理。
       maximum-decoded-image-bytes: ${AI_CONVERSATION_IMAGE_MAX_DECODED_BYTES:33554432}
-      # 单实例 Broker 最多常驻二百五十六 MiB 解码预览，超限槽位仍可实时发送但不进入重连缓存。
+      # 原始图片不超过三十八万四千字节时直接通过 SSE 预览，对应 Base64 约五百 KiB。
+      maximum-inline-preview-bytes: ${AI_CONVERSATION_IMAGE_MAX_INLINE_PREVIEW_BYTES:384000}
+      # 超限图片缩略图最长边默认压到七百六十八像素，在传输体积和可辨识度之间取平衡。
+      thumbnail-max-edge-pixels: ${AI_CONVERSATION_IMAGE_THUMBNAIL_MAX_EDGE_PIXELS:768}
+      # 无透明通道的缩略图使用百分之七十 JPEG 质量，后续有限次数降级仍受字节硬上限约束。
+      thumbnail-jpeg-quality: ${AI_CONVERSATION_IMAGE_THUMBNAIL_JPEG_QUALITY:70}
+      # 单实例 Broker 最多常驻二百五十六 MiB 有界预览，超限槽位仍可实时发送但不进入重连缓存。
       maximum-preview-retained-bytes: ${AI_CONVERSATION_IMAGE_MAX_PREVIEW_RETAINED_BYTES:268435456}
     # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
     attachments:
@@ -421,6 +427,45 @@ app:
     security:
       # HMAC-SHA256 密钥必须是至少三十二字节的规范 Base64。
       idempotency-hmac-key-base64: ${AI_CONVERSATION_IDEMPOTENCY_HMAC_KEY_BASE64}
+
+  # 本地 Whisper 实时语音输入通过一次性票据和受信任 WSS 上游隔离公网客户端与 GPU 服务。
+  voice:
+    # 总开关关闭时不注册票据接口、公开 WebSocket 入口和本机 Whisper 上游客户端。
+    enabled: ${VOICE_ENABLED:true}
+    # 公网客户端只连接 Java 现有 HTTPS 端口下的固定 WebSocket 路径。
+    public-path: ${VOICE_PUBLIC_PATH:/ws/voice}
+    # 一次性票据仅保留三十秒，避免票据被截获后形成长期重放窗口。
+    ticket-ttl: ${VOICE_TICKET_TTL:30s}
+    # 用户和设备的票据申请计数按一分钟固定窗口收敛。
+    ticket-rate-window: ${VOICE_TICKET_RATE_WINDOW:1m}
+    # 每个用户和设备一分钟最多签发十张票据，防止绕过 GPU 会话限制进行排队攻击。
+    ticket-rate-limit: ${VOICE_TICKET_RATE_LIMIT:10}
+    # 单次录音固定限制为五分钟，Java 与 Python 同时执行字节数硬边界。
+    max-duration: ${VOICE_MAX_DURATION:5m}
+    # 临时转写目标每一千五百毫秒刷新一次，但不承诺逐字零延迟。
+    partial-interval: ${VOICE_PARTIAL_INTERVAL:1500ms}
+    # RTX 4070 默认同时承载三个实时识别会话，并与 Python 推理 Worker 数保持一致。
+    max-active-sessions: ${VOICE_MAX_ACTIVE_SESSIONS:3}
+    # 超出三路活动会话后最多保留五个仅等待准入且尚未采集音频的 WebSocket 连接。
+    waiting-queue-capacity: ${VOICE_WAITING_QUEUE_CAPACITY:5}
+    # 排队连接最多等待九十秒，超时后释放名额并提示客户端重试。
+    queue-wait-timeout: ${VOICE_QUEUE_WAIT_TIMEOUT:90s}
+    # H5 握手只接受下列精确来源；Android 原生连接不携带 Origin 并由票据中的平台约束。
+    allowed-origins:
+      # 本地 H5 开发服务器通过 localhost 安全上下文访问 Java WSS。
+      - ${VOICE_ALLOWED_ORIGIN_LOCAL:https://localhost:3000}
+      # 本地 H5 使用回环 IP 时保留独立精确来源，禁止通配符来源。
+      - ${VOICE_ALLOWED_ORIGIN_LOOPBACK:https://127.0.0.1:3000}
+      # 生产 H5 使用站点根域来源；部署域名变化时必须显式覆盖环境变量。
+      - ${VOICE_ALLOWED_ORIGIN_PRODUCTION:https://niko000o.site}
+    # Java 仅通过本机 TLS WebSocket 连接 Python，禁止把 7896 暴露给公网客户端。
+    upstream-uri: ${VOICE_UPSTREAM_URI:wss://127.0.0.1:7896/ws/transcribe}
+    # Java 使用指定 PEM 证书建立独立信任上下文，禁止 trust-all 或关闭主机名校验。
+    upstream-trust-certificate: ${VOICE_UPSTREAM_TRUST_CERTIFICATE:file:${user.home}/.ai-temperate/certs/local-https.pem}
+    # Java 与 Python 建立 WSS 握手最多等待五秒，超时后返回可重试的上游不可用错误。
+    upstream-connect-timeout: ${VOICE_UPSTREAM_CONNECT_TIMEOUT:5s}
+    # 提交完整五分钟音频后最多等待两分钟获得权威最终转写。
+    final-timeout: ${VOICE_FINAL_TIMEOUT:120s}
 
   # CLIProxyAPI 用户推理开关和服务层超时配置。
   ai-inference:

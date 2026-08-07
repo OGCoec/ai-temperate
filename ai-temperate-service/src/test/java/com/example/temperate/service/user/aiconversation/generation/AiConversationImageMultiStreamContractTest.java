@@ -23,7 +23,7 @@ final class AiConversationImageMultiStreamContractTest {
                 .contains("Flux.range(0, outputCount)")
                 .contains(".flatMap(outputIndex ->")
                 .contains("new AiConversationModelEvent.ImageFailure(")
-                .contains("completed without a final image")
+                .contains("completed without a final image or metering evidence")
                 .contains("finalSeen.get() && meteringSeen.get()")
                 .contains("state.reserveFinalBytes(image)")
                 .contains("maximumGeneratedImageBatchBytes")
@@ -64,10 +64,11 @@ final class AiConversationImageMultiStreamContractTest {
 
         assertThat(source)
                 .contains("startLifecycleRenewal(lifecycle, lease, permit, state)")
-                .contains("generatedMedia,\n                    remainingDuration(workerDeadlineNanos)")
+                .contains("openGeneratedUploadSession(")
+                .contains("uploadSession.finish(")
                 .contains("imagePreviewBroker.seal(generationPublicId)");
         assertThat(source.indexOf("startLifecycleRenewal(lifecycle, lease, permit, state)"))
-                .isLessThan(source.indexOf("attachments.finalizeAttachments("));
+                .isLessThan(source.indexOf("openGeneratedUploadSession("));
     }
 
     @Test
