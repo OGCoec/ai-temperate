@@ -25,17 +25,20 @@
 				v-for="(turn, index) in turns"
 				:key="turn.key"
 				class="turn-marker-button"
-				:class="[`is-${turn.status}`, { 'is-active': turn.key === activeTurnKey }]"
+				:class="{
+					'is-active': turn.key === activeTurnKey,
+					'is-previewed': index === previewIndex
+				}"
 				type="button"
 				:tabindex="markerTabIndex(turn, index)"
 				:aria-current="turn.key === activeTurnKey ? 'true' : undefined"
 				:aria-label="markerLabel(turn)"
 				@mouseenter="openPreview(turn, index)"
 				@focus="openPreview(turn, index, true)"
-				@click="$emit('select-turn', turn.key)"
+				@click="selectMarker(turn, index)"
 				@keydown="handleMarkerKeydown($event, index)"
 			>
-				<view class="turn-marker-line" aria-hidden="true"></view>
+				<view class="turn-marker-line" :style="markerLineStyle(index)" aria-hidden="true"></view>
 			</button>
 		</view>
 
@@ -45,35 +48,34 @@
 			<view class="turn-continuation-dot"></view>
 		</view>
 
-		<view
+		<button
 			v-if="previewTurn"
 			class="turn-preview-card"
+			type="button"
 			:style="previewCardStyle"
-			role="group"
-			aria-label="轮次预览"
+			:aria-label="`${markerLabel(previewTurn)}，点击定位到该轮正文`"
 			@mouseenter="cancelPreviewClose"
 			@mouseleave="schedulePreviewClose"
+			@click="selectPreviewTurn"
+			@keydown.esc.stop.prevent="closePreviewAndRestoreMarker"
 		>
 			<view class="turn-preview-meta">
 				<text>{{ turnPositionLabel(previewTurn) }}</text>
 				<text v-if="formattedTime(previewTurn.createdAt)">{{ formattedTime(previewTurn.createdAt) }}</text>
 				<text v-if="previewStatusLabel">{{ previewStatusLabel }}</text>
 			</view>
-			<scroll-view class="turn-preview-question" scroll-y>
-				<text>{{ previewTurn.question }}</text>
-			</scroll-view>
+			<text class="turn-preview-question">{{ previewTurn.question }}</text>
 			<text class="turn-preview-answer">{{ previewTurn.answerSummary }}</text>
 			<text v-if="previewTurn.attachmentSummary" class="turn-preview-attachments">
 				{{ previewTurn.attachmentSummary }}
 			</text>
-			<button class="turn-preview-jump" type="button" tabindex="-1" @click="$emit('select-turn', previewTurn.key)">
-				跳转到完整问答
-			</button>
-		</view>
+		</button>
 	</view>
 </template>
 
 <script>
+	import { turnMarkerWidth } from '@/common/aichat/ai-conversation-turn-navigation.js'
+
 	const STATUS_LABELS = Object.freeze({
 		streaming: '生成中',
 		saving: '保存中',
@@ -135,7 +137,7 @@
 				const lastIndex = Math.max(1, this.turns.length - 1)
 				const ratio = Math.max(0, this.previewIndex) / lastIndex
 				const top = Math.round(15 + ratio * 70)
-				return { top: `clamp(140px, ${top}%, calc(100% - 140px))` }
+				return { top: `clamp(92px, ${top}%, calc(100% - 92px))` }
 			}
 		},
 		watch: {
@@ -148,6 +150,9 @@
 			this.cancelPreviewClose()
 		},
 		methods: {
+			markerLineStyle(index) {
+				return { width: `${turnMarkerWidth(index, this.previewIndex)}px` }
+			},
 			turnPositionLabel(turn) {
 				return this.positionsKnown
 					? `第 ${turn.position} 轮`
@@ -189,6 +194,23 @@
 			requestOlder() {
 				if (this.loadingBefore || (!this.hasMoreBefore && !this.hasHiddenBefore)) return
 				this.$emit(this.loadError ? 'retry-older' : 'request-older')
+			},
+			selectMarker(turn, index) {
+				this.openPreview(turn, index)
+				this.$emit('select-turn', turn.key)
+			},
+			selectPreviewTurn() {
+				if (!this.previewTurn) return
+				this.$emit('select-turn', this.previewTurn.key)
+			},
+			closePreviewAndRestoreMarker() {
+				const index = this.previewIndex
+				this.closePreview()
+				this.$nextTick(() => {
+					// #ifdef H5
+					this.$el?.querySelectorAll?.('.turn-marker-button')?.[index]?.focus?.()
+					// #endif
+				})
 			},
 			handleMarkerKeydown(event, index) {
 				let targetIndex = index
@@ -262,7 +284,7 @@
 
 	.turn-marker-button,
 	.turn-continuation,
-	.turn-preview-jump {
+	.turn-preview-card {
 		margin: 0;
 		border: 0;
 		background: transparent;
@@ -271,7 +293,7 @@
 
 	.turn-marker-button::after,
 	.turn-continuation::after,
-	.turn-preview-jump::after {
+	.turn-preview-card::after {
 		border: 0;
 	}
 
@@ -293,30 +315,17 @@
 		transition: width 150ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out;
 	}
 
-	.turn-marker-button.is-active .turn-marker-line,
-	.turn-marker-button:focus-visible .turn-marker-line,
-	.turn-marker-button:hover .turn-marker-line {
-		width: 20px;
+	.turn-marker-button.is-active .turn-marker-line {
 		background: #8fdcbe;
 	}
 
-	.turn-marker-button.is-streaming .turn-marker-line {
-		background: #37d39a;
-		animation: turn-marker-pulse 1.6s ease-in-out infinite;
-	}
-
-	.turn-marker-button.is-saving .turn-marker-line {
-		background: #72e1b8;
-	}
-
-	.turn-marker-button.is-stopped .turn-marker-line,
-	.turn-marker-button.is-failed .turn-marker-line {
-		background: #d99a56;
+	.turn-marker-button.is-previewed:not(.is-active) .turn-marker-line {
+		background: rgba(232, 238, 235, .84);
 	}
 
 	.turn-marker-button:focus-visible,
 	.turn-continuation:focus-visible,
-	.turn-preview-jump:focus-visible {
+	.turn-preview-card:focus-visible {
 		outline: 2px solid rgba(55, 211, 154, .72);
 		outline-offset: 1px;
 	}
@@ -346,9 +355,9 @@
 	.turn-preview-card {
 		position: absolute;
 		left: 38px;
-		width: min(360px, calc(100vw - 360px));
-		max-height: 280px;
-		padding: 13px 14px;
+		width: min(288px, calc(100vw - 360px));
+		max-height: 176px;
+		padding: 10px 12px;
 		overflow: hidden;
 		border: 1px solid rgba(94, 111, 101, .58);
 		border-radius: 14px;
@@ -356,8 +365,11 @@
 		box-shadow: 0 18px 48px rgba(0, 0, 0, .36);
 		backdrop-filter: blur(20px) saturate(115%);
 		color: #e8eeeb;
+		cursor: pointer;
+		line-height: normal;
+		text-align: left;
 		transform: translateY(-50%);
-		animation: turn-preview-enter 150ms ease-out;
+		animation: turn-preview-enter 140ms cubic-bezier(.23, 1, .32, 1);
 		box-sizing: border-box;
 	}
 
@@ -370,12 +382,16 @@
 	}
 
 	.turn-preview-question {
-		max-height: 96px;
 		margin-top: 8px;
+		display: -webkit-box;
+		overflow: hidden;
 		color: #f3f5f4;
 		font-size: 13px;
 		font-weight: 700;
 		line-height: 1.55;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		word-break: break-word;
 	}
 
 	.turn-preview-answer {
@@ -397,28 +413,9 @@
 		font-size: 11px;
 	}
 
-	.turn-preview-jump {
-		min-height: 32px;
-		margin-top: 9px;
-		padding: 5px 8px;
-		border-radius: 8px;
-		color: #8fdcbe;
-		font-size: 12px;
-		text-align: left;
-	}
-
-	.turn-preview-jump:hover {
-		background: rgba(55, 211, 154, .09);
-	}
-
 	@keyframes turn-preview-enter {
 		from { opacity: 0; transform: translate(-6px, -50%); }
 		to { opacity: 1; transform: translate(0, -50%); }
-	}
-
-	@keyframes turn-marker-pulse {
-		0%, 100% { opacity: .55; box-shadow: 0 0 0 0 rgba(55, 211, 154, 0); }
-		50% { opacity: 1; box-shadow: 0 0 0 3px rgba(55, 211, 154, .12); }
 	}
 
 	@media screen and (min-width: 768px) {
@@ -435,7 +432,6 @@
 
 	@media (prefers-reduced-motion: reduce) {
 		.turn-marker-line { transition: none; }
-		.turn-marker-button.is-streaming .turn-marker-line,
 		.turn-preview-card { animation: none; }
 	}
 </style>

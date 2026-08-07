@@ -59,12 +59,42 @@ test('uses the local id for an in-flight turn and maps visible generation states
 	assert.equal(failed.status, 'failed')
 })
 
+test('keeps every turn marker collapsed until the rail is interacting', async () => {
+	const navigation = await loadNavigation()
+
+	for (const index of [0, 9, 49]) {
+		assert.equal(navigation.turnMarkerWidth(index, -1), 8)
+	}
+	assert.equal(navigation.turnMarkerWidth(0, Number.NaN), 8)
+	assert.equal(navigation.turnMarkerWidth(-1, 0), 8)
+})
+
+test('expands turn markers gradually around the interacting turn', async () => {
+	const navigation = await loadNavigation()
+	const widths = Array.from({ length: 9 }, (_, offset) =>
+		navigation.turnMarkerWidth(offset + 6, 10))
+
+	assert.deepEqual(widths, [8, 10, 13, 16, 20, 16, 13, 10, 8])
+	assert.deepEqual(
+		Array.from({ length: 5 }, (_, index) => navigation.turnMarkerWidth(index, 0)),
+		[20, 16, 13, 10, 8]
+	)
+	assert.deepEqual(
+		Array.from({ length: 5 }, (_, offset) => navigation.turnMarkerWidth(45 + offset, 49)),
+		[8, 10, 13, 16, 20]
+	)
+})
+
 test('keeps the initial and shifted render window at no more than fifty turns', async () => {
 	const navigation = await loadNavigation()
 
 	assert.deepEqual(navigation.createInitialTurnWindow(0), { start: 0, end: 0 })
+	assert.deepEqual(navigation.createInitialTurnWindow(1), { start: 0, end: 1 })
 	assert.deepEqual(navigation.createInitialTurnWindow(49), { start: 0, end: 49 })
+	assert.deepEqual(navigation.createInitialTurnWindow(50), { start: 0, end: 50 })
+	assert.deepEqual(navigation.createInitialTurnWindow(51), { start: 1, end: 51 })
 	assert.deepEqual(navigation.createInitialTurnWindow(100), { start: 50, end: 100 })
+	assert.deepEqual(navigation.createInitialTurnWindow(101), { start: 51, end: 101 })
 	assert.deepEqual(
 		navigation.shiftTurnWindow({ start: 50, end: 100 }, 'before', 100),
 		{ start: 25, end: 75 }
@@ -87,15 +117,66 @@ test('preserves overlap after prepending older history and can center a cached t
 	assert.deepEqual(navigation.centerTurnWindow(99, 100), { start: 50, end: 100 })
 })
 
-test('uses measured heights before bounded estimates for hidden spacers', async () => {
+test('never renders more than fifty turns while moving across boundary totals', async () => {
 	const navigation = await loadNavigation()
-	const messages = [
-		message(1, { contentText: '短问题', responseText: '短回答' }),
-		message(2, { contentText: '较长问题'.repeat(30), responseText: '较长回答'.repeat(80) })
-	]
-	const measured = { message_1: 420 }
 
-	assert.equal(navigation.sumTurnHeights(messages, measured, 0, 1), 420)
-	assert.ok(navigation.estimateTurnHeight(messages[1]) > navigation.estimateTurnHeight(messages[0]))
-	assert.ok(navigation.estimateTurnHeight(messages[1]) <= 1200)
+	for (const total of [1, 49, 50, 51, 100, 101]) {
+		let window = navigation.createInitialTurnWindow(total)
+		for (let index = 0; index < 8; index += 1) {
+			assert.ok(window.end - window.start <= 50)
+			assert.ok(window.start >= 0)
+			assert.ok(window.end <= total)
+			window = navigation.shiftTurnWindow(window, 'before', total)
+		}
+		for (let index = 0; index < 8; index += 1) {
+			assert.ok(window.end - window.start <= 50)
+			assert.ok(window.start >= 0)
+			assert.ok(window.end <= total)
+			window = navigation.shiftTurnWindow(window, 'after', total)
+		}
+	}
+})
+
+test('restores the previous visible anchor without estimated spacer heights', async () => {
+	const navigation = await loadNavigation()
+
+	assert.equal(navigation.restoreAnchoredScrollTop(320, 48, 248), 520)
+	assert.equal(navigation.restoreAnchoredScrollTop(90, 180, 40), 0)
+	assert.equal(navigation.restoreAnchoredScrollTop(200, Number.NaN, 40), 200)
+	assert.equal(typeof navigation.estimateTurnHeight, 'undefined')
+	assert.equal(typeof navigation.sumTurnHeights, 'undefined')
+})
+
+test('resolves the exposed uni-app scroll main before same-class wrapper elements', async () => {
+	const navigation = await loadNavigation()
+	const wrapper = { name: 'wrapper' }
+	const main = { name: 'main' }
+	const host = {
+		querySelectorAll: () => [wrapper, main]
+	}
+	const reference = {
+		$el: host,
+		$getMain: () => main
+	}
+
+	assert.equal(
+		navigation.resolveTurnScrollElement(reference, null, () => ({ overflowY: 'visible' })),
+		main
+	)
+})
+
+test('falls back to the actual overflow container when uni-app does not expose its main', async () => {
+	const navigation = await loadNavigation()
+	const wrapper = { name: 'wrapper' }
+	const main = { name: 'main' }
+	const host = {
+		querySelectorAll: () => [wrapper, main]
+	}
+
+	assert.equal(
+		navigation.resolveTurnScrollElement(null, host, element => ({
+			overflowY: element === main ? 'auto' : 'visible'
+		})),
+		main
+	)
 })

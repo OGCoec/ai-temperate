@@ -1,8 +1,8 @@
 const DEFAULT_WINDOW_SIZE = 50
 const DEFAULT_WINDOW_SHIFT = 25
 const ANSWER_SUMMARY_LENGTH = 180
-const MIN_TURN_HEIGHT = 220
-const MAX_TURN_HEIGHT = 1200
+const TURN_MARKER_COLLAPSED_WIDTH = 8
+const TURN_MARKER_INTERACTION_WIDTHS = Object.freeze([20, 16, 13, 10])
 
 function boundedInteger(value, minimum, maximum) {
 	const number = Number(value)
@@ -102,6 +102,15 @@ export function createTurnNavigationItem(message, index = 0) {
 	})
 }
 
+export function turnMarkerWidth(index, interactionIndex) {
+	if (!Number.isInteger(index) || index < 0
+		|| !Number.isInteger(interactionIndex) || interactionIndex < 0) {
+		return TURN_MARKER_COLLAPSED_WIDTH
+	}
+	const distance = Math.abs(index - interactionIndex)
+	return TURN_MARKER_INTERACTION_WIDTHS[distance] ?? TURN_MARKER_COLLAPSED_WIDTH
+}
+
 export function createInitialTurnWindow(total, limit = DEFAULT_WINDOW_SIZE) {
 	const safeTotal = Math.max(0, Math.trunc(Number(total) || 0))
 	const safeLimit = Math.max(1, Math.trunc(Number(limit) || DEFAULT_WINDOW_SIZE))
@@ -152,32 +161,29 @@ export function centerTurnWindow(targetIndex, total, limit = DEFAULT_WINDOW_SIZE
 	return Object.freeze({ start, end: start + size })
 }
 
-export function estimateTurnHeight(message) {
-	const questionLength = Array.from(String(message?.contentText || '')).length
-	const answerLength = Array.from(String(message?.responseText || '')).length
-	const attachments = [
-		...(Array.isArray(message?.contentAttachments) ? message.contentAttachments : []),
-		...(Array.isArray(message?.responseAttachments) ? message.responseAttachments : [])
-	].length
-	const textHeight = Math.ceil(questionLength / 34) * 26 + Math.ceil(answerLength / 52) * 24
-	const attachmentHeight = Math.min(attachments, 4) * 170
-	return boundedInteger(180 + textHeight + attachmentHeight, MIN_TURN_HEIGHT, MAX_TURN_HEIGHT)
+export function restoreAnchoredScrollTop(currentScrollTop, previousOffset, nextOffset) {
+	const current = Number(currentScrollTop)
+	const before = Number(previousOffset)
+	const after = Number(nextOffset)
+	if (![current, before, after].every(Number.isFinite)) {
+		return Number.isFinite(current) ? Math.max(0, current) : 0
+	}
+	return Math.max(0, current + after - before)
 }
 
-export function sumTurnHeights(messages, measuredHeights, start = 0, end = messages?.length || 0) {
-	const list = Array.isArray(messages) ? messages : []
-	const safeStart = boundedInteger(start, 0, list.length)
-	const safeEnd = boundedInteger(end, safeStart, list.length)
-	let total = 0
-	for (let index = safeStart; index < safeEnd; index += 1) {
-		const message = list[index]
-		const key = messageTurnKey(message, index)
-		const measured = measuredHeights instanceof Map
-			? measuredHeights.get(key)
-			: measuredHeights?.[key]
-		total += Number.isFinite(Number(measured)) && Number(measured) > 0
-			? Number(measured)
-			: estimateTurnHeight(message)
-	}
-	return Math.round(total)
+export function resolveTurnScrollElement(reference, fallbackHost, styleResolver) {
+	const exposedMain = typeof reference?.$getMain === 'function'
+		? reference.$getMain()
+		: null
+	if (exposedMain) return exposedMain
+
+	const host = reference?.$el || reference || fallbackHost || null
+	if (!host) return null
+	const candidates = Array.from(host.querySelectorAll?.('.uni-scroll-view') || [])
+	const resolveStyle = typeof styleResolver === 'function'
+		? styleResolver
+		: element => globalThis.getComputedStyle?.(element)
+	const scrollable = candidates.find(element =>
+		['auto', 'scroll'].includes(String(resolveStyle(element)?.overflowY || '').toLowerCase()))
+	return scrollable || candidates[candidates.length - 1] || host
 }

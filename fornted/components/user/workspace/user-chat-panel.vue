@@ -29,7 +29,7 @@
 					ref="messageScroll"
 					class="message-scroll"
 					scroll-y
-					:scroll-into-view="scrollTarget"
+					:scroll-into-view="turnNavigationDesktop ? '' : scrollTarget"
 					@scroll="handleMessageScroll"
 				>
 					<view class="message-shell">
@@ -53,16 +53,9 @@
 						更早消息加载失败，点击重试
 					</button>
 					<view
-						v-if="turnNavigationDesktop && topTurnSpacerHeight"
-						class="turn-window-spacer is-before"
-						:style="{ height: `${topTurnSpacerHeight}px` }"
-						aria-hidden="true"
-					></view>
-
-					<view
 						v-for="(message, renderedIndex) in renderedMessages"
 						:id="messageElementId(message, renderedMessageIndex(renderedIndex))"
-						:key="messageTurnKey(message, renderedMessageIndex(renderedIndex))"
+						:key="messageElementId(message, renderedMessageIndex(renderedIndex))"
 						class="message-turn"
 					>
 						<view class="message-block user-message">
@@ -183,12 +176,6 @@
 							<text v-if="message.error" class="message-error" role="alert">{{ message.error }}</text>
 						</view>
 					</view>
-					<view
-						v-if="turnNavigationDesktop && bottomTurnSpacerHeight"
-						class="turn-window-spacer is-after"
-						:style="{ height: `${bottomTurnSpacerHeight}px` }"
-						aria-hidden="true"
-					></view>
 					<view id="message-bottom" class="message-bottom"></view>
 					</view>
 				</scroll-view>
@@ -386,8 +373,9 @@
 		createTurnNavigationItem,
 		messageTurnElementId,
 		messageTurnKey,
+		resolveTurnScrollElement,
+		restoreAnchoredScrollTop,
 		shiftTurnWindow,
-		sumTurnHeights,
 		windowAfterPrepend
 	} from '@/common/aichat/ai-conversation-turn-navigation.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
@@ -439,7 +427,8 @@
 	const CANCEL_RETRY_DELAYS = Object.freeze([0, 250, 750])
 	const TURN_WINDOW_SIZE = 50
 	const TURN_WINDOW_SHIFT = 25
-	const TURN_WINDOW_EDGE_PX = 240
+	const TURN_WINDOW_EDGE_ENTER_PX = 96
+	const TURN_WINDOW_EDGE_RELEASE_PX = 180
 	const TURN_FOLLOW_LATEST_PX = 320
 
 	function positiveFiniteNumber(value) {
@@ -578,12 +567,11 @@
 				turnNavigationDesktop: false,
 				renderWindow: { start: 0, end: 0 },
 				activeTurnKey: '',
-				turnHeights: {},
 				turnScrollTop: 0,
 				turnViewportHeight: 0,
 				turnScrollFrame: null,
-				turnResizeObserver: null,
 				turnWindowMoving: false,
+				turnWindowEdgeLock: '',
 				turnNavigationReady: false,
 				turnFollowLatest: true,
 				olderMessagesError: ''
@@ -601,7 +589,7 @@
 		},
 		beforeUnmount() {
 			this.closeContextObserver()
-			this.releaseTurnNavigationObservers()
+			this.releaseTurnNavigationFrame()
 			if (this.generatedResponseImageResizeListener
 				&& typeof uni.offWindowResize === 'function') {
 				uni.offWindowResize(this.generatedResponseImageResizeListener)
@@ -723,19 +711,6 @@
 				if (!this.turnNavigationDesktop) return []
 				return this.renderedMessages.map((message, index) =>
 					createTurnNavigationItem(message, this.renderedMessageIndex(index)))
-			},
-			topTurnSpacerHeight() {
-				if (!this.turnNavigationDesktop) return 0
-				return sumTurnHeights(this.messages, this.turnHeights, 0, this.renderWindow.start)
-			},
-			bottomTurnSpacerHeight() {
-				if (!this.turnNavigationDesktop) return 0
-				return sumTurnHeights(
-					this.messages,
-					this.turnHeights,
-					this.renderWindow.end,
-					this.messages.length
-				)
 			},
 			hasHiddenTurnsBefore() {
 				return this.turnNavigationDesktop && this.renderWindow.start > 0
@@ -953,7 +928,15 @@
 				const enabled = clientPlatform() === 'H5' && width >= 768
 				if (enabled === this.turnNavigationDesktop && (this.renderWindow.end || !this.messages.length)) return
 				this.turnNavigationDesktop = enabled
-				this.resetTurnNavigationWindow(enabled)
+				this.scrollTarget = ''
+				if (enabled) {
+					this.resetTurnNavigationWindow(true)
+					return
+				}
+				this.releaseTurnNavigationFrame()
+				this.renderWindow = { start: 0, end: this.messages.length }
+				this.turnWindowEdgeLock = ''
+				this.turnNavigationReady = true
 			},
 			resetTurnNavigationWindow(followLatest = true) {
 				this.renderWindow = this.turnNavigationDesktop
@@ -964,12 +947,12 @@
 					: ''
 				this.turnNavigationReady = false
 				this.turnWindowMoving = false
+				this.turnWindowEdgeLock = ''
 				this.turnFollowLatest = followLatest
 				this.olderMessagesError = ''
 				this.$nextTick(() => {
-					this.measureRenderedTurns()
 					if (followLatest && this.messages.length) this.setMessageScrollTarget('message-bottom')
-					// 初始 scroll-into-view 完成前不能把 scrollTop=0 误判成用户请求更早历史。
+					// 初始定位完成前不能把 scrollTop=0 误判成用户请求更早历史。
 					// #ifdef H5
 					requestAnimationFrame(() => requestAnimationFrame(() => {
 						this.turnNavigationReady = true
@@ -980,13 +963,12 @@
 					// #endif
 				})
 			},
-			releaseTurnNavigationObservers() {
-				this.turnResizeObserver?.disconnect?.()
-				this.turnResizeObserver = null
+			releaseTurnNavigationFrame() {
 				// #ifdef H5
 				if (this.turnScrollFrame != null) cancelAnimationFrame(this.turnScrollFrame)
 				// #endif
 				this.turnScrollFrame = null
+				this.turnWindowEdgeLock = ''
 			},
 			renderedMessageIndex(renderedIndex) {
 				return this.turnNavigationDesktop
@@ -997,59 +979,50 @@
 				return messageTurnElementId(message, index)
 			},
 			setMessageScrollTarget(elementId) {
+				if (this.turnNavigationDesktop) {
+					this.$nextTick(() => this.scrollDesktopToElement(elementId))
+					return
+				}
 				this.scrollTarget = ''
 				this.$nextTick(() => { this.scrollTarget = elementId })
 			},
 			turnScrollElement() {
 				// #ifdef H5
-				const host = this.$el?.querySelector?.('.message-scroll')
-				if (!host) return null
-				const preferred = host.querySelector?.('.uni-scroll-view')
-				if (preferred) return preferred
-				const candidates = [host, ...(host.querySelectorAll?.('*') || [])]
-				return candidates.find(element =>
-					element.scrollHeight > element.clientHeight + 1
-					&& ['auto', 'scroll'].includes(getComputedStyle(element).overflowY)) || host
+				return resolveTurnScrollElement(
+					this.$refs.messageScroll,
+					this.$el?.querySelector?.('.message-scroll'),
+					element => getComputedStyle(element)
+				)
 				// #endif
 				return null
 			},
-			turnElementHeight(element) {
+			setDesktopScrollTop(value) {
 				// #ifdef H5
-				const marginBottom = Number.parseFloat(getComputedStyle(element).marginBottom) || 0
-				return Math.max(1, Math.round(element.offsetHeight + marginBottom))
+				const root = this.turnScrollElement()
+				if (!root) return false
+				root.scrollTop = Math.max(0, Number(value) || 0)
+				this.turnScrollTop = root.scrollTop
+				return true
 				// #endif
-				return 0
+				return false
 			},
-			measureRenderedTurns() {
-				if (!this.turnNavigationDesktop) return
+			scrollDesktopToElement(elementId) {
 				// #ifdef H5
-				const elements = Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])
-				const turnsByElementId = new Map(this.visibleTurnItems.map(turn => [turn.elementId, turn]))
-				const heights = { ...this.turnHeights }
-				for (const element of elements) {
-					const turn = turnsByElementId.get(element.id)
-					if (turn) heights[turn.key] = this.turnElementHeight(element)
+				const root = this.turnScrollElement()
+				if (!root) return false
+				if (elementId === 'message-bottom') {
+					return this.setDesktopScrollTop(root.scrollHeight - root.clientHeight)
 				}
-				this.turnHeights = heights
-				this.turnResizeObserver?.disconnect?.()
-				if (typeof ResizeObserver === 'function') {
-					this.turnResizeObserver = new ResizeObserver(entries => {
-						const nextHeights = { ...this.turnHeights }
-						let changed = false
-						for (const entry of entries) {
-							const turn = turnsByElementId.get(entry.target.id)
-							if (!turn) continue
-							const height = this.turnElementHeight(entry.target)
-							if (nextHeights[turn.key] !== height) {
-								nextHeights[turn.key] = height
-								changed = true
-							}
-						}
-						if (changed) this.turnHeights = nextHeights
-					})
-					for (const element of elements) this.turnResizeObserver.observe(element)
-				}
+				const element = Array.from(
+					this.$el?.querySelectorAll?.('.message-turn') || []
+				).find(candidate => candidate.id === elementId)
+				if (!element) return false
+				const rootRect = root.getBoundingClientRect()
+				const targetRect = element.getBoundingClientRect()
+				return this.setDesktopScrollTop(
+					root.scrollTop + targetRect.top - rootRect.top)
 				// #endif
+				return false
 			},
 			captureTurnAnchor() {
 				if (!this.turnNavigationDesktop) return null
@@ -1062,21 +1035,28 @@
 					.filter(item => item.rect.bottom > rootRect.top && item.rect.top < rootRect.bottom)
 					.sort((left, right) => left.rect.top - right.rect.top)
 				const first = visible[0]
-				return first ? { elementId: first.element.id, offset: first.rect.top - rootRect.top } : null
+				return first ? {
+					elementId: first.element.id,
+					offset: first.rect.top - rootRect.top,
+					scrollTop: root.scrollTop
+				} : null
 				// #endif
 				return null
 			},
 			restoreTurnAnchor(anchor) {
 				return new Promise(resolve => {
 					this.$nextTick(() => {
-						this.measureRenderedTurns()
 						// #ifdef H5
 						const root = this.turnScrollElement()
 						const element = Array.from(this.$el?.querySelectorAll?.('.message-turn') || [])
 							.find(candidate => candidate.id === anchor?.elementId)
 						if (root && element && anchor) {
 							const offset = element.getBoundingClientRect().top - root.getBoundingClientRect().top
-							root.scrollTop += offset - anchor.offset
+							this.setDesktopScrollTop(restoreAnchoredScrollTop(
+								anchor.scrollTop,
+								anchor.offset,
+								offset
+							))
 						}
 						requestAnimationFrame(resolve)
 						// #endif
@@ -1114,27 +1094,33 @@
 			},
 			handleMessageScroll(event) {
 				const detail = event?.detail || {}
-				this.turnScrollTop = Number(detail.scrollTop || 0)
 				const root = this.turnScrollElement()
+				this.turnScrollTop = Number(detail.scrollTop ?? root?.scrollTop ?? 0)
 				this.turnViewportHeight = Number(root?.clientHeight || this.turnViewportHeight || 0)
 				const scrollHeight = Number(detail.scrollHeight || root?.scrollHeight || 0)
 				const distanceToBottom = Math.max(0, scrollHeight - this.turnScrollTop - this.turnViewportHeight)
-				const distanceToWindowTop = Math.max(0, this.turnScrollTop - this.topTurnSpacerHeight)
-				const distanceToWindowBottom = Math.max(
-					0,
-					scrollHeight - this.bottomTurnSpacerHeight - this.turnScrollTop - this.turnViewportHeight
-				)
-				this.turnFollowLatest = distanceToBottom <= TURN_FOLLOW_LATEST_PX
+				this.turnFollowLatest = !this.hasHiddenTurnsAfter
+					&& distanceToBottom <= TURN_FOLLOW_LATEST_PX
 				if (!this.turnNavigationDesktop || this.turnScrollFrame != null) return
 				// #ifdef H5
 				this.turnScrollFrame = requestAnimationFrame(() => {
 					this.turnScrollFrame = null
 					this.updateActiveTurnFromScroll()
 					if (!this.turnNavigationReady || this.turnWindowMoving || this.messagesLoading) return
-					if (distanceToWindowTop <= TURN_WINDOW_EDGE_PX) {
+					if (this.turnWindowEdgeLock) {
+						const released = this.turnWindowEdgeLock === 'before'
+							? this.turnScrollTop >= TURN_WINDOW_EDGE_RELEASE_PX
+							: distanceToBottom >= TURN_WINDOW_EDGE_RELEASE_PX
+						if (!released) return
+						this.turnWindowEdgeLock = ''
+					}
+					if (this.turnScrollTop <= TURN_WINDOW_EDGE_ENTER_PX
+						&& (this.renderWindow.start > 0 || this.hasMoreMessages)) {
+						this.turnWindowEdgeLock = 'before'
 						if (this.renderWindow.start > 0) void this.moveTurnWindow('before')
 						else if (this.hasMoreMessages) void this.loadOlderMessages({ preserveAnchor: true })
-					} else if (distanceToWindowBottom <= TURN_WINDOW_EDGE_PX && this.hasHiddenTurnsAfter) {
+					} else if (distanceToBottom <= TURN_WINDOW_EDGE_ENTER_PX && this.hasHiddenTurnsAfter) {
+						this.turnWindowEdgeLock = 'after'
 						void this.moveTurnWindow('after')
 					}
 				})
@@ -1167,13 +1153,26 @@
 				const outsideWindow = targetIndex < this.renderWindow.start || targetIndex >= this.renderWindow.end
 				if (this.turnNavigationDesktop && outsideWindow) {
 					this.renderWindow = centerTurnWindow(targetIndex, this.messages.length, TURN_WINDOW_SIZE)
+				}
+				this.turnWindowEdgeLock = ''
+				const elementId = messageTurnElementId(this.messages[targetIndex], targetIndex)
+				if (this.turnNavigationDesktop) {
+					this.turnWindowMoving = true
 					this.$nextTick(() => {
-						this.measureRenderedTurns()
-						this.setMessageScrollTarget(messageTurnElementId(this.messages[targetIndex], targetIndex))
+						this.scrollDesktopToElement(elementId)
+						// 点击定位后的两个绘制帧内禁止边缘检测把目标立即换出窗口。
+						// #ifdef H5
+						requestAnimationFrame(() => requestAnimationFrame(() => {
+							this.turnWindowMoving = false
+						}))
+						// #endif
+						// #ifndef H5
+						this.turnWindowMoving = false
+						// #endif
 					})
 					return
 				}
-				this.setMessageScrollTarget(messageTurnElementId(this.messages[targetIndex], targetIndex))
+				this.setMessageScrollTarget(elementId)
 			},
 			async loadModels() {
 				if (this.modelsLoading || this.models.length) return
@@ -1234,7 +1233,6 @@
 				this.activeResearchSession = null
 				this.resetContextUsage()
 				this.applyStore(resetCurrentConversation())
-				this.turnHeights = {}
 				this.resetTurnNavigationWindow(false)
 				this.draft = ''
 				this.pendingAttachments = []
@@ -1249,7 +1247,6 @@
 				this.resetContextUsage()
 				this.releaseAllLocalPreviews()
 				this.applyStore(selectConversation(publicId))
-				this.turnHeights = {}
 				this.resetTurnNavigationWindow(false)
 				await this.reloadCurrentMessages()
 				await this.refreshContextUsage()
@@ -2109,10 +2106,7 @@
 				if (this.turnNavigationDesktop) {
 					this.renderWindow = createInitialTurnWindow(this.messages.length, TURN_WINDOW_SIZE)
 				}
-				this.$nextTick(() => {
-					this.measureRenderedTurns()
-					this.setMessageScrollTarget('message-bottom')
-				})
+				this.setMessageScrollTarget('message-bottom')
 			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
@@ -2156,7 +2150,6 @@
 					...this.generatedResponseImageNaturalSizes,
 					[key]: Object.freeze({ width: naturalWidth, height: naturalHeight })
 				}
-				this.$nextTick(() => this.measureRenderedTurns())
 			},
 			handleGeneratedResponseImageWindowResize(event) {
 				this.refreshGeneratedResponseImageViewportHeight(
@@ -2365,7 +2358,6 @@
 	.message-stage { min-width: 0; min-height: 0; position: relative; overflow: hidden; }
 	.message-scroll { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; overflow-x: hidden; }
 	.message-shell { width: min(100%, 780px); min-height: 100%; margin: 0 auto; padding: 28px 18px 22px; box-sizing: border-box; }
-	.turn-window-spacer { width: 1px; min-height: 0; pointer-events: none; }
 	.chat-empty { min-height: 48vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 	.chat-empty-mark { width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(55, 211, 154, .38); border-radius: 18px; background: rgba(55, 211, 154, .12); color: #72e1b8; font-weight: 800; }
 	.chat-empty-title { margin-top: 18px; font-size: 25px; font-weight: 750; }
