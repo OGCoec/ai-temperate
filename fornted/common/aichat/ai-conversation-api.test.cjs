@@ -143,3 +143,53 @@ test('cancelResponse reuses the original idempotency key and does not send model
 	})
 	delete globalThis.__aiConversationRequest
 })
+
+test('reads authoritative context usage and requests asynchronous compaction', async () => {
+	const calls = []
+	const modelPublicId = 'AAAAAAAAAAE'
+	const operationPublicId = 'AAAAAAAAAAAAAAAAAAAAAw'
+	const usage = {
+		conversationPublicId: conversationId,
+		modelPublicId,
+		estimatedContextTokens: 800000,
+		estimatedContextK: 800,
+		contextWindowTokens: 1000000,
+		contextWindowK: 1000,
+		usagePercent: 80,
+		thresholdPercent: 80,
+		thresholdReached: true,
+		hardLimitExceeded: false,
+		contextRevision: 12,
+		compactionStatus: 'QUEUED',
+		compactionOperationPublicId: operationPublicId,
+		updatedAt: '2026-08-07T06:45:03Z'
+	}
+	const module = await loadApi(async (url, options) => {
+		calls.push([url, options])
+		return options.method === 'GET'
+			? usage
+			: {
+				status: 'QUEUED',
+				usage,
+				operation: { operationPublicId, status: 'QUEUED' }
+			}
+	})
+
+	const snapshot = await module.aiConversationApi.contextUsage(
+		conversationId, modelPublicId)
+	const requested = await module.aiConversationApi.requestCompaction(
+		conversationId,
+		modelPublicId,
+		'4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6')
+
+	assert.equal(snapshot.usagePercent, 80)
+	assert.equal(snapshot.thresholdReached, true)
+	assert.equal(requested.operation.operationPublicId, operationPublicId)
+	assert.equal(calls[0][0], `/api/ai/conversations/${conversationId}/context-usage?modelPublicId=${modelPublicId}`)
+	assert.deepEqual(calls[1][1], {
+		method: 'POST',
+		headers: { 'Idempotency-Key': '4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6' },
+		data: { modelPublicId }
+	})
+	delete globalThis.__aiConversationRequest
+})

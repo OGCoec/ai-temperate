@@ -281,6 +281,18 @@ app:
     image-estimated-tokens: ${AI_CONVERSATION_IMAGE_ESTIMATED_TOKENS:2048}
     # 预计下一轮达到上下文窗口百分之八十时调度异步压缩。
     pre-compaction-percent: ${AI_CONVERSATION_PRE_COMPACTION_PERCENT:80}
+    # 上下文用量展示、硬容量等待和压缩任务状态使用独立的有限时长配置组。
+    context-usage:
+      # 只有绝对容量不足时才等待异步压缩，最长等待六十秒。
+      hard-limit-wait-timeout: ${AI_CONVERSATION_CONTEXT_HARD_LIMIT_WAIT_TIMEOUT:60s}
+      # 按需上下文 SSE 每十秒发送一次心跳以尽快识别失效连接。
+      event-heartbeat: ${AI_CONVERSATION_CONTEXT_EVENT_HEARTBEAT:10s}
+      # 单次按需上下文 SSE 最长保留七十秒，超时后由前端按需重连。
+      event-timeout: ${AI_CONVERSATION_CONTEXT_EVENT_TIMEOUT:70s}
+      # 排队或运行中的压缩状态最多保留十分钟，异常退出后由绝对 TTL 收敛。
+      operation-ttl: ${AI_CONVERSATION_CONTEXT_OPERATION_TTL:10m}
+      # 压缩成功或失败终态保留五分钟，供断线页面恢复最终展示。
+      terminal-retention: ${AI_CONVERSATION_CONTEXT_TERMINAL_RETENTION:5m}
     # RESERVED 超时判定在最大流时长之外额外保留两分钟安全缓冲。
     reservation-safety-buffer: ${AI_CONVERSATION_RESERVATION_SAFETY_BUFFER:2m}
     # 过期 RESERVED 扫描每分钟运行一次且不执行自动退款。

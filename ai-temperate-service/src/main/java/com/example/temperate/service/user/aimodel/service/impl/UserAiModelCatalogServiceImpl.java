@@ -192,6 +192,10 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.inputRatio(),
                 model.cachedInputRatio(),
                 model.outputRatio(),
+                model.contextWindowTokens(),
+                toK(model.contextWindowTokens()),
+                model.maxOutputTokens(),
+                toK(model.maxOutputTokens()),
                 model.capabilities(),
                 reasoningLevels(model.vendor()),
                 AiConversationReasoningEffort.defaultLevel(),
@@ -219,6 +223,10 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 model.getInputRatio(),
                 model.getCachedInputRatio(),
                 model.getOutputRatio(),
+                model.getContextWindowTokens(),
+                toK(model.getContextWindowTokens()),
+                model.getMaxOutputTokens(),
+                toK(model.getMaxOutputTokens()),
                 capabilities,
                 reasoningLevels(model.getVendor()),
                 AiConversationReasoningEffort.defaultLevel(),
@@ -291,5 +299,9 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
         } catch (JsonProcessingException | NullPointerException exception) {
             throw new IllegalStateException("AI model tags JSON is invalid.", exception);
         }
+    }
+
+    private static long toK(long tokens) {
+        return Math.floorDiv(Math.addExact(tokens, 999L), 1_000L);
     }
 }

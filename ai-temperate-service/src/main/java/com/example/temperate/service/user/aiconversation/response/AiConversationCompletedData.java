@@ -1,6 +1,7 @@
 package com.example.temperate.service.user.aiconversation.response;
 
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
+import com.example.temperate.service.user.aiconversation.context.usage.AiConversationContextUsage;
 import java.util.List;
 
 /**
@@ -19,7 +20,9 @@ public record AiConversationCompletedData(
         List<AiConversationAttachment> inputAttachments,
         List<AiConversationAttachment> responseAttachments,
         List<String> warnings,
-        long sequence) {
+        long sequence,
+        AiConversationContextUsage contextUsage,
+        String compactionOperationPublicId) {
 
     public AiConversationCompletedData {
         inputAttachments = inputAttachments == null ? List.of() : List.copyOf(inputAttachments);
@@ -53,7 +56,9 @@ public record AiConversationCompletedData(
                 inputAttachments,
                 responseAttachments,
                 warnings,
-                0L);
+                0L,
+                null,
+                null);
     }
 
     public AiConversationCompletedData(
@@ -79,6 +84,8 @@ public record AiConversationCompletedData(
                 List.of(),
                 List.of(),
                 List.of(),
-                0L);
+                0L,
+                null,
+                null);
     }
 }

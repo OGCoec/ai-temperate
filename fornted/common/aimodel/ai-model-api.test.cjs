@@ -22,6 +22,10 @@ const PAGE_RESPONSE = {
 	models: [{
 		publicId: 'AAABi0VWeJ8',
 		modelName: 'gpt-5.4',
+		contextWindowTokens: 1000000,
+		contextWindowK: 1000,
+		maxOutputTokens: 128000,
+		maxOutputK: 128,
 		modelNameMatchedTokens: ['5.4'],
 		vendor: 'openai',
 		description: '用于代码与推理的模型。',
@@ -64,6 +68,10 @@ test('requests model pages through the authenticated client and normalizes safe 
 	]])
 	assert.equal(page.total, 21)
 	assert.equal(page.models[0].publicId, 'AAABi0VWeJ8')
+	assert.equal(page.models[0].contextWindowTokens, 1000000)
+	assert.equal(page.models[0].contextWindowK, 1000)
+	assert.equal(page.models[0].maxOutputTokens, 128000)
+	assert.equal(page.models[0].maxOutputK, 128)
 	assert.equal(page.models[0].icon, 'https://cdn.example.test/gpt-5.4.svg')
 	assert.equal(page.models[0].cachedInputRatio, '0.25')
 	assert.equal(page.models[0].outputRatio, '4')

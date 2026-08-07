@@ -23,6 +23,10 @@ public record UserAiModelResult(
         BigDecimal inputRatio,
         BigDecimal cachedInputRatio,
         BigDecimal outputRatio,
+        long contextWindowTokens,
+        long contextWindowK,
+        long maxOutputTokens,
+        long maxOutputK,
         List<AiModelCapabilityCode> capabilities,
         List<Short> supportedReasoningEffortLevels,
         short defaultReasoningEffortLevel,
@@ -30,6 +34,13 @@ public record UserAiModelResult(
         List<AiConversationImageAspect> supportedImageAspects) {
 
     public UserAiModelResult {
+        if (contextWindowTokens <= 0L
+                || contextWindowK <= 0L
+                || maxOutputTokens <= 0L
+                || maxOutputK <= 0L) {
+            throw new IllegalArgumentException(
+                    "AI model context and output limits must be positive.");
+        }
         modelNameMatchedTokens = modelNameMatchedTokens == null
                 ? List.of()
                 : List.copyOf(modelNameMatchedTokens);

@@ -15,11 +15,15 @@ import com.example.temperate.service.user.aiconversation.concurrency.AiConversat
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextService;
+import com.example.temperate.service.user.aiconversation.context.AiConversationContextSnapshot;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextWriteOutcome;
 import com.example.temperate.service.user.aiconversation.context.AiConversationEphemeralStart;
+import com.example.temperate.service.user.aiconversation.context.AiConversationInterruptionSource;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingBoundary;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingClock;
@@ -139,6 +143,7 @@ public final class AiConversationGenerationWorkerImpl
     private final AiConversationGenerationBillingTransactionService billingTransactionService;
     private final AiConversationImagePreviewBroker imagePreviewBroker;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
+    private final AiConversationCompactionCoordinator compactionCoordinator;
     private final long maximumGeneratedImageBatchBytes;
 
     public AiConversationGenerationWorkerImpl(
@@ -159,7 +164,8 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationStreamTimingDiagnosticService timingDiagnosticService,
             AiConversationStreamTimingClock timingClock,
             AiConversationMetrics metrics,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiConversationCompactionCoordinator compactionCoordinator) {
         this(
                 controlService,
                 activeRegistry,
@@ -185,7 +191,8 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
-                null);
+                null,
+                compactionCoordinator);
     }
 
     public AiConversationGenerationWorkerImpl(
@@ -207,7 +214,8 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationStreamTimingClock timingClock,
             AiConversationMetrics metrics,
             ObjectMapper objectMapper,
-            AiConversationStreamTransportDiagnosticService transportDiagnosticService) {
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService,
+            AiConversationCompactionCoordinator compactionCoordinator) {
         this(
                 controlService,
                 activeRegistry,
@@ -233,7 +241,8 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
-                null);
+                null,
+                compactionCoordinator);
     }
 
     @Autowired
@@ -262,7 +271,8 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationGenerationBillingTransactionService billingTransactionService,
             AiConversationImagePreviewBroker imagePreviewBroker,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
-            AiConversationAttachmentProperties attachmentProperties) {
+            AiConversationAttachmentProperties attachmentProperties,
+            AiConversationCompactionCoordinator compactionCoordinator) {
         this.controlService = Objects.requireNonNull(controlService);
         this.activeRegistry = Objects.requireNonNull(activeRegistry);
         this.terminalService = Objects.requireNonNull(terminalService);
@@ -288,6 +298,7 @@ public final class AiConversationGenerationWorkerImpl
         this.billingTransactionService = billingTransactionService;
         this.imagePreviewBroker = Objects.requireNonNull(imagePreviewBroker);
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
+        this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
         this.maximumGeneratedImageBatchBytes = attachmentProperties == null
                 ? Long.MAX_VALUE
                 : attachmentProperties.maxTotalBytesPerMessage();
@@ -302,6 +313,7 @@ public final class AiConversationGenerationWorkerImpl
         }
         if ("CANCELLED_BEFORE_START".equals(claim.outcome())) {
             activeRegistry.clear(generationPublicId);
+            preserveUserStopBeforeStart(claim.workItem());
             freezeCancellation(claim.workItem(), "", null, traceId);
             return;
         }
@@ -384,7 +396,7 @@ public final class AiConversationGenerationWorkerImpl
             if (beforeUpstream != null
                     && beforeUpstream.generation().getGenerationStatus()
                             == AiConversationGenerationStatus.CANCEL_REQUESTED.code()) {
-                markInterrupted(conversationPublicId, state);
+                markInterrupted(beforeUpstream, conversationPublicId, state);
                 freezeCancellation(beforeUpstream, state.answer.toString(), state.usage.get(), traceId);
                 return;
             }
@@ -560,10 +572,10 @@ public final class AiConversationGenerationWorkerImpl
             if (latest != null
                     && latest.generation().getGenerationStatus()
                     == AiConversationGenerationStatus.CANCEL_REQUESTED.code()) {
-                markInterrupted(conversationPublicId, state);
+                markInterrupted(latest, conversationPublicId, state);
                 freezeCancellation(latest, state.answer.toString(), state.usage.get(), traceId);
             } else if (state.failure.get() != null) {
-                markInterrupted(conversationPublicId, state);
+                markInterrupted(workItem, conversationPublicId, state);
                 freezeFailure(
                         workItem,
                         upstreamFailure(state.failure.get()),
@@ -597,7 +609,7 @@ public final class AiConversationGenerationWorkerImpl
                             traceId);
                 }
             } else {
-                markInterrupted(conversationPublicId, state);
+                markInterrupted(workItem, conversationPublicId, state);
                 freezeFailure(
                         workItem,
                         AiConversationGenerationTerminalType.SYSTEM_FAILED,
@@ -1053,7 +1065,7 @@ public final class AiConversationGenerationWorkerImpl
         if (isCancellationRequested(beforeTerminal)) {
             // Stop 在 OSS 上传期间到达时，刚创建的对象尚无数据库引用，必须先补偿再冻结取消事实。
             attachments.compensateCreatedObjects(finalized.createdObjectKeys());
-            markInterrupted(conversationPublicId, state);
+            markInterrupted(beforeTerminal, conversationPublicId, state);
             freezeCancellation(beforeTerminal, "", state.usage.get(), traceId);
             return;
         }
@@ -1236,16 +1248,127 @@ public final class AiConversationGenerationWorkerImpl
                 traceId);
     }
 
-    private void markInterrupted(String conversationPublicId, WorkerState state) {
+    private void markInterrupted(
+            AiConversationGenerationWorkItem workItem,
+            String conversationPublicId,
+            WorkerState state) {
         if (state.cacheGeneration == null || state.ephemeralOrdinal <= 0L) {
             return;
         }
         try {
-            contextStore.markEphemeralInterrupted(
-                    conversationPublicId, state.cacheGeneration, state.ephemeralOrdinal);
+            AiConversationInterruptionSource source = interruptionSource(
+                    workItem.generation().getCancelSource());
+            AiConversationContextWriteOutcome outcome =
+                    contextStore.saveInterruptedTurn(
+                            conversationPublicId,
+                            state.cacheGeneration,
+                            state.ephemeralOrdinal,
+                            utf8Chunks(
+                                    state.answer.toString(),
+                                    conversationProperties.streamFlushBytes()),
+                            source);
+            if (outcome == AiConversationContextWriteOutcome.APPLIED
+                    && source == AiConversationInterruptionSource.USER_STOP) {
+                compactionCoordinator.request(
+                        workItem.generation().getConversationId(),
+                        conversationPublicId,
+                        workItem.generation().getModelId(),
+                        AiConversationCompactionTrigger.USER_STOP);
+            }
         } catch (RuntimeException ignoredFailure) {
             // Redis 草稿状态是派生数据，失败不能阻止 PostgreSQL 终态和退款。
         }
+    }
+
+    private void preserveUserStopBeforeStart(
+            AiConversationGenerationWorkItem workItem) {
+        if (interruptionSource(workItem.generation().getCancelSource())
+                != AiConversationInterruptionSource.USER_STOP) {
+            return;
+        }
+        try {
+            AiConversationGeneration generation = workItem.generation();
+            AiConversationGenerationPayload payload = workItem.payload();
+            String conversationPublicId = idCodec.encode(
+                    generation.getConversationId());
+            AiConversationGenerationInputSnapshot inputSnapshot =
+                    inputCodec.decode(payload.getInputAttachmentsJson());
+            AiConversationContent input = new AiConversationContent(
+                    payload.getInputText(), inputSnapshot.attachments());
+            // Worker 尚未建立上游流时没有缓存游标；先在最新 generation 中创建用户 Turn，
+            // 再以 USER_STOP 原子提交空的部分回答，确保明确的用户意图仍进入后续上下文。
+            for (int attempt = 0; attempt < 2; attempt++) {
+                AiConversationContextSnapshot snapshot = contextService.load(
+                        generation.getConversationId(), conversationPublicId);
+                AiConversationEphemeralStart ephemeral =
+                        contextStore.appendEphemeralUser(
+                                conversationPublicId,
+                                snapshot.generation(),
+                                idCodec.encode(generation.getUsageId()),
+                                input);
+                if (ephemeral.outcome()
+                        == AiConversationContextWriteOutcome.GENERATION_MISMATCH) {
+                    continue;
+                }
+                if (ephemeral.outcome()
+                        != AiConversationContextWriteOutcome.APPLIED) {
+                    return;
+                }
+                AiConversationContextWriteOutcome stopped =
+                        contextStore.saveInterruptedTurn(
+                                conversationPublicId,
+                                snapshot.generation(),
+                                ephemeral.ordinal(),
+                                List.of(),
+                                AiConversationInterruptionSource.USER_STOP);
+                if (stopped == AiConversationContextWriteOutcome.APPLIED) {
+                    compactionCoordinator.request(
+                            generation.getConversationId(),
+                            conversationPublicId,
+                            generation.getModelId(),
+                            AiConversationCompactionTrigger.USER_STOP);
+                }
+                return;
+            }
+        } catch (RuntimeException ignoredFailure) {
+            // Redis 快照是可重建派生层；保存零输出 Stop 失败不能阻止权威取消和退款终态。
+        }
+    }
+
+    private static AiConversationInterruptionSource interruptionSource(
+            String cancelSource) {
+        if (AiConversationGenerationCancelSource.USER_STOP.name()
+                .equals(cancelSource)) {
+            return AiConversationInterruptionSource.USER_STOP;
+        }
+        if (AiConversationGenerationCancelSource.CLIENT_EXIT_TIMEOUT.name()
+                .equals(cancelSource)) {
+            return AiConversationInterruptionSource.TRANSPORT_DISCONNECT;
+        }
+        return AiConversationInterruptionSource.SYSTEM_FAILURE;
+    }
+
+    private static List<String> utf8Chunks(String value, int maxBytes) {
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int bytes = 0;
+        for (int index = 0; index < value.length();) {
+            int codePoint = value.codePointAt(index);
+            String unit = new String(Character.toChars(codePoint));
+            int unitBytes = unit.getBytes(StandardCharsets.UTF_8).length;
+            if (bytes > 0 && bytes + unitBytes > maxBytes) {
+                chunks.add(current.toString());
+                current.setLength(0);
+                bytes = 0;
+            }
+            current.append(unit);
+            bytes += unitBytes;
+            index += Character.charCount(codePoint);
+        }
+        if (!current.isEmpty()) {
+            chunks.add(current.toString());
+        }
+        return List.copyOf(chunks);
     }
 
     private AiModelCacheEntry requiredModel(long modelId) {

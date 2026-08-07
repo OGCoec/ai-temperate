@@ -162,7 +162,9 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         inputCodec,
                         attachmentCodec,
                         eventPublisher,
-                        previewBroker);
+                        previewBroker,
+                        mock(com.example.temperate.service.user.aiconversation.compaction
+                                .AiConversationCompactionCoordinator.class));
 
         consumer.consume(new AiConversationGenerationTerminated(
                 "generation",
@@ -260,7 +262,9 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         inputCodec,
                         attachmentCodec,
                         eventPublisher,
-                        previewBroker);
+                        previewBroker,
+                        mock(com.example.temperate.service.user.aiconversation.compaction
+                                .AiConversationCompactionCoordinator.class));
 
         consumer.consume(new AiConversationGenerationTerminated(
                 "generation",
@@ -352,7 +356,9 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         inputCodec,
                         attachmentCodec,
                         eventPublisher,
-                        previewBroker);
+                        previewBroker,
+                        mock(com.example.temperate.service.user.aiconversation.compaction
+                                .AiConversationCompactionCoordinator.class));
 
         consumer.consume(new AiConversationGenerationTerminated(
                 "generation",

@@ -16,6 +16,9 @@ import com.example.temperate.service.user.aiconversation.config.AiConversationIm
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextService;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionRequestResult;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationCreateCommand;
@@ -44,6 +47,8 @@ import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 在事务外完成模型、附件和 Redis 上下文准备，再委托短事务原子创建预扣、Generation 与 Payload。
@@ -77,6 +82,7 @@ public final class AiConversationGenerationServiceImpl
     private final AiConversationStreamingStrategyRegistry strategyRegistry;
     private final HybridBase64UrlCodec hybridIdCodec;
     private final PublicIdCodec publicIdCodec;
+    private final AiConversationCompactionCoordinator compactionCoordinator;
 
     public AiConversationGenerationServiceImpl(
             AiModelCacheService modelCacheService,
@@ -89,7 +95,8 @@ public final class AiConversationGenerationServiceImpl
             AiConversationImageGenerationProperties imageProperties,
             AiConversationStreamingStrategyRegistry strategyRegistry,
             HybridBase64UrlCodec hybridIdCodec,
-            PublicIdCodec publicIdCodec) {
+            PublicIdCodec publicIdCodec,
+            AiConversationCompactionCoordinator compactionCoordinator) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
         this.attachmentService = Objects.requireNonNull(attachmentService);
         this.contextService = Objects.requireNonNull(contextService);
@@ -101,6 +108,7 @@ public final class AiConversationGenerationServiceImpl
         this.strategyRegistry = Objects.requireNonNull(strategyRegistry);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
+        this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
     }
 
     @Override
@@ -148,6 +156,37 @@ public final class AiConversationGenerationServiceImpl
                 digest,
                 metering,
                 currentTraceId()));
+    }
+
+    @Override
+    public Mono<AiConversationGenerationStart> createAsync(
+            AiConversationResponseCommand command) {
+        return Mono.defer(() -> {
+            try {
+                return Mono.just(create(command));
+            } catch (AiConversationException failure) {
+                if (failure.code() != AiConversationErrorCode.AI_CONTEXT_TOO_LARGE
+                        || command.conversationId() == null) {
+                    return Mono.error(failure);
+                }
+                String conversationPublicId = hybridIdCodec.encode(
+                        command.conversationId());
+                AiConversationCompactionRequestResult request =
+                        compactionCoordinator.request(
+                                command.conversationId(),
+                                conversationPublicId,
+                                publicIdCodec.decode(command.modelPublicId()),
+                                AiConversationCompactionTrigger.HARD_LIMIT_WAIT);
+                if (request.operation() == null) {
+                    return Mono.error(failure);
+                }
+                return compactionCoordinator.awaitTerminal(
+                                conversationPublicId,
+                                request.operation().operationPublicId())
+                        .then(Mono.fromCallable(() -> create(command))
+                                .subscribeOn(Schedulers.boundedElastic()));
+            }
+        });
     }
 
     private AiConversationImageGenerationOptions resolveImageGeneration(

@@ -89,24 +89,69 @@ final class AiConversationRedisContractTest {
                 .contains("INTERRUPTED")
                 .contains("interruptionSource")
                 .contains("assistantChunkCount")
+                .contains("estimatedContextTokens")
+                .contains("contextRevision")
                 .contains("maximumFields")
                 .doesNotContain("EXPIRE")
                 .doesNotContain("PEXPIRE");
     }
 
     @Test
-    void persistedCommitEnforcesHashLimitInsideLua() throws IOException {
+    void v2SnapshotRejectsLegacySchemaAndKeepsCompactionTimestamp()
+            throws IOException {
+        String store = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/context/impl/RedisAiConversationContextStore.java");
+
+        assertThat(store)
+                .contains("private static final int SCHEMA_VERSION = 2")
+                .contains("meta.schemaVersion() != SCHEMA_VERSION")
+                .contains("lastCompactedAt");
+    }
+
+    @Test
+    void persistedCommitEnforcesHashLimitAndAtomicallyWritesTokenMetaInsideLua()
+            throws IOException {
         String commit = read(
                 "ai-temperate-service/src/main/resources/lua/ai-conversation/commit_turn.lua");
+        String store = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/context/impl/RedisAiConversationContextStore.java");
 
         assertThat(commit)
                 .contains("generation")
+                .contains("contextRevision")
+                .contains("redis.call('HSET', KEYS[1], 'meta', ARGV[3])")
+                .contains("redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])")
                 .contains("HLEN")
                 .contains("HEXISTS")
                 .contains("maximumFields")
                 .contains("return -1")
                 .doesNotContain("EXPIRE")
                 .doesNotContain("PEXPIRE");
+        assertThat(store)
+                .contains("current.estimatedContextTokens()")
+                .contains("estimatedTurnTokens")
+                .contains("json(meta)");
+    }
+
+    @Test
+    void contextEventRevisionOutlivesTheShortLivedCompactionState()
+            throws IOException {
+        String claim = read(
+                "ai-temperate-service/src/main/resources/lua/ai-conversation/claim_context_compaction.lua");
+        String transition = read(
+                "ai-temperate-service/src/main/resources/lua/ai-conversation/transition_context_compaction.lua");
+        String usage = read(
+                "ai-temperate-service/src/main/resources/lua/ai-conversation/publish_context_usage.lua");
+        String store = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/compaction/impl/RedisAiConversationCompactionStateStore.java");
+
+        assertThat(claim).contains("INCR', KEYS[2]").contains("ARGV[6]");
+        assertThat(transition).contains("INCR', KEYS[2]").contains("ARGV[9]");
+        assertThat(usage).contains("INCR', KEYS[2]").contains("ARGV[4]");
+        assertThat(store)
+                .contains("aiConversationContextEventRevisionKey")
+                .contains("conversationProperties.contextTtl()")
+                .contains("AiConversationCompactionOperation.idle(");
     }
 
     @Test

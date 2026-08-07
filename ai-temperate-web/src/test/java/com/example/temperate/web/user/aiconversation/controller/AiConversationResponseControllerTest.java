@@ -8,10 +8,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
@@ -50,6 +52,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.support.WebDataBinderFactory;
@@ -58,6 +61,7 @@ import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 /**
@@ -92,7 +96,8 @@ final class AiConversationResponseControllerTest {
                         "AAAAAAAAAAA",
                         (short) 2,
                         null,
-                        new AiConversationInputRequest("hello", List.of()))))
+                        new AiConversationInputRequest("hello", List.of())))
+                .block())
                 .isInstanceOf(AiConversationException.class)
                 .hasMessage("Idempotency-Key must be a UUIDv4.");
     }
@@ -119,9 +124,9 @@ final class AiConversationResponseControllerTest {
                                 "0",
                                 "1",
                                 "STOP"));
-        when(service.respond(any())).thenReturn(
+        when(service.respondAsync(any())).thenReturn(Mono.just(
                 new AiConversationResponseStream(
-                        accepted, Flux.just(completed)));
+                        accepted, Flux.just(completed))));
         AiConversationResponseController controller =
                 new AiConversationResponseController(service);
 
@@ -134,7 +139,8 @@ final class AiConversationResponseControllerTest {
                                 (short) 4,
                                 null,
                                 new AiConversationInputRequest(
-                                        "hello", List.of())));
+                                        "hello", List.of())))
+                        .block();
 
         assertThat(response.getHeaders().getContentType())
                 .isEqualTo(MediaType.TEXT_EVENT_STREAM);
@@ -151,7 +157,7 @@ final class AiConversationResponseControllerTest {
                 .verifyComplete();
         ArgumentCaptor<AiConversationResponseCommand> commandCaptor =
                 ArgumentCaptor.forClass(AiConversationResponseCommand.class);
-        verify(service).respond(commandCaptor.capture());
+        verify(service).respondAsync(commandCaptor.capture());
         assertThat(commandCaptor.getValue().reasoningEffort())
                 .isEqualTo(AiConversationReasoningEffort.EXTRA_HIGH);
     }
@@ -166,8 +172,8 @@ final class AiConversationResponseControllerTest {
                         "BBBBBBBBBBBBBBBBBBBBBB",
                         "AAAAAAAAAAA",
                         true));
-        when(service.respond(any())).thenReturn(
-                new AiConversationResponseStream(accepted, Flux.empty()));
+        when(service.respondAsync(any())).thenReturn(Mono.just(
+                new AiConversationResponseStream(accepted, Flux.empty())));
         AiConversationResponseController controller =
                 new AiConversationResponseController(service);
 
@@ -178,11 +184,12 @@ final class AiConversationResponseControllerTest {
                         "AAAAAAAAAAA",
                         null,
                         null,
-                        new AiConversationInputRequest("hello", List.of())));
+                        new AiConversationInputRequest("hello", List.of())))
+                .block();
 
         ArgumentCaptor<AiConversationResponseCommand> commandCaptor =
                 ArgumentCaptor.forClass(AiConversationResponseCommand.class);
-        verify(service).respond(commandCaptor.capture());
+        verify(service).respondAsync(commandCaptor.capture());
         assertThat(commandCaptor.getValue().reasoningEffort())
                 .isEqualTo(AiConversationReasoningEffort.MEDIUM);
         assertThat(commandCaptor.getValue().webSearchMode())
@@ -208,7 +215,8 @@ final class AiConversationResponseControllerTest {
                                 new AiConversationImageRequest(
                                         AiConversationImageAspect.PORTRAIT),
                                 new AiConversationInputRequest(
-                                        "draw a fox", List.of()))))
+                                        "draw a fox", List.of())))
+                .block())
                 .isInstanceOf(AiConversationException.class)
                 .hasMessageContaining("异步 Generation");
         verifyNoInteractions(service);
@@ -234,10 +242,10 @@ final class AiConversationResponseControllerTest {
                         .AiConversationGenerationObserverService.class);
         when(generationProvider.getIfAvailable()).thenReturn(generationService);
         when(observerProvider.getIfAvailable()).thenReturn(observerService);
-        when(generationService.create(any())).thenThrow(new AiConversationException(
+        when(generationService.createAsync(any())).thenReturn(Mono.error(new AiConversationException(
                 AiConversationErrorCode.AI_REQUEST_INVALID,
                 "图片生成不支持联网搜索。",
-                false));
+                false)));
         AiConversationResponseController controller =
                 new AiConversationResponseController(
                         responseService,
@@ -257,10 +265,11 @@ final class AiConversationResponseControllerTest {
                         new AiConversationImageRequest(
                                 AiConversationImageAspect.PORTRAIT),
                         new AiConversationInputRequest(
-                                "draw a fox", List.of()))))
+                                "draw a fox", List.of())))
+                .block())
                 .isInstanceOf(AiConversationException.class)
                 .hasMessageContaining("不支持联网搜索");
-        verify(generationService).create(any());
+        verify(generationService).createAsync(any());
         verifyNoInteractions(responseService);
     }
 
@@ -352,10 +361,11 @@ final class AiConversationResponseControllerTest {
             throws Exception {
         AiConversationResponseService service =
                 mock(AiConversationResponseService.class);
-        when(service.respond(any())).thenThrow(new AiConversationException(
+        when(service.respondAsync(any())).thenReturn(Mono.error(
+                new AiConversationException(
                 AiConversationErrorCode.AI_QUOTA_INSUFFICIENT,
                 "不应向客户端暴露的内部额度诊断",
-                false));
+                false)));
         AiConversationExceptionHandler exceptionHandler =
                 new AiConversationExceptionHandler(Clock.fixed(
                         Instant.parse("2026-07-31T13:40:01Z"),
@@ -375,13 +385,17 @@ final class AiConversationResponseControllerTest {
                 .setMessageConverters(jsonConverter)
                 .build();
 
-        mockMvc.perform(post("/api/ai/conversations/responses")
+        MvcResult asyncResult = mockMvc.perform(post("/api/ai/conversations/responses")
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(acceptedTypes)
                         .header(
                                 "Idempotency-Key",
                                 "4f7b5d34-3a0e-4d91-8fc2-65b7c8b141d6")
                         .content(REQUEST_BODY))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(asyncResult))
                 .andExpect(status().isPaymentRequired())
                 .andExpect(content().contentTypeCompatibleWith(
                         MediaType.APPLICATION_JSON))

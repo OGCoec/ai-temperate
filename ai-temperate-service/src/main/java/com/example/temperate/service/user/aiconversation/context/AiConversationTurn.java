@@ -10,7 +10,8 @@ public record AiConversationTurn(
         AiConversationContent user,
         AiConversationContent assistant,
         AiConversationTurnState state,
-        AiConversationInterruptionSource interruptionSource) {
+        AiConversationInterruptionSource interruptionSource,
+        long estimatedTokens) {
 
     public AiConversationTurn(
             String reference,
@@ -19,7 +20,26 @@ public record AiConversationTurn(
             AiConversationContent user,
             AiConversationContent assistant,
             AiConversationTurnState state) {
-        this(reference, messageId, ordinal, user, assistant, state, null);
+        this(reference, messageId, ordinal, user, assistant, state, null, 0L);
+    }
+
+    public AiConversationTurn(
+            String reference,
+            Long messageId,
+            Long ordinal,
+            AiConversationContent user,
+            AiConversationContent assistant,
+            AiConversationTurnState state,
+            AiConversationInterruptionSource interruptionSource) {
+        this(reference, messageId, ordinal, user, assistant, state,
+                interruptionSource, 0L);
+    }
+
+    public AiConversationTurn {
+        if (estimatedTokens < 0L) {
+            throw new IllegalArgumentException(
+                    "AI conversation turn token estimate must not be negative.");
+        }
     }
 
     public boolean ephemeral() {
@@ -27,13 +47,12 @@ public record AiConversationTurn(
     }
 
     /**
-     * 只有用户明确停止的草稿允许进入下一次模型上下文；旧缓存没有来源时保持原兼容语义。
+     * 只有用户明确停止的草稿允许进入下一次模型上下文；v2 缓存不再把缺失来源解释为用户意图。
      */
     public boolean includedInPrompt() {
         return state == AiConversationTurnState.PERSISTED
                 || (state == AiConversationTurnState.INTERRUPTED
-                        && (interruptionSource == null
-                                || interruptionSource
-                                        == AiConversationInterruptionSource.USER_STOP));
+                        && interruptionSource
+                                == AiConversationInterruptionSource.USER_STOP);
     }
 }

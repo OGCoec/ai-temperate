@@ -15,7 +15,10 @@ export function openAiConversationSseApp(request, handlers = {}) {
 		rejectCompleted = reject
 	})
 	const parser = createAiConversationSseParser(event => {
-		if (event.type === 'completed' || event.type === 'error') terminalReceived = true
+		const terminal = typeof handlers.isTerminalEvent === 'function'
+			? handlers.isTerminalEvent(event)
+			: event.type === 'completed' || event.type === 'error'
+		if (terminal) terminalReceived = true
 		handlers.onEvent?.(event)
 	})
 	const connection = openSseRequest({
@@ -32,6 +35,7 @@ export function openAiConversationSseApp(request, handlers = {}) {
 				statusCode: Number(renewal?.statusCode || 0),
 				contentType: 'text/event-stream'
 			})
+			handlers.onOpen?.()
 		},
 		onChunk(chunk) { if (!closed) parser.push(String(chunk || '')) },
 		onError(failure) {

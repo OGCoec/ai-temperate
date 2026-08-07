@@ -25,11 +25,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
@@ -54,7 +51,6 @@ public final class AiConversationCompactionServiceImpl
     private final AiConversationCompactionModelSelector modelSelector;
     private final AiConversationProperties conversationProperties;
     private final ObjectMapper objectMapper;
-    private final Executor executor;
     private final AiConversationMetrics metrics;
 
     public AiConversationCompactionServiceImpl(
@@ -67,7 +63,6 @@ public final class AiConversationCompactionServiceImpl
             AiConversationCompactionModelSelector modelSelector,
             AiConversationProperties conversationProperties,
             ObjectMapper objectMapper,
-            @Qualifier("aiConversationCompactionExecutor") Executor executor,
             AiConversationMetrics metrics) {
         this.conversationMapper = Objects.requireNonNull(conversationMapper);
         this.messageMapper = Objects.requireNonNull(messageMapper);
@@ -79,67 +74,28 @@ public final class AiConversationCompactionServiceImpl
         this.conversationProperties =
                 Objects.requireNonNull(conversationProperties);
         this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.executor = Objects.requireNonNull(executor);
         this.metrics = Objects.requireNonNull(metrics);
     }
 
     @Override
-    public void schedule(
+    public boolean compactDurable(
             byte[] conversationId,
             String conversationPublicId,
             String cacheGeneration,
             long cutoffMessageId) {
-        byte[] safeId = conversationId.clone();
-        try {
-            executor.execute(() -> compactDurableAtCutoff(
-                    safeId,
-                    conversationPublicId,
-                    cacheGeneration,
-                    cutoffMessageId));
-        } catch (RejectedExecutionException exception) {
-            metrics.compaction("persistent", "skipped");
-            LOGGER.warn(
-                    "event=ai_conversation_compaction_skipped reason=queue_full");
-        }
-    }
-
-    @Override
-    public void scheduleEphemeral(
-            String conversationPublicId,
-            String cacheGeneration) {
-        try {
-            executor.execute(() -> compactEphemeral(
-                    conversationPublicId,
-                    cacheGeneration,
-                    false));
-        } catch (RejectedExecutionException exception) {
-            metrics.compaction("ephemeral", "skipped");
-            LOGGER.warn(
-                    "event=ai_conversation_ephemeral_compaction_skipped reason=queue_full");
-        }
-    }
-
-    @Override
-    public boolean compactSynchronously(
-            byte[] conversationId,
-            String conversationPublicId,
-            String cacheGeneration) {
-        Long cutoff = messageMapper.findLatestPersistedMessageId(conversationId);
-        if (cutoff == null) {
-            return false;
-        }
         return compactDurableAtCutoff(
                 conversationId,
                 conversationPublicId,
                 cacheGeneration,
-                cutoff);
+                cutoffMessageId);
     }
 
     @Override
-    public boolean compactEphemeralSynchronously(
+    public boolean compactEphemeral(
             String conversationPublicId,
             String cacheGeneration) {
-        return compactEphemeral(conversationPublicId, cacheGeneration, true);
+        return compactEphemeralUnderLease(
+                conversationPublicId, cacheGeneration);
     }
 
     private boolean compactDurableAtCutoff(
@@ -253,10 +209,9 @@ public final class AiConversationCompactionServiceImpl
         return true;
     }
 
-    private boolean compactEphemeral(
+    private boolean compactEphemeralUnderLease(
             String conversationPublicId,
-            String cacheGeneration,
-            boolean force) {
+            String cacheGeneration) {
         AiConversationLease lease = leaseService.tryAcquire(
                         conversationPublicId,
                         AiConversationLeaseType.COMPACTION)
@@ -270,9 +225,7 @@ public final class AiConversationCompactionServiceImpl
                     .find(conversationPublicId)
                     .filter(value -> value.generation().equals(cacheGeneration))
                     .orElse(null);
-            if (snapshot == null
-                    || (!force && snapshot.fieldCount()
-                    < conversationProperties.compactionHashFieldThreshold())) {
+            if (snapshot == null) {
                 metrics.compaction("ephemeral", "skipped");
                 return false;
             }

@@ -5,6 +5,7 @@ import com.example.temperate.service.user.aiconversation.exception.AiConversatio
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationResponseController;
+import com.example.temperate.web.user.aiconversation.controller.AiConversationContextController;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationAttachmentController;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationQueryController;
 import java.io.IOException;
@@ -27,6 +28,7 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
  */
 @RestControllerAdvice(assignableTypes = {
         AiConversationResponseController.class,
+        AiConversationContextController.class,
         AiConversationGenerationController.class,
         AiConversationAttachmentController.class,
         AiConversationQueryController.class
@@ -46,10 +48,15 @@ public final class AiConversationExceptionHandler {
     @ExceptionHandler(AiConversationException.class)
     public ResponseEntity<ApiErrorResponse> handle(
             AiConversationException exception) {
-        return ResponseEntity.status(status(exception.code()))
+        ResponseEntity.BodyBuilder builder = ResponseEntity
+                .status(status(exception.code()))
                 .cacheControl(CacheControl.noStore().cachePrivate())
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new ApiErrorResponse(
+                .contentType(MediaType.APPLICATION_JSON);
+        if (exception.code()
+                == AiConversationErrorCode.AI_CONTEXT_COMPACTION_TIMEOUT) {
+            builder.header("Retry-After", "60");
+        }
+        return builder.body(new ApiErrorResponse(
                         exception.code().name(),
                         message(exception),
                         clock.instant()));
@@ -94,7 +101,7 @@ public final class AiConversationExceptionHandler {
             case AI_CONVERSATION_BUSY, AI_IDEMPOTENCY_CONFLICT ->
                     HttpStatus.CONFLICT;
             case AI_QUOTA_INSUFFICIENT -> HttpStatus.PAYMENT_REQUIRED;
-            case AI_CONTEXT_TOO_LARGE, AI_MODEL_LIMITS_MISSING,
+            case AI_MODEL_LIMITS_MISSING,
                     AI_QUOTA_RULE_MISSING,
                     AI_MODEL_REASONING_LEVEL_UNSUPPORTED,
                     AI_IMAGE_RESOLUTION_UNSUPPORTED,
@@ -105,8 +112,10 @@ public final class AiConversationExceptionHandler {
                     AI_RUNTIME_LINKAGE_FAILED ->
                     HttpStatus.SERVICE_UNAVAILABLE;
             case AI_CONCURRENCY_LIMIT_REACHED -> HttpStatus.SERVICE_UNAVAILABLE;
+            case AI_CONTEXT_TOO_LARGE -> HttpStatus.CONFLICT;
             case AI_CONTEXT_COMPACTION_FAILED,
-                    AI_UPSTREAM_STREAM_FAILED,
+                    AI_CONTEXT_COMPACTION_TIMEOUT -> HttpStatus.SERVICE_UNAVAILABLE;
+            case AI_UPSTREAM_STREAM_FAILED,
                     AI_USAGE_UNAVAILABLE,
                     AI_SETTLEMENT_RECONCILE_REQUIRED ->
                     HttpStatus.BAD_GATEWAY;

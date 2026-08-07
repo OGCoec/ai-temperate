@@ -48,6 +48,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 为普通用户提供创建会话和继续会话的 POST SSE 接口，只负责编解码、认证主体和流协议响应头。
@@ -107,7 +108,7 @@ public final class AiConversationResponseController {
             summary = "创建会话并流式生成第一条回答",
             description = "页面创建不落库；本接口预扣成功后由服务端生成 22 字符会话公共 ID，"
                     + "并依次发送 accepted、delta、heartbeat、completed 或 error 事件。")
-    public ResponseEntity<Flux<ServerSentEvent<Object>>> createAndRespond(
+    public Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> createAndRespond(
             @AuthenticationPrincipal SessionPrincipal principal,
             @RequestHeader(IDEMPOTENCY_HEADER)
             @Parameter(
@@ -138,7 +139,7 @@ public final class AiConversationResponseController {
     @Operation(
             summary = "继续已有会话并流式生成回答",
             description = "会话公共 ID 必须属于当前用户；同一会话同时只允许一个活跃生成。")
-    public ResponseEntity<Flux<ServerSentEvent<Object>>> continueAndRespond(
+    public Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> continueAndRespond(
             @AuthenticationPrincipal SessionPrincipal principal,
             @PathVariable
             @Parameter(
@@ -195,7 +196,7 @@ public final class AiConversationResponseController {
                 status.name()));
     }
 
-    private ResponseEntity<Flux<ServerSentEvent<Object>>> response(
+    private Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> response(
             SessionPrincipal principal,
             AiConversationPublicId conversationPublicId,
             String idempotencyKey,
@@ -244,12 +245,17 @@ public final class AiConversationResponseController {
         }
         if (command.imageGeneration() != null) {
             // 图片字节与最终 OSS URL 只在异步 Generation 链路中有明确边界；该链路关闭时必须失败封闭，禁止误降级成文本调用。
-            throw new AiConversationException(
+            return Mono.error(new AiConversationException(
                     AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
                     "图片生成需要启用异步 Generation 链路。",
-                    true);
+                    true));
         }
-        AiConversationResponseStream stream = responseService.respond(command);
+        return responseService.respondAsync(command)
+                .map(AiConversationResponseController::directSseResponse);
+    }
+
+    private static ResponseEntity<Flux<ServerSentEvent<Object>>> directSseResponse(
+            AiConversationResponseStream stream) {
         Flux<ServerSentEvent<Object>> body = Flux.concat(
                         Flux.just(stream.accepted()),
                         stream.events())
@@ -263,12 +269,20 @@ public final class AiConversationResponseController {
                 .body(body);
     }
 
-    private ResponseEntity<Flux<ServerSentEvent<Object>>> asyncResponse(
+    private Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> asyncResponse(
             SessionPrincipal principal,
             AiConversationResponseCommand command,
             AiConversationGenerationService generationService,
             AiConversationGenerationObserverService observerService) {
-        AiConversationGenerationStart start = generationService.create(command);
+        return generationService.createAsync(command)
+                .map(start -> generationSseResponse(
+                        principal, start, observerService));
+    }
+
+    private ResponseEntity<Flux<ServerSentEvent<Object>>> generationSseResponse(
+            SessionPrincipal principal,
+            AiConversationGenerationStart start,
+            AiConversationGenerationObserverService observerService) {
         AiConversationGenerationObserverSession observer = observerService.observe(
                 principal.userId(),
                 hybridIdCodec.decode(start.generationPublicId()));

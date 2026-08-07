@@ -29,11 +29,6 @@ public interface AiConversationContextStore {
             int firstChunkNumber,
             List<String> chunks);
 
-    AiConversationContextWriteOutcome markEphemeralInterrupted(
-            String conversationPublicId,
-            String generation,
-            long ephemeralOrdinal);
-
     AiConversationContextWriteOutcome saveInterruptedTurn(
             String conversationPublicId,
             String generation,

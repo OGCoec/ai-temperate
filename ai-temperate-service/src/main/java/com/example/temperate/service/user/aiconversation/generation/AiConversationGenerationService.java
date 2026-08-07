@@ -3,6 +3,7 @@ package com.example.temperate.service.user.aiconversation.generation;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import java.util.List;
 import java.util.UUID;
+import reactor.core.publisher.Mono;
 
 /**
  * 定义异步 Generation 的预扣创建、幂等恢复、用户归属查询和活动任务查询边界。
@@ -10,6 +11,9 @@ import java.util.UUID;
 public interface AiConversationGenerationService {
 
     AiConversationGenerationStart create(AiConversationResponseCommand command);
+
+    Mono<AiConversationGenerationStart> createAsync(
+            AiConversationResponseCommand command);
 
     AiConversationGenerationView getOwned(long userId, byte[] generationId);
 

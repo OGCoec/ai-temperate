@@ -19,6 +19,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({
         AiConversationProperties.class,
+        AiConversationContextUsageProperties.class,
         AiConversationLifecycleDiagnosticsProperties.class,
         AiConversationStreamDiagnosticsProperties.class,
         AiConversationAsyncGenerationProperties.class,

@@ -324,7 +324,8 @@ public final class RedisKeyFactory {
      * 生成保存压缩摘要、持久化尾部和中断覆盖层的 AI 会话上下文 Hash Key。
      */
     public String aiConversationContextKey(ConversationRedisId conversationId) {
-        return aiConversationKey(IdentifierType.AI_CONVERSATION_CONTEXT, conversationId);
+        return aiConversationKey(
+                "v2", IdentifierType.AI_CONVERSATION_CONTEXT, conversationId);
     }
 
     /**
@@ -340,7 +341,7 @@ public final class RedisKeyFactory {
         return create(
                 "ai",
                 "conversation",
-                "v1",
+                "v2",
                 IdentifierType.AI_CONVERSATION_CONTEXT_BUILD,
                 conversationId.value() + "_" + buildId.value());
     }
@@ -357,6 +358,33 @@ public final class RedisKeyFactory {
      */
     public String aiConversationCompactionKey(ConversationRedisId conversationId) {
         return aiConversationKey(IdentifierType.AI_CONVERSATION_COMPACTION, conversationId);
+    }
+
+    /**
+     * 生成会话上下文用量和压缩任务共用的短期状态 Hash Key。
+     */
+    public String aiConversationCompactionStateKey(
+            ConversationRedisId conversationId) {
+        return aiConversationKey(
+                IdentifierType.AI_CONVERSATION_COMPACTION_STATE,
+                conversationId);
+    }
+
+    /**
+     * 生成会话上下文事件的单调 revision Key；其寿命长于短期任务状态，避免重连后序号回退。
+     */
+    public String aiConversationContextEventRevisionKey(
+            ConversationRedisId conversationId) {
+        return aiConversationKey(
+                IdentifierType.AI_CONVERSATION_CONTEXT_EVENT_REVISION,
+                conversationId);
+    }
+
+    /**
+     * 生成跨实例广播上下文 revision 和压缩状态的固定 Redis Pub/Sub 频道。
+     */
+    public String aiConversationContextEventsChannel() {
+        return fixedKey("ai", "conversation", "v1", "context-events");
     }
 
     /**
@@ -666,11 +694,18 @@ public final class RedisKeyFactory {
 
     private String aiConversationKey(
             IdentifierType type, ConversationRedisId conversationId) {
+        return aiConversationKey("v1", type, conversationId);
+    }
+
+    private String aiConversationKey(
+            String version,
+            IdentifierType type,
+            ConversationRedisId conversationId) {
         if (conversationId == null) {
             throw new IllegalArgumentException(
                     "AI conversation Redis key requires a conversation ID.");
         }
-        return create("ai", "conversation", "v1", type, conversationId.value());
+        return create("ai", "conversation", version, type, conversationId.value());
     }
 
     private String create(
@@ -828,6 +863,8 @@ public final class RedisKeyFactory {
         AI_CONVERSATION_CONTEXT_BUILD("ctx-build"),
         AI_CONVERSATION_INFLIGHT("inflight"),
         AI_CONVERSATION_COMPACTION("compact"),
+        AI_CONVERSATION_COMPACTION_STATE("compact-state"),
+        AI_CONVERSATION_CONTEXT_EVENT_REVISION("context-event-revision"),
         AI_CONVERSATION_USER_CONCURRENCY("concurrency-user"),
         AI_DIRECT_RESPONSE_OWNER("owner"),
         AI_DIRECT_RESPONSE_CANCEL("cancel"),

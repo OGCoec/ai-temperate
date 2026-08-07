@@ -21,13 +21,21 @@ final class AiConversationRedisKeyFactoryTest {
                 "0123456789abcdef0123456789abcdef");
 
         assertThat(factory.aiConversationContextKey(id))
-                .isEqualTo("ait:test:ai:conversation:v1:ctx:AAAAAAAAAAAAAAAAAAAAAA");
+                .isEqualTo("ait:test:ai:conversation:v2:ctx:AAAAAAAAAAAAAAAAAAAAAA");
         assertThat(factory.aiConversationInflightKey(id))
                 .isEqualTo("ait:test:ai:conversation:v1:inflight:AAAAAAAAAAAAAAAAAAAAAA");
         assertThat(factory.aiConversationCompactionKey(id))
                 .isEqualTo("ait:test:ai:conversation:v1:compact:AAAAAAAAAAAAAAAAAAAAAA");
+        assertThat(factory.aiConversationCompactionStateKey(id))
+                .isEqualTo("ait:test:ai:conversation:v1:compact-state:AAAAAAAAAAAAAAAAAAAAAA");
+        assertThat(factory.aiConversationContextEventRevisionKey(id))
+                .isEqualTo("ait:test:ai:conversation:v1:context-event-revision:"
+                        + "AAAAAAAAAAAAAAAAAAAAAA")
+                .hasSizeLessThanOrEqualTo(RedisKeyFactory.TARGET_MAX_BYTES);
+        assertThat(factory.aiConversationContextEventsChannel())
+                .isEqualTo("ait:test:ai:conversation:v1:context-events");
         assertThat(factory.aiConversationContextBuildKey(id, buildId))
-                .isEqualTo("ait:test:ai:conversation:v1:ctx-build:"
+                .isEqualTo("ait:test:ai:conversation:v2:ctx-build:"
                         + "AAAAAAAAAAAAAAAAAAAAAA_0123456789abcdef0123456789abcdef")
                 .hasSizeLessThanOrEqualTo(128);
     }

@@ -148,6 +148,14 @@ function normalizedModel(value) {
 	return Object.freeze({
 		publicId,
 		modelName: normalizedRequiredText(value.modelName, 'modelName'),
+		contextWindowTokens: normalizedSafeInteger(
+			value.contextWindowTokens, 'contextWindowTokens', 1),
+		contextWindowK: normalizedSafeInteger(
+			value.contextWindowK, 'contextWindowK', 1),
+		maxOutputTokens: normalizedSafeInteger(
+			value.maxOutputTokens, 'maxOutputTokens', 1),
+		maxOutputK: normalizedSafeInteger(
+			value.maxOutputK, 'maxOutputK', 1),
 		modelNameMatchedTokens: Object.freeze(normalizedOptionalStringList(
 			value.modelNameMatchedTokens,
 			'modelNameMatchedTokens'

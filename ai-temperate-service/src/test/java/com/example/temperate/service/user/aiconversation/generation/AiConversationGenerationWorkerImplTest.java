@@ -20,11 +20,15 @@ import com.example.temperate.service.user.aiconversation.concurrency.AiConversat
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextService;
+import com.example.temperate.service.user.aiconversation.context.AiConversationContextSnapshot;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextWriteOutcome;
 import com.example.temperate.service.user.aiconversation.context.AiConversationEphemeralStart;
+import com.example.temperate.service.user.aiconversation.context.AiConversationInterruptionSource;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingBoundary;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingClock;
@@ -77,12 +81,59 @@ final class AiConversationGenerationWorkerImplTest {
         fixture.worker.execute(fixture.generationPublicId, "trace-test");
 
         verify(fixture.modelClient, never()).stream(any());
+        verify(fixture.contextStore, never())
+                .saveInterruptedTurn(any(), any(), any(Long.class), any(), any());
         AiConversationGenerationTerminalCommand command = terminalCommand(fixture);
         assertThat(command.terminalType())
                 .isEqualTo(AiConversationGenerationTerminalType.CLIENT_CANCELLED);
         assertThat(command.terminalReason()).isEqualTo("CLIENT_EXIT_TIMEOUT");
         assertThat(command.assistantText()).isEmpty();
         assertThat(command.usage()).isNull();
+    }
+
+    @Test
+    void userStopBeforeWorkerClaimPreservesTheUserTurnWithoutCallingUpstream() {
+        Fixture fixture = fixture(Flux.never());
+        fixture.cancelled.setCancelSource("USER_STOP");
+        when(fixture.controlService.claim(fixture.generationId))
+                .thenReturn(new AiConversationGenerationClaim(
+                        "CANCELLED_BEFORE_START",
+                        new AiConversationGenerationWorkItem(
+                                fixture.cancelled, fixture.payload, usageDetail())));
+        AiConversationContextSnapshot snapshot =
+                mock(AiConversationContextSnapshot.class);
+        when(snapshot.generation()).thenReturn("cancel-generation");
+        when(fixture.contextService.load(
+                fixture.cancelled.getConversationId(),
+                fixture.conversationPublicId))
+                .thenReturn(snapshot);
+        when(fixture.contextStore.saveInterruptedTurn(
+                fixture.conversationPublicId,
+                "cancel-generation",
+                1L,
+                List.of(),
+                AiConversationInterruptionSource.USER_STOP))
+                .thenReturn(AiConversationContextWriteOutcome.APPLIED);
+
+        fixture.worker.execute(fixture.generationPublicId, "trace-test");
+
+        verify(fixture.modelClient, never()).stream(any());
+        verify(fixture.contextStore).appendEphemeralUser(
+                eq(fixture.conversationPublicId),
+                eq("cancel-generation"),
+                eq(fixture.usagePublicId),
+                any(AiConversationContent.class));
+        verify(fixture.contextStore).saveInterruptedTurn(
+                fixture.conversationPublicId,
+                "cancel-generation",
+                1L,
+                List.of(),
+                AiConversationInterruptionSource.USER_STOP);
+        verify(fixture.compactionCoordinator).request(
+                eq(fixture.cancelled.getConversationId()),
+                eq(fixture.conversationPublicId),
+                eq(7L),
+                eq(AiConversationCompactionTrigger.USER_STOP));
     }
 
     @Test
@@ -276,6 +327,8 @@ final class AiConversationGenerationWorkerImplTest {
                 mock(AiConversationGenerationOutputStore.class);
         AiConversationStreamTimingDiagnosticService timingDiagnosticService =
                 mock(AiConversationStreamTimingDiagnosticService.class);
+        AiConversationCompactionCoordinator compactionCoordinator =
+                mock(AiConversationCompactionCoordinator.class);
         AiConversationStreamTimingClock timingClock = () -> 123L;
         when(timingDiagnosticService.observeBoundary(any(), any(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -333,7 +386,8 @@ final class AiConversationGenerationWorkerImplTest {
                 timingDiagnosticService,
                 timingClock,
                 mock(AiConversationMetrics.class),
-                new ObjectMapper().findAndRegisterModules());
+                new ObjectMapper().findAndRegisterModules(),
+                compactionCoordinator);
         return new Fixture(
                 generationId,
                 generationPublicId,
@@ -344,6 +398,9 @@ final class AiConversationGenerationWorkerImplTest {
                 cancelled,
                 controlService,
                 terminalService,
+                contextService,
+                contextStore,
+                compactionCoordinator,
                 modelClient,
                 timingDiagnosticService,
                 worker);
@@ -441,6 +498,9 @@ final class AiConversationGenerationWorkerImplTest {
             AiConversationGeneration cancelled,
             AiConversationGenerationControlService controlService,
             AiConversationGenerationTerminalService terminalService,
+            AiConversationContextService contextService,
+            AiConversationContextStore contextStore,
+            AiConversationCompactionCoordinator compactionCoordinator,
             AiConversationModelClient modelClient,
             AiConversationStreamTimingDiagnosticService timingDiagnosticService,
             AiConversationGenerationWorkerImpl worker) {

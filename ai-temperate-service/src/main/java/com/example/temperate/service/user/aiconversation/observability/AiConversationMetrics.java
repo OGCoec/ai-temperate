@@ -2,10 +2,12 @@ package com.example.temperate.service.user.aiconversation.observability;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.stereotype.Component;
 
 /**
@@ -17,9 +19,16 @@ import org.springframework.stereotype.Component;
 public final class AiConversationMetrics {
 
     private final MeterRegistry registry;
+    private final AtomicInteger activeContextEventConnections =
+            new AtomicInteger();
 
     public AiConversationMetrics(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry);
+        Gauge.builder(
+                        "ai.conversation.context.events.active",
+                        activeContextEventConnections,
+                        AtomicInteger::get)
+                .register(registry);
     }
 
     public void request(String outcome) {
@@ -41,6 +50,38 @@ public final class AiConversationMetrics {
                 .tag("outcome", operationOutcome(outcome))
                 .register(registry)
                 .increment();
+    }
+
+    public void contextCompactionQueued(String trigger) {
+        counter(
+                "ai.conversation.context.compaction.queued",
+                "trigger",
+                compactionTrigger(trigger));
+    }
+
+    public void contextCompactionDuration(Duration elapsed, String outcome) {
+        Timer.builder("ai.conversation.context.compaction.duration")
+                .tag("outcome", contextCompactionOutcome(outcome))
+                .register(registry)
+                .record(elapsed);
+    }
+
+    public void contextHardLimitWait(Duration elapsed, String outcome) {
+        Timer.builder("ai.conversation.context.hard_limit.wait.duration")
+                .tag("outcome", hardLimitWaitOutcome(outcome))
+                .register(registry)
+                .record(elapsed);
+    }
+
+    public void contextEventsOpened() {
+        activeContextEventConnections.incrementAndGet();
+        counter("ai.conversation.context.events.opened", "outcome", "success");
+    }
+
+    public void contextEventsClosed() {
+        activeContextEventConnections.updateAndGet(current ->
+                Math.max(0, current - 1));
+        counter("ai.conversation.context.events.closed", "outcome", "success");
     }
 
     public void billing(String operation, String outcome) {
@@ -174,6 +215,28 @@ public final class AiConversationMetrics {
     private static String operationOutcome(String value) {
         return switch (value) {
             case "success", "failed", "skipped", "conflict" -> value;
+            default -> "failed";
+        };
+    }
+
+    private static String compactionTrigger(String value) {
+        return switch (value) {
+            case "MODEL_SWITCH", "ANSWER_COMPLETED", "USER_STOP",
+                    "HASH_FIELD_SAFETY", "HARD_LIMIT_WAIT" -> value;
+            default -> "ANSWER_COMPLETED";
+        };
+    }
+
+    private static String contextCompactionOutcome(String value) {
+        return switch (value) {
+            case "success", "failed", "rejected" -> value;
+            default -> "failed";
+        };
+    }
+
+    private static String hardLimitWaitOutcome(String value) {
+        return switch (value) {
+            case "success", "failed", "timeout", "cancelled" -> value;
             default -> "failed";
         };
     }

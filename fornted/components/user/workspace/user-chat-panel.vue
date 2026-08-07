@@ -174,6 +174,28 @@
 						<picker :range="models" range-key="modelName" :value="selectedModelIndex" :disabled="generating || !models.length" @change="selectModel">
 							<view class="model-picker"><text>{{ selectedModel?.modelName || '选择模型' }}</text><uni-icons type="down" size="14" color="#9ba6a0" /></view>
 						</picker>
+						<view
+							v-if="contextUsage"
+							class="context-usage"
+							:class="`is-${contextUsageTone}`"
+							role="status"
+						>
+							<view class="context-usage-copy">
+								<text>{{ contextUsageLabel }}</text>
+								<text v-if="contextCompactionActive" class="context-usage-status">正在压缩上下文</text>
+								<text v-else-if="contextUsage.compactionStatus === 'FAILED'" class="context-usage-status">压缩失败</text>
+							</view>
+							<view
+								class="context-usage-track"
+								role="progressbar"
+								aria-label="上下文用量"
+								aria-valuemin="0"
+								aria-valuemax="100"
+								:aria-valuenow="String(contextUsageProgress)"
+							>
+								<view class="context-usage-fill" :style="{ width: `${contextUsageProgress}%` }"></view>
+							</view>
+						</view>
 						<button
 							v-if="multipleImageOutputsAvailable"
 							ref="imageOutputCountTrigger"
@@ -243,7 +265,16 @@
 <script>
 	import { aiModelApi } from '@/common/aimodel/ai-model-api.js'
 	import { clientPlatform } from '@/common/auth/config.js'
-	import { aiConversationApi } from '@/common/aichat/ai-conversation-api.js'
+	import {
+		aiConversationApi,
+		normalizeAiConversationContextUsage
+	} from '@/common/aichat/ai-conversation-api.js'
+	import { openAiConversationContextStream } from '@/common/aichat/ai-conversation-context-stream.js'
+	import {
+		formatAiConversationContextPercent,
+		formatAiConversationContextTokens,
+		recalculateAiConversationContextUsage
+	} from '@/common/aichat/ai-conversation-context-usage.js'
 	import { aiConversationErrorMessage } from '@/common/aichat/ai-conversation-error-presentation.js'
 	import { chooseConversationFiles } from '@/common/aichat/ai-conversation-file-picker.js'
 	import {
@@ -447,6 +478,12 @@
 				draft: '',
 				models: [],
 				selectedModelPublicId: '',
+				contextUsage: null,
+				contextEventRevision: 0,
+				contextObserver: null,
+				contextObserverConversationPublicId: '',
+				contextObserverModelPublicId: '',
+				contextObserverEpoch: 0,
 				selectedReasoningEffortLevel: 2,
 				selectedImageAspect: 'SQUARE',
 				selectedImageOutputCount: 1,
@@ -489,6 +526,7 @@
 			}
 		},
 		beforeUnmount() {
+			this.closeContextObserver()
 			if (this.generatedResponseImageResizeListener
 				&& typeof uni.offWindowResize === 'function') {
 				uni.offWindowResize(this.generatedResponseImageResizeListener)
@@ -581,6 +619,27 @@
 			},
 			canSend() { return this.sendGate.allowed },
 			sendBlockedReason() { return this.sendGate.reason },
+			contextCompactionActive() {
+				return this.contextUsage?.compactionStatus === 'QUEUED'
+					|| this.contextUsage?.compactionStatus === 'RUNNING'
+			},
+			contextUsagePercent() {
+				return Math.max(0, Number(this.contextUsage?.usagePercent || 0))
+			},
+			contextUsageProgress() {
+				return Math.min(100, this.contextUsagePercent)
+			},
+			contextUsageLabel() {
+				if (!this.contextUsage) return ''
+				return `${formatAiConversationContextTokens(this.contextUsage.estimatedContextTokens)} / ${formatAiConversationContextTokens(this.contextUsage.contextWindowTokens)} · ${formatAiConversationContextPercent(this.contextUsage.usagePercent)}%`
+			},
+			contextUsageTone() {
+				if (this.contextUsage?.hardLimitExceeded
+					|| this.contextUsage?.compactionStatus === 'FAILED') return 'danger'
+				if (this.contextUsage?.thresholdReached
+					|| this.contextCompactionActive) return 'warning'
+				return 'healthy'
+			},
 			activeConversationTitle() {
 				if (!this.currentConversationPublicId) return '新聊天'
 				return this.conversations.find(item => item.conversationPublicId === this.currentConversationPublicId)?.title || '未命名对话'
@@ -590,6 +649,9 @@
 			onAuthenticatedPageReady() {
 				this.applyStore(readAiConversationStore())
 				if (!this.models.length && !this.modelsLoading) this.loadModels()
+				else if (this.currentConversationPublicId) {
+					void this.refreshContextUsage()
+				}
 				if (asyncGenerationEnabled()) this.restoreActiveGenerations()
 				else this.restoreStoppedDraftForCurrentConversation()
 				this.restoreResearchForCurrentConversation()
@@ -600,6 +662,188 @@
 			},
 			syncStore() {
 				this.applyStore(readAiConversationStore())
+			},
+			closeContextObserver(resetRevision = false) {
+				this.contextObserverEpoch += 1
+				this.contextObserver?.close?.()
+				this.contextObserver = null
+				this.contextObserverConversationPublicId = ''
+				this.contextObserverModelPublicId = ''
+				if (resetRevision) this.contextEventRevision = 0
+			},
+			resetContextUsage() {
+				this.closeContextObserver(true)
+				this.contextUsage = null
+			},
+			applyContextUsage(value) {
+				let usage
+				try {
+					usage = normalizeAiConversationContextUsage(value)
+				} catch (_) {
+					return false
+				}
+				if (usage.conversationPublicId !== this.currentConversationPublicId
+					|| usage.modelPublicId !== this.selectedModelPublicId) return false
+				this.contextUsage = usage
+				return true
+			},
+			recalculateContextUsageForModel(model) {
+				if (!this.contextUsage || !model
+					|| this.contextUsage.conversationPublicId
+						!== this.currentConversationPublicId) return
+				this.contextUsage = recalculateAiConversationContextUsage(
+					this.contextUsage, model)
+			},
+			async openContextObserver() {
+				const conversationPublicId = this.currentConversationPublicId
+				const modelPublicId = this.selectedModelPublicId
+				if (!conversationPublicId || !modelPublicId) return null
+				if (this.contextObserver
+					&& this.contextObserverConversationPublicId === conversationPublicId
+					&& this.contextObserverModelPublicId === modelPublicId) {
+					return this.contextObserver
+				}
+				const previousConversationPublicId =
+					this.contextObserverConversationPublicId
+				this.closeContextObserver(Boolean(previousConversationPublicId)
+					&& previousConversationPublicId !== conversationPublicId)
+				const epoch = ++this.contextObserverEpoch
+				this.contextObserverConversationPublicId = conversationPublicId
+				this.contextObserverModelPublicId = modelPublicId
+				try {
+					const observer = await openAiConversationContextStream({
+						conversationPublicId,
+						modelPublicId,
+						afterRevision: this.contextEventRevision
+					}, {
+						onEvent: event => this.handleContextEvent(
+							conversationPublicId, modelPublicId, event)
+					})
+					if (epoch !== this.contextObserverEpoch
+						|| conversationPublicId !== this.currentConversationPublicId
+						|| modelPublicId !== this.selectedModelPublicId) {
+						observer.close()
+						return null
+					}
+					this.contextObserver = observer
+					void observer.completed.catch(() => {
+						if (epoch === this.contextObserverEpoch) this.contextUsage = null
+					}).finally(() => {
+						if (epoch === this.contextObserverEpoch) {
+							this.contextObserver = null
+							this.contextObserverConversationPublicId = ''
+							this.contextObserverModelPublicId = ''
+						}
+					})
+					return observer
+				} catch (_) {
+					if (epoch === this.contextObserverEpoch) {
+						this.contextUsage = null
+						this.contextObserverConversationPublicId = ''
+						this.contextObserverModelPublicId = ''
+					}
+					return null
+				}
+			},
+			handleContextEvent(conversationPublicId, modelPublicId, event) {
+				if (conversationPublicId !== this.currentConversationPublicId
+					|| modelPublicId !== this.selectedModelPublicId) return
+				const eventRevision = Number(event.data?.eventRevision || event.id || 0)
+				if (Number.isSafeInteger(eventRevision)
+					&& eventRevision > this.contextEventRevision) {
+					this.contextEventRevision = eventRevision
+				}
+				if (event.data?.contextUsage
+					&& this.applyContextUsage(event.data.contextUsage)
+					&& event.data?.compactionStatus) {
+					// 顶层状态读取晚于嵌套用量；紧邻的旧 completed/新 queued 竞态以较新的顶层状态为准。
+					this.contextUsage = Object.freeze({
+						...this.contextUsage,
+						compactionStatus: event.data.compactionStatus,
+						compactionOperationPublicId:
+							event.data.compactionOperationPublicId || null
+					})
+				}
+				if (event.type === 'timeout'
+					|| ((event.type === 'compaction_completed'
+						|| event.type === 'compaction_failed')
+						&& !this.contextCompactionActive)
+					|| this.contextUsage?.compactionStatus === 'COMPLETED'
+					|| this.contextUsage?.compactionStatus === 'FAILED'
+					|| (event.type === 'context_usage'
+						&& !this.contextCompactionActive)) {
+					this.closeContextObserver(false)
+				}
+			},
+			async requestContextCompaction(
+				conversationPublicId,
+				modelPublicId
+			) {
+				const result = await aiConversationApi.requestCompaction(
+					conversationPublicId, modelPublicId, uuidV4())
+				if (conversationPublicId !== this.currentConversationPublicId
+					|| modelPublicId !== this.selectedModelPublicId) return result
+				if (this.applyContextUsage(result.usage) && result.operation) {
+					this.contextUsage = Object.freeze({
+						...this.contextUsage,
+						compactionStatus: result.operation.status || 'QUEUED',
+						compactionOperationPublicId:
+							result.operation.operationPublicId
+					})
+				}
+				if (!result.operation
+					|| (result.operation.status !== 'QUEUED'
+						&& result.operation.status !== 'RUNNING')) {
+					this.closeContextObserver(false)
+				}
+				return result
+			},
+			async refreshContextUsage({ requestCompaction = false } = {}) {
+				const conversationPublicId = this.currentConversationPublicId
+				const modelPublicId = this.selectedModelPublicId
+				if (!conversationPublicId || !modelPublicId) {
+					this.resetContextUsage()
+					return null
+				}
+				try {
+					const usage = await aiConversationApi.contextUsage(
+						conversationPublicId, modelPublicId)
+					if (conversationPublicId !== this.currentConversationPublicId
+						|| modelPublicId !== this.selectedModelPublicId) return null
+					this.applyContextUsage(usage)
+					if (requestCompaction && usage.thresholdReached) {
+						await this.openContextObserver()
+						return await this.requestContextCompaction(
+							conversationPublicId, modelPublicId)
+					}
+					if (usage.compactionStatus === 'QUEUED'
+						|| usage.compactionStatus === 'RUNNING') {
+						await this.openContextObserver()
+					} else {
+						this.closeContextObserver(false)
+					}
+					return usage
+				} catch (_) {
+					if (conversationPublicId === this.currentConversationPublicId
+						&& modelPublicId === this.selectedModelPublicId) {
+						this.contextUsage = null
+						this.closeContextObserver(false)
+					}
+					return null
+				}
+			},
+			acceptTerminalContextUsage(data) {
+				if (!data?.contextUsage || !this.applyContextUsage(
+					data.contextUsage)) {
+					void this.refreshContextUsage()
+					return
+				}
+				if (data.compactionOperationPublicId
+					|| this.contextCompactionActive) {
+					void this.openContextObserver()
+				} else {
+					this.closeContextObserver(false)
+				}
 			},
 			async loadModels() {
 				if (this.modelsLoading || this.models.length) return
@@ -626,6 +870,9 @@
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 						this.selectedWebSearchMode, this.selectedModel)
+					if (this.currentConversationPublicId) {
+						await this.refreshContextUsage()
+					}
 				} catch (error) {
 					this.composerError = error.message || '模型列表加载失败。'
 				} finally {
@@ -655,6 +902,7 @@
 				this.releaseAllLocalPreviews()
 				this.activeResearchSession?.close?.()
 				this.activeResearchSession = null
+				this.resetContextUsage()
 				this.applyStore(resetCurrentConversation())
 				this.draft = ''
 				this.pendingAttachments = []
@@ -666,9 +914,11 @@
 				else if (this.generating) return
 				this.activeResearchSession?.close?.()
 				this.activeResearchSession = null
+				this.resetContextUsage()
 				this.releaseAllLocalPreviews()
 				this.applyStore(selectConversation(publicId))
 				await this.reloadCurrentMessages()
+				await this.refreshContextUsage()
 				if (!asyncGenerationEnabled()) this.restoreStoppedDraftForCurrentConversation()
 				if (asyncGenerationEnabled()) await this.resumeGenerationForConversation(publicId)
 			},
@@ -708,10 +958,13 @@
 				try { this.applyStore(setMessagePage(await aiConversationApi.messages(this.currentConversationPublicId, { before: this.nextBefore }), true)) }
 				catch (error) { this.composerError = error.message || '更早消息加载失败。'; this.applyStore(setMessagesLoading(false)) }
 			},
-			selectModel(event) {
+			async selectModel(event) {
 				const model = this.models[Number(event.detail.value)]
 				if (!model) return
+				// 模型事件一发生就关闭旧模型流，但保留会话级 revision 给新模型连接续接。
+				this.closeContextObserver(false)
 				this.selectedModelPublicId = model.publicId
+				this.recalculateContextUsageForModel(model)
 				uni.setStorageSync(MODEL_STORAGE_KEY, model.publicId)
 				const level = this.normalizeReasoningEffortForModel(model)
 				uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
@@ -728,6 +981,9 @@
 				}
 				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 					this.selectedWebSearchMode, model)
+				if (this.currentConversationPublicId) {
+					await this.refreshContextUsage({ requestCompaction: true })
+				}
 			},
 			normalizeReasoningEffortForModel(
 				model,
@@ -1149,6 +1405,7 @@
 						text: event.data?.text || ''
 					})
 				} else if (event.type === 'completed' && event.data?.generationPublicId) {
+					this.acceptTerminalContextUsage(event.data)
 					const generationPublicId = event.data.generationPublicId
 					const terminalAttachmentEvidenceComplete =
 						Array.isArray(event.data?.attachments)
@@ -1190,6 +1447,7 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
 				} else if (event.type === 'completed') {
+					this.acceptTerminalContextUsage(event.data)
 					this.activeResearchSession?.bindMessage?.(
 						event.data?.messagePublicId)
 					this.activeResearchSession?.markTerminal?.('COMPLETED')
@@ -1402,6 +1660,11 @@
 				const cancelledLocalId = this.activeLocalId
 				const current = this.messages.find(message =>
 					message.localId === cancelledLocalId)
+				// 先确认按需上下文 SSE 已经完成握手，再发送 Stop，避免快速保存与压缩终态落在订阅窗口之外。
+				if (this.currentConversationPublicId
+					&& this.selectedModelPublicId) {
+					await this.openContextObserver()
+				}
 				if (!asyncGenerationEnabled()) {
 					// 先冻结视觉层和当前可见文本，再等待取消确认，避免重试期间继续向 UI 追加内容。
 					this.activeResearchSession?.markTerminal?.('USER_STOP')
@@ -1770,6 +2033,17 @@
 	.composer-controls { min-width: 0; flex-wrap: wrap; gap: 4px; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.context-usage { min-width: 142px; min-height: 36px; padding: 6px 10px; display: flex; flex-direction: column; justify-content: center; gap: 5px; border: 1px solid rgba(55, 211, 154, .24); border-radius: 10px; background: rgba(15, 22, 19, .72); color: #8fdcbe; box-sizing: border-box; }
+	.context-usage-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; line-height: 1.15; white-space: nowrap; }
+	.context-usage-status { font-size: 9px; opacity: .9; }
+	.context-usage-track { width: 100%; height: 3px; overflow: hidden; border-radius: 999px; background: rgba(143, 220, 190, .16); }
+	.context-usage-fill { height: 100%; border-radius: inherit; background: #55d9a7; transition: width 180ms ease, background-color 180ms ease; }
+	.context-usage.is-warning { border-color: rgba(242, 162, 77, .34); color: #f2b56f; }
+	.context-usage.is-warning .context-usage-track { background: rgba(242, 162, 77, .16); }
+	.context-usage.is-warning .context-usage-fill { background: #f2a24d; }
+	.context-usage.is-danger { border-color: rgba(255, 112, 104, .38); color: #ff9b94; }
+	.context-usage.is-danger .context-usage-track { background: rgba(255, 112, 104, .16); }
+	.context-usage.is-danger .context-usage-fill { background: #ff7068; }
 	.reasoning-effort-picker, .image-aspect-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
 	.image-aspect-picker { color: #9bc8ec; }
 	.web-search-toggle { min-height: 36px; margin: 0; padding: 0 8px 0 10px; display: flex; align-items: center; gap: 7px; border-radius: 10px; color: #9bc8ec; font-size: 12px; line-height: 1; }
@@ -1796,6 +2070,7 @@
 		.composer-meta { align-items: flex-start; flex-direction: column; gap: 2px; }
 		.composer-controls { max-width: 100%; }
 		.model-picker text { max-width: 42vw; }
+		.context-usage { min-width: min(168px, 88vw); }
 		.research-row { grid-template-columns: 1fr; gap: 2px; }
 		.composer-note { padding-left: 10px; text-align: left; }
 	}

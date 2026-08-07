@@ -16,6 +16,9 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationR
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementCommand;
 import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionRequestResult;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextSnapshot;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextStore;
@@ -47,6 +50,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -84,6 +88,7 @@ public final class AiConversationGenerationBillingConsumerImpl
     private final AiConversationGenerationInputCodec inputCodec;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
     private final AiConversationImagePreviewBroker previewBroker;
+    private final AiConversationCompactionCoordinator compactionCoordinator;
 
     public AiConversationGenerationBillingConsumerImpl(
             AiConversationGenerationMapper generationMapper,
@@ -101,7 +106,8 @@ public final class AiConversationGenerationBillingConsumerImpl
             AiConversationGenerationInputCodec inputCodec,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
             ApplicationEventPublisher eventPublisher,
-            AiConversationImagePreviewBroker previewBroker) {
+            AiConversationImagePreviewBroker previewBroker,
+            AiConversationCompactionCoordinator compactionCoordinator) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.payloadMapper = Objects.requireNonNull(payloadMapper);
         this.detailMapper = Objects.requireNonNull(detailMapper);
@@ -118,6 +124,7 @@ public final class AiConversationGenerationBillingConsumerImpl
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
         this.eventPublisher = Objects.requireNonNull(eventPublisher);
         this.previewBroker = Objects.requireNonNull(previewBroker);
+        this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
     }
 
     @Override
@@ -164,7 +171,14 @@ public final class AiConversationGenerationBillingConsumerImpl
                         existing.name(),
                         messageId,
                         requestedImageCount,
-                        responseAttachments);
+                        responseAttachments,
+                        AiConversationGenerationTerminalType.COMPLETED.name()
+                                        .equals(terminal.terminalType())
+                                ? refreshContextAfterCompletion(
+                                        generation,
+                                        idCodec.encode(
+                                                generation.getConversationId()))
+                                : null);
             }
             return;
         }
@@ -315,10 +329,11 @@ public final class AiConversationGenerationBillingConsumerImpl
             AiConversationGenerationBillingResult result = transactionService.settle(command);
             transactionCommitted = true;
             if (result.applied()) {
+                AiConversationCompactionRequestResult contextRefresh = null;
                 if (command.mode() == AiConversationGenerationBillingMode.COMPLETE
                         || command.mode()
                                 == AiConversationGenerationBillingMode.COMPLETE_RECONCILE) {
-                    commitPersistedContext(
+                    contextRefresh = commitPersistedContext(
                             generation,
                             payload,
                             result.messageId(),
@@ -338,7 +353,8 @@ public final class AiConversationGenerationBillingConsumerImpl
                         inputSnapshot.imageGeneration() == null
                                 ? (short) 0
                                 : inputSnapshot.imageGeneration().outputCount(),
-                        responseAttachments);
+                        responseAttachments,
+                        contextRefresh);
             }
             metrics.generationBilling(
                     Duration.ofNanos(System.nanoTime() - billingStarted), "success");
@@ -357,23 +373,33 @@ public final class AiConversationGenerationBillingConsumerImpl
             String finalStatus,
             long messageId,
             short requestedImageCount,
-            List<AiConversationAttachment> responseAttachments) {
+            List<AiConversationAttachment> responseAttachments,
+            AiConversationCompactionRequestResult contextRefresh) {
         // 图片字节已经在 Worker 中释放；终态只发送正式附件、请求数量和可选消息 ID，供浏览器重建缺失槽位。
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("generationPublicId", terminal.generationPublicId());
+        data.put("usagePublicId", terminal.usagePublicId());
+        data.put("messagePublicId", messageId > 0L
+                ? publicIdCodec.encode(messageId)
+                : "");
+        data.put("status", finalStatus);
+        data.put("terminalType", terminal.terminalType());
+        data.put("terminalReason", Objects.requireNonNullElse(
+                terminal.terminalReason(), "unavailable"));
+        data.put("requestedImageCount", requestedImageCount);
+        data.put("attachments", List.copyOf(responseAttachments));
+        if (contextRefresh != null) {
+            data.put("contextUsage", contextRefresh.usage());
+            data.put(
+                    "compactionOperationPublicId",
+                    contextRefresh.operation() == null
+                            ? null
+                            : contextRefresh.operation().operationPublicId());
+        }
         eventPublisher.publishEvent(new AiConversationGenerationBilledEvent(
                 terminal.generationPublicId(),
                 "completed",
-                json(Map.of(
-                        "generationPublicId", terminal.generationPublicId(),
-                        "usagePublicId", terminal.usagePublicId(),
-                        "messagePublicId", messageId > 0L
-                                ? publicIdCodec.encode(messageId)
-                                : "",
-                        "status", finalStatus,
-                        "terminalType", terminal.terminalType(),
-                        "terminalReason", Objects.requireNonNullElse(
-                                terminal.terminalReason(), "unavailable"),
-                        "requestedImageCount", requestedImageCount,
-                        "attachments", List.copyOf(responseAttachments)))));
+                json(data)));
         // 终态事件已经进入既有输出通道后统一释放所有预览槽位；没有浏览器观察者时也不会等 TTL 才回收大图。
         previewBroker.release(terminal.generationPublicId());
     }
@@ -507,7 +533,7 @@ public final class AiConversationGenerationBillingConsumerImpl
         }
     }
 
-    private void commitPersistedContext(
+    private AiConversationCompactionRequestResult commitPersistedContext(
             AiConversationGeneration generation,
             AiConversationGenerationPayload payload,
             long messageId,
@@ -517,7 +543,7 @@ public final class AiConversationGenerationBillingConsumerImpl
                 || messageId <= 0L
                 || settlement == null) {
             invalidateContext(generation);
-            return;
+            return null;
         }
         String conversationPublicId = idCodec.encode(generation.getConversationId());
         String contextGeneration = payload.getContextGeneration();
@@ -533,7 +559,8 @@ public final class AiConversationGenerationBillingConsumerImpl
                         settlement.user(),
                         settlement.assistant());
                 if (outcome == AiConversationContextWriteOutcome.APPLIED) {
-                    return;
+                    return refreshContextAfterCompletion(
+                            generation, conversationPublicId);
                 }
                 if (outcome == AiConversationContextWriteOutcome.UNAVAILABLE) {
                     break;
@@ -552,6 +579,22 @@ public final class AiConversationGenerationBillingConsumerImpl
         metrics.context(outcome == AiConversationContextWriteOutcome.GENERATION_MISMATCH
                 ? "generation_conflict" : "unavailable");
         invalidateContext(generation);
+        return null;
+    }
+
+    private AiConversationCompactionRequestResult refreshContextAfterCompletion(
+            AiConversationGeneration generation,
+            String conversationPublicId) {
+        try {
+            return compactionCoordinator.request(
+                    generation.getConversationId(),
+                    conversationPublicId,
+                    generation.getModelId(),
+                    AiConversationCompactionTrigger.ANSWER_COMPLETED);
+        } catch (RuntimeException ignoredFailure) {
+            // 消息和资金事务已经提交；派生用量事件或压缩调度失败不得反向破坏权威终态。
+            return null;
+        }
     }
 
     private void invalidateContext(AiConversationGeneration generation) {

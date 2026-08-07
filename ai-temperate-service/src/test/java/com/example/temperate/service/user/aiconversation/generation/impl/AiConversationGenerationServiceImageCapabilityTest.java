@@ -151,7 +151,9 @@ final class AiConversationGenerationServiceImageCapabilityTest {
                         268_435_456L),
                 registry,
                 mock(HybridBase64UrlCodec.class),
-                publicIds), created);
+                publicIds,
+                mock(com.example.temperate.service.user.aiconversation.compaction
+                        .AiConversationCompactionCoordinator.class)), created);
     }
 
     private static AiConversationResponseCommand command(

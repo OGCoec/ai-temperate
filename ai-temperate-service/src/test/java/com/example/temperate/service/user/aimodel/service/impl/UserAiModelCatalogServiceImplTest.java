@@ -122,6 +122,10 @@ final class UserAiModelCatalogServiceImplTest {
              assertThat(item.icon()).isEqualTo("https://example.test/model.svg");
              assertThat(item.modelNameMatchedTokens()).containsExactly("mini");
             assertThat(item.descriptionMatchedTokens()).containsExactly("mini");
+            assertThat(item.contextWindowTokens()).isEqualTo(256_000L);
+            assertThat(item.contextWindowK()).isEqualTo(256L);
+            assertThat(item.maxOutputTokens()).isEqualTo(32_000L);
+            assertThat(item.maxOutputK()).isEqualTo(32L);
             assertThat(item.capabilities()).containsExactly(AiModelCapabilityCode.RESPONSES);
         });
         assertThat(result.total()).isEqualTo(1);
@@ -279,6 +283,8 @@ final class UserAiModelCatalogServiceImplTest {
         model.setInputRatio(new BigDecimal("1.00000000"));
         model.setCachedInputRatio(new BigDecimal("0.25000000"));
         model.setOutputRatio(new BigDecimal("4.00000000"));
+        model.setContextWindowTokens(256_000L);
+        model.setMaxOutputTokens(32_000L);
         model.setEnabled(true);
         model.setCreatedAt(LocalDate.of(2026, 7, 31));
         model.setUpdatedAt(LocalDate.of(2026, 7, 31));

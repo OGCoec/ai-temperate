@@ -93,9 +93,13 @@ export function openAiConversationSseH5(request, handlers = {}) {
 			error.code = 'AI_CONVERSATION_SSE_UNSUPPORTED'
 			throw error
 		}
+		handlers.onOpen?.()
 		const decoder = new TextDecoder('utf-8', { fatal: true })
 		const parser = createAiConversationSseParser(event => {
-			if (event.type === 'completed' || event.type === 'error') terminalReceived = true
+			const terminal = typeof handlers.isTerminalEvent === 'function'
+				? handlers.isTerminalEvent(event)
+				: event.type === 'completed' || event.type === 'error'
+			if (terminal) terminalReceived = true
 			handlers.onEvent?.(event)
 		})
 		try {
