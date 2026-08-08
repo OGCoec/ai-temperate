@@ -12,11 +12,17 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.aimodel.search.AiModelSearchCriteria;
 import com.example.temperate.service.aimodel.search.AiModelSearchService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
+import com.example.temperate.service.user.aiconversation.config.AiConversationVideoGenerationProperties;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageAspect;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfileService;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
 import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoAspectRatio;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoDurationRange;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMode;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoProfileService;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoResolution;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelPageResult;
 import com.example.temperate.service.user.aimodel.dto.UserAiModelResult;
 import com.example.temperate.service.user.aimodel.exception.UserAiModelCatalogErrorCode;
@@ -57,6 +63,8 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
     private final ObjectMapper objectMapper;
     private final AiConversationImageProfileService imageProfileService;
     private final AiConversationImageGenerationProperties imageProperties;
+    private final AiConversationVideoProfileService videoProfileService;
+    private final AiConversationVideoGenerationProperties videoProperties;
 
     public UserAiModelCatalogServiceImpl(
             AiModelCacheService cacheService,
@@ -66,7 +74,9 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
             PublicIdCodec publicIdCodec,
             ObjectMapper objectMapper,
             AiConversationImageProfileService imageProfileService,
-            AiConversationImageGenerationProperties imageProperties) {
+            AiConversationImageGenerationProperties imageProperties,
+            AiConversationVideoProfileService videoProfileService,
+            AiConversationVideoGenerationProperties videoProperties) {
         this.cacheService = Objects.requireNonNull(cacheService);
         this.modelMapper = Objects.requireNonNull(modelMapper);
         this.capabilityMapper = Objects.requireNonNull(capabilityMapper);
@@ -75,6 +85,8 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.imageProfileService = Objects.requireNonNull(imageProfileService);
         this.imageProperties = Objects.requireNonNull(imageProperties);
+        this.videoProfileService = Objects.requireNonNull(videoProfileService);
+        this.videoProperties = Objects.requireNonNull(videoProperties);
     }
 
     @Override
@@ -200,7 +212,11 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 reasoningLevels(model.vendor()),
                 AiConversationReasoningEffort.defaultLevel(),
                 imageLevels(model.vendor(), model.modelName(), model.capabilities()),
-                imageAspects(model.vendor(), model.modelName(), model.capabilities()));
+                imageAspects(model.vendor(), model.modelName(), model.capabilities()),
+                videoModes(model.vendor(), model.modelName(), model.capabilities()),
+                videoResolutions(model.vendor(), model.modelName(), model.capabilities()),
+                videoAspectRatios(model.vendor(), model.modelName(), model.capabilities()),
+                videoDuration(model.vendor(), model.modelName(), model.capabilities()));
     }
 
     private UserAiModelResult toResult(
@@ -231,7 +247,11 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 reasoningLevels(model.getVendor()),
                 AiConversationReasoningEffort.defaultLevel(),
                 imageLevels(model.getVendor(), model.getModelName(), capabilities),
-                imageAspects(model.getVendor(), model.getModelName(), capabilities));
+                imageAspects(model.getVendor(), model.getModelName(), capabilities),
+                videoModes(model.getVendor(), model.getModelName(), capabilities),
+                videoResolutions(model.getVendor(), model.getModelName(), capabilities),
+                videoAspectRatios(model.getVendor(), model.getModelName(), capabilities),
+                videoDuration(model.getVendor(), model.getModelName(), capabilities));
     }
 
     private List<Short> imageLevels(
@@ -258,6 +278,79 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
                 && imageProfileService.supports(provider, modelName)
                 ? imageProfileService.supportedAspects(provider, modelName)
                 : List.of();
+    }
+
+    private List<AiConversationVideoMode> videoModes(
+            String vendor,
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        AiModelProvider provider = providerOrNull(vendor);
+        if (!videoProperties.enabled()
+                || provider == null
+                || !videoProfileService.supports(provider, modelName)) {
+            return List.of();
+        }
+        return videoProfileService.supportedModes(provider, modelName).stream()
+                .filter(mode -> switch (mode) {
+                    case TEXT_TO_VIDEO, IMAGE_TO_VIDEO, REFERENCE_TO_VIDEO ->
+                            capabilities.contains(AiModelCapabilityCode.VIDEO_GENERATION);
+                    case VIDEO_EDIT ->
+                            capabilities.contains(AiModelCapabilityCode.VIDEO_EDIT)
+                                    && capabilities.contains(AiModelCapabilityCode.VIDEO_INPUT);
+                    case VIDEO_EXTEND ->
+                            capabilities.contains(AiModelCapabilityCode.VIDEO_EXTENSION)
+                                    && capabilities.contains(AiModelCapabilityCode.VIDEO_INPUT);
+                })
+                .toList();
+    }
+
+    private List<AiConversationVideoResolution> videoResolutions(
+            String vendor,
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        AiModelProvider provider = providerOrNull(vendor);
+        List<AiConversationVideoMode> modes = videoModes(
+                vendor, modelName, capabilities);
+        if (provider == null || modes.isEmpty()) {
+            return List.of();
+        }
+        return modes.stream()
+                .flatMap(mode -> videoProfileService
+                        .supportedResolutions(provider, modelName, mode)
+                        .stream())
+                .distinct()
+                .toList();
+    }
+
+    private List<AiConversationVideoAspectRatio> videoAspectRatios(
+            String vendor,
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        boolean supportsGeneration = videoModes(vendor, modelName, capabilities)
+                .stream()
+                .anyMatch(mode -> mode == AiConversationVideoMode.TEXT_TO_VIDEO
+                        || mode == AiConversationVideoMode.IMAGE_TO_VIDEO
+                        || mode == AiConversationVideoMode.REFERENCE_TO_VIDEO);
+        return supportsGeneration
+                ? List.of(AiConversationVideoAspectRatio.values())
+                : List.of();
+    }
+
+    private AiConversationVideoDurationRange videoDuration(
+            String vendor,
+            String modelName,
+            List<AiModelCapabilityCode> capabilities) {
+        List<AiConversationVideoMode> modes = videoModes(
+                vendor, modelName, capabilities);
+        if (modes.stream().anyMatch(mode ->
+                mode == AiConversationVideoMode.TEXT_TO_VIDEO
+                        || mode == AiConversationVideoMode.IMAGE_TO_VIDEO
+                        || mode == AiConversationVideoMode.REFERENCE_TO_VIDEO)) {
+            return new AiConversationVideoDurationRange(1, 15);
+        }
+        return modes.contains(AiConversationVideoMode.VIDEO_EXTEND)
+                ? new AiConversationVideoDurationRange(2, 10)
+                : null;
     }
 
     private static List<Short> reasoningLevels(String vendor) {

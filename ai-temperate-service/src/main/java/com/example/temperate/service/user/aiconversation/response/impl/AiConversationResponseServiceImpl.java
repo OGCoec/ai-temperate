@@ -279,6 +279,7 @@ public final class AiConversationResponseServiceImpl
                             command.reasoningEffort(),
                             command.webSearchMode(),
                             command.imageGeneration(),
+                            command.videoGeneration(),
                             command.idempotencyKey(),
                             command.input().validated(attachments));
             return respondValidated(prepared, traceContext);

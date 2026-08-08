@@ -194,6 +194,19 @@ public final class RedisAiConversationGenerationOutputStoreImpl
     }
 
     @Override
+    public void publishEvent(
+            String generationPublicId,
+            String eventName,
+            String dataJson) {
+        publish(new AiConversationGenerationOutputEvent(
+                AiConversationGenerationOutputEvent.CURRENT_SCHEMA_VERSION,
+                generationPublicId,
+                currentRevision(generationPublicId),
+                eventName,
+                dataJson));
+    }
+
+    @Override
     public AiConversationGenerationOutputSnapshot snapshot(String generationPublicId) {
         Map<Object, Object> values = redisTemplate.opsForHash().entries(key(generationPublicId));
         long revision = parseRevision(values.get("revision"));

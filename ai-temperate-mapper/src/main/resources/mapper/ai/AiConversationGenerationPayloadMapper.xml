@@ -82,6 +82,17 @@
           AND ephemeral_ordinal IS NULL
     </update>
 
+    <update id="bindUpstreamRequestId">
+        UPDATE ai_conversation_generation_payload
+        SET upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR},
+            updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE generation_id = #{generationId,jdbcType=BINARY}
+          AND (
+              upstream_request_id IS NULL
+              OR upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR}
+          )
+    </update>
+
     <delete id="deleteByGenerationIds">
         DELETE FROM ai_conversation_generation_payload
         WHERE generation_id IN
@@ -104,7 +115,10 @@
                 ELSE CAST(#{meteringEvidenceJson,jdbcType=LONGVARCHAR} AS JSONB)
             END,
             model_finish_reason = #{modelFinishReason,jdbcType=VARCHAR},
-            upstream_request_id = #{upstreamRequestId,jdbcType=VARCHAR},
+            upstream_request_id = COALESCE(
+                #{upstreamRequestId,jdbcType=VARCHAR},
+                upstream_request_id
+            ),
             updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         WHERE generation_id = #{generationId,jdbcType=BINARY}
           AND assistant_text IS NULL

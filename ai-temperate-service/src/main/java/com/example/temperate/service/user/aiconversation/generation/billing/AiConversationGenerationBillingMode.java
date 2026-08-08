@@ -7,5 +7,6 @@ public enum AiConversationGenerationBillingMode {
     COMPLETE,
     COMPLETE_RECONCILE,
     INTERRUPTED,
-    REFUND_FULL
+    REFUND_FULL,
+    RECONCILE_ONLY
 }

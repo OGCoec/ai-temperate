@@ -143,16 +143,24 @@ final class AiConversationGenerationServiceImageCapabilityTest {
                 mock(AiConversationGenerationMapper.class),
                 hasher,
                 profiles,
-                new AiConversationImageGenerationProperties(
+				new AiConversationImageGenerationProperties(
                         true,
                         "/v1/images/generations",
                         "/v1/images/edits",
                         33_554_432,
                         384_000,
                         768,
-                        70,
-                        268_435_456L),
-                registry,
+						70,
+						268_435_456L),
+				mock(com.example.temperate.service.user.aiconversation.video
+						.AiConversationVideoProfileService.class),
+				mock(com.example.temperate.service.user.aiconversation.video
+						.AiConversationVideoCostEstimator.class),
+				mock(com.example.temperate.service.user.aiconversation.video
+						.AiConversationVideoMetadataService.class),
+				com.example.temperate.service.user.aiconversation.config
+						.AiConversationVideoGenerationProperties.officialDefaults(),
+				registry,
                 mock(HybridBase64UrlCodec.class),
                 publicIds,
                 mock(com.example.temperate.service.user.aiconversation.compaction

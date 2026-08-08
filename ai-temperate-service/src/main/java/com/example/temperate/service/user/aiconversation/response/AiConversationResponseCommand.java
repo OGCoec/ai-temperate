@@ -3,6 +3,7 @@ package com.example.temperate.service.user.aiconversation.response;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationRequest;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -17,6 +18,7 @@ public record AiConversationResponseCommand(
         AiConversationReasoningEffort reasoningEffort,
         AiConversationWebSearchMode webSearchMode,
         AiConversationImageGenerationRequest imageGeneration,
+        AiConversationVideoGenerationRequest videoGeneration,
         UUID idempotencyKey,
         AiConversationContent input) {
 
@@ -47,6 +49,33 @@ public record AiConversationResponseCommand(
                 modelPublicId,
                 reasoningEffort,
                 webSearchMode,
+                null,
+                null,
+                idempotencyKey,
+                input);
+    }
+
+    /**
+     * 保留图片调用方的构造方式，并明确该入口不会隐式开启视频生成。
+     */
+    public AiConversationResponseCommand(
+            long userId,
+            String userPublicId,
+            byte[] conversationId,
+            String modelPublicId,
+            AiConversationReasoningEffort reasoningEffort,
+            AiConversationWebSearchMode webSearchMode,
+            AiConversationImageGenerationRequest imageGeneration,
+            UUID idempotencyKey,
+            AiConversationContent input) {
+        this(
+                userId,
+                userPublicId,
+                conversationId,
+                modelPublicId,
+                reasoningEffort,
+                webSearchMode,
+                imageGeneration,
                 null,
                 idempotencyKey,
                 input);

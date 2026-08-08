@@ -57,7 +57,8 @@ DECLARE
     missing_comment_count INTEGER;
     missing_index_count INTEGER;
     missing_metering_column_count INTEGER;
-    missing_metering_constraint_count INTEGER;
+	missing_metering_constraint_count INTEGER;
+	missing_video_stage_count INTEGER;
 BEGIN
     SELECT COUNT(*)
       INTO table_count
@@ -154,8 +155,30 @@ BEGIN
       LEFT JOIN pg_constraint actual
         ON actual.conname = required.constraint_name
      WHERE actual.conname IS NULL;
-    IF missing_metering_constraint_count <> 0 THEN
-        RAISE EXCEPTION 'AI Generation schema is missing % metering constraints', missing_metering_constraint_count;
-    END IF;
+	IF missing_metering_constraint_count <> 0 THEN
+		RAISE EXCEPTION 'AI Generation schema is missing % metering constraints', missing_metering_constraint_count;
+	END IF;
+
+	-- 视频阶段列和白名单约束用于诊断 xAI 与 OSS 边界，但不会保存临时 URL。
+	SELECT COUNT(*)
+	  INTO missing_video_stage_count
+	  FROM (VALUES
+		  ('video_stage'),
+		  ('chk_ai_conversation_generation_video_stage')
+	  ) AS required(object_name)
+	  LEFT JOIN (
+		  SELECT column_name AS object_name
+		  FROM information_schema.columns
+		  WHERE table_schema = 'public'
+			AND table_name = 'ai_conversation_generation'
+		  UNION ALL
+		  SELECT conname
+		  FROM pg_constraint
+	  ) actual
+		ON actual.object_name = required.object_name
+	 WHERE actual.object_name IS NULL;
+	IF missing_video_stage_count <> 0 THEN
+		RAISE EXCEPTION 'AI Generation schema is missing % video stage objects', missing_video_stage_count;
+	END IF;
 END
 $verification$;

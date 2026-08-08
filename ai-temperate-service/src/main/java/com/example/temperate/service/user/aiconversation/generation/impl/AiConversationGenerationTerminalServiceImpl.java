@@ -143,7 +143,7 @@ public final class AiConversationGenerationTerminalServiceImpl
                 command.usage(),
                 command.meteringEvidenceJson(),
                 "CLIENT_CANCELLED",
-                null,
+                command.upstreamRequestId(),
                 command.traceId());
     }
 

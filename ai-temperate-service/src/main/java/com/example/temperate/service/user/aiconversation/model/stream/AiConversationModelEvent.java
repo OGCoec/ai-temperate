@@ -4,6 +4,8 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMod
 import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImage;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageMeteringEvidence;
 import com.example.temperate.service.user.aiconversation.model.AiConversationMeteredUsage;
+import com.example.temperate.service.user.aiconversation.video.AiConversationGeneratedVideo;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMeteringEvidence;
 import java.util.Objects;
 
 /**
@@ -18,7 +20,11 @@ public sealed interface AiConversationModelEvent permits
         AiConversationModelEvent.ImageOutputReady,
         AiConversationModelEvent.ImageUsage,
         AiConversationModelEvent.ImageCostEvidence,
-        AiConversationModelEvent.ImageFailure,
+		AiConversationModelEvent.ImageFailure,
+		AiConversationModelEvent.VideoRequestAccepted,
+		AiConversationModelEvent.VideoProgress,
+        AiConversationModelEvent.Video,
+        AiConversationModelEvent.VideoCostEvidence,
         AiConversationModelEvent.Activity,
         AiConversationModelEvent.Source,
         AiConversationModelEvent.ReasoningSummaryDelta,
@@ -92,6 +98,51 @@ public sealed interface AiConversationModelEvent permits
                 throw new IllegalArgumentException("Image output index is out of range.");
             }
             cause = Objects.requireNonNull(cause);
+        }
+    }
+
+    /**
+     * 在创建 POST 返回后立即冻结 xAI 请求标识，使后续轮询超时或断网仍可人工对账。
+     */
+    record VideoRequestAccepted(String requestId)
+            implements AiConversationModelEvent {
+
+        public VideoRequestAccepted {
+            requestId = Objects.requireNonNull(requestId);
+        }
+    }
+
+    /**
+     * 表示 xAI 异步任务的协议进度，不携带视频地址或供应商原始正文。
+     */
+    record VideoProgress(int progress) implements AiConversationModelEvent {
+
+        public VideoProgress {
+            if (progress < 0 || progress > 100) {
+                throw new IllegalArgumentException("Video progress is invalid.");
+            }
+        }
+    }
+
+    /**
+     * 表示已生成但尚未进入 OSS 的临时视频，外层 Worker 必须立即交给 FC 且不得持久化其中的 URL。
+     */
+    record Video(AiConversationGeneratedVideo value)
+            implements AiConversationModelEvent {
+
+        public Video {
+            value = Objects.requireNonNull(value);
+        }
+    }
+
+    /**
+     * 表示 xAI 视频任务的精确成本或缺失成本证据，供终态结算与人工对账使用。
+     */
+    record VideoCostEvidence(AiConversationVideoMeteringEvidence evidence)
+            implements AiConversationModelEvent {
+
+        public VideoCostEvidence {
+            evidence = Objects.requireNonNull(evidence);
         }
     }
 

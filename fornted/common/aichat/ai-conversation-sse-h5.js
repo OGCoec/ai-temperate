@@ -98,7 +98,8 @@ export function openAiConversationSseH5(request, handlers = {}) {
 		const parser = createAiConversationSseParser(event => {
 			const terminal = typeof handlers.isTerminalEvent === 'function'
 				? handlers.isTerminalEvent(event)
-				: event.type === 'completed' || event.type === 'error'
+				: ['completed', 'error', 'video_ready', 'video_failed']
+					.includes(event.type)
 			if (terminal) terminalReceived = true
 			handlers.onEvent?.(event)
 		})

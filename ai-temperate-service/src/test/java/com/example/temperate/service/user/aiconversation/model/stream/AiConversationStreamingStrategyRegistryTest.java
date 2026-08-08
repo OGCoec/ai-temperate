@@ -31,9 +31,12 @@ final class AiConversationStreamingStrategyRegistryTest {
         StubStrategy xaiResponses = strategy(AiModelProvider.XAI,
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
                 AiConversationMeteringBasis.TOKEN);
-        StubStrategy xaiImages = strategy(AiModelProvider.XAI,
-                AiConversationStreamingProtocol.IMAGES_GENERATION,
-                AiConversationMeteringBasis.PROVIDER_COST_TICKS);
+		StubStrategy xaiImages = strategy(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.IMAGES_GENERATION,
+				AiConversationMeteringBasis.PROVIDER_COST_TICKS);
+		StubStrategy xaiVideos = strategy(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.VIDEOS_GENERATION,
+				AiConversationMeteringBasis.PROVIDER_COST_TICKS);
         StubStrategy anthropicChat = strategy(AiModelProvider.ANTHROPIC,
                 AiConversationStreamingProtocol.CHAT_COMPLETIONS,
                 AiConversationMeteringBasis.TOKEN);
@@ -56,7 +59,8 @@ final class AiConversationStreamingStrategyRegistryTest {
                         Map.entry("openAiImages", openAiImages),
                         Map.entry("xaiChat", xaiChat),
                         Map.entry("xaiResponses", xaiResponses),
-                        Map.entry("xaiImages", xaiImages),
+						Map.entry("xaiImages", xaiImages),
+						Map.entry("xaiVideos", xaiVideos),
                         Map.entry("anthropicChat", anthropicChat),
                         Map.entry("anthropicSearch", anthropicSearch),
                         Map.entry("googleChat", googleChat),
@@ -66,9 +70,12 @@ final class AiConversationStreamingStrategyRegistryTest {
         assertThat(registry.getRequired(AiModelProvider.OPENAI,
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH))
                 .isSameAs(openAiResponses);
-        assertThat(registry.getRequired(AiModelProvider.XAI,
-                AiConversationStreamingProtocol.IMAGES_GENERATION))
-                .isSameAs(xaiImages);
+		assertThat(registry.getRequired(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.IMAGES_GENERATION))
+				.isSameAs(xaiImages);
+		assertThat(registry.getRequired(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.VIDEOS_GENERATION))
+				.isSameAs(xaiVideos);
         assertThat(registry.getRequired(AiModelProvider.ANTHROPIC,
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH))
                 .isSameAs(anthropicSearch);
@@ -116,19 +123,30 @@ final class AiConversationStreamingStrategyRegistryTest {
             completeStrategies() {
         java.util.HashMap<String, AiConversationStreamingStrategy> values =
                 new java.util.HashMap<>();
-        put(values, "openAi", AiModelProvider.OPENAI,
-                AiConversationMeteringBasis.TOKEN);
-        put(values, "xai", AiModelProvider.XAI,
-                AiConversationMeteringBasis.TOKEN);
-        values.put("xaiImages", strategy(AiModelProvider.XAI,
-                AiConversationStreamingProtocol.IMAGES_GENERATION,
-                AiConversationMeteringBasis.PROVIDER_COST_TICKS));
+		put(values, "openAi", AiModelProvider.OPENAI,
+				AiConversationMeteringBasis.TOKEN,
+				AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+				AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
+				AiConversationStreamingProtocol.IMAGES_GENERATION);
+		put(values, "xai", AiModelProvider.XAI,
+				AiConversationMeteringBasis.TOKEN,
+				AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+				AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH);
+		values.put("xaiImages", strategy(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.IMAGES_GENERATION,
+				AiConversationMeteringBasis.PROVIDER_COST_TICKS));
+		values.put("xaiVideos", strategy(AiModelProvider.XAI,
+				AiConversationStreamingProtocol.VIDEOS_GENERATION,
+				AiConversationMeteringBasis.PROVIDER_COST_TICKS));
         put(values, "anthropic", AiModelProvider.ANTHROPIC,
                 AiConversationMeteringBasis.TOKEN,
                 AiConversationStreamingProtocol.CHAT_COMPLETIONS,
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH);
-        put(values, "google", AiModelProvider.GOOGLE,
-                AiConversationMeteringBasis.TOKEN);
+		put(values, "google", AiModelProvider.GOOGLE,
+				AiConversationMeteringBasis.TOKEN,
+				AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+				AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
+				AiConversationStreamingProtocol.IMAGES_GENERATION);
         return Map.copyOf(values);
     }
 

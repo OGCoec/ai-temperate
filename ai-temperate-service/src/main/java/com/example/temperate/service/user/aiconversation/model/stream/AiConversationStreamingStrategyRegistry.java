@@ -92,15 +92,22 @@ public final class AiConversationStreamingStrategyRegistry {
             requiredStrategies() {
         EnumMap<AiModelProvider, Set<AiConversationStreamingProtocol>> matrix =
                 new EnumMap<>(AiModelProvider.class);
-        matrix.put(AiModelProvider.OPENAI,
-                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
-        matrix.put(AiModelProvider.XAI,
-                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
+        matrix.put(AiModelProvider.OPENAI, Set.copyOf(EnumSet.of(
+                AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+                AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
+                AiConversationStreamingProtocol.IMAGES_GENERATION)));
+        matrix.put(AiModelProvider.XAI, Set.copyOf(EnumSet.of(
+                AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+                AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
+                AiConversationStreamingProtocol.IMAGES_GENERATION,
+                AiConversationStreamingProtocol.VIDEOS_GENERATION)));
         matrix.put(AiModelProvider.ANTHROPIC, Set.copyOf(EnumSet.of(
                 AiConversationStreamingProtocol.CHAT_COMPLETIONS,
                 AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH)));
-        matrix.put(AiModelProvider.GOOGLE,
-                Set.copyOf(EnumSet.allOf(AiConversationStreamingProtocol.class)));
+        matrix.put(AiModelProvider.GOOGLE, Set.copyOf(EnumSet.of(
+                AiConversationStreamingProtocol.CHAT_COMPLETIONS,
+                AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH,
+                AiConversationStreamingProtocol.IMAGES_GENERATION)));
         // 支持矩阵是启动期唯一真相，禁止通过 Bean 是否存在静默扩大供应商能力。
         return Map.copyOf(matrix);
     }

@@ -6,6 +6,7 @@ import com.example.temperate.service.user.aiconversation.billing.TokenReservatio
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
 import com.example.temperate.service.user.aiconversation.response.AiConversationWebSearchMode;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationOptions;
 import java.util.Objects;
 
 /**
@@ -19,6 +20,7 @@ public record AiConversationGenerationCreateCommand(
         int reasoningEffort,
         AiConversationContent input,
         AiConversationImageGenerationOptions imageGeneration,
+        AiConversationVideoGenerationOptions videoGeneration,
         AiConversationWebSearchMode webSearchMode,
         byte[] idempotencyDigest,
         AiConversationReservationMetering metering,
@@ -54,6 +56,7 @@ public record AiConversationGenerationCreateCommand(
                 reasoningEffort,
                 input,
                 imageGeneration,
+                null,
                 AiConversationWebSearchMode.OFF,
                 idempotencyDigest,
                 new TokenReservationMetering(
@@ -84,6 +87,7 @@ public record AiConversationGenerationCreateCommand(
                 reasoningEffort,
                 input,
                 imageGeneration,
+                null,
                 AiConversationWebSearchMode.OFF,
                 idempotencyDigest,
                 metering,

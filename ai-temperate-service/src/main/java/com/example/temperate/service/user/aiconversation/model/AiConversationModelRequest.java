@@ -2,6 +2,7 @@ package com.example.temperate.service.user.aiconversation.model;
 
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationOptions;
 import java.util.Objects;
 import java.util.List;
 
@@ -16,16 +17,41 @@ public record AiConversationModelRequest(
         AiConversationPromptSnapshot prompt,
         AiConversationImageGenerationOptions imageGeneration,
         short outputIndex,
-        List<String> imageInputUrls) {
+        List<String> imageInputUrls,
+        AiConversationVideoGenerationOptions videoGeneration,
+        List<String> videoInputUrls) {
 
     public AiConversationModelRequest {
         provider = Objects.requireNonNull(provider);
         reasoningEffort = Objects.requireNonNull(reasoningEffort);
         imageInputUrls = imageInputUrls == null ? List.of() : List.copyOf(imageInputUrls);
+        videoInputUrls = videoInputUrls == null ? List.of() : List.copyOf(videoInputUrls);
+        if (imageGeneration != null && videoGeneration != null) {
+            throw new IllegalArgumentException(
+                    "Image and video generation cannot be combined.");
+        }
         if (imageGeneration != null
                 && (outputIndex < 0 || outputIndex >= imageGeneration.outputCount())) {
             throw new IllegalArgumentException("Image output index is out of range.");
         }
+        if (videoGeneration != null
+                && (!imageInputUrls.isEmpty() || outputIndex != 0)) {
+            throw new IllegalArgumentException(
+                    "Video generation cannot reuse image output slots.");
+        }
+    }
+
+    public AiConversationModelRequest(
+            AiModelProvider provider,
+            String modelName,
+            long maxOutputTokens,
+            AiConversationReasoningEffort reasoningEffort,
+            AiConversationPromptSnapshot prompt,
+            AiConversationImageGenerationOptions imageGeneration,
+            short outputIndex,
+            List<String> imageInputUrls) {
+        this(provider, modelName, maxOutputTokens, reasoningEffort, prompt,
+                imageGeneration, outputIndex, imageInputUrls, null, List.of());
     }
 
     public AiConversationModelRequest(
@@ -38,7 +64,7 @@ public record AiConversationModelRequest(
             List<String> imageInputUrls) {
         this(AiModelProvider.OPENAI, modelName, maxOutputTokens,
                 reasoningEffort, prompt, imageGeneration, outputIndex,
-                imageInputUrls);
+                imageInputUrls, null, List.of());
     }
 
     public AiConversationModelRequest(
@@ -48,7 +74,7 @@ public record AiConversationModelRequest(
             AiConversationPromptSnapshot prompt,
             AiConversationImageGenerationOptions imageGeneration) {
         this(AiModelProvider.OPENAI, modelName, maxOutputTokens, reasoningEffort, prompt,
-                imageGeneration, (short) 0, List.of());
+                imageGeneration, (short) 0, List.of(), null, List.of());
     }
 
     public AiConversationModelRequest(
@@ -57,7 +83,7 @@ public record AiConversationModelRequest(
             AiConversationReasoningEffort reasoningEffort,
             AiConversationPromptSnapshot prompt) {
         this(AiModelProvider.OPENAI, modelName, maxOutputTokens, reasoningEffort, prompt,
-                null, (short) 0, List.of());
+                null, (short) 0, List.of(), null, List.of());
     }
 
     public AiConversationModelRequest(
@@ -67,6 +93,6 @@ public record AiConversationModelRequest(
             AiConversationReasoningEffort reasoningEffort,
             AiConversationPromptSnapshot prompt) {
         this(provider, modelName, maxOutputTokens, reasoningEffort, prompt,
-                null, (short) 0, List.of());
+                null, (short) 0, List.of(), null, List.of());
     }
 }

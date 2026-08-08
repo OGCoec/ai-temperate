@@ -3,7 +3,9 @@ package com.example.temperate.service.user.aiconversation.generation.observer.im
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
+import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
 import com.example.temperate.model.ai.entity.AiConversationGeneration;
+import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
@@ -28,6 +30,8 @@ import com.example.temperate.service.user.aiconversation.image.AiConversationIma
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePersistedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResultCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -74,6 +78,8 @@ public final class AiConversationGenerationObserverServiceImpl
     private final Clock clock;
     private final AiConversationMetrics metrics;
     private final AiConversationImagePreviewBroker previewBroker;
+    private final AiConversationGenerationPayloadMapper payloadMapper;
+    private final AiConversationPersistedVideoResultCodec persistedVideoResultCodec;
 
     public AiConversationGenerationObserverServiceImpl(
             AiConversationGenerationMapper generationMapper,
@@ -102,7 +108,43 @@ public final class AiConversationGenerationObserverServiceImpl
                 metrics,
                 clock,
                 AiConversationStreamTransportDiagnosticService.noOp(),
-                AiConversationImagePreviewBroker.noOp());
+                AiConversationImagePreviewBroker.noOp(),
+                null,
+                null);
+    }
+
+    public AiConversationGenerationObserverServiceImpl(
+            AiConversationGenerationMapper generationMapper,
+            AiConversationGenerationOutputStore outputStore,
+            AiConversationGenerationOutputSubscriber outputSubscriber,
+            AiConversationGenerationObserverStateService observerStateService,
+            AiConversationAsyncGenerationProperties asyncProperties,
+            HybridBase64UrlCodec idCodec,
+            PublicIdCodec publicIdCodec,
+            ObjectMapper objectMapper,
+            AiConversationStreamTimingDiagnosticService timingDiagnosticService,
+            AiConversationStreamTimingClock timingClock,
+            AiConversationMetrics metrics,
+            Clock clock,
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService,
+            AiConversationImagePreviewBroker previewBroker) {
+        this(
+                generationMapper,
+                outputStore,
+                outputSubscriber,
+                observerStateService,
+                asyncProperties,
+                idCodec,
+                publicIdCodec,
+                objectMapper,
+                timingDiagnosticService,
+                timingClock,
+                metrics,
+                clock,
+                transportDiagnosticService,
+                previewBroker,
+                null,
+                null);
     }
 
     @Autowired
@@ -120,7 +162,9 @@ public final class AiConversationGenerationObserverServiceImpl
             AiConversationMetrics metrics,
             Clock clock,
             AiConversationStreamTransportDiagnosticService transportDiagnosticService,
-            AiConversationImagePreviewBroker previewBroker) {
+            AiConversationImagePreviewBroker previewBroker,
+            AiConversationGenerationPayloadMapper payloadMapper,
+            AiConversationPersistedVideoResultCodec persistedVideoResultCodec) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.outputStore = Objects.requireNonNull(outputStore);
         this.outputSubscriber = Objects.requireNonNull(outputSubscriber);
@@ -135,6 +179,8 @@ public final class AiConversationGenerationObserverServiceImpl
         this.metrics = Objects.requireNonNull(metrics);
         this.clock = Objects.requireNonNull(clock);
         this.previewBroker = Objects.requireNonNull(previewBroker);
+        this.payloadMapper = payloadMapper;
+        this.persistedVideoResultCodec = persistedVideoResultCodec;
     }
 
     @Override
@@ -331,10 +377,12 @@ public final class AiConversationGenerationObserverServiceImpl
             Sinks.Many<AiConversationStreamEvent> sink,
             AtomicLong deliveredRevision,
             AiConversationGenerationOutputEvent event) {
-        boolean terminal = "completed".equals(event.eventName())
-                || "error".equals(event.eventName())
-                || "cancelled".equals(event.eventName());
-        if (terminal || event.revision() > deliveredRevision.get()) {
+		boolean terminal = terminalEvent(event.eventName());
+		boolean transientVideoEvent = "video_generation_progress".equals(
+				event.eventName())
+				|| "video_transfer_started".equals(event.eventName());
+		if (terminal || transientVideoEvent
+				|| event.revision() > deliveredRevision.get()) {
             deliveredRevision.accumulateAndGet(event.revision(), Math::max);
             sink.tryEmitNext(event(event.eventName(), event.dataJson()));
             if (terminal) {
@@ -363,7 +411,53 @@ public final class AiConversationGenerationObserverServiceImpl
                 generation.getTerminalType(), "unavailable"));
         data.put("terminalReason", Objects.requireNonNullElse(
                 generation.getTerminalReason(), "unavailable"));
-        return new AiConversationStreamEvent("completed", data);
+        if (generation.getVideoStage() == null) {
+            return new AiConversationStreamEvent("completed", data);
+        }
+        AiConversationGenerationPayload payload = payloadMapper == null
+                ? null
+                : payloadMapper.findByGenerationId(generation.getId());
+        AiConversationPersistedVideoResult persisted = persistedVideoResult(payload);
+        if (persisted == null) {
+            data.put("errorCode", Objects.requireNonNullElse(
+                    generation.getTerminalReason(), "AI_VIDEO_RESULT_UNAVAILABLE"));
+            data.put("failureStage", generation.getVideoStage());
+            return new AiConversationStreamEvent("video_failed", data);
+        }
+        data.put("messagePublicId", persistedMessagePublicId(payload));
+        data.put("attachments", List.of(persisted.attachment()));
+        data.put("durationMillis", persisted.durationMillis());
+        data.put("width", persisted.width());
+        data.put("height", persisted.height());
+        data.put("byteSize", persisted.byteSize());
+        data.put("contentType", persisted.contentType());
+        data.put("videoCodec", persisted.videoCodec());
+        data.put("storageProvider", persisted.storageProvider());
+        return new AiConversationStreamEvent("video_ready", data);
+    }
+
+    private AiConversationPersistedVideoResult persistedVideoResult(
+            AiConversationGenerationPayload payload) {
+        if (payload == null || persistedVideoResultCodec == null) {
+            return null;
+        }
+        if (payload.getAssistantAttachmentsJson() == null
+                || !payload.getAssistantAttachmentsJson().stripLeading().startsWith("{")) {
+            return null;
+        }
+        try {
+            // Redis 终态丢失时只解码数据库中的 OSS 结果信封，禁止重新调用 xAI、FC 或下载视频。
+            return persistedVideoResultCodec.decode(
+                    payload.getAssistantAttachmentsJson());
+        } catch (RuntimeException invalidEnvelope) {
+            return null;
+        }
+    }
+
+    private String persistedMessagePublicId(AiConversationGenerationPayload payload) {
+        return payload == null || payload.getConversationMessageId() == null
+                ? ""
+                : publicIdCodec.encode(payload.getConversationMessageId());
     }
 
     private static void closeQuietly(AutoCloseable closeable) {
@@ -374,11 +468,13 @@ public final class AiConversationGenerationObserverServiceImpl
         }
     }
 
-    private static boolean terminalEvent(String eventName) {
-        return "completed".equals(eventName)
-                || "error".equals(eventName)
-                || "cancelled".equals(eventName);
-    }
+	private static boolean terminalEvent(String eventName) {
+		return "completed".equals(eventName)
+				|| "error".equals(eventName)
+				|| "cancelled".equals(eventName)
+				|| "video_ready".equals(eventName)
+				|| "video_failed".equals(eventName);
+	}
 
     private static AiConversationGenerationStatus generationStatus(int code) {
         for (AiConversationGenerationStatus status : AiConversationGenerationStatus.values()) {

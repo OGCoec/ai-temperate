@@ -193,6 +193,40 @@ export async function openAiConversationStream(command, handlers = {}) {
 						item?.status === 'FAILED')
 				})
 			}
+			if (event.type === 'video_generation_progress' && generationPublicId) {
+				updateGeneration(generationPublicId, {
+					videoProgress: Math.max(0, Math.min(100,
+						Number(event.data?.progress || 0)))
+				})
+			}
+			if (event.type === 'video_transfer_started' && generationPublicId) {
+				updateGeneration(generationPublicId, { videoTransferring: true })
+			}
+			if ((event.type === 'video_ready' || event.type === 'video_failed')
+				&& generationPublicId) {
+				updateGeneration(generationPublicId, {
+					messagePublicId: event.data?.messagePublicId || '',
+					responseAttachments: event.type === 'video_ready'
+						&& Array.isArray(event.data?.attachments)
+						? event.data.attachments : [],
+					videoMetadata: event.type === 'video_ready' ? {
+						durationMillis: Number(event.data?.durationMillis || 0),
+						width: Number(event.data?.width || 0),
+						height: Number(event.data?.height || 0),
+						byteSize: Number(event.data?.byteSize || 0),
+						videoCodec: String(event.data?.videoCodec || '')
+					} : null,
+					videoTransferring: false,
+					videoError: event.type === 'video_failed'
+						? String(event.data?.failureStage
+							|| event.data?.terminalReason || 'VIDEO_FAILED') : '',
+					videoErrorCode: event.type === 'video_failed'
+						? String(event.data?.errorCode
+							|| event.data?.terminalReason || 'AI_VIDEO_FAILED') : ''
+				})
+				terminalStatus = event.data?.status || (event.type === 'video_ready'
+					? 'SETTLED' : 'RECONCILE_REQUIRED')
+			}
 			if (asyncGenerationEnabled() && event.type === 'completed'
 				&& generationPublicId) {
 				const current = getGeneration(generationPublicId)
@@ -375,6 +409,39 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					failedImageOutputs: failedImages.filter(item =>
 						item?.status === 'FAILED')
 				})
+			}
+			if (event.type === 'video_generation_progress') {
+				updateGeneration(generationPublicId, {
+					videoProgress: Math.max(0, Math.min(100,
+						Number(event.data?.progress || 0)))
+				})
+			}
+			if (event.type === 'video_transfer_started') {
+				updateGeneration(generationPublicId, { videoTransferring: true })
+			}
+			if (event.type === 'video_ready' || event.type === 'video_failed') {
+				updateGeneration(generationPublicId, {
+					messagePublicId: event.data?.messagePublicId || '',
+					responseAttachments: event.type === 'video_ready'
+						&& Array.isArray(event.data?.attachments)
+						? event.data.attachments : [],
+					videoMetadata: event.type === 'video_ready' ? {
+						durationMillis: Number(event.data?.durationMillis || 0),
+						width: Number(event.data?.width || 0),
+						height: Number(event.data?.height || 0),
+						byteSize: Number(event.data?.byteSize || 0),
+						videoCodec: String(event.data?.videoCodec || '')
+					} : null,
+					videoTransferring: false,
+					videoError: event.type === 'video_failed'
+						? String(event.data?.failureStage
+							|| event.data?.terminalReason || 'VIDEO_FAILED') : '',
+					videoErrorCode: event.type === 'video_failed'
+						? String(event.data?.errorCode
+							|| event.data?.terminalReason || 'AI_VIDEO_FAILED') : ''
+				})
+				terminalStatus = event.data?.status || (event.type === 'video_ready'
+					? 'SETTLED' : 'RECONCILE_REQUIRED')
 			}
 			if (event.type === 'completed') {
 				const current = getGeneration(generationPublicId)

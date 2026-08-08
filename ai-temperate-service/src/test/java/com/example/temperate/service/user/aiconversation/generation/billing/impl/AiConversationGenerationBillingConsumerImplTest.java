@@ -40,6 +40,7 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMet
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingPolicy;
 import com.example.temperate.service.user.aiconversation.text.AiConversationTextTokenizer;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -52,6 +53,43 @@ import org.springframework.context.ApplicationEventPublisher;
  * 验证资金事务已提交后的 Rabbit 幂等补发会从冻结证据恢复多图数量、消息 ID 和正式附件，且不会再次访问 OSS。
  */
 final class AiConversationGenerationBillingConsumerImplTest {
+
+    @Test
+    void keepsFrozenVideoObjectOutOfBillingFailureCompensation() {
+        AiConversationAttachment video = AiConversationAttachment.available(
+                "video-attachment",
+                "generated-video.mp4",
+                "video/mp4",
+                8_192L,
+                AiConversationAttachmentCategory.VIDEO,
+                "https://cdn.example/generated-video.mp4");
+        AiConversationPersistedVideoResult persisted =
+                new AiConversationPersistedVideoResult(
+                        video,
+                        5_000L,
+                        1280,
+                        720,
+                        "video/mp4",
+                        8_192L,
+                        "avc1",
+                        "ai/video/frozen.mp4",
+                        "ALIYUN_OSS");
+        AiConversationAttachmentFinalization finalizedInputs =
+                new AiConversationAttachmentFinalization(
+                        List.of(),
+                        List.of(),
+                        List.of("ai/input/copied.png"),
+                        false);
+
+        AiConversationAttachmentFinalization result =
+                AiConversationGenerationBillingConsumerImpl.videoFinalization(
+                        finalizedInputs, persisted);
+
+        assertThat(result.responseAttachments()).containsExactly(video);
+        assertThat(result.createdObjectKeys())
+                .containsExactly("ai/input/copied.png")
+                .doesNotContain("ai/video/frozen.mp4");
+    }
 
     @Test
     void missingXaiImageCostDeliversFrozenImageAndRequestsReconciliation() {
@@ -159,9 +197,11 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         publicIdCodec,
                         objectMapper,
                         mock(AiConversationMetrics.class),
-                        inputCodec,
-                        attachmentCodec,
-                        eventPublisher,
+						inputCodec,
+						attachmentCodec,
+						new com.example.temperate.service.user.aiconversation.video
+								.AiConversationPersistedVideoResultCodec(objectMapper),
+						eventPublisher,
                         previewBroker,
                         mock(com.example.temperate.service.user.aiconversation.compaction
                                 .AiConversationCompactionCoordinator.class));
@@ -259,9 +299,11 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         publicIdCodec,
                         objectMapper,
                         mock(AiConversationMetrics.class),
-                        inputCodec,
-                        attachmentCodec,
-                        eventPublisher,
+						inputCodec,
+						attachmentCodec,
+						new com.example.temperate.service.user.aiconversation.video
+								.AiConversationPersistedVideoResultCodec(objectMapper),
+						eventPublisher,
                         previewBroker,
                         mock(com.example.temperate.service.user.aiconversation.compaction
                                 .AiConversationCompactionCoordinator.class));
@@ -353,9 +395,11 @@ final class AiConversationGenerationBillingConsumerImplTest {
                         publicIdCodec,
                         objectMapper,
                         mock(AiConversationMetrics.class),
-                        inputCodec,
-                        attachmentCodec,
-                        eventPublisher,
+						inputCodec,
+						attachmentCodec,
+						new com.example.temperate.service.user.aiconversation.video
+								.AiConversationPersistedVideoResultCodec(objectMapper),
+						eventPublisher,
                         previewBroker,
                         mock(com.example.temperate.service.user.aiconversation.compaction
                                 .AiConversationCompactionCoordinator.class));

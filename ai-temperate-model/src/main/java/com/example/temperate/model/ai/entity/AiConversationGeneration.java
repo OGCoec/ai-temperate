@@ -26,7 +26,8 @@ public class AiConversationGeneration {
     private String cancelSource;
     private String terminalType;
     private String terminalReason;
-    private Integer terminalVersion;
+	private Integer terminalVersion;
+	private String videoStage;
     private OffsetDateTime createdAt;
     private OffsetDateTime startedAt;
     private OffsetDateTime detachedAt;

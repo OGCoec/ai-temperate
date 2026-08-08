@@ -93,6 +93,12 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
                     command.finishReason(),
                     command.failureCode());
             finalStatus = AiConversationGenerationStatus.REFUNDED.code();
+        } else if (command.mode()
+                == AiConversationGenerationBillingMode.RECONCILE_ONLY) {
+            // 上游是否受理或实际成本无法确认时保留全部预扣，禁止猜测退款或伪造零成本。
+            settlementService.markReconcileRequired(
+                    generation.getUsageId(), command.failureCode());
+            finalStatus = AiConversationGenerationStatus.RECONCILE_REQUIRED.code();
         } else if (command.mode() == AiConversationGenerationBillingMode.COMPLETE) {
             settlementResult = settlementService.complete(command.settlementCommand());
             finalStatus = settlementResult.requiresReconciliation()
@@ -118,6 +124,8 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
                 finalStatus,
                 command.mode()
                                 == AiConversationGenerationBillingMode.COMPLETE_RECONCILE
+                                || command.mode()
+                                        == AiConversationGenerationBillingMode.RECONCILE_ONLY
                         ? command.failureCode()
                         : null,
                 now) != 1) {

@@ -107,7 +107,7 @@ public final class AiConversationResponseController {
     @Operation(
             summary = "创建会话并流式生成第一条回答",
             description = "页面创建不落库；本接口预扣成功后由服务端生成 22 字符会话公共 ID，"
-                    + "并依次发送 accepted、delta、heartbeat、completed 或 error 事件。")
+                    + "并发送 accepted、delta、heartbeat、completed/error 或视频 progress/transfer/ready/failed 事件。")
     public Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> createAndRespond(
             @AuthenticationPrincipal SessionPrincipal principal,
             @RequestHeader(IDEMPOTENCY_HEADER)
@@ -217,6 +217,15 @@ public final class AiConversationResponseController {
                                 : new AiConversationImageGenerationRequest(
                                         request.image().aspect(),
                                         request.image().outputCount()),
+                        request.video() == null
+                                ? null
+                                : new com.example.temperate.service.user.aiconversation.video
+                                        .AiConversationVideoGenerationRequest(
+                                                request.video().mode(),
+                                                request.video().durationSeconds(),
+                                                request.video().resolution(),
+                                                request.video().aspectRatio(),
+                                                request.video().inputAttachmentPublicIds()),
                         idempotencyUuid,
                         new AiConversationContent(
                                 request.input().text(),
@@ -235,6 +244,7 @@ public final class AiConversationResponseController {
                 : generationServiceProvider.getIfAvailable();
         if (generationService != null
                 && (request.image() != null
+                        || request.video() != null
                         || request.webSearchMode() == AiConversationWebSearchMode.OFF)) {
             // 图片请求必须进入 Generation 服务统一拒绝联网组合；只有纯文本联网请求继续走直接 POST SSE 研究协议。
             return asyncResponse(
@@ -243,11 +253,11 @@ public final class AiConversationResponseController {
                     generationService,
                     Objects.requireNonNull(observerServiceProvider.getIfAvailable()));
         }
-        if (command.imageGeneration() != null) {
-            // 图片字节与最终 OSS URL 只在异步 Generation 链路中有明确边界；该链路关闭时必须失败封闭，禁止误降级成文本调用。
+        if (command.imageGeneration() != null || command.videoGeneration() != null) {
+            // 媒体生成与最终 OSS URL 只在异步 Generation 链路中有明确边界；该链路关闭时必须失败封闭，禁止误降级成文本调用。
             return Mono.error(new AiConversationException(
                     AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
-                    "图片生成需要启用异步 Generation 链路。",
+                    "媒体生成需要启用异步 Generation 链路。",
                     true));
         }
         return responseService.respondAsync(command)

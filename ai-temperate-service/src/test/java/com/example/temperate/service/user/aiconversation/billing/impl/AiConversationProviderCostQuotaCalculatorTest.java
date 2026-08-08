@@ -14,13 +14,15 @@ final class AiConversationProviderCostQuotaCalculatorTest {
             new AiConversationProviderCostQuotaCalculator();
 
     @Test
-    void convertsOfficialCostTicksToQuotaMinor() {
+    void convertsOfficialCostTicksToAccountMinorCents() {
         assertThat(calculator.actualQuotaMinor(0L)).isZero();
-        assertThat(calculator.actualQuotaMinor(1L)).isEqualTo(100L);
-        assertThat(calculator.actualQuotaMinor(100_000_000L)).isEqualTo(100L);
-        assertThat(calculator.actualQuotaMinor(100_000_001L)).isEqualTo(200L);
-        assertThat(calculator.actualQuotaMinor(200_000_000L)).isEqualTo(200L);
+        assertThat(calculator.actualQuotaMinor(1L)).isEqualTo(1L);
+        assertThat(calculator.actualQuotaMinor(100_000_000L)).isEqualTo(1L);
+        assertThat(calculator.actualQuotaMinor(100_000_001L)).isEqualTo(2L);
+        assertThat(calculator.actualQuotaMinor(200_000_000L)).isEqualTo(2L);
+        assertThat(calculator.actualQuotaMinor(8_400_000_000L)).isEqualTo(84L);
         assertThat(calculator.reservedQuotaMinor((short) 3)).isEqualTo(300L);
+        assertThat(calculator.reservedQuotaMinor(100_000_001L)).isEqualTo(2L);
     }
 
     @Test

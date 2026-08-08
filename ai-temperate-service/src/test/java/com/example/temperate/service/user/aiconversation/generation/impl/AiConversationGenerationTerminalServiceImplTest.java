@@ -89,7 +89,7 @@ final class AiConversationGenerationTerminalServiceImplTest {
                 isNull(),
                 isNull(),
                 eq("CLIENT_CANCELLED"),
-                isNull(),
+                eq("upstream-request"),
                 any(OffsetDateTime.class));
         ArgumentCaptor<AiConversationGenerationTerminalEvent> event =
                 ArgumentCaptor.forClass(AiConversationGenerationTerminalEvent.class);

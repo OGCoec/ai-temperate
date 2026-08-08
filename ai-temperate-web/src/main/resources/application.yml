@@ -381,6 +381,68 @@ app:
       thumbnail-jpeg-quality: ${AI_CONVERSATION_IMAGE_THUMBNAIL_JPEG_QUALITY:70}
       # 单实例 Broker 最多常驻二百五十六 MiB 有界预览，超限槽位仍可实时发送但不进入重连缓存。
       maximum-preview-retained-bytes: ${AI_CONVERSATION_IMAGE_MAX_PREVIEW_RETAINED_BYTES:268435456}
+    # xAI 视频使用异步任务和 FC 搬运，主业务 JVM 只处理小型 JSON 与 OSS 引用。
+    video-generation:
+      # 默认启用视频入口，部署环境仍可通过变量关闭并必须提供完整的 FC 与 RAM 安全配置。
+      enabled: ${AI_CONVERSATION_VIDEO_GENERATION_ENABLED:true}
+      # xAI pending 状态固定每五秒查询一次，单次网络失败不会自动重试。
+      poll-interval: ${AI_CONVERSATION_VIDEO_POLL_INTERVAL:5s}
+      # 单个视频任务最多等待十五分钟，超时保留 request ID 并进入人工对账。
+      maximum-polling-duration: ${AI_CONVERSATION_VIDEO_MAX_POLLING_DURATION:15m}
+      # xAI 创建和轮询 JSON 响应最多占用一 MiB，视频内容不进入该响应。
+      maximum-response-json-bytes: ${AI_CONVERSATION_VIDEO_MAX_RESPONSE_JSON_BYTES:1048576}
+      # xAI 视频 REST 路径只允许配置相对 API 路径，禁止改成任意外部 URL。
+      endpoints:
+        # 文本、单图和参考图视频共用官方 generations 路径。
+        generations: ${AI_CONVERSATION_VIDEO_GENERATIONS_PATH:/v1/videos/generations}
+        # 视频编辑使用官方 edits 路径。
+        edits: ${AI_CONVERSATION_VIDEO_EDITS_PATH:/v1/videos/edits}
+        # 视频延长使用官方 extensions 路径。
+        extensions: ${AI_CONVERSATION_VIDEO_EXTENSIONS_PATH:/v1/videos/extensions}
+        # 轮询路径必须保留 requestId 模板变量。
+        poll: ${AI_CONVERSATION_VIDEO_POLL_PATH:/v1/videos/{requestId}}
+      # grok-imagine-video-1.5 使用官方三档输出秒价和图片输入价，单位均为美元成本 ticks。
+      version15:
+        # 官方普通生成模型名称不得自动替换成其他模型。
+        model-name: ${AI_CONVERSATION_VIDEO_15_MODEL:grok-imagine-video-1.5}
+        # 480p 官方价格为每秒零点零八美元，即八亿 ticks。
+        p480-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P480_TICKS:800000000}
+        # 720p 官方价格为每秒零点一四美元，即十四亿 ticks。
+        p720-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P720_TICKS:1400000000}
+        # 1080p 官方价格为每秒零点二五美元，即二十五亿 ticks。
+        p1080-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P1080_TICKS:2500000000}
+        # 每张图片输入官方价格为零点零一美元，即一亿 ticks。
+        image-input-ticks-each: ${AI_CONVERSATION_VIDEO_15_IMAGE_INPUT_TICKS:100000000}
+      # grok-imagine-video 使用官方编辑和延长价格，单位均为美元成本 ticks。
+      legacy:
+        # 官方视频编辑和延长模型名称不得自动替换成新模型。
+        model-name: ${AI_CONVERSATION_VIDEO_LEGACY_MODEL:grok-imagine-video}
+        # 480p 官方价格为每秒零点零五美元，即五亿 ticks。
+        p480-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_P480_TICKS:500000000}
+        # 720p 官方价格为每秒零点零七美元，即七亿 ticks。
+        p720-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_P720_TICKS:700000000}
+        # 每张图片输入官方价格为零点零零二美元，即两千万 ticks。
+        image-input-ticks-each: ${AI_CONVERSATION_VIDEO_LEGACY_IMAGE_INPUT_TICKS:20000000}
+        # 视频输入官方价格为每秒零点零一美元，即一亿 ticks。
+        video-input-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_VIDEO_INPUT_TICKS:100000000}
+      # FC 只接收签名小型 JSON，并通过 RAM 角色把 xAI 视频流式写入固定 OSS 前缀。
+      function-compute:
+        # FC HTTPS 调用地址必须由部署环境提供，关闭视频时允许为空。
+        invocation-url: ${AI_CONVERSATION_VIDEO_FC_INVOCATION_URL:}
+        # 主业务到 FC 的独立 HMAC Secret 只允许由环境变量提供，不得写入默认值。
+        hmac-secret: ${AI_CONVERSATION_VIDEO_FC_HMAC_SECRET:}
+        # 主业务同步等待 FC 搬运最多十五分钟，期间只保留小型响应状态。
+        timeout: ${AI_CONVERSATION_VIDEO_FC_TIMEOUT:15m}
+        # FC 只允许写入该服务端固定对象前缀，客户端不能覆盖。
+        object-prefix: ${AI_CONVERSATION_VIDEO_OSS_OBJECT_PREFIX:ai/video/}
+        # 单个视频硬上限默认二 GiB，超限时 FC 中止 Multipart Upload。
+        maximum-video-bytes: ${AI_CONVERSATION_VIDEO_MAX_BYTES:2147483648}
+        # FC 只允许连接显式配置的 xAI 临时视频域名。
+        allowed-source-hosts:
+          # xAI 官方视频结果域名作为默认唯一来源。
+          - ${AI_CONVERSATION_VIDEO_XAI_SOURCE_HOST:vidgen.x.ai}
+          # 项目 OSS 签名输入视频域名只用于编辑和延长前的 FC 元数据探测。
+          - ${AI_CONVERSATION_VIDEO_OSS_SOURCE_HOST:ihaveaplan.oss-us-west-1.aliyuncs.com}
     # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
     attachments:
       # 会话附件沿用现有公共读 Bucket，真实 Bucket 名允许按部署环境覆盖。

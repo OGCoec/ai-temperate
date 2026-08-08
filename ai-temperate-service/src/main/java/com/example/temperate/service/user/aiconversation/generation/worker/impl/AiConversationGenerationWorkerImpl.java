@@ -7,6 +7,7 @@ import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadResult;
@@ -16,6 +17,7 @@ import com.example.temperate.service.user.aiconversation.concurrency.AiConversat
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyService;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
+import com.example.temperate.service.user.aiconversation.config.AiConversationVideoGenerationProperties;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
@@ -80,6 +82,16 @@ import com.example.temperate.service.user.aiconversation.model.stream.AiConversa
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategyRegistry;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamBatcher;
+import com.example.temperate.service.user.aiconversation.video.AiConversationGeneratedVideo;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResultCodec;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationOptions;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationStage;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMeteringEvidence;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoObjectKeyFactory;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoTransferCommand;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoTransferResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoTransferService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -150,6 +162,10 @@ public final class AiConversationGenerationWorkerImpl
     private final AiConversationImagePreviewProcessor imagePreviewProcessor;
     private final AiConversationImagePreviewBroker imagePreviewBroker;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
+    private final AiConversationVideoTransferService videoTransferService;
+    private final AiConversationVideoObjectKeyFactory videoObjectKeyFactory;
+    private final AiConversationVideoGenerationProperties videoProperties;
+    private final AiConversationPersistedVideoResultCodec persistedVideoResultCodec;
     private final AiConversationCompactionCoordinator compactionCoordinator;
     private final long maximumGeneratedImageBatchBytes;
 
@@ -200,6 +216,10 @@ public final class AiConversationGenerationWorkerImpl
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
                 null,
+                null,
+                null,
+                AiConversationVideoGenerationProperties.officialDefaults(),
+                new AiConversationPersistedVideoResultCodec(objectMapper),
                 compactionCoordinator);
     }
 
@@ -251,6 +271,10 @@ public final class AiConversationGenerationWorkerImpl
                 AiConversationImagePreviewBroker.noOp(),
                 new AiConversationPersistedGeneratedAttachmentCodec(objectMapper),
                 null,
+                null,
+                null,
+                AiConversationVideoGenerationProperties.officialDefaults(),
+                new AiConversationPersistedVideoResultCodec(objectMapper),
                 compactionCoordinator);
     }
 
@@ -282,6 +306,10 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationImagePreviewBroker imagePreviewBroker,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
             AiConversationAttachmentProperties attachmentProperties,
+            AiConversationVideoTransferService videoTransferService,
+            AiConversationVideoObjectKeyFactory videoObjectKeyFactory,
+            AiConversationVideoGenerationProperties videoProperties,
+            AiConversationPersistedVideoResultCodec persistedVideoResultCodec,
             AiConversationCompactionCoordinator compactionCoordinator) {
         this.controlService = Objects.requireNonNull(controlService);
         this.activeRegistry = Objects.requireNonNull(activeRegistry);
@@ -309,6 +337,10 @@ public final class AiConversationGenerationWorkerImpl
         this.imagePreviewProcessor = Objects.requireNonNull(imagePreviewProcessor);
         this.imagePreviewBroker = Objects.requireNonNull(imagePreviewBroker);
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
+        this.videoTransferService = videoTransferService;
+        this.videoObjectKeyFactory = videoObjectKeyFactory;
+        this.videoProperties = Objects.requireNonNull(videoProperties);
+        this.persistedVideoResultCodec = Objects.requireNonNull(persistedVideoResultCodec);
         this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
         this.maximumGeneratedImageBatchBytes = attachmentProperties == null
                 ? Long.MAX_VALUE
@@ -347,9 +379,15 @@ public final class AiConversationGenerationWorkerImpl
         AiConversationLease lease = null;
         Disposable subscription = null;
         Disposable.Composite lifecycle = null;
-        long workerDeadlineNanos = deadlineAfter(asyncProperties.maxWorkerDuration());
-        WorkerState state = new WorkerState(maximumGeneratedImageBatchBytes);
+		long workerDeadlineNanos = deadlineAfter(asyncProperties.maxWorkerDuration());
+		WorkerState state = new WorkerState(maximumGeneratedImageBatchBytes);
+		state.generationId = generation.getId();
         try {
+            if (payload.getUpstreamRequestId() != null) {
+                // 已冻结 ID 非法时宁可停止并对账，也不能把损坏数据当作“尚未创建”而重复 POST。
+                state.upstreamRequestId.set(requiredUpstreamRequestId(
+                        payload.getUpstreamRequestId()));
+            }
             AiModelCacheEntry model = requiredModel(generation.getModelId());
             if (workItem.usageDetail() == null) {
                 throw new IllegalStateException(
@@ -365,6 +403,14 @@ public final class AiConversationGenerationWorkerImpl
                     inputCodec.decode(payload.getInputAttachmentsJson());
             AiConversationImageGenerationOptions imageGeneration =
                     inputSnapshot.imageGeneration();
+			AiConversationVideoGenerationOptions videoGeneration =
+					inputSnapshot.videoGeneration();
+			if (videoGeneration != null && state.upstreamRequestId.get() == null) {
+				controlService.updateVideoStage(
+						generation.getId(), AiConversationVideoGenerationStage.VALIDATING_MEDIA);
+				controlService.updateVideoStage(
+						generation.getId(), AiConversationVideoGenerationStage.RESERVED);
+			}
             AiConversationContent input = new AiConversationContent(
                     payload.getInputText(), inputSnapshot.attachments());
             AiConversationPromptSnapshot prompt = contextService.prepare(
@@ -408,21 +454,29 @@ public final class AiConversationGenerationWorkerImpl
                     && beforeUpstream.generation().getGenerationStatus()
                             == AiConversationGenerationStatus.CANCEL_REQUESTED.code()) {
                 markInterrupted(beforeUpstream, conversationPublicId, state);
-                freezeCancellation(beforeUpstream, state.answer.toString(), state.usage.get(), traceId);
+                freezeCancellation(
+                        beforeUpstream,
+                        state.answer.toString(),
+                        state.usage.get(),
+                        state,
+                        traceId);
                 return;
             }
 
-            if (imageGeneration != null) {
+            if (imageGeneration != null || videoGeneration != null) {
                 AiConversationGenerationBillingTransactionService billing =
                         requiredImageDependency(billingTransactionService);
-                AiConversationAttachmentService attachments =
-                        requiredImageDependency(attachmentService);
                 // 正式 Object Key 依赖稳定消息 ID；在上游订阅前只预留 ID，不提前创建消息或冻结计费终态。
                 long messageId = billing.getOrReserveMessageId(generation.getId());
-                state.imageUploadSession = attachments.openGeneratedUploadSession(
-                        publicIdCodec.encode(generation.getLoginIdentityId()),
-                        conversationPublicId,
-                        publicIdCodec.encode(messageId));
+                state.reservedMessageId = messageId;
+                if (imageGeneration != null) {
+                    AiConversationAttachmentService attachments =
+                            requiredImageDependency(attachmentService);
+                    state.imageUploadSession = attachments.openGeneratedUploadSession(
+                            publicIdCodec.encode(generation.getLoginIdentityId()),
+                            conversationPublicId,
+                            publicIdCodec.encode(messageId));
+                }
             }
 
             // Worker 与 SSE Observer 是被 Redis 分隔的两次订阅；此处必须在最终订阅外层建立 Context，
@@ -436,7 +490,16 @@ public final class AiConversationGenerationWorkerImpl
                             AiConversationStreamTimingPath.ASYNC_GENERATION_WORKER,
                             timingClock.nanoTime());
             Flux<AiConversationModelEvent> modelEvents;
-            if (imageGeneration == null) {
+            if (videoGeneration != null) {
+                modelEvents = videoModelEvents(
+                        model,
+                        payload,
+                        prompt,
+                        inputSnapshot.attachments(),
+                        videoGeneration,
+                        provider,
+                        state.upstreamRequestId.get());
+            } else if (imageGeneration == null) {
                 AiConversationModelRequest modelRequest =
                         new AiConversationModelRequest(
                                 provider,
@@ -539,9 +602,17 @@ public final class AiConversationGenerationWorkerImpl
                             batched,
                             AiConversationStreamTimingBoundary.AFTER_STREAM_BATCHER,
                             chunk -> chunk.text() == null ? 0 : chunk.text().length());
-            Flux<AiConversationModelChunk> timed = timingDiagnosticService.withSession(
-                    observedBatcher, timingContext);
-            subscription = timed
+			Flux<AiConversationModelChunk> timed = timingDiagnosticService.withSession(
+					observedBatcher, timingContext);
+			if (videoGeneration != null) {
+				AiConversationVideoGenerationStage stage = state.upstreamRequestId.get() == null
+						? AiConversationVideoGenerationStage.XAI_SUBMITTING
+						: AiConversationVideoGenerationStage.XAI_PENDING;
+				controlService.updateVideoStage(generation.getId(), stage);
+				state.videoPendingStage.set(
+						stage == AiConversationVideoGenerationStage.XAI_PENDING);
+			}
+			subscription = timed
                     .doFinally(signal -> {
                         state.signal.set(signal);
                         state.finished.countDown();
@@ -561,6 +632,7 @@ public final class AiConversationGenerationWorkerImpl
                         "AI_GENERATION_WORKER_TIMEOUT",
                         state.answer.toString(),
                         state.usage.get(),
+                        state,
                         traceId);
                 return;
             }
@@ -597,7 +669,12 @@ public final class AiConversationGenerationWorkerImpl
                     && latest.generation().getGenerationStatus()
                     == AiConversationGenerationStatus.CANCEL_REQUESTED.code()) {
                 markInterrupted(latest, conversationPublicId, state);
-                freezeCancellation(latest, state.answer.toString(), state.usage.get(), traceId);
+                freezeCancellation(
+                        latest,
+                        state.answer.toString(),
+                        state.usage.get(),
+                        state,
+                        traceId);
             } else if (state.failure.get() != null) {
                 markInterrupted(workItem, conversationPublicId, state);
                 freezeFailure(
@@ -606,12 +683,23 @@ public final class AiConversationGenerationWorkerImpl
                         failureCode(state.failure.get()),
                         state.answer.toString(),
                         state.usage.get(),
+                        state,
                         traceId);
             } else if (state.signal.get() == SignalType.ON_COMPLETE
                     && (imageGeneration != null
                             ? !state.finalImages.isEmpty()
-                            : state.usage.get() != null)) {
-                if (imageGeneration == null) {
+                            : videoGeneration != null
+                                    ? state.generatedVideo.get() != null
+                                            && state.videoMeteringEvidence.get() != null
+                                    : state.usage.get() != null)) {
+                if (videoGeneration != null) {
+                    freezeCompletedVideo(
+                            generationPublicId,
+                            generation,
+                            conversationPublicId,
+                            state,
+                            traceId);
+                } else if (imageGeneration == null) {
                     terminalService.freeze(new AiConversationGenerationTerminalCommand(
                             generation.getId(),
                             AiConversationGenerationTerminalType.COMPLETED,
@@ -640,6 +728,7 @@ public final class AiConversationGenerationWorkerImpl
                         "AI_STREAM_TERMINATED_WITHOUT_USAGE",
                         state.answer.toString(),
                         null,
+                        state,
                         traceId);
             }
         } catch (InterruptedException exception) {
@@ -650,6 +739,7 @@ public final class AiConversationGenerationWorkerImpl
                     "AI_GENERATION_WORKER_INTERRUPTED",
                     state.answer.toString(),
                     state.usage.get(),
+                    state,
                     traceId);
         } catch (RuntimeException failure) {
             boolean terminalClaimed = freezeFailureOrCancellation(
@@ -658,6 +748,7 @@ public final class AiConversationGenerationWorkerImpl
                     failureCode(failure),
                     state.answer.toString(),
                     state.usage.get(),
+                    state,
                     traceId);
             if (!terminalClaimed) {
                 // 终态已经由先前事务冻结时，原异常通常代表 Terminal Confirm 失败，必须阻止 Generation ACK。
@@ -726,6 +817,53 @@ public final class AiConversationGenerationWorkerImpl
         if (state.failure.compareAndSet(null, failure)) {
             lifecycle.dispose();
         }
+    }
+
+    private Flux<AiConversationModelEvent> videoModelEvents(
+            AiModelCacheEntry model,
+            AiConversationGenerationPayload payload,
+            AiConversationPromptSnapshot prompt,
+            List<AiConversationAttachment> attachments,
+            AiConversationVideoGenerationOptions videoGeneration,
+            AiModelProvider provider,
+            String resumeUpstreamRequestId) {
+        AiConversationAttachmentService attachmentPort =
+                requiredImageDependency(attachmentService);
+        Map<String, AiConversationAttachment> byId = attachments.stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        AiConversationAttachment::attachmentId,
+                        attachment -> attachment));
+        List<String> inputUrls = videoGeneration.inputAttachmentPublicIds().stream()
+                .map(publicId -> {
+                    AiConversationAttachment attachment = byId.get(publicId);
+                    if (attachment == null) {
+                        throw new IllegalStateException(
+                                "Frozen video input attachment is unavailable.");
+                    }
+                    return attachmentPort.resolveModelUrl(attachment);
+                })
+                .toList();
+        AiConversationModelRequest request = new AiConversationModelRequest(
+                provider,
+                model.modelName(),
+                model.maxOutputTokens(),
+                AiConversationReasoningEffort.fromLevel(
+                        payload.getReasoningEffort().shortValue()),
+                prompt,
+                null,
+                (short) 0,
+                List.of(),
+                videoGeneration,
+                inputUrls);
+        var strategy = Objects.requireNonNull(streamingStrategyRegistry)
+                .getRequired(provider, AiConversationStreamingProtocol.VIDEOS_GENERATION);
+        requireMeteringBasis(payload, strategy.meteringBasis());
+        return strategy.stream(new AiConversationStreamingRequest(
+                request,
+                com.example.temperate.service.user.aiconversation.response
+                        .AiConversationWebSearchMode.OFF,
+                null,
+                resumeUpstreamRequestId));
     }
 
     private Flux<AiConversationModelEvent> imageModelEvents(
@@ -976,6 +1114,63 @@ public final class AiConversationGenerationWorkerImpl
                     failureCode(imageFailure.cause()));
             return;
         }
+		if (event instanceof AiConversationModelEvent.VideoRequestAccepted accepted) {
+			String requestId = requiredUpstreamRequestId(accepted.requestId());
+			// 在订阅下一个轮询事件前持久化 request_id，Worker 宕机后只能恢复 GET，禁止再次 POST。
+			controlService.bindUpstreamRequestId(state.generationId, requestId);
+			String previous = state.upstreamRequestId.getAndSet(requestId);
+			if (previous != null && !previous.equals(requestId)) {
+				throw new IllegalStateException(
+						"AI video request ID conflicts with the active request ID.");
+			}
+			if (state.videoPendingStage.compareAndSet(false, true)) {
+				controlService.updateVideoStage(
+						state.generationId,
+						AiConversationVideoGenerationStage.XAI_PENDING);
+			}
+			return;
+		}
+		if (event instanceof AiConversationModelEvent.VideoProgress progress) {
+			if (state.videoPendingStage.compareAndSet(false, true)) {
+				controlService.updateVideoStage(
+						state.generationId,
+						AiConversationVideoGenerationStage.XAI_PENDING);
+			}
+            outputStore.publishEvent(
+                    generationPublicId,
+                    "video_generation_progress",
+                    json(Map.of("progress", progress.progress())));
+            return;
+        }
+        if (event instanceof AiConversationModelEvent.VideoCostEvidence costEvent) {
+            AiConversationVideoMeteringEvidence evidence = costEvent.evidence();
+            if (!state.videoMeteringEvidence.compareAndSet(null, evidence)) {
+                sink.error(new IllegalStateException(
+                        "Video stream returned duplicate cost evidence."));
+                return;
+            }
+            state.upstreamRequestId.compareAndSet(
+                    null, boundedUpstreamRequestId(evidence.requestId()));
+            if (evidence.costInUsdTicks() != null) {
+                state.usage.set(new AiConversationProviderCostUsage(
+                        evidence.costInUsdTicks()));
+            }
+            return;
+        }
+		if (event instanceof AiConversationModelEvent.Video videoEvent) {
+            AiConversationGeneratedVideo video = videoEvent.value();
+            if (!state.generatedVideo.compareAndSet(null, video)) {
+                sink.error(new IllegalStateException(
+                        "Video stream returned duplicate completed results."));
+                return;
+            }
+            state.upstreamRequestId.compareAndSet(
+                    null, boundedUpstreamRequestId(video.requestId()));
+			state.finishReason.compareAndSet(null, "STOP");
+			controlService.updateVideoStage(
+					state.generationId, AiConversationVideoGenerationStage.XAI_DONE);
+			return;
+        }
         if (event instanceof AiConversationModelEvent.Failure failure) {
             sink.error(new IllegalStateException(failure.reasonCode()));
         }
@@ -1218,6 +1413,106 @@ public final class AiConversationGenerationWorkerImpl
         }
     }
 
+    private void freezeCompletedVideo(
+            String generationPublicId,
+            AiConversationGeneration generation,
+            String conversationPublicId,
+            WorkerState state,
+            String traceId) {
+        AiConversationGeneratedVideo generated = Objects.requireNonNull(
+                state.generatedVideo.get(),
+                "Completed video result is unavailable.");
+        AiConversationVideoTransferService transferPort = Objects.requireNonNull(
+                videoTransferService,
+                "Video transfer service is unavailable.");
+        AiConversationVideoObjectKeyFactory keyFactory = Objects.requireNonNull(
+                videoObjectKeyFactory,
+                "Video object-key factory is unavailable.");
+        if (state.reservedMessageId <= 0L) {
+            throw new IllegalStateException("Video message ID was not reserved.");
+        }
+        String attachmentId = cn.hutool.core.lang.id.NanoId.randomNanoId(38);
+        String userPublicId = publicIdCodec.encode(generation.getLoginIdentityId());
+        String messagePublicId = publicIdCodec.encode(state.reservedMessageId);
+        String objectKey = keyFactory.create(
+                userPublicId,
+                conversationPublicId,
+                messagePublicId,
+                attachmentId);
+		controlService.updateVideoStage(
+				generation.getId(), AiConversationVideoGenerationStage.OSS_TRANSFERRING);
+		state.videoTransferStarted.set(true);
+		outputStore.publishEvent(
+                generationPublicId,
+                "video_transfer_started",
+                json(Map.of("stage", "OSS_TRANSFERRING")));
+		AiConversationVideoTransferResult transferred = transferPort.transfer(
+                new AiConversationVideoTransferCommand(
+                        cn.hutool.core.lang.id.NanoId.randomNanoId(38),
+                        generated.ephemeralUrl(),
+                        objectKey,
+                        "video/mp4",
+						videoProperties.functionCompute().maximumVideoBytes()));
+		controlService.updateVideoStage(
+				generation.getId(), AiConversationVideoGenerationStage.OSS_READY);
+        AiConversationAttachment attachment = AiConversationAttachment.available(
+                attachmentId,
+                "generated-video.mp4",
+                transferred.contentType(),
+                transferred.byteSize(),
+                AiConversationAttachmentCategory.VIDEO,
+                transferred.publicUrl());
+        AiConversationPersistedVideoResult persisted =
+                new AiConversationPersistedVideoResult(
+                        attachment,
+                        transferred.durationMillis(),
+                        transferred.width(),
+                        transferred.height(),
+                        transferred.contentType(),
+                        transferred.byteSize(),
+                        transferred.videoCodec(),
+                        transferred.objectKey(),
+                        "ALIYUN_OSS");
+        AiConversationGenerationWorkItem beforeTerminal = controlService.load(
+                generation.getId());
+        if (isCancellationRequested(beforeTerminal)) {
+            requiredImageDependency(attachmentService)
+                    .compensateCreatedObjects(List.of(transferred.objectKey()));
+            markInterrupted(beforeTerminal, conversationPublicId, state);
+            freezeCancellation(beforeTerminal, "", state.usage.get(), state, traceId);
+            return;
+        }
+        AiConversationGenerationTerminalResult terminal;
+        try {
+            terminal = terminalService.freeze(
+                    new AiConversationGenerationTerminalCommand(
+                            generation.getId(),
+                            AiConversationGenerationTerminalType.COMPLETED,
+                            "VIDEO_OSS_READY",
+                            "",
+                            persistedVideoResultCodec.encode(persisted),
+                            state.usage.get(),
+                            meteringEvidenceJson(state),
+                            state.finishReason.get(),
+                            state.upstreamRequestId.get(),
+                            traceId));
+        } catch (RuntimeException failure) {
+            requiredImageDependency(attachmentService)
+                    .compensateCreatedObjects(List.of(transferred.objectKey()));
+            throw failure;
+        }
+        if (!terminal.claimed()
+                || !AiConversationGenerationTerminalType.COMPLETED.name()
+                        .equals(terminal.terminalType())) {
+            requiredImageDependency(attachmentService)
+                    .compensateCreatedObjects(List.of(transferred.objectKey()));
+            return;
+        }
+        // 终态已经冻结后，阶段标记失败只能交由恢复/告警处理，禁止再删除终态引用的 OSS 正式对象。
+        controlService.updateVideoStage(
+                generation.getId(), AiConversationVideoGenerationStage.SUCCEEDED);
+    }
+
     private void freezeCompletedImage(
             String generationPublicId,
             AiConversationGeneration generation,
@@ -1252,7 +1547,7 @@ public final class AiConversationGenerationWorkerImpl
             // Stop 在 OSS 上传期间到达时，刚创建的对象尚无数据库引用，必须先补偿再冻结取消事实。
             abortImageUploadsSafely(state);
             markInterrupted(beforeTerminal, conversationPublicId, state);
-            freezeCancellation(beforeTerminal, "", state.usage.get(), traceId);
+            freezeCancellation(beforeTerminal, "", state.usage.get(), state, traceId);
             return;
         }
         List<AiConversationAttachment> persisted = uploadResults.stream()
@@ -1383,6 +1678,16 @@ public final class AiConversationGenerationWorkerImpl
             String assistantText,
             AiConversationMeteredUsage usage,
             String traceId) {
+        return freezeCancellation(
+                workItem, assistantText, usage, null, traceId);
+    }
+
+    private boolean freezeCancellation(
+            AiConversationGenerationWorkItem workItem,
+            String assistantText,
+            AiConversationMeteredUsage usage,
+            WorkerState state,
+            String traceId) {
         String source = workItem.generation().getCancelSource();
         AiConversationGenerationTerminalType type = AiConversationGenerationCancelSource.ADMIN_CANCEL.name()
                         .equals(source)
@@ -1395,29 +1700,54 @@ public final class AiConversationGenerationWorkerImpl
                 assistantText,
                 "[]",
                 usage,
+                state == null ? null : meteringEvidenceJson(state),
                 "CLIENT_CANCELLED",
-                null,
+                state == null ? null : state.upstreamRequestId.get(),
                 traceId)).claimed();
     }
 
-    private boolean freezeFailure(
+	private boolean freezeFailure(
             AiConversationGenerationWorkItem workItem,
             AiConversationGenerationTerminalType type,
             String reason,
             String assistantText,
             AiConversationMeteredUsage usage,
-            String traceId) {
-        return terminalService.freeze(new AiConversationGenerationTerminalCommand(
+			WorkerState state,
+			String traceId) {
+		if (workItem.generation().getVideoStage() != null) {
+			controlService.updateVideoStage(
+					workItem.generation().getId(),
+					videoFailureStage(reason, state.videoTransferStarted.get()));
+		}
+		return terminalService.freeze(new AiConversationGenerationTerminalCommand(
                 workItem.generation().getId(),
                 type,
                 reason,
                 assistantText,
                 "[]",
                 usage,
+                meteringEvidenceJson(state),
                 type.name(),
-                null,
+                state.upstreamRequestId.get(),
                 traceId)).claimed();
-    }
+	}
+
+	private static AiConversationVideoGenerationStage videoFailureStage(
+			String reason,
+			boolean videoTransferStarted) {
+		if (videoTransferStarted) {
+			return AiConversationVideoGenerationStage.OSS_TRANSFER_FAILED;
+		}
+		return switch (reason) {
+			case "AI_VIDEO_XAI_REJECTED" -> AiConversationVideoGenerationStage.XAI_REJECTED;
+			case "AI_VIDEO_XAI_EXPIRED" -> AiConversationVideoGenerationStage.XAI_EXPIRED;
+			case "AI_VIDEO_XAI_RESULT_UNCERTAIN", "AI_GENERATION_WORKER_TIMEOUT" ->
+					AiConversationVideoGenerationStage.XAI_RESULT_UNCERTAIN;
+			case "AI_VIDEO_OSS_TRANSFER_FAILED" ->
+					AiConversationVideoGenerationStage.OSS_TRANSFER_FAILED;
+			default -> AiConversationVideoGenerationStage.XAI_FAILED;
+		};
+	}
 
     private boolean freezeFailureOrCancellation(
             AiConversationGenerationWorkItem original,
@@ -1425,13 +1755,14 @@ public final class AiConversationGenerationWorkerImpl
             String failureCode,
             String assistantText,
             AiConversationMeteredUsage usage,
+            WorkerState state,
             String traceId) {
         AiConversationGenerationWorkItem latest = controlService.load(
                 original.generation().getId());
         if (latest != null
                 && latest.generation().getGenerationStatus()
                 == AiConversationGenerationStatus.CANCEL_REQUESTED.code()) {
-            return freezeCancellation(latest, assistantText, usage, traceId);
+            return freezeCancellation(latest, assistantText, usage, state, traceId);
         }
         return freezeFailure(
                 original,
@@ -1439,6 +1770,7 @@ public final class AiConversationGenerationWorkerImpl
                 failureCode,
                 assistantText,
                 usage,
+                state,
                 traceId);
     }
 
@@ -1594,9 +1926,10 @@ public final class AiConversationGenerationWorkerImpl
         state.answerBytes = newBytes;
     }
 
-    private static AiConversationGenerationTerminalType upstreamFailure(Throwable failure) {
-        if (failure instanceof AiConversationException exception
-                && exception.code().name().startsWith("AI_UPSTREAM_")) {
+	private static AiConversationGenerationTerminalType upstreamFailure(Throwable failure) {
+		if (failure instanceof AiConversationException exception
+				&& (exception.code().name().startsWith("AI_UPSTREAM_")
+						|| exception.code().name().startsWith("AI_VIDEO_XAI_"))) {
             return AiConversationGenerationTerminalType.UPSTREAM_FAILED;
         }
         return AiConversationGenerationTerminalType.SYSTEM_FAILED;
@@ -1621,7 +1954,41 @@ public final class AiConversationGenerationWorkerImpl
                 : "unavailable";
     }
 
+    private static String requiredUpstreamRequestId(String value) {
+        String normalized = normalizedUpstreamRequestId(value);
+        if (normalized == null) {
+            throw new IllegalArgumentException("AI upstream request ID is invalid.");
+        }
+        return normalized;
+    }
+
+    private static String normalizedUpstreamRequestId(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.matches("[A-Za-z0-9._:-]{1,128}")
+                ? normalized
+                : null;
+    }
+
     private String meteringEvidenceJson(WorkerState state) {
+        AiConversationVideoMeteringEvidence videoEvidence =
+                state.videoMeteringEvidence.get();
+        if (videoEvidence != null) {
+            var root = objectMapper.createObjectNode();
+            root.put("schemaVersion", 1);
+            root.put("basis", AiConversationMeteringBasis.PROVIDER_COST_TICKS.name());
+            root.put("kind", "VIDEO");
+            root.put("requestId", videoEvidence.requestId());
+            if (videoEvidence.costInUsdTicks() == null) {
+                root.putNull("costTicks");
+            } else {
+                root.put("costTicks", Long.toString(
+                        videoEvidence.costInUsdTicks()));
+            }
+            return root.toString();
+        }
         if (state.imageMeteringEvidence.isEmpty()) {
             return null;
         }
@@ -1656,6 +2023,13 @@ public final class AiConversationGenerationWorkerImpl
         private final AtomicReference<String> upstreamRequestId = new AtomicReference<>();
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private final AtomicReference<SignalType> signal = new AtomicReference<>();
+        private final AtomicReference<AiConversationGeneratedVideo> generatedVideo =
+                new AtomicReference<>();
+		private final AtomicReference<AiConversationVideoMeteringEvidence>
+				videoMeteringEvidence = new AtomicReference<>();
+		private final AtomicBoolean videoPendingStage = new AtomicBoolean();
+		private final AtomicBoolean videoTransferStarted = new AtomicBoolean();
+		private byte[] generationId;
         private final ConcurrentSkipListMap<Short, AiConversationGeneratedImage>
                 finalImages = new ConcurrentSkipListMap<>();
         private final ConcurrentMap<Short, AiConversationMeteredUsage> imageUsages =
@@ -1678,6 +2052,7 @@ public final class AiConversationGenerationWorkerImpl
         private final AtomicLong finalImageBytes = new AtomicLong();
         private final long maximumFinalImageBytes;
         private AiConversationGeneratedUploadSession imageUploadSession;
+        private long reservedMessageId;
         private String cacheGeneration;
         private long ephemeralOrdinal;
         private int answerBytes;

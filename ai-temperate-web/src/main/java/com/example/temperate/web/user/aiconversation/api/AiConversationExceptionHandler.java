@@ -111,11 +111,16 @@ public final class AiConversationExceptionHandler {
                     AI_CONTEXT_CACHE_UNAVAILABLE,
                     AI_RUNTIME_LINKAGE_FAILED ->
                     HttpStatus.SERVICE_UNAVAILABLE;
+            case AI_VIDEO_OSS_TRANSFER_FAILED -> HttpStatus.SERVICE_UNAVAILABLE;
             case AI_CONCURRENCY_LIMIT_REACHED -> HttpStatus.SERVICE_UNAVAILABLE;
             case AI_CONTEXT_TOO_LARGE -> HttpStatus.CONFLICT;
             case AI_CONTEXT_COMPACTION_FAILED,
                     AI_CONTEXT_COMPACTION_TIMEOUT -> HttpStatus.SERVICE_UNAVAILABLE;
             case AI_UPSTREAM_STREAM_FAILED,
+                    AI_VIDEO_XAI_REJECTED,
+                    AI_VIDEO_XAI_FAILED,
+                    AI_VIDEO_XAI_EXPIRED,
+                    AI_VIDEO_XAI_RESULT_UNCERTAIN,
                     AI_USAGE_UNAVAILABLE,
                     AI_SETTLEMENT_RECONCILE_REQUIRED ->
                     HttpStatus.BAD_GATEWAY;

@@ -26,5 +26,14 @@ public interface AiConversationGenerationOutputStore {
             String eventName,
             String dataJson);
 
+    /**
+     * 发布不改变权威终态的短生命周期状态事件；重连客户端仍以数据库任务状态为准。
+     */
+    default void publishEvent(
+            String generationPublicId,
+            String eventName,
+            String dataJson) {
+    }
+
     AiConversationGenerationOutputSnapshot snapshot(String generationPublicId);
 }

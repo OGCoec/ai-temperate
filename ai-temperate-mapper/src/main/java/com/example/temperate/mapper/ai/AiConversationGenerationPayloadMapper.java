@@ -31,6 +31,11 @@ public interface AiConversationGenerationPayloadMapper {
             @Param("ephemeralOrdinal") long ephemeralOrdinal,
             @Param("now") OffsetDateTime now);
 
+    int bindUpstreamRequestId(
+            @Param("generationId") byte[] generationId,
+            @Param("upstreamRequestId") String upstreamRequestId,
+            @Param("now") OffsetDateTime now);
+
     int deleteByGenerationIds(
             @Param("generationIds") List<byte[]> generationIds);
 

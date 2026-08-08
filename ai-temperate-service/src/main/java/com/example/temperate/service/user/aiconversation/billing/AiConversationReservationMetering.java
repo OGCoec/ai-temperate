@@ -7,7 +7,8 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationMet
  */
 public sealed interface AiConversationReservationMetering permits
         TokenReservationMetering,
-        ProviderCostReservationMetering {
+        ProviderCostReservationMetering,
+        VideoProviderCostReservationMetering {
 
     AiConversationMeteringBasis basis();
 }

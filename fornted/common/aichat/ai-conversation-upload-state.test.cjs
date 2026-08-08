@@ -119,3 +119,23 @@ test('image edit mode accepts PNG JPEG and WebP without IMAGE_INPUT capability',
 		imageEditing: true
 	}).reason, /PNG、JPEG 和 WebP/)
 })
+
+test('media operation delegates media compatibility to its dedicated mode gate', async () => {
+	const state = await loadState()
+	const model = { capabilities: ['VIDEO_GENERATION'] }
+
+	assert.equal(state.deriveSendGate({
+		model,
+		text: 'animate this image',
+		attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED)],
+		generating: false,
+		mediaOperation: true
+	}).allowed, true)
+	assert.match(state.deriveSendGate({
+		model,
+		text: 'animate this image',
+		attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADING)],
+		generating: false,
+		mediaOperation: true
+	}).reason, /正在上传/)
+})

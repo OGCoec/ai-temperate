@@ -61,9 +61,21 @@
 						<view class="message-block user-message">
 							<text v-if="message.contentText" class="message-text">{{ message.contentText }}</text>
 							<view v-if="message.contentAttachments?.length" class="attachment-grid">
-								<view v-for="attachment in message.contentAttachments" :key="attachment.attachmentId" class="attachment-card">
+								<view
+									v-for="attachment in message.contentAttachments"
+									:key="attachment.attachmentId"
+									class="attachment-card"
+									:class="{ 'is-video': previewVideo(attachment) }"
+									:style="previewVideo(attachment) ? generatedVideoCardStyle(attachment) : null"
+								>
 									<image v-if="previewImage(attachment)" class="attachment-image" :src="attachment.url" mode="aspectFill" />
-									<video v-else-if="previewVideo(attachment)" class="attachment-video" :src="attachment.url" controls />
+									<video
+										v-else-if="previewVideo(attachment)"
+										class="attachment-video"
+										:src="attachment.url"
+										controls
+										@loadedmetadata="handleGeneratedVideoMetadata(attachment, $event)"
+									/>
 									<view v-else class="attachment-file" @click="openAttachment(attachment)">
 										<uni-icons type="paperclip" size="20" color="#37d39a" />
 										<text>{{ attachment.fileName }}</text>
@@ -136,7 +148,13 @@
 							<text v-else-if="message.streaming && !modelActivityText(message)" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
 							<view v-if="message.responseAttachments?.length" class="attachment-grid">
-								<view v-for="attachment in message.responseAttachments" :key="attachment.attachmentId" class="attachment-card">
+								<view
+									v-for="attachment in message.responseAttachments"
+									:key="attachment.attachmentId"
+									class="attachment-card"
+									:class="{ 'is-video': previewVideo(attachment) }"
+									:style="previewVideo(attachment) ? generatedVideoCardStyle(attachment, message.videoMetadata) : null"
+								>
 									<view
 										v-if="attachment.imageSlot && !attachment.url"
 										class="image-output-slot"
@@ -155,7 +173,13 @@
 										@load="handleGeneratedResponseImageLoad(attachment, $event)"
 										mode="widthFix"
 									/>
-									<video v-else-if="previewVideo(attachment)" class="attachment-video" :src="attachment.url" controls />
+									<video
+										v-else-if="previewVideo(attachment)"
+										class="attachment-video"
+										:src="attachment.url"
+										controls
+										@loadedmetadata="handleGeneratedVideoMetadata(attachment, $event)"
+									/>
 									<button v-else class="attachment-file" type="button" :disabled="attachment.state !== 'AVAILABLE'" @click="openAttachment(attachment)">
 										<uni-icons type="download" size="20" color="#37d39a" />
 										<text>{{ attachment.state === 'AVAILABLE' ? attachment.fileName : '生成内容保存失败' }}</text>
@@ -185,7 +209,9 @@
 				<user-chat-attachment-list
 					:attachments="pendingAttachments"
 					:model="selectedModel"
-					:image-editing="imageGenerationAvailable && pendingAttachments.length > 0"
+					:image-editing="imageGenerationAvailable && !videoGenerationAvailable && pendingAttachments.length > 0"
+					:media-operation="videoGenerationAvailable"
+					:video-mode="selectedVideoMode"
 					:generating="generating"
 					@remove="removePending"
 					@retry="retryAttachment"
@@ -267,6 +293,47 @@
 							<text>数量 · {{ selectedImageOutputCount }}</text>
 						</button>
 						<picker
+							v-if="videoGenerationAvailable"
+							:range="videoModeOptions"
+							range-key="label"
+							:value="selectedVideoModeIndex"
+							:disabled="generating"
+							@change="selectVideoMode"
+						>
+							<view class="video-option-picker"><text>模式 · {{ selectedVideoModeLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
+						</picker>
+						<picker
+							v-if="videoGenerationAvailable && videoDurationOptions.length"
+							:range="videoDurationOptions"
+							range-key="label"
+							:value="selectedVideoDurationIndex"
+							:disabled="generating"
+							@change="selectVideoDuration"
+						>
+							<view class="video-option-picker"><text>时长 · {{ selectedVideoDuration }} 秒</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
+						</picker>
+						<picker
+							v-if="videoGenerationAvailable && videoResolutionOptions.length"
+							:range="videoResolutionOptions"
+							range-key="label"
+							:value="selectedVideoResolutionIndex"
+							:disabled="generating"
+							@change="selectVideoResolution"
+						>
+							<view class="video-option-picker"><text>清晰度 · {{ selectedVideoResolutionLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
+						</picker>
+						<picker
+							v-if="videoGenerationAvailable && videoAspectOptions.length"
+							:range="videoAspectOptions"
+							range-key="label"
+							:value="selectedVideoAspectIndex"
+							:disabled="generating"
+							@change="selectVideoAspect"
+						>
+							<view class="video-option-picker"><text>画幅 · {{ selectedVideoAspectLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
+						</picker>
+						<picker
+							v-if="!videoGenerationAvailable"
 							:range="reasoningEffortOptions"
 							range-key="label"
 							:value="selectedReasoningEffortIndex"
@@ -380,6 +447,17 @@
 		supportedImageAspectOptions,
 		upsertImageOutputAttachment
 	} from '@/common/aichat/ai-conversation-image-generation.js'
+	import {
+		modelSupportsVideoGeneration,
+		normalizeVideoDuration,
+		normalizeVideoMode,
+		supportedVideoAspectOptions,
+		supportedVideoDurationOptions,
+		supportedVideoModeOptions,
+		supportedVideoResolutionOptions,
+		videoGenerationRequest,
+		videoSendGate
+	} from '@/common/aichat/ai-conversation-video-generation.js'
 	import { preloadConversationImage } from '@/common/aichat/ai-conversation-image-preloader.js'
 	import {
 		createAiConversationResearchSession,
@@ -461,6 +539,10 @@
 	const GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX = 1080
 	const GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX = 1080
 	const GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO = 0.7
+	const GENERATED_VIDEO_MAX_WIDTH_PX = 720
+	const GENERATED_VIDEO_MAX_HEIGHT_PX = 1080
+	const GENERATED_VIDEO_VIEWPORT_HEIGHT_RATIO = 0.68
+	const GENERATED_VIDEO_FALLBACK_SIZE = Object.freeze({ width: 1280, height: 720 })
 	const CANCEL_RETRY_DELAYS = Object.freeze([0, 250, 750])
 	const TURN_WINDOW_SIZE = 50
 	const TURN_WINDOW_SHIFT = 25
@@ -515,6 +597,30 @@
 			maximumHeight / naturalHeight
 		)
 		return Math.max(1, Math.floor(naturalWidth * scale))
+	}
+
+	function generatedVideoDisplaySize(naturalSize, viewportHeight) {
+		const naturalWidth = positiveFiniteNumber(naturalSize?.width)
+			?? GENERATED_VIDEO_FALLBACK_SIZE.width
+		const naturalHeight = positiveFiniteNumber(naturalSize?.height)
+			?? GENERATED_VIDEO_FALLBACK_SIZE.height
+		const validViewportHeight = positiveFiniteNumber(viewportHeight)
+		const maximumHeight = validViewportHeight == null
+			? GENERATED_VIDEO_MAX_HEIGHT_PX
+			: Math.min(
+				GENERATED_VIDEO_MAX_HEIGHT_PX,
+				validViewportHeight * GENERATED_VIDEO_VIEWPORT_HEIGHT_RATIO
+			)
+		const scale = Math.min(
+			1,
+			GENERATED_VIDEO_MAX_WIDTH_PX / naturalWidth,
+			maximumHeight / naturalHeight
+		)
+		return Object.freeze({
+			width: Math.max(1, Math.floor(naturalWidth * scale)),
+			naturalWidth,
+			naturalHeight
+		})
 	}
 
 	function currentWindowHeight() {
@@ -594,12 +700,17 @@
 				selectedReasoningEffortLevel: 2,
 				selectedImageAspect: 'SQUARE',
 				selectedImageOutputCount: 1,
+				selectedVideoMode: '',
+				selectedVideoDuration: 5,
+				selectedVideoResolution: 'P720',
+				selectedVideoAspect: 'RATIO_16_9',
 				selectedWebSearchMode: AI_CONVERSATION_WEB_SEARCH_MODES.OFF,
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
 				imageUpgradeTokens: markRaw(new Map()),
 				generatedResponseImageNaturalSizes: {},
+				generatedVideoNaturalSizes: {},
 				generatedResponseImageViewportHeight: null,
 				generatedResponseImageResizeListener: null,
 				generating: false,
@@ -692,6 +803,52 @@
 			imageGenerationAvailable() {
 				return modelSupportsImageGeneration(this.selectedModel)
 			},
+			videoGenerationAvailable() {
+				return modelSupportsVideoGeneration(this.selectedModel)
+			},
+			videoModeOptions() {
+				return supportedVideoModeOptions(this.selectedModel)
+			},
+			selectedVideoModeIndex() {
+				return Math.max(0, this.videoModeOptions.findIndex(option =>
+					option.value === this.selectedVideoMode))
+			},
+			selectedVideoModeLabel() {
+				return this.videoModeOptions.find(option =>
+					option.value === this.selectedVideoMode)?.label || '请选择'
+			},
+			videoDurationOptions() {
+				return supportedVideoDurationOptions(
+					this.selectedModel, this.selectedVideoMode)
+			},
+			selectedVideoDurationIndex() {
+				return Math.max(0, this.videoDurationOptions.findIndex(option =>
+					option.value === this.selectedVideoDuration))
+			},
+			videoResolutionOptions() {
+				return supportedVideoResolutionOptions(
+					this.selectedModel, this.selectedVideoMode)
+			},
+			selectedVideoResolutionIndex() {
+				return Math.max(0, this.videoResolutionOptions.findIndex(option =>
+					option.value === this.selectedVideoResolution))
+			},
+			selectedVideoResolutionLabel() {
+				return this.videoResolutionOptions.find(option =>
+					option.value === this.selectedVideoResolution)?.label || '请选择'
+			},
+			videoAspectOptions() {
+				return supportedVideoAspectOptions(
+					this.selectedModel, this.selectedVideoMode)
+			},
+			selectedVideoAspectIndex() {
+				return Math.max(0, this.videoAspectOptions.findIndex(option =>
+					option.value === this.selectedVideoAspect))
+			},
+			selectedVideoAspectLabel() {
+				return this.videoAspectOptions.find(option =>
+					option.value === this.selectedVideoAspect)?.label || '请选择'
+			},
 			multipleImageOutputsAvailable() {
 				return modelSupportsMultipleImageOutputs(this.selectedModel)
 			},
@@ -723,7 +880,8 @@
 					option.value === this.selectedReasoningEffortLevel)?.label || 'Medium'
 			},
 			webSearchAvailable() {
-				return modelSupportsAiConversationWebSearch(this.selectedModel)
+				return !this.videoGenerationAvailable
+					&& modelSupportsAiConversationWebSearch(this.selectedModel)
 			},
 			webSearchOptions() {
 				return AI_CONVERSATION_WEB_SEARCH_OPTIONS
@@ -740,6 +898,22 @@
 				return this.selectedWebSearchMode !== AI_CONVERSATION_WEB_SEARCH_MODES.OFF
 			},
 			sendGate() {
+				if (this.videoGenerationAvailable) {
+					const uploadGate = deriveSendGate({
+						model: this.selectedModel,
+						text: this.draft,
+						attachments: this.pendingAttachments,
+						generating: this.generating,
+						mediaOperation: true
+					})
+					if (!uploadGate.allowed) return uploadGate
+					return videoSendGate({
+						model: this.selectedModel,
+						mode: this.selectedVideoMode,
+						text: this.draft,
+						attachments: this.pendingAttachments
+					})
+				}
 				if (this.imageGenerationAvailable && !String(this.draft || '').trim()) {
 					return Object.freeze({ allowed: false, reason: '请输入图片生成提示词。' })
 				}
@@ -1469,6 +1643,7 @@
 						? normalizeImageOutputCount(
 							uni.getStorageSync(IMAGE_OUTPUT_COUNT_STORAGE_KEY))
 						: 1
+					this.normalizeVideoSelections(this.selectedModel)
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 						this.selectedWebSearchMode, this.selectedModel)
@@ -1616,6 +1791,7 @@
 				}
 				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
 					this.selectedWebSearchMode, model)
+				this.normalizeVideoSelections(model)
 				if (this.currentConversationPublicId) {
 					await this.refreshContextUsage({ requestCompaction: true })
 				}
@@ -1635,6 +1811,41 @@
 					: fallback
 				this.selectedReasoningEffortLevel = level
 				return level
+			},
+			normalizeVideoSelections(model) {
+				this.selectedVideoMode = normalizeVideoMode(
+					model, this.selectedVideoMode)
+				this.selectedVideoDuration = normalizeVideoDuration(
+					model, this.selectedVideoMode, this.selectedVideoDuration)
+				const resolutions = supportedVideoResolutionOptions(
+					model, this.selectedVideoMode)
+				if (!resolutions.some(option =>
+					option.value === this.selectedVideoResolution)) {
+					this.selectedVideoResolution = resolutions[0]?.value || ''
+				}
+				const aspects = supportedVideoAspectOptions(
+					model, this.selectedVideoMode)
+				if (!aspects.some(option => option.value === this.selectedVideoAspect)) {
+					this.selectedVideoAspect = aspects[0]?.value || ''
+				}
+			},
+			selectVideoMode(event) {
+				const option = this.videoModeOptions[Number(event.detail.value)]
+				if (!option) return
+				this.selectedVideoMode = option.value
+				this.normalizeVideoSelections(this.selectedModel)
+			},
+			selectVideoDuration(event) {
+				const option = this.videoDurationOptions[Number(event.detail.value)]
+				if (option) this.selectedVideoDuration = option.value
+			},
+			selectVideoResolution(event) {
+				const option = this.videoResolutionOptions[Number(event.detail.value)]
+				if (option) this.selectedVideoResolution = option.value
+			},
+			selectVideoAspect(event) {
+				const option = this.videoAspectOptions[Number(event.detail.value)]
+				if (option) this.selectedVideoAspect = option.value
 			},
 			selectImageAspect(event) {
 				const option = this.imageAspectOptions[Number(event.detail.value)]
@@ -1792,6 +2003,7 @@
 				const text = this.draft.trim()
 				const localId = uuidV4()
 				const requestedImageCount = this.imageGenerationAvailable
+					&& !this.videoGenerationAvailable
 					? this.multipleImageOutputsAvailable
 						? normalizeImageOutputCount(this.selectedImageOutputCount)
 						: 1
@@ -1811,7 +2023,8 @@
 						contentType: file.contentType,
 						sizeBytes: String(file.sizeBytes),
 						category: attachmentCategory(file),
-						url: file.path,
+						url: this.videoGenerationAvailable
+							&& attachmentCategory(file) === 'VIDEO' ? '' : file.path,
 						state: 'AVAILABLE'
 					})),
 					responseText: '',
@@ -1867,8 +2080,9 @@
 				// 用户从旧轮次直接发送新问题时，先把可见窗口切回最新轮次；
 				// 后续流式增量仍由 turnFollowLatest 决定是否继续自动跟随。
 				this.scrollBottom({ force: true })
-				// 图片生成端点不接受联网工具，发送边界必须覆盖浏览器遗留的搜索状态。
+				// 图片和视频生成端点都不接受联网工具，发送边界必须覆盖浏览器遗留的搜索状态。
 				const webSearchMode = this.imageGenerationAvailable
+					|| this.videoGenerationAvailable
 					? AI_CONVERSATION_WEB_SEARCH_MODES.OFF
 					: normalizeAiConversationWebSearchMode(
 						this.selectedWebSearchMode, this.selectedModel)
@@ -1884,10 +2098,21 @@
 						webSearchMode,
 						input: { text, attachments: attachmentRefs },
 						...(this.imageGenerationAvailable
+							&& !this.videoGenerationAvailable
 							? { image: imageGenerationRequest(
 								this.selectedModel,
 								this.selectedImageAspect,
 								requestedImageCount) }
+							: {}),
+						...(this.videoGenerationAvailable
+							? { video: videoGenerationRequest({
+								model: this.selectedModel,
+								mode: this.selectedVideoMode,
+								durationSeconds: this.selectedVideoDuration,
+								resolution: this.selectedVideoResolution,
+								aspectRatio: this.selectedVideoAspect,
+								attachments: attachmentRefs
+							}) }
 							: {})
 					}
 				}
@@ -1988,6 +2213,65 @@
 					}
 				} else if (event.type === 'activity') {
 					this.handleModelActivity(localId, event.data)
+				} else if (event.type === 'video_generation_progress') {
+					const progress = Math.max(0, Math.min(100,
+						Number(event.data?.progress || 0)))
+					this.applyStore(patchLocalMessage(localId, {
+						streaming: true,
+						saving: false,
+						modelActivity: { phase: 'VIDEO_GENERATION', progress }
+					}))
+				} else if (event.type === 'video_transfer_started') {
+					this.applyStore(patchLocalMessage(localId, {
+						streaming: false,
+						saving: true,
+						modelActivity: { phase: 'VIDEO_TRANSFER' }
+					}))
+				} else if (event.type === 'video_ready') {
+					this.acceptTerminalContextUsage(event.data)
+					this.activeGenerationSubscription?.()
+					this.activeGenerationSubscription = null
+					this.finishTextPresentation(() => {
+						this.applyStore(patchLocalMessage(localId, {
+							messagePublicId: event.data?.messagePublicId || '',
+							responseAttachments: Array.isArray(event.data?.attachments)
+								? event.data.attachments : [],
+							videoMetadata: {
+								durationMillis: Number(event.data?.durationMillis || 0),
+								width: Number(event.data?.width || 0),
+								height: Number(event.data?.height || 0),
+								byteSize: Number(event.data?.byteSize || 0),
+								videoCodec: String(event.data?.videoCodec || '')
+							},
+							streaming: false,
+							saving: false,
+							modelActivity: null,
+							error: ''
+						}))
+						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
+						this.localPreviewUrls.delete(localId)
+						this.$emit('conversation-completed')
+						this.streamDiagnostics?.finish?.('COMPLETE')
+						this.$nextTick(() =>
+							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
+					})
+				} else if (event.type === 'video_failed') {
+					this.activeGenerationSubscription?.()
+					this.activeGenerationSubscription = null
+					this.finishTextPresentation(() => {
+						const stage = String(event.data?.failureStage
+							|| event.data?.terminalReason || 'VIDEO_FAILED')
+						this.applyStore(patchLocalMessage(localId, {
+							responseAttachments: [],
+							streaming: false,
+							saving: false,
+							modelActivity: null,
+							error: `视频生成未能交付（${stage}），费用已按供应商终态处理。`
+						}))
+						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
+						this.localPreviewUrls.delete(localId)
+						this.streamDiagnostics?.finish?.('SSE_ERROR')
+					})
 				} else if (event.type === 'source') {
 					if (this.activeResearchSession?.appendSource?.(event.data)) {
 						this.patchResearch(localId)
@@ -2199,6 +2483,11 @@
 					return '联网搜索状态已更新'
 				}
 				if (activity.phase === 'GENERATING') return '正在生成回答'
+				if (activity.phase === 'VIDEO_GENERATION') {
+					return `正在生成视频 · ${Math.max(0, Math.min(100,
+						Number(activity.progress || 0)))}%`
+				}
+				if (activity.phase === 'VIDEO_TRANSFER') return '正在安全保存视频到 OSS'
 				if (activity.phase === 'FINALIZING') return '正在保存生成内容'
 				return ''
 			},
@@ -2505,6 +2794,42 @@
 					? { width: '100%' }
 					: { width: `${displayWidth}px` }
 			},
+			generatedVideoCardStyle(attachment, terminalMetadata = null) {
+				const key = this.generatedResponseImageKey(attachment)
+				const observedSize = key
+					? this.generatedVideoNaturalSizes[key]
+					: null
+				const terminalWidth = positiveFiniteNumber(terminalMetadata?.width)
+				const terminalHeight = positiveFiniteNumber(terminalMetadata?.height)
+				const naturalSize = observedSize || (
+					terminalWidth != null && terminalHeight != null
+						? { width: terminalWidth, height: terminalHeight }
+						: GENERATED_VIDEO_FALLBACK_SIZE
+				)
+				const display = generatedVideoDisplaySize(
+					naturalSize,
+					this.generatedResponseImageViewportHeight
+				)
+				return {
+					width: `${display.width}px`,
+					aspectRatio: `${display.naturalWidth} / ${display.naturalHeight}`
+				}
+			},
+			handleGeneratedVideoMetadata(attachment, event) {
+				const key = this.generatedResponseImageKey(attachment)
+				if (!key) return
+
+				const naturalWidth = positiveFiniteNumber(event?.detail?.width)
+					?? positiveFiniteNumber(event?.target?.videoWidth)
+				const naturalHeight = positiveFiniteNumber(event?.detail?.height)
+					?? positiveFiniteNumber(event?.target?.videoHeight)
+				if (naturalWidth == null || naturalHeight == null) return
+
+				this.generatedVideoNaturalSizes = {
+					...this.generatedVideoNaturalSizes,
+					[key]: Object.freeze({ width: naturalWidth, height: naturalHeight })
+				}
+			},
 			handleGeneratedResponseImageLoad(attachment, event) {
 				const key = this.generatedResponseImageKey(attachment)
 				if (!key) return
@@ -2690,10 +3015,20 @@
 							streaming: !['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status),
 							saving: task.status === 'CANCEL_REQUESTED'
+								|| task.videoTransferring === true
 								|| (task.previewImages || []).some(attachment =>
 									attachment?.status === 'FINALIZING'),
+							modelActivity: task.videoTransferring
+								? { phase: 'VIDEO_TRANSFER' }
+								: task.videoProgress != null
+									&& Number.isFinite(Number(task.videoProgress))
+									? { phase: 'VIDEO_GENERATION', progress: Number(task.videoProgress) }
+									: null,
 							stopped: String(task.terminalType || '').includes('CANCELLED'),
 							warnings: task.warnings || [],
+							error: task.videoError
+								? `视频生成未能交付（${task.videoError}），费用已按供应商终态处理。`
+								: '',
 							requestedImageCount: Number(task.requestedImageCount || 0),
 							imageOutputSummary: Number(task.requestedImageCount || 0) > 1
 								&& Array.isArray(task.responseAttachments)
@@ -2757,10 +3092,12 @@
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 	.attachment-card { min-width: 0; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
+	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; max-height: min(68vh, 1080px); aspect-ratio: 16 / 9; justify-self: center; background: #000; }
 	.image-output-slot { min-height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #8fdcbe; font-size: 12px; text-align: center; }
 	.image-output-slot.is-failed { color: #ff9b94; background: rgba(125, 43, 39, .12); }
 	.image-output-summary { display: block; margin-top: 9px; color: #a9b5af; font-size: 12px; }
-	.attachment-image, .attachment-video { width: 100%; height: 180px; display: block; }
+	.attachment-image { width: 100%; height: 180px; display: block; }
+	.attachment-video { width: 100%; height: 100%; margin: 0 auto; display: block; object-fit: contain; background: #000; }
 	.attachment-image.generated-response-image { width: auto; max-width: 100%; height: auto; margin: 0 auto; display: block; }
 	.image-preview-state { display: block; padding: 8px 10px; color: #8fdcbe; font-size: 11px; line-height: 1.45; }
 	.image-count-picker { min-height: 34px; margin: 0; padding: 0 10px; border-radius: 10px; color: #cbd4cf; font-size: 12px; }
@@ -2805,8 +3142,9 @@
 	.context-usage.is-danger { border-color: rgba(255, 112, 104, .38); color: #ff9b94; }
 	.context-usage.is-danger .context-usage-track { background: rgba(255, 112, 104, .16); }
 	.context-usage.is-danger .context-usage-fill { background: #ff7068; }
-	.reasoning-effort-picker, .image-aspect-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
+	.reasoning-effort-picker, .image-aspect-picker, .video-option-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
 	.image-aspect-picker { color: #9bc8ec; }
+	.video-option-picker { color: #9bc8ec; }
 	.web-search-toggle { min-height: 36px; margin: 0; padding: 0 8px 0 10px; display: flex; align-items: center; gap: 7px; border-radius: 10px; color: #9bc8ec; font-size: 12px; line-height: 1; }
 	.web-search-toggle::after { border: 0; }
 	.web-search-toggle:focus-visible { outline: 2px solid rgba(55, 211, 154, .7); outline-offset: 2px; }

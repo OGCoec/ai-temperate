@@ -12,17 +12,23 @@ import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWork
 import com.example.temperate.mapper.ai.AiConversationMapper;
 import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
 import com.example.temperate.mapper.ai.AiModelUsageMapper;
+import com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
+import com.example.temperate.model.ai.entity.AiModelUsageDetail;
+import com.example.temperate.model.ai.entity.AiModelUsageVideoDetail;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservation;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationCommand;
 import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.VideoProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMode;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoResolution;
 import com.example.temperate.service.user.membership.MembershipQuotaPlan;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import java.math.BigDecimal;
@@ -138,11 +144,55 @@ class AiConversationBillingServiceImplTest {
         assertThat(detail.getValue().getOutputRatioSnapshot()).isNull();
     }
 
+    @Test
+    void videoReservationPersistsPricingSnapshotInSeparatedDetail() {
+        BillingFixture fixture = fixture(50_000L);
+        VideoProviderCostReservationMetering metering =
+                new VideoProviderCostReservationMetering(
+                        AiConversationVideoMode.TEXT_TO_VIDEO,
+                        AiConversationVideoResolution.P720,
+                        6,
+                        0,
+                        0L,
+                        1_400_000_000L,
+                        100_000_000L,
+                        0L,
+                        8_400_000_000L);
+        AiConversationReservationCommand command = new AiConversationReservationCommand(
+                7L,
+                null,
+                reservationCommand().model(),
+                new byte[32],
+                metering);
+
+        AiConversationReservation reservation = fixture.service().reserve(command);
+
+        // 6 秒 × 0.14 美元/秒 = 0.84 美元，账户最小单位为 0.01，因此预扣 84。
+        assertThat(reservation.reservedQuotaMinor()).isEqualTo(84L);
+        assertThat(fixture.quota().getQuotaBalanceMinor()).isEqualTo(49_916L);
+        ArgumentCaptor<AiModelUsageDetail> usageDetail =
+                ArgumentCaptor.forClass(AiModelUsageDetail.class);
+        verify(fixture.detailMapper()).insert(usageDetail.capture());
+        assertThat(usageDetail.getValue().getRequestedOutputCount()).isNull();
+
+        ArgumentCaptor<AiModelUsageVideoDetail> videoDetail =
+                ArgumentCaptor.forClass(AiModelUsageVideoDetail.class);
+        verify(fixture.videoDetailMapper()).insert(videoDetail.capture());
+        assertThat(videoDetail.getValue().getUsageId()).containsExactly((byte) 2);
+        assertThat(videoDetail.getValue().getVideoMode())
+                .isEqualTo("TEXT_TO_VIDEO");
+        assertThat(videoDetail.getValue().getVideoResolution()).isEqualTo("P720");
+        assertThat(videoDetail.getValue().getRequestedDurationSeconds()).isEqualTo(6);
+        assertThat(videoDetail.getValue().getEstimatedProviderCostTicks())
+                .isEqualTo(8_400_000_000L);
+    }
+
     private static AiConversationBillingServiceImpl service() {
         return new AiConversationBillingServiceImpl(
                 mock(AiConversationMapper.class),
                 mock(AiModelUsageMapper.class),
                 mock(AiModelUsageDetailMapper.class),
+                mock(AiModelUsageVideoDetailMapper.class),
                 mock(UserMembershipQuotaMapper.class),
                 mock(HybridSemaphoreIdWorker.class),
                 new AiConversationQuotaCalculator(),
@@ -159,6 +209,8 @@ class AiConversationBillingServiceImplTest {
         AiConversationMapper conversationMapper = mock(AiConversationMapper.class);
         AiModelUsageMapper usageMapper = mock(AiModelUsageMapper.class);
         AiModelUsageDetailMapper detailMapper = mock(AiModelUsageDetailMapper.class);
+        AiModelUsageVideoDetailMapper videoDetailMapper =
+                mock(AiModelUsageVideoDetailMapper.class);
         UserMembershipQuotaMapper quotaMapper = mock(UserMembershipQuotaMapper.class);
         HybridSemaphoreIdWorker idWorker = mock(HybridSemaphoreIdWorker.class);
         UserMembershipQuota quota = new UserMembershipQuota();
@@ -170,6 +222,7 @@ class AiConversationBillingServiceImplTest {
         when(quotaMapper.updateBalanceAndPeriod(any())).thenReturn(1);
         when(usageMapper.insert(any())).thenReturn(1);
         when(detailMapper.insert(any())).thenReturn(1);
+        when(videoDetailMapper.insert(any())).thenReturn(1);
         when(idWorker.nextId())
                 .thenReturn(new byte[] {1})
                 .thenReturn(new byte[] {2});
@@ -178,6 +231,7 @@ class AiConversationBillingServiceImplTest {
                         conversationMapper,
                         usageMapper,
                         detailMapper,
+                        videoDetailMapper,
                         quotaMapper,
                         idWorker,
                         new AiConversationQuotaCalculator(),
@@ -193,7 +247,8 @@ class AiConversationBillingServiceImplTest {
                 quota,
                 quotaMapper,
                 usageMapper,
-                detailMapper);
+                detailMapper,
+                videoDetailMapper);
     }
 
     private static AiConversationReservationCommand reservationCommand() {
@@ -226,6 +281,7 @@ class AiConversationBillingServiceImplTest {
             UserMembershipQuota quota,
             UserMembershipQuotaMapper quotaMapper,
             AiModelUsageMapper usageMapper,
-            AiModelUsageDetailMapper detailMapper) {
+            AiModelUsageDetailMapper detailMapper,
+            AiModelUsageVideoDetailMapper videoDetailMapper) {
     }
 }

@@ -80,6 +80,18 @@ test('ordinary H5 CSP permits presigned uploads only to the conversation OSS ori
 	assert.doesNotMatch(connectSource, /\*\.oss-us-west-1\.aliyuncs\.com/)
 })
 
+test('ordinary H5 CSP permits generated video playback only from the conversation OSS origin', () => {
+	const index = readProjectFile('index.html')
+	const mediaSource = index.match(/media-src ([^;]+)/)?.[1]
+
+	assert.ok(mediaSource, 'ordinary user pages must declare media-src CSP')
+	assert.match(mediaSource, /(?:^|\s)'self'(?:\s|$)/)
+	assert.match(mediaSource, /(?:^|\s)blob:(?:\s|$)/)
+	assert.match(mediaSource, /https:\/\/ihaveaplan\.oss-us-west-1\.aliyuncs\.com/)
+	assert.doesNotMatch(mediaSource, /(?:^|\s)(?:https:|\*)(?:\s|$)/)
+	assert.doesNotMatch(mediaSource, /\*\.oss-us-west-1\.aliyuncs\.com/)
+})
+
 test('ordinary H5 CSP permits sandboxed blob HTML previews only as frame content', () => {
 	const index = readProjectFile('index.html')
 	const frameSource = index.match(/frame-src ([^;]+)/)?.[1]

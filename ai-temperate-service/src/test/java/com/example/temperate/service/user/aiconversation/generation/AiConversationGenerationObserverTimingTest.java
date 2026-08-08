@@ -10,7 +10,11 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
+import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
 import com.example.temperate.model.ai.entity.AiConversationGeneration;
+import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingBoundary;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingClock;
@@ -28,6 +32,9 @@ import com.example.temperate.service.user.aiconversation.image.AiConversationIma
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewData;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResultCodec;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationStage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -191,6 +198,88 @@ final class AiConversationGenerationObserverTimingTest {
                 .containsExactly("P6_OBSERVER_RECEIVED", "P7_SSE_READY");
         assertThat(diagnostics.toString())
                 .doesNotContain("preview-must-not-enter-diagnostics");
+    }
+
+    @Test
+    void rebuildsVideoReadyFromDatabaseEnvelopeWhenRedisTerminalIsMissing() {
+        byte[] generationId = bytes(7);
+        AiConversationGeneration generation = generation(
+                generationId, bytes(8), bytes(9));
+        generation.setGenerationStatus(AiConversationGenerationStatus.SETTLED.code());
+        generation.setTerminalType(AiConversationGenerationTerminalType.COMPLETED.name());
+        generation.setTerminalReason("VIDEO_OSS_READY");
+        generation.setVideoStage(AiConversationVideoGenerationStage.SUCCEEDED.name());
+        AiConversationGenerationMapper generationMapper = mock(
+                AiConversationGenerationMapper.class);
+        AiConversationGenerationPayloadMapper payloadMapper = mock(
+                AiConversationGenerationPayloadMapper.class);
+        AiConversationGenerationOutputStore outputStore = mock(
+                AiConversationGenerationOutputStore.class);
+        AiConversationGenerationOutputSubscriber outputSubscriber = mock(
+                AiConversationGenerationOutputSubscriber.class);
+        AiConversationStreamTimingDiagnosticService timing = mock(
+                AiConversationStreamTimingDiagnosticService.class);
+        AiConversationImagePreviewBroker previewBroker = mock(
+                AiConversationImagePreviewBroker.class);
+        when(generationMapper.attachObserver(any(), eq(42L), any(Integer.class), any()))
+                .thenReturn(1);
+        when(generationMapper.findOwned(generationId, 42L)).thenReturn(generation);
+        when(outputSubscriber.subscribe(any(), any())).thenReturn(() -> {
+        });
+        when(outputStore.snapshot(any())).thenReturn(
+                new AiConversationGenerationOutputSnapshot(0L, "", null, null));
+        when(timing.observeBoundary(any(), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(timing.withSession(any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(previewBroker.events(any())).thenReturn(Flux.empty());
+        AiConversationPersistedVideoResultCodec codec =
+                new AiConversationPersistedVideoResultCodec(OBJECT_MAPPER);
+        AiConversationGenerationPayload payload = new AiConversationGenerationPayload();
+        payload.setConversationMessageId(77L);
+        payload.setAssistantAttachmentsJson(codec.encode(
+                new AiConversationPersistedVideoResult(
+                        AiConversationAttachment.available(
+                                "video-attachment",
+                                "generated-video.mp4",
+                                "video/mp4",
+                                4096L,
+                                AiConversationAttachmentCategory.VIDEO,
+                                "https://oss.example/generated-video.mp4"),
+                        5_000L,
+                        1280,
+                        720,
+                        "video/mp4",
+                        4096L,
+                        "h264",
+                        "ai/video/generated-video.mp4",
+                        "ALIYUN_OSS")));
+        when(payloadMapper.findByGenerationId(generationId)).thenReturn(payload);
+        AiConversationGenerationObserverService service =
+                new AiConversationGenerationObserverServiceImpl(
+                        generationMapper,
+                        outputStore,
+                        outputSubscriber,
+                        mock(AiConversationGenerationObserverStateService.class),
+                        asyncProperties(),
+                        HYBRID_ID_CODEC,
+                        PUBLIC_ID_CODEC,
+                        OBJECT_MAPPER,
+                        timing,
+                        fixedClock(),
+                        mock(AiConversationMetrics.class),
+                        Clock.systemUTC(),
+                        AiConversationStreamTransportDiagnosticService.noOp(),
+                        previewBroker,
+                        payloadMapper,
+                        codec);
+
+        StepVerifier.create(service.observe(42L, generationId).events())
+                .expectNextMatches(event -> "snapshot".equals(event.name()))
+                .expectNextMatches(event -> "video_ready".equals(event.name())
+                        && event.data() instanceof Map<?, ?> data
+                        && ((java.util.List<?>) data.get("attachments")).size() == 1)
+                .verifyComplete();
     }
 
     private static AiConversationGeneration generation(

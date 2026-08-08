@@ -264,9 +264,15 @@ final class UserAiModelCatalogServiceImplTest {
                         "/v1/images/edits",
                         33_554_432,
                         384_000,
-                        768,
-                        70,
-                        268_435_456L));
+						768,
+						70,
+						268_435_456L),
+				new com.example.temperate.service.user.aiconversation.video.impl
+						.AiConversationVideoProfileServiceImpl(
+							com.example.temperate.service.user.aiconversation.config
+								.AiConversationVideoGenerationProperties.officialDefaults()),
+				com.example.temperate.service.user.aiconversation.config
+						.AiConversationVideoGenerationProperties.officialDefaults());
     }
 
     private static AiModelSearchCriteria emptyCriteria() {

@@ -33,6 +33,9 @@ public record AiConversationResponseRequest(
         @Valid
         @Schema(description = "图片生成或编辑参数；普通文字模型请求必须省略")
         AiConversationImageRequest image,
+        @Valid
+        @Schema(description = "xAI 视频生成、编辑或延长参数；其他请求必须省略")
+        AiConversationVideoRequest video,
         @NotNull
         @Valid
         AiConversationInputRequest input) {
@@ -51,6 +54,18 @@ public record AiConversationResponseRequest(
             Short reasoningEffortLevel,
             AiConversationWebSearchMode webSearchMode,
             AiConversationInputRequest input) {
-        this(modelPublicId, reasoningEffortLevel, webSearchMode, null, input);
+        this(modelPublicId, reasoningEffortLevel, webSearchMode, null, null, input);
+    }
+
+    /**
+     * 保留图片客户端的既有构造契约，视频参数保持关闭。
+     */
+    public AiConversationResponseRequest(
+            String modelPublicId,
+            Short reasoningEffortLevel,
+            AiConversationWebSearchMode webSearchMode,
+            AiConversationImageRequest image,
+            AiConversationInputRequest input) {
+        this(modelPublicId, reasoningEffortLevel, webSearchMode, image, null, input);
     }
 }

@@ -277,9 +277,10 @@ public class AdminAiModelController {
                             "AUDIO_EDIT",
                             "VIDEO_INPUT",
                             "VIDEO_GENERATION",
-                            "VIDEO_EDIT"
+                            "VIDEO_EDIT",
+                            "VIDEO_EXTENSION"
                     }))
-            @NotEmpty @Size(max = 12)
+            @NotEmpty @Size(max = 13)
             List<@NotBlank @Size(max = 64) String> capabilities) {
 
         AdminAiModelCreateCommand toCommand() {

@@ -4,10 +4,12 @@ import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWork
 import com.example.temperate.mapper.ai.AiConversationMapper;
 import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
 import com.example.temperate.mapper.ai.AiModelUsageMapper;
+import com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.model.ai.entity.AiConversation;
 import com.example.temperate.model.ai.entity.AiModelUsage;
 import com.example.temperate.model.ai.entity.AiModelUsageDetail;
+import com.example.temperate.model.ai.entity.AiModelUsageVideoDetail;
 import com.example.temperate.model.ai.enums.AiModelBillingStatus;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
@@ -18,6 +20,7 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationR
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationCommand;
 import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.VideoProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
@@ -45,6 +48,7 @@ public final class AiConversationBillingServiceImpl
     private final AiConversationMapper conversationMapper;
     private final AiModelUsageMapper usageMapper;
     private final AiModelUsageDetailMapper detailMapper;
+    private final AiModelUsageVideoDetailMapper videoDetailMapper;
     private final UserMembershipQuotaMapper quotaMapper;
     private final HybridSemaphoreIdWorker idWorker;
     private final AiConversationQuotaCalculator quotaCalculator;
@@ -58,6 +62,7 @@ public final class AiConversationBillingServiceImpl
             AiConversationMapper conversationMapper,
             AiModelUsageMapper usageMapper,
             AiModelUsageDetailMapper detailMapper,
+            AiModelUsageVideoDetailMapper videoDetailMapper,
             UserMembershipQuotaMapper quotaMapper,
             HybridSemaphoreIdWorker idWorker,
             AiConversationQuotaCalculator quotaCalculator,
@@ -69,6 +74,7 @@ public final class AiConversationBillingServiceImpl
         this.conversationMapper = Objects.requireNonNull(conversationMapper);
         this.usageMapper = Objects.requireNonNull(usageMapper);
         this.detailMapper = Objects.requireNonNull(detailMapper);
+        this.videoDetailMapper = Objects.requireNonNull(videoDetailMapper);
         this.quotaMapper = Objects.requireNonNull(quotaMapper);
         this.idWorker = Objects.requireNonNull(idWorker);
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
@@ -166,6 +172,8 @@ public final class AiConversationBillingServiceImpl
             throw new IllegalStateException(
                     "AI model usage detail insert did not affect one row.");
         }
+        // 视频快照在通用详情成功写入后于同一事务落库，确保无物理外键时仍不会提交孤立扩展记录。
+        insertVideoReservation(usageId, command.metering());
         cacheInvalidationExecutor.evictAfterCommit(command.userId());
         metrics.billing("reserve", "success");
         return new AiConversationReservation(
@@ -222,6 +230,11 @@ public final class AiConversationBillingServiceImpl
             return providerCostQuotaCalculator.reservedQuotaMinor(
                     providerCost.requestedOutputCount());
         }
+        if (metering instanceof VideoProviderCostReservationMetering video) {
+            // 视频预扣直接使用官方 ticks 到账户美分整数的换算；这里不能再叠加套餐额度倍率。
+            return providerCostQuotaCalculator.reservedQuotaMinor(
+                    video.estimatedProviderCostTicks());
+        }
         throw new IllegalArgumentException("Unsupported reservation metering basis.");
     }
 
@@ -247,10 +260,20 @@ public final class AiConversationBillingServiceImpl
             detail.setRequestedOutputCount(providerCost.requestedOutputCount());
             return;
         }
+        if (metering instanceof VideoProviderCostReservationMetering) {
+            // 视频预扣冻结官方 ticks 单价与媒体规模，不能读取模型 Token 倍率或图片固定槽位价格。
+            detail.setEstimatedPromptTokens(null);
+            detail.setMaxOutputTokens(null);
+            detail.setInputRatioSnapshot(null);
+            detail.setCachedInputRatioSnapshot(null);
+            detail.setOutputRatioSnapshot(null);
+            detail.setRequestedOutputCount(null);
+            return;
+        }
         throw new IllegalArgumentException("Unsupported reservation metering basis.");
     }
 
-    private static AiConversationReservationMetering reservationMetering(
+    private AiConversationReservationMetering reservationMetering(
             AiModelUsageDetail detail) {
         if (detail.getMeteringBasis()
                 == com.example.temperate.service.user.aiconversation.model
@@ -262,7 +285,55 @@ public final class AiConversationBillingServiceImpl
                     detail.getCachedInputRatioSnapshot(),
                     detail.getOutputRatioSnapshot());
         }
-        return new ProviderCostReservationMetering(detail.getRequestedOutputCount());
+        if (detail.getRequestedOutputCount() != null) {
+            return new ProviderCostReservationMetering(
+                    detail.getRequestedOutputCount());
+        }
+        AiModelUsageVideoDetail videoDetail =
+                videoDetailMapper.findByUsageId(detail.getUsageId());
+        if (videoDetail == null) {
+            throw new IllegalStateException(
+                    "AI model usage video detail is missing.");
+        }
+        return new VideoProviderCostReservationMetering(
+                com.example.temperate.service.user.aiconversation.video
+                        .AiConversationVideoMode.valueOf(
+                                videoDetail.getVideoMode()),
+                com.example.temperate.service.user.aiconversation.video
+                        .AiConversationVideoResolution.valueOf(
+                                videoDetail.getVideoResolution()),
+                videoDetail.getRequestedDurationSeconds(),
+                videoDetail.getInputImageCount(),
+                videoDetail.getInputVideoDurationMillis(),
+                videoDetail.getOutputCostTicksPerSecond(),
+                videoDetail.getImageInputCostTicksEach(),
+                videoDetail.getVideoInputCostTicksPerSecond(),
+                videoDetail.getEstimatedProviderCostTicks());
+    }
+
+    private void insertVideoReservation(
+            byte[] usageId,
+            AiConversationReservationMetering metering) {
+        if (!(metering instanceof VideoProviderCostReservationMetering video)) {
+            return;
+        }
+        AiModelUsageVideoDetail videoDetail = new AiModelUsageVideoDetail();
+        videoDetail.setUsageId(usageId);
+        videoDetail.setVideoMode(video.mode().name());
+        videoDetail.setVideoResolution(video.resolution().name());
+        videoDetail.setRequestedDurationSeconds(video.requestedDurationSeconds());
+        videoDetail.setInputImageCount(video.inputImageCount());
+        videoDetail.setInputVideoDurationMillis(video.inputVideoDurationMillis());
+        videoDetail.setOutputCostTicksPerSecond(video.outputCostTicksPerSecond());
+        videoDetail.setImageInputCostTicksEach(video.imageInputCostTicksEach());
+        videoDetail.setVideoInputCostTicksPerSecond(
+                video.videoInputCostTicksPerSecond());
+        videoDetail.setEstimatedProviderCostTicks(
+                video.estimatedProviderCostTicks());
+        if (videoDetailMapper.insert(videoDetail) != 1) {
+            throw new IllegalStateException(
+                    "AI model usage video detail insert did not affect one row.");
+        }
     }
 
     void activateExpiredPeriod(UserMembershipQuota quota) {

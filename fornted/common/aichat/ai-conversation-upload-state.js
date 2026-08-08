@@ -86,7 +86,14 @@ export function createPendingAttachment(file, localId) {
 	}
 }
 
-export function deriveSendGate({ model, text, attachments, generating, imageEditing = false }) {
+export function deriveSendGate({
+	model,
+	text,
+	attachments,
+	generating,
+	imageEditing = false,
+	mediaOperation = false
+}) {
 	if (generating) return Object.freeze({ allowed: false, reason: '正在生成回答。' })
 	if (!String(text || '').trim() && !attachments.length) {
 		return Object.freeze({ allowed: false, reason: '请输入消息或添加附件。' })
@@ -114,7 +121,7 @@ export function deriveSendGate({ model, text, attachments, generating, imageEdit
 		})
 	}
 	const incompatible = attachments.find(file => !isAttachmentCompatible(file, model))
-	if (incompatible && !imageEditing) {
+	if (incompatible && !imageEditing && !mediaOperation) {
 		return Object.freeze({
 			allowed: false,
 			reason: `${incompatible.fileName} 不受当前模型支持。`

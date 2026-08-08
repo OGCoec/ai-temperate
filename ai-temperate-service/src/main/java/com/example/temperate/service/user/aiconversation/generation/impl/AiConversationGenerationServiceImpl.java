@@ -12,7 +12,9 @@ import com.example.temperate.service.user.aiconversation.attachment.AiConversati
 import com.example.temperate.service.user.aiconversation.billing.AiConversationReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.VideoProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.config.AiConversationImageGenerationProperties;
+import com.example.temperate.service.user.aiconversation.config.AiConversationVideoGenerationProperties;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.context.AiConversationContextService;
 import com.example.temperate.service.user.aiconversation.context.AiConversationPromptSnapshot;
@@ -40,6 +42,18 @@ import com.example.temperate.service.user.aiconversation.model.stream.AiConversa
 import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import com.example.temperate.service.user.aiconversation.security.AiConversationIdempotencyHasher;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoCostEstimator;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationOptions;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationRequest;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoInputMetadata;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMetadataProbeCommand;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMetadataService;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMode;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoModelProfile;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoProfileService;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoResolution;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.Objects;
@@ -79,6 +93,10 @@ public final class AiConversationGenerationServiceImpl
     private final AiConversationIdempotencyHasher idempotencyHasher;
     private final AiConversationImageProfileService imageProfileService;
     private final AiConversationImageGenerationProperties imageProperties;
+    private final AiConversationVideoProfileService videoProfileService;
+    private final AiConversationVideoCostEstimator videoCostEstimator;
+    private final AiConversationVideoMetadataService videoMetadataService;
+    private final AiConversationVideoGenerationProperties videoProperties;
     private final AiConversationStreamingStrategyRegistry strategyRegistry;
     private final HybridBase64UrlCodec hybridIdCodec;
     private final PublicIdCodec publicIdCodec;
@@ -93,6 +111,10 @@ public final class AiConversationGenerationServiceImpl
             AiConversationIdempotencyHasher idempotencyHasher,
             AiConversationImageProfileService imageProfileService,
             AiConversationImageGenerationProperties imageProperties,
+            AiConversationVideoProfileService videoProfileService,
+            AiConversationVideoCostEstimator videoCostEstimator,
+            AiConversationVideoMetadataService videoMetadataService,
+            AiConversationVideoGenerationProperties videoProperties,
             AiConversationStreamingStrategyRegistry strategyRegistry,
             HybridBase64UrlCodec hybridIdCodec,
             PublicIdCodec publicIdCodec,
@@ -105,6 +127,10 @@ public final class AiConversationGenerationServiceImpl
         this.idempotencyHasher = Objects.requireNonNull(idempotencyHasher);
         this.imageProfileService = Objects.requireNonNull(imageProfileService);
         this.imageProperties = Objects.requireNonNull(imageProperties);
+        this.videoProfileService = Objects.requireNonNull(videoProfileService);
+        this.videoCostEstimator = Objects.requireNonNull(videoCostEstimator);
+        this.videoMetadataService = Objects.requireNonNull(videoMetadataService);
+        this.videoProperties = Objects.requireNonNull(videoProperties);
         this.strategyRegistry = Objects.requireNonNull(strategyRegistry);
         this.hybridIdCodec = Objects.requireNonNull(hybridIdCodec);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
@@ -120,9 +146,15 @@ public final class AiConversationGenerationServiceImpl
         List<AiConversationAttachment> attachments = attachmentService.validateTemporaryInputs(
                 command.userPublicId(), command.input().uploadReferences());
         AiConversationContent validatedInput = command.input().validated(attachments);
-        AiConversationImageGenerationOptions imageGeneration =
-                resolveImageGeneration(command, model, provider, attachments);
-        AiConversationStreamingProtocol protocol = imageGeneration != null
+		AiConversationImageGenerationOptions imageGeneration =
+				command.videoGeneration() == null
+						? resolveImageGeneration(command, model, provider, attachments)
+						: null;
+        AiConversationVideoGenerationOptions videoGeneration =
+                resolveVideoGeneration(command, model, provider, attachments);
+        AiConversationStreamingProtocol protocol = videoGeneration != null
+                ? AiConversationStreamingProtocol.VIDEOS_GENERATION
+                : imageGeneration != null
                 ? AiConversationStreamingProtocol.IMAGES_GENERATION
                 : command.webSearchMode()
                         == com.example.temperate.service.user.aiconversation.response
@@ -143,7 +175,8 @@ public final class AiConversationGenerationServiceImpl
                 strategy,
                 model,
                 preliminary.estimatedPromptTokens(),
-                imageGeneration);
+                imageGeneration,
+                videoGeneration);
         return creationTransactionService.create(new AiConversationGenerationCreateCommand(
                 command.userId(),
                 command.conversationId(),
@@ -152,6 +185,7 @@ public final class AiConversationGenerationServiceImpl
                 command.reasoningEffort().level(),
                 validatedInput,
                 imageGeneration,
+                videoGeneration,
                 command.webSearchMode(),
                 digest,
                 metering,
@@ -241,6 +275,218 @@ public final class AiConversationGenerationServiceImpl
                 command.imageGeneration().outputCount());
     }
 
+    private AiConversationVideoGenerationOptions resolveVideoGeneration(
+            AiConversationResponseCommand command,
+            AiModelCacheEntry model,
+            AiModelProvider provider,
+            List<AiConversationAttachment> attachments) {
+        boolean videoModel = videoProfileService.supports(
+                        provider, model.modelName())
+                || model.capabilities().stream().anyMatch(capability ->
+                        capability == AiModelCapabilityCode.VIDEO_GENERATION
+                                || capability == AiModelCapabilityCode.VIDEO_EDIT
+                                || capability == AiModelCapabilityCode.VIDEO_EXTENSION);
+        if (!videoModel && command.videoGeneration() == null) {
+            return null;
+        }
+        if (!videoProperties.enabled()) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,
+                    "视频生成功能当前未启用。",
+                    true);
+        }
+        AiConversationVideoGenerationRequest request = command.videoGeneration();
+        if (!videoModel
+                || request == null
+                || command.imageGeneration() != null
+                || command.webSearchMode()
+                        != com.example.temperate.service.user.aiconversation.response
+                                .AiConversationWebSearchMode.OFF
+                || command.input().text().isBlank()) {
+            throw invalidVideoRequest("视频请求参数与模型能力不匹配。");
+        }
+
+        validateVideoCapability(model, request.mode());
+        List<AiConversationAttachment> selected = selectVideoAttachments(
+                attachments, request.inputAttachmentPublicIds());
+        int durationSeconds = request.durationSeconds() == null
+                ? 0
+                : request.durationSeconds();
+        AiConversationVideoResolution resolution = request.resolution();
+        AiConversationVideoInputMetadata inputMetadata = null;
+
+        switch (request.mode()) {
+            case TEXT_TO_VIDEO -> requireVideoInputShape(
+                    selected, 0, request.durationSeconds(), resolution,
+                    request.aspectRatio());
+            case IMAGE_TO_VIDEO -> {
+                requireVideoInputShape(
+                        selected, 1, request.durationSeconds(), resolution,
+                        request.aspectRatio());
+                validateImageVideoInputs(selected);
+            }
+            case REFERENCE_TO_VIDEO -> {
+                if (selected.isEmpty() || selected.size() > 7) {
+                    throw invalidVideoRequest("参考图视频必须选择一至七张图片。");
+                }
+                requireGeneratedVideoControls(
+                        request.durationSeconds(), resolution, request.aspectRatio());
+                validateImageVideoInputs(selected);
+            }
+            case VIDEO_EDIT, VIDEO_EXTEND -> {
+                validateVideoOperationControls(request);
+                AiConversationAttachment video = requiredMp4Input(selected);
+                // 输入视频时长与编码由 FC 读取，主业务进程只发送小型探测 JSON，绝不下载媒体字节。
+				try {
+					inputMetadata = videoMetadataService.probe(
+							new AiConversationVideoMetadataProbeCommand(
+									attachmentService.resolveModelUrl(video),
+									video.contentType(),
+									videoProperties.functionCompute().maximumVideoBytes()));
+				} catch (RuntimeException probeFailure) {
+					// 探测失败只向客户端暴露稳定校验错误，禁止传播 FC、OSS 或签名 URL 细节。
+					throw invalidVideoRequest("输入视频无法完成可信媒体校验。");
+				}
+                resolution = inheritedResolution(inputMetadata);
+            }
+        }
+
+        try {
+            AiConversationVideoGenerationOptions options =
+                    new AiConversationVideoGenerationOptions(
+                            request.mode(),
+                            durationSeconds,
+                            resolution,
+                            request.aspectRatio(),
+                            request.inputAttachmentPublicIds(),
+                            inputMetadata == null ? 0L : inputMetadata.durationMillis(),
+                            inputMetadata == null ? 0 : inputMetadata.width(),
+                            inputMetadata == null ? 0 : inputMetadata.height(),
+                            inputMetadata == null ? null : inputMetadata.codec());
+            videoProfileService.required(
+                    provider, model.modelName(), options.mode(), options.resolution());
+            return options;
+        } catch (IllegalArgumentException exception) {
+            throw invalidVideoRequest(exception.getMessage());
+        }
+    }
+
+    private static void validateVideoCapability(
+            AiModelCacheEntry model,
+            AiConversationVideoMode mode) {
+        boolean supported = switch (mode) {
+            case TEXT_TO_VIDEO, IMAGE_TO_VIDEO, REFERENCE_TO_VIDEO ->
+                    model.capabilities().contains(AiModelCapabilityCode.VIDEO_GENERATION);
+            case VIDEO_EDIT ->
+                    model.capabilities().contains(AiModelCapabilityCode.VIDEO_EDIT)
+                            && model.capabilities().contains(
+                                    AiModelCapabilityCode.VIDEO_INPUT);
+            case VIDEO_EXTEND ->
+                    model.capabilities().contains(AiModelCapabilityCode.VIDEO_EXTENSION)
+                            && model.capabilities().contains(
+                                    AiModelCapabilityCode.VIDEO_INPUT);
+        };
+        if (!supported) {
+            throw invalidVideoRequest("所选模型不支持该视频模式。");
+        }
+    }
+
+    private static List<AiConversationAttachment> selectVideoAttachments(
+            List<AiConversationAttachment> attachments,
+            List<String> publicIds) {
+        LinkedHashMap<String, AiConversationAttachment> byId = new LinkedHashMap<>();
+        for (AiConversationAttachment attachment : attachments) {
+            byId.put(attachment.attachmentId(), attachment);
+        }
+        HashSet<String> uniqueIds = new HashSet<>(publicIds);
+        if (uniqueIds.size() != publicIds.size()
+                || publicIds.size() != attachments.size()) {
+            throw invalidVideoRequest(
+                    "视频输入必须且只能引用本次请求已授权的全部附件。");
+        }
+        return publicIds.stream()
+                .map(publicId -> {
+                    AiConversationAttachment attachment = byId.get(publicId);
+                    if (attachment == null) {
+                        throw invalidVideoRequest("视频输入附件不存在或不属于当前请求。");
+                    }
+                    return attachment;
+                })
+                .toList();
+    }
+
+    private static void requireVideoInputShape(
+            List<AiConversationAttachment> selected,
+            int expectedCount,
+            Integer durationSeconds,
+            AiConversationVideoResolution resolution,
+            com.example.temperate.service.user.aiconversation.video
+                    .AiConversationVideoAspectRatio aspectRatio) {
+        if (selected.size() != expectedCount) {
+            throw invalidVideoRequest("视频模式的输入附件数量不正确。");
+        }
+        requireGeneratedVideoControls(durationSeconds, resolution, aspectRatio);
+    }
+
+    private static void requireGeneratedVideoControls(
+            Integer durationSeconds,
+            AiConversationVideoResolution resolution,
+            com.example.temperate.service.user.aiconversation.video
+                    .AiConversationVideoAspectRatio aspectRatio) {
+        if (durationSeconds == null || resolution == null || aspectRatio == null) {
+            throw invalidVideoRequest("普通视频生成必须指定秒数、清晰度和画幅。");
+        }
+    }
+
+    private static void validateImageVideoInputs(
+            List<AiConversationAttachment> attachments) {
+        boolean invalid = attachments.stream().anyMatch(attachment ->
+                attachment.category() != AiConversationAttachmentCategory.IMAGE);
+        if (invalid) {
+            throw invalidVideoRequest("图片或参考图生成只允许使用图片附件。");
+        }
+    }
+
+    private static void validateVideoOperationControls(
+            AiConversationVideoGenerationRequest request) {
+        if (request.resolution() != null || request.aspectRatio() != null) {
+            throw invalidVideoRequest("视频编辑和延长不能覆盖清晰度或画幅。");
+        }
+        if (request.mode() == AiConversationVideoMode.VIDEO_EDIT
+                && request.durationSeconds() != null) {
+            throw invalidVideoRequest("视频编辑不能传递生成秒数。");
+        }
+        if (request.mode() == AiConversationVideoMode.VIDEO_EXTEND
+                && request.durationSeconds() == null) {
+            throw invalidVideoRequest("视频延长必须指定新增秒数。");
+        }
+    }
+
+    private static AiConversationAttachment requiredMp4Input(
+            List<AiConversationAttachment> selected) {
+        if (selected.size() != 1) {
+            throw invalidVideoRequest("视频编辑和延长必须选择一个 MP4 视频。");
+        }
+        AiConversationAttachment attachment = selected.getFirst();
+        if (attachment.category() != AiConversationAttachmentCategory.VIDEO
+                || !"video/mp4".equalsIgnoreCase(attachment.contentType())) {
+            throw invalidVideoRequest("视频编辑和延长只支持 MP4 输入。");
+        }
+        return attachment;
+    }
+
+    private static AiConversationVideoResolution inheritedResolution(
+            AiConversationVideoInputMetadata metadata) {
+        int shortEdge = Math.min(metadata.width(), metadata.height());
+        if (shortEdge <= 480) {
+            return AiConversationVideoResolution.P480;
+        }
+        if (shortEdge <= 720) {
+            return AiConversationVideoResolution.P720;
+        }
+        throw invalidVideoRequest("视频编辑和延长的输入清晰度最高为 720p。");
+    }
+
     private static void validateEditAttachments(
             AiModelProvider provider,
             List<AiConversationAttachment> attachments) {
@@ -259,7 +505,7 @@ public final class AiConversationGenerationServiceImpl
         }
     }
 
-    private static AiConversationReservationMetering reservationMetering(
+    private static AiConversationReservationMetering reservationMeteringWithoutVideo(
             AiConversationStreamingStrategy strategy,
             AiModelCacheEntry model,
             long estimatedPromptTokens,
@@ -281,10 +527,57 @@ public final class AiConversationGenerationServiceImpl
                 model.outputRatio());
     }
 
+    private AiConversationReservationMetering reservationMetering(
+            AiConversationStreamingStrategy strategy,
+            AiModelCacheEntry model,
+            long estimatedPromptTokens,
+            AiConversationImageGenerationOptions imageGeneration,
+            AiConversationVideoGenerationOptions videoGeneration) {
+        if (videoGeneration == null) {
+            return reservationMeteringWithoutVideo(
+                    strategy,
+                    model,
+                    estimatedPromptTokens,
+                    imageGeneration);
+        }
+        if (strategy.meteringBasis()
+                != AiConversationMeteringBasis.PROVIDER_COST_TICKS) {
+            throw new IllegalStateException(
+                    "Video generation must use provider-cost ticks metering.");
+        }
+        AiConversationVideoModelProfile profile = videoProfileService.required(
+                AiModelProvider.fromVendor(model.vendor()),
+                model.modelName(),
+                videoGeneration.mode(),
+                videoGeneration.resolution());
+        long estimatedTicks = videoCostEstimator.estimateCostTicks(
+                videoGeneration, profile.pricing());
+        return new VideoProviderCostReservationMetering(
+                videoGeneration.mode(),
+                videoGeneration.resolution(),
+                videoGeneration.durationSeconds(),
+                videoGeneration.inputImageCount(),
+                videoGeneration.inputVideoDurationMillis(),
+                profile.pricing().requiredOutputCostTicksPerSecond(
+                        videoGeneration.resolution()),
+                profile.pricing().imageInputCostTicksEach(),
+                profile.pricing().videoInputCostTicksPerSecond(),
+                estimatedTicks);
+    }
+
     private static AiConversationException invalidImageRequest(String message) {
         return new AiConversationException(
                 AiConversationErrorCode.AI_REQUEST_INVALID,
                 message,
+                false);
+    }
+
+    private static AiConversationException invalidVideoRequest(String message) {
+        return new AiConversationException(
+                AiConversationErrorCode.AI_REQUEST_INVALID,
+                message == null || message.isBlank()
+                        ? "视频请求参数无效。"
+                        : message,
                 false);
     }
 

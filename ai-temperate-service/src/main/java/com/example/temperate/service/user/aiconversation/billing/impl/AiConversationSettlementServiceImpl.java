@@ -171,7 +171,8 @@ public final class AiConversationSettlementServiceImpl
                 || detail.getMeteringBasis()
                 != AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()
                 || command.usage() != null
-                || !"AI_IMAGE_COST_EVIDENCE_MISSING".equals(failureCode)) {
+                || !("AI_IMAGE_COST_EVIDENCE_MISSING".equals(failureCode)
+                        || "AI_VIDEO_COST_EVIDENCE_MISSING".equals(failureCode))) {
             throw new IllegalArgumentException(
                     "Cost-evidence reconciliation requires a provider-cost reservation without fabricated usage.");
         }
@@ -531,6 +532,7 @@ public final class AiConversationSettlementServiceImpl
                     detail.getCachedInputRatioSnapshot(),
                     detail.getOutputRatioSnapshot());
         } else if (command.usage() instanceof AiConversationProviderCostUsage providerUsage) {
+            // 结算必须与预扣使用同一 ticks→账户美分规则，差额才能正确退款或补扣。
             actualQuota = providerCostQuotaCalculator.actualQuotaMinor(
                     providerUsage.costInUsdTicks());
         } else {

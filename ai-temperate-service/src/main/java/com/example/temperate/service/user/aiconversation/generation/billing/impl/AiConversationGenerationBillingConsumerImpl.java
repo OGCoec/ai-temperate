@@ -16,6 +16,7 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationR
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementCommand;
 import com.example.temperate.service.user.aiconversation.billing.ProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
+import com.example.temperate.service.user.aiconversation.billing.VideoProviderCostReservationMetering;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionRequestResult;
 import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
@@ -46,6 +47,9 @@ import com.example.temperate.service.user.aiconversation.response.AiConversation
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingDecision;
 import com.example.temperate.service.user.aiconversation.response.AiConversationTerminalBillingPolicy;
 import com.example.temperate.service.user.aiconversation.text.AiConversationTextTokenizer;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResultCodec;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationStage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -87,6 +91,7 @@ public final class AiConversationGenerationBillingConsumerImpl
     private final AiConversationMetrics metrics;
     private final AiConversationGenerationInputCodec inputCodec;
     private final AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec;
+    private final AiConversationPersistedVideoResultCodec persistedVideoResultCodec;
     private final AiConversationImagePreviewBroker previewBroker;
     private final AiConversationCompactionCoordinator compactionCoordinator;
 
@@ -105,6 +110,7 @@ public final class AiConversationGenerationBillingConsumerImpl
             AiConversationMetrics metrics,
             AiConversationGenerationInputCodec inputCodec,
             AiConversationPersistedGeneratedAttachmentCodec generatedAttachmentCodec,
+            AiConversationPersistedVideoResultCodec persistedVideoResultCodec,
             ApplicationEventPublisher eventPublisher,
             AiConversationImagePreviewBroker previewBroker,
             AiConversationCompactionCoordinator compactionCoordinator) {
@@ -122,6 +128,7 @@ public final class AiConversationGenerationBillingConsumerImpl
         this.metrics = Objects.requireNonNull(metrics);
         this.inputCodec = Objects.requireNonNull(inputCodec);
         this.generatedAttachmentCodec = Objects.requireNonNull(generatedAttachmentCodec);
+        this.persistedVideoResultCodec = Objects.requireNonNull(persistedVideoResultCodec);
         this.eventPublisher = Objects.requireNonNull(eventPublisher);
         this.previewBroker = Objects.requireNonNull(previewBroker);
         this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
@@ -149,6 +156,8 @@ public final class AiConversationGenerationBillingConsumerImpl
                                 : frozenPayload.getConversationMessageId();
                 short requestedImageCount = 0;
                 List<AiConversationAttachment> responseAttachments = List.of();
+                AiConversationPersistedVideoResult persistedVideoResult = null;
+                boolean videoRequest = false;
                 if (frozenPayload != null) {
                     AiConversationGenerationInputSnapshot frozenInput =
                             inputCodec.decode(frozenPayload.getInputAttachmentsJson());
@@ -164,7 +173,29 @@ public final class AiConversationGenerationBillingConsumerImpl
                             responseAttachments = generatedAttachmentCodec.decode(
                                     frozenPayload.getAssistantAttachmentsJson());
                         }
+                    } else if (frozenInput.videoGeneration() != null
+                            && AiConversationGenerationTerminalType.COMPLETED.name()
+                                    .equals(terminal.terminalType())
+                            && frozenPayload.getAssistantAttachmentsJson() != null
+                            && frozenPayload.getAssistantAttachmentsJson()
+                                    .stripLeading().startsWith("{")) {
+                        videoRequest = true;
+                        persistedVideoResult = persistedVideoResultCodec.decode(
+                                frozenPayload.getAssistantAttachmentsJson());
+                        responseAttachments = List.of(
+                                persistedVideoResult.attachment());
+                    } else if (frozenInput.videoGeneration() != null) {
+                        videoRequest = true;
                     }
+                }
+                if (videoRequest
+                        && existing == AiConversationGenerationStatus.RECONCILE_REQUIRED
+                        && generationMapper.updateVideoStage(
+                                generationId,
+                                AiConversationVideoGenerationStage
+                                        .BILLING_RECONCILE_REQUIRED.name()) != 1) {
+                    throw new IllegalStateException(
+                            "AI video reconcile stage replay did not affect one row.");
                 }
                 publishBilled(
                         terminal,
@@ -172,6 +203,12 @@ public final class AiConversationGenerationBillingConsumerImpl
                         messageId,
                         requestedImageCount,
                         responseAttachments,
+                        persistedVideoResult,
+                        videoRequest,
+                        effectiveVideoStage(
+                                videoRequest,
+                                existing.name(),
+                                generation.getVideoStage()),
                         AiConversationGenerationTerminalType.COMPLETED.name()
                                         .equals(terminal.terminalType())
                                 ? refreshContextAfterCompletion(
@@ -211,7 +248,20 @@ public final class AiConversationGenerationBillingConsumerImpl
             // 消息 ID 先原子绑定到 Payload，Rabbit 重投时附件对象路径保持稳定，避免重复创建不同对象。
             long messageId = transactionService.getOrReserveMessageId(generationId);
             String conversationPublicId = idCodec.encode(generation.getConversationId());
-            if (inputSnapshot.imageGeneration() == null) {
+            if (inputSnapshot.videoGeneration() != null) {
+                // 视频对象已由 FC 写入 OSS；Billing 仅公开化输入附件并读取结果信封，禁止再次下载或搬运视频。
+                AiConversationAttachmentFinalization finalizedInputs =
+                        attachmentService.finalizeAttachments(
+                                publicIdCodec.encode(generation.getLoginIdentityId()),
+                                conversationPublicId,
+                                publicIdCodec.encode(messageId),
+                                user.attachments(),
+                                List.of());
+                AiConversationPersistedVideoResult persistedVideo =
+                        persistedVideoResultCodec.decode(
+                                payload.getAssistantAttachmentsJson());
+                finalized = videoFinalization(finalizedInputs, persistedVideo);
+            } else if (inputSnapshot.imageGeneration() == null) {
                 finalized = attachmentService.finalizeAttachments(
                         publicIdCodec.encode(generation.getLoginIdentityId()),
                         conversationPublicId,
@@ -256,8 +306,55 @@ public final class AiConversationGenerationBillingConsumerImpl
                             traceId),
                     terminal.terminalType(),
                     costEvidenceMissing
-                            ? "AI_IMAGE_COST_EVIDENCE_MISSING"
+                            ? inputSnapshot.videoGeneration() == null
+                                    ? "AI_IMAGE_COST_EVIDENCE_MISSING"
+                                    : "AI_VIDEO_COST_EVIDENCE_MISSING"
                             : terminal.terminalReason());
+        } else if (inputSnapshot.videoGeneration() != null
+                && payload.getMeteringBasis()
+                        == AiConversationMeteringBasis.PROVIDER_COST_TICKS.code()) {
+            if (usage != null) {
+                // xAI 已报告实际成本时，即使 OSS 搬运或任务交付失败也必须按真实供应商成本结算。
+                command = new AiConversationGenerationBillingCommand(
+                        generationId,
+                        terminal.terminalVersion(),
+                        AiConversationGenerationBillingMode.INTERRUPTED,
+                        settlementCommand(
+                                generation,
+                                payload,
+                                null,
+                                user,
+                                new AiConversationContent("", List.of()),
+                                usage,
+                                type.name(),
+                                traceId),
+                        type.name(),
+                        terminal.terminalReason());
+            } else if ("AI_VIDEO_XAI_REJECTED".equals(
+                            terminal.terminalReason())
+                    || ((type == AiConversationGenerationTerminalType.CLIENT_CANCELLED
+                                    || type == AiConversationGenerationTerminalType.ADMIN_CANCELLED)
+                            && payload.getUpstreamRequestId() == null
+                            && payload.getMeteringEvidenceJson() == null)) {
+                command = new AiConversationGenerationBillingCommand(
+                        generationId,
+                        terminal.terminalVersion(),
+                        AiConversationGenerationBillingMode.REFUND_FULL,
+                        null,
+                        type.name(),
+                        terminal.terminalReason());
+            } else {
+                // POST 或轮询结果无法确认时保留预扣并进入人工对账，禁止把未知成本当成零成本退款。
+                command = new AiConversationGenerationBillingCommand(
+                        generationId,
+                        terminal.terminalVersion(),
+                        AiConversationGenerationBillingMode.RECONCILE_ONLY,
+                        null,
+                        type.name(),
+                        Objects.requireNonNullElse(
+                                terminal.terminalReason(),
+                                "AI_VIDEO_XAI_RESULT_UNCERTAIN"));
+            }
         } else if (type == AiConversationGenerationTerminalType.UPSTREAM_FAILED
                 || type == AiConversationGenerationTerminalType.SYSTEM_FAILED
                 || type == AiConversationGenerationTerminalType.COMPLETED) {
@@ -346,6 +443,23 @@ public final class AiConversationGenerationBillingConsumerImpl
                                 && command.settlementCommand() != null
                                 ? command.settlementCommand().assistant().attachments()
                                 : List.of();
+                AiConversationPersistedVideoResult persistedVideoResult =
+                        inputSnapshot.videoGeneration() != null
+                                        && payload.getAssistantAttachmentsJson() != null
+                                        && payload.getAssistantAttachmentsJson()
+                                                .stripLeading().startsWith("{")
+                                ? persistedVideoResultCodec.decode(
+                                        payload.getAssistantAttachmentsJson())
+                                : null;
+                if (inputSnapshot.videoGeneration() != null
+                        && "RECONCILE_REQUIRED".equals(result.finalStatus())
+                        && generationMapper.updateVideoStage(
+                                generationId,
+                                AiConversationVideoGenerationStage
+                                        .BILLING_RECONCILE_REQUIRED.name()) != 1) {
+                    throw new IllegalStateException(
+                            "AI video reconcile stage update did not affect one row.");
+                }
                 publishBilled(
                         terminal,
                         result.finalStatus(),
@@ -354,6 +468,12 @@ public final class AiConversationGenerationBillingConsumerImpl
                                 ? (short) 0
                                 : inputSnapshot.imageGeneration().outputCount(),
                         responseAttachments,
+                        persistedVideoResult,
+                        inputSnapshot.videoGeneration() != null,
+                        effectiveVideoStage(
+                                inputSnapshot.videoGeneration() != null,
+                                result.finalStatus(),
+                                generation.getVideoStage()),
                         contextRefresh);
             }
             metrics.generationBilling(
@@ -374,6 +494,9 @@ public final class AiConversationGenerationBillingConsumerImpl
             long messageId,
             short requestedImageCount,
             List<AiConversationAttachment> responseAttachments,
+            AiConversationPersistedVideoResult persistedVideoResult,
+            boolean videoRequest,
+            String videoStage,
             AiConversationCompactionRequestResult contextRefresh) {
         // 图片字节已经在 Worker 中释放；终态只发送正式附件、请求数量和可选消息 ID，供浏览器重建缺失槽位。
         Map<String, Object> data = new LinkedHashMap<>();
@@ -388,6 +511,20 @@ public final class AiConversationGenerationBillingConsumerImpl
                 terminal.terminalReason(), "unavailable"));
         data.put("requestedImageCount", requestedImageCount);
         data.put("attachments", List.copyOf(responseAttachments));
+        if (persistedVideoResult != null) {
+            data.put("durationMillis", persistedVideoResult.durationMillis());
+            data.put("width", persistedVideoResult.width());
+            data.put("height", persistedVideoResult.height());
+            data.put("byteSize", persistedVideoResult.byteSize());
+            data.put("contentType", persistedVideoResult.contentType());
+            data.put("videoCodec", persistedVideoResult.videoCodec());
+            data.put("storageProvider", persistedVideoResult.storageProvider());
+        } else if (videoRequest) {
+            data.put("errorCode", Objects.requireNonNullElse(
+                    terminal.terminalReason(), "AI_VIDEO_FAILED"));
+            data.put("failureStage", Objects.requireNonNullElse(
+                    videoStage, "BILLING_RECONCILE_REQUIRED"));
+        }
         if (contextRefresh != null) {
             data.put("contextUsage", contextRefresh.usage());
             data.put(
@@ -398,10 +535,39 @@ public final class AiConversationGenerationBillingConsumerImpl
         }
         eventPublisher.publishEvent(new AiConversationGenerationBilledEvent(
                 terminal.generationPublicId(),
-                "completed",
+                videoRequest
+                        ? persistedVideoResult == null
+                                ? "video_failed"
+                                : "video_ready"
+                        : "completed",
                 json(data)));
         // 终态事件已经进入既有输出通道后统一释放所有预览槽位；没有浏览器观察者时也不会等 TTL 才回收大图。
         previewBroker.release(terminal.generationPublicId());
+    }
+
+    private static String effectiveVideoStage(
+            boolean videoRequest,
+            String finalStatus,
+            String persistedStage) {
+        if (!videoRequest) {
+            return null;
+        }
+        return "RECONCILE_REQUIRED".equals(finalStatus)
+                ? AiConversationVideoGenerationStage.BILLING_RECONCILE_REQUIRED.name()
+                : persistedStage;
+    }
+
+    static AiConversationAttachmentFinalization videoFinalization(
+            AiConversationAttachmentFinalization finalizedInputs,
+            AiConversationPersistedVideoResult persistedVideo) {
+        Objects.requireNonNull(finalizedInputs);
+        Objects.requireNonNull(persistedVideo);
+        // 视频对象已在 Worker 终态前由 FC 持久化；Billing 失败只能补偿本次复制的输入附件，禁止删除终态引用的视频。
+        return new AiConversationAttachmentFinalization(
+                finalizedInputs.inputAttachments(),
+                List.of(persistedVideo.attachment()),
+                finalizedInputs.createdObjectKeys(),
+                finalizedInputs.partialFailure());
     }
 
     private AiConversationSettlementCommand settlementCommand(
