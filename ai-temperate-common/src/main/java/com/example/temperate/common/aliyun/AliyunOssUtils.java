@@ -9,6 +9,7 @@ import com.aliyun.sdk.service.oss2.models.GetObjectRequest;
 import com.aliyun.sdk.service.oss2.models.GetObjectResult;
 import com.aliyun.sdk.service.oss2.models.HeadObjectRequest;
 import com.aliyun.sdk.service.oss2.models.PutObjectRequest;
+import com.aliyun.sdk.service.oss2.progress.ProgressListener;
 import com.aliyun.sdk.service.oss2.transport.BinaryData;
 import java.io.IOException;
 import java.time.Duration;
@@ -185,10 +186,39 @@ public final class AliyunOssUtils {
             boolean forbidOverwrite,
             Duration connectTimeout,
             Duration readWriteTimeout) {
+        putObjectBytes(
+                bucket,
+                region,
+                endpoint,
+                objectKey,
+                bytes,
+                contentType,
+                cacheControl,
+                forbidOverwrite,
+                connectTimeout,
+                readWriteTimeout,
+                null);
+    }
+
+    /**
+     * 使用 OSS SDK 的真实字节回调上传对象；监听器只反映请求体传输，不得把它当作对象最终可用的依据。
+     */
+    public void putObjectBytes(
+            String bucket,
+            String region,
+            String endpoint,
+            String objectKey,
+            byte[] bytes,
+            String contentType,
+            String cacheControl,
+            boolean forbidOverwrite,
+            Duration connectTimeout,
+            Duration readWriteTimeout,
+            ProgressListener progressListener) {
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("bytes must not be empty");
         }
-        PutObjectRequest request = PutObjectRequest.newBuilder()
+        PutObjectRequest.Builder builder = PutObjectRequest.newBuilder()
                 .bucket(requireText(bucket, "bucket"))
                 .key(requireObjectKey(objectKey))
                 .body(BinaryData.fromBytes(bytes))
@@ -196,8 +226,11 @@ public final class AliyunOssUtils {
                 .contentType(requireText(contentType, "contentType"))
                 .cacheControl(requireText(cacheControl, "cacheControl"))
                 .objectAcl(PUBLIC_READ_ACL)
-                .forbidOverwrite(forbidOverwrite)
-                .build();
+                .forbidOverwrite(forbidOverwrite);
+        if (progressListener != null) {
+            builder.progressListener(progressListener);
+        }
+        PutObjectRequest request = builder.build();
         OSSClient client = client(
                 region, endpoint, connectTimeout, readWriteTimeout);
         try {

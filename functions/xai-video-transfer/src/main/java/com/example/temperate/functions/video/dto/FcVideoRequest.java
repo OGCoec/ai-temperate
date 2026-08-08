@@ -11,13 +11,16 @@ public final class FcVideoRequest {
 
     private final String operation;
     private final JsonNode payload;
+    private final String responseMode;
 
     @JsonCreator
     public FcVideoRequest(
             @JsonProperty("operation") String operation,
-            @JsonProperty("payload") JsonNode payload) {
+            @JsonProperty("payload") JsonNode payload,
+            @JsonProperty("responseMode") String responseMode) {
         this.operation = operation;
         this.payload = payload;
+        this.responseMode = responseMode;
     }
 
     public String operation() {
@@ -26,5 +29,12 @@ public final class FcVideoRequest {
 
     public JsonNode payload() {
         return payload;
+    }
+
+    /**
+     * 返回客户端要求的响应形态；缺省时继续使用历史单个 JSON 响应，便于灰度发布和回滚。
+     */
+    public String responseMode() {
+        return responseMode;
     }
 }

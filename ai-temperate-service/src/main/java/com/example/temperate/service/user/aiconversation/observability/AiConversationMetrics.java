@@ -182,6 +182,26 @@ public final class AiConversationMetrics {
                 .record(elapsed);
     }
 
+    /**
+     * 记录生成媒体向 OSS 交付的最终结果；标签只允许媒体类型、结果和固定耗时档位，禁止引入用户或对象标识。
+     */
+    public void mediaUpload(Duration elapsed, String mediaType, String outcome) {
+        String type = "video".equalsIgnoreCase(mediaType) ? "video" : "image";
+        String resolvedOutcome = operationOutcome(outcome);
+        String durationBucket = mediaUploadDurationBucket(elapsed);
+        Counter.builder("ai.conversation.media.upload")
+                .tag("media_type", type)
+                .tag("outcome", resolvedOutcome)
+                .tag("duration_bucket", durationBucket)
+                .register(registry)
+                .increment();
+        Timer.builder("ai.conversation.media.upload.duration")
+                .tag("media_type", type)
+                .tag("outcome", resolvedOutcome)
+                .register(registry)
+                .record(elapsed);
+    }
+
     private void counter(String name, String key, String value) {
         Counter.builder(name)
                 .tag(key, value)
@@ -246,5 +266,19 @@ public final class AiConversationMetrics {
             case "reserve", "refund", "supplement", "reconcile" -> value;
             default -> "reconcile";
         };
+    }
+
+    private static String mediaUploadDurationBucket(Duration elapsed) {
+        long milliseconds = Math.max(0L, elapsed == null ? 0L : elapsed.toMillis());
+        if (milliseconds < 1_000L) {
+            return "lt_1s";
+        }
+        if (milliseconds < 5_000L) {
+            return "1s_to_5s";
+        }
+        if (milliseconds < 30_000L) {
+            return "5s_to_30s";
+        }
+        return "gte_30s";
     }
 }

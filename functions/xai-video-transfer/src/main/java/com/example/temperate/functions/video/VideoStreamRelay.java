@@ -19,12 +19,26 @@ public final class VideoStreamRelay {
             VideoSourceStream.OpenedVideo source,
             VideoPartUploader uploader,
             long maximumBytes) throws IOException {
+        return relay(source, uploader, maximumBytes, VideoTransferProgressListener.noOp());
+    }
+
+    /**
+     * 在保持单次来源读取与有界分片的前提下，把每个 OSS 分片的内部字节进度汇总为整个视频的上传进度。
+     */
+    public VideoTransferResponse relay(
+            VideoSourceStream.OpenedVideo source,
+            VideoPartUploader uploader,
+            long maximumBytes,
+            VideoTransferProgressListener progressListener) throws IOException {
         Objects.requireNonNull(source);
         Objects.requireNonNull(uploader);
+        Objects.requireNonNull(progressListener);
         byte[] buffer = new byte[PART_BYTES];
         MessageDigest digest = sha256();
         VideoMetadataProbe probe = new VideoMetadataProbe();
         long total = 0L;
+        long uploaded = 0L;
+        Long declaredLength = source.declaredLength() > 0L ? source.declaredLength() : null;
         long partNumber = 1L;
         try {
             while (true) {
@@ -42,12 +56,22 @@ public final class VideoStreamRelay {
                 digest.update(buffer, 0, length);
                 probe.accept(buffer, length);
                 // SDK 调用返回后才复用缓冲区；每个 part 固定一次上传且 OperationOptions 禁止重试。
-                uploader.uploadPart(partNumber++, buffer, length);
+                long uploadedBeforePart = uploaded;
+                uploader.uploadPart(
+                        partNumber++,
+                        buffer,
+                        length,
+                        transferred -> progressListener.uploading(
+                                uploadedBeforePart + Math.min(length, transferred),
+                                declaredLength));
+                uploaded += length;
+                progressListener.uploading(uploaded, declaredLength);
             }
             if (total <= 0L) {
                 throw new IOException("Video source is empty.");
             }
             VideoProbeResponse metadata = probe.finish();
+            progressListener.verifying(uploaded, declaredLength);
             VideoPartUploader.StoredObject stored = uploader.complete(total);
             return new VideoTransferResponse(
                     stored.objectKey(),

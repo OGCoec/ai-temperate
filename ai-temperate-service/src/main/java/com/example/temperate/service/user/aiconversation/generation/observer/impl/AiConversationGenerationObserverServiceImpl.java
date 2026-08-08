@@ -380,7 +380,9 @@ public final class AiConversationGenerationObserverServiceImpl
 		boolean terminal = terminalEvent(event.eventName());
 		boolean transientVideoEvent = "video_generation_progress".equals(
 				event.eventName())
-				|| "video_transfer_started".equals(event.eventName());
+				|| "video_transfer_started".equals(event.eventName())
+				// 上传进度不改变文本 revision，仍必须实时穿透到当前 SSE 观察者。
+				|| "media_upload_progress".equals(event.eventName());
 		if (terminal || transientVideoEvent
 				|| event.revision() > deliveredRevision.get()) {
             deliveredRevision.accumulateAndGet(event.revision(), Math::max);

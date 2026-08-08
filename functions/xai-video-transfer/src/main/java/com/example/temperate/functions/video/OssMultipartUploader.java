@@ -11,6 +11,7 @@ import com.aliyun.sdk.service.oss2.models.HeadObjectRequest;
 import com.aliyun.sdk.service.oss2.models.InitiateMultipartUploadRequest;
 import com.aliyun.sdk.service.oss2.models.Part;
 import com.aliyun.sdk.service.oss2.models.UploadPartRequest;
+import com.aliyun.sdk.service.oss2.progress.ProgressListener;
 import com.aliyun.sdk.service.oss2.transport.BinaryData;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -20,7 +21,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 使用 FC Context 提供的 RAM 短期 STS 执行单次尝试的 OSS Multipart Upload，并在失败时显式 Abort 未完成分片。
+ * 使用 FC Web Function 注入的 RAM 短期 STS 执行单次尝试的 OSS Multipart Upload，并在失败时显式 Abort 未完成分片。
  */
 public final class OssMultipartUploader
         implements VideoPartUploader, AutoCloseable {
@@ -62,12 +63,33 @@ public final class OssMultipartUploader
 
     @Override
     public void uploadPart(long partNumber, byte[] bytes, int length) {
+        uploadPart(partNumber, bytes, length, ignored -> {
+        });
+    }
+
+    @Override
+    public void uploadPart(
+            long partNumber,
+            byte[] bytes,
+            int length,
+            VideoPartUploadProgressListener progressListener) {
         if (completed
                 || partNumber < 1L
                 || length <= 0
                 || length > bytes.length) {
             throw new IllegalArgumentException("OSS video part is invalid.");
         }
+        ProgressListener sdkProgressListener = new ProgressListener() {
+            @Override
+            public void onProgress(long increment, long transferred, long total) {
+                progressListener.onProgress(Math.min(length, Math.max(0L, transferred)));
+            }
+
+            @Override
+            public void onFinish() {
+                progressListener.onProgress(length);
+            }
+        };
         String eTag = client.uploadPart(
                         UploadPartRequest.newBuilder()
                                 .bucket(configuration.bucket())
@@ -77,6 +99,7 @@ public final class OssMultipartUploader
                                 .body(BinaryData.fromStream(
                                         new ByteArrayInputStream(bytes, 0, length),
                                         (long) length))
+                                .progressListener(sdkProgressListener)
                                 .build(),
                         ONE_ATTEMPT)
                 .eTag();

@@ -7,6 +7,17 @@ public interface VideoPartUploader {
 
     void uploadPart(long partNumber, byte[] bytes, int length);
 
+    /**
+     * 默认兼容旧实现；生产 OSS 上传器覆写该方法以交付分片内真实字节回调。
+     */
+    default void uploadPart(
+            long partNumber,
+            byte[] bytes,
+            int length,
+            VideoPartUploadProgressListener progressListener) {
+        uploadPart(partNumber, bytes, length);
+    }
+
     StoredObject complete(long expectedBytes);
 
     void compensate();

@@ -11,6 +11,7 @@ import com.example.temperate.service.user.aiconversation.attachment.AiConversati
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadResult;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadProgressAwareSession;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadSession;
 import com.example.temperate.service.user.aiconversation.attachment.config.AiConversationAttachmentProperties;
 import com.example.temperate.service.user.aiconversation.concurrency.AiConversationConcurrencyPermit;
@@ -43,6 +44,8 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalService;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationTerminalType;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputStore;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaUploadProgressPublisher;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaUploadProgress;
 import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
 import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputSnapshot;
 import com.example.temperate.service.user.aiconversation.generation.billing.AiConversationGenerationBillingTransactionService;
@@ -146,6 +149,7 @@ public final class AiConversationGenerationWorkerImpl
     private final AiConversationLeaseService leaseService;
     private final AiConversationModelClient modelClient;
     private final AiConversationGenerationOutputStore outputStore;
+    private final AiConversationMediaUploadProgressPublisher mediaUploadProgressPublisher;
     private final AiConversationProperties conversationProperties;
     private final AiConversationAsyncGenerationProperties asyncProperties;
     private final HybridBase64UrlCodec idCodec;
@@ -220,6 +224,7 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 AiConversationVideoGenerationProperties.officialDefaults(),
                 new AiConversationPersistedVideoResultCodec(objectMapper),
+                AiConversationMediaUploadProgressPublisher.noOp(),
                 compactionCoordinator);
     }
 
@@ -275,6 +280,7 @@ public final class AiConversationGenerationWorkerImpl
                 null,
                 AiConversationVideoGenerationProperties.officialDefaults(),
                 new AiConversationPersistedVideoResultCodec(objectMapper),
+                AiConversationMediaUploadProgressPublisher.noOp(),
                 compactionCoordinator);
     }
 
@@ -310,6 +316,7 @@ public final class AiConversationGenerationWorkerImpl
             AiConversationVideoObjectKeyFactory videoObjectKeyFactory,
             AiConversationVideoGenerationProperties videoProperties,
             AiConversationPersistedVideoResultCodec persistedVideoResultCodec,
+            AiConversationMediaUploadProgressPublisher mediaUploadProgressPublisher,
             AiConversationCompactionCoordinator compactionCoordinator) {
         this.controlService = Objects.requireNonNull(controlService);
         this.activeRegistry = Objects.requireNonNull(activeRegistry);
@@ -321,6 +328,7 @@ public final class AiConversationGenerationWorkerImpl
         this.leaseService = Objects.requireNonNull(leaseService);
         this.modelClient = Objects.requireNonNull(modelClient);
         this.outputStore = Objects.requireNonNull(outputStore);
+        this.mediaUploadProgressPublisher = Objects.requireNonNull(mediaUploadProgressPublisher);
         this.conversationProperties = Objects.requireNonNull(conversationProperties);
         this.asyncProperties = Objects.requireNonNull(asyncProperties);
         this.idCodec = Objects.requireNonNull(idCodec);
@@ -476,6 +484,11 @@ public final class AiConversationGenerationWorkerImpl
                             publicIdCodec.encode(generation.getLoginIdentityId()),
                             conversationPublicId,
                             publicIdCodec.encode(messageId));
+                    if (state.imageUploadSession
+                            instanceof AiConversationGeneratedUploadProgressAwareSession session) {
+                        session.setProgressListener(progress -> mediaUploadProgressPublisher
+                                .publish(generationPublicId, progress));
+                    }
                 }
             }
 
@@ -1217,6 +1230,7 @@ public final class AiConversationGenerationWorkerImpl
                                 outputIndex,
                                 AiConversationAttachment.STORAGE_FAILURE_CODE);
                         metrics.imagePersistence(uploadDuration, "failed");
+                        metrics.mediaUpload(uploadDuration, "image", "failed");
                         recordImagePersistenceDiagnostic(
                                 timingContext,
                                 outputIndex,
@@ -1233,6 +1247,7 @@ public final class AiConversationGenerationWorkerImpl
                                 outputIndex,
                                 result.attachment());
                         metrics.imagePersistence(uploadDuration, "success");
+                        metrics.mediaUpload(uploadDuration, "image", "success");
                     } else {
                         state.removeFinalImage(outputIndex);
                         state.imageUsages.remove(outputIndex);
@@ -1247,6 +1262,7 @@ public final class AiConversationGenerationWorkerImpl
                                 outputIndex,
                                 AiConversationAttachment.STORAGE_FAILURE_CODE);
                         metrics.imagePersistence(uploadDuration, "dropped");
+                        metrics.mediaUpload(uploadDuration, "image", "failed");
                     }
                     recordImagePersistenceDiagnostic(
                             timingContext,
@@ -1413,6 +1429,19 @@ public final class AiConversationGenerationWorkerImpl
         }
     }
 
+    /**
+     * 进度事件仅影响当前 SSE 展示；输出通道暂时不可用时不能反向中断已经开始的 OSS 搬运。
+     */
+    private void publishMediaUploadProgressSafely(
+            String generationPublicId,
+            AiConversationMediaUploadProgress progress) {
+        try {
+            mediaUploadProgressPublisher.publish(generationPublicId, progress);
+        } catch (RuntimeException ignored) {
+            // 最终视频附件仍由 FC 结果和数据库状态决定，临时进度允许丢失。
+        }
+    }
+
     private void freezeCompletedVideo(
             String generationPublicId,
             AiConversationGeneration generation,
@@ -1446,13 +1475,25 @@ public final class AiConversationGenerationWorkerImpl
                 generationPublicId,
                 "video_transfer_started",
                 json(Map.of("stage", "OSS_TRANSFERRING")));
-		AiConversationVideoTransferResult transferred = transferPort.transfer(
+		long videoTransferStartedNanos = System.nanoTime();
+		AiConversationVideoTransferResult transferred;
+		try {
+			transferred = transferPort.transfer(
                 new AiConversationVideoTransferCommand(
                         cn.hutool.core.lang.id.NanoId.randomNanoId(38),
                         generated.ephemeralUrl(),
                         objectKey,
                         "video/mp4",
-						videoProperties.functionCompute().maximumVideoBytes()));
+						videoProperties.functionCompute().maximumVideoBytes()),
+				progress -> publishMediaUploadProgressSafely(
+						generationPublicId, progress));
+			metrics.mediaUpload(Duration.ofNanos(
+					System.nanoTime() - videoTransferStartedNanos), "video", "success");
+		} catch (RuntimeException failure) {
+			metrics.mediaUpload(Duration.ofNanos(
+					System.nanoTime() - videoTransferStartedNanos), "video", "failed");
+			throw failure;
+		}
 		controlService.updateVideoStage(
 				generation.getId(), AiConversationVideoGenerationStage.OSS_READY);
         AiConversationAttachment attachment = AiConversationAttachment.available(

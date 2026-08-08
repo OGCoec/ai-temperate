@@ -1,0 +1,3 @@
+#!/bin/sh
+# FC custom runtime uses sh explicitly, so this bootstrap does not depend on executable bits in a Windows-built deployment package.
+exec java --add-modules jdk.httpserver -jar /code/xai-video-transfer-0.0.1-SNAPSHOT.jar

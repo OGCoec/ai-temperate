@@ -1,15 +1,19 @@
 package com.example.temperate.service.user.aiconversation.attachment.impl;
 
 import cn.hutool.core.lang.id.NanoId;
+import com.aliyun.sdk.service.oss2.progress.ProgressListener;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentFinalization;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentObjectKeyFactory;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentObjectStorage;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentProgressObjectStorage;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentService;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentUploadReference;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadResult;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadProgressAwareSession;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadProgressListener;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadSession;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreupload;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreuploadBatch;
@@ -17,6 +21,10 @@ import com.example.temperate.service.user.aiconversation.attachment.AiConversati
 import com.example.temperate.service.user.aiconversation.attachment.config.AiConversationAttachmentProperties;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaType;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaUploadProgress;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaUploadProgressThrottle;
+import com.example.temperate.service.user.aiconversation.generation.progress.AiConversationMediaUploadState;
 import io.micrometer.core.instrument.Metrics;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -34,6 +42,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -244,7 +253,7 @@ public final class AiConversationAttachmentServiceImpl
                         attachment.fileName());
                 try {
                     String sourceKey = keyFactory.objectKeyFromTemporaryLocator(attachment.url());
-                    String publicUrl = retry(() -> storage.copyToPublic(
+                    String publicUrl = retry(ignored -> storage.copyToPublic(
                             sourceKey,
                             finalKey,
                             attachment.contentType()));
@@ -315,20 +324,34 @@ public final class AiConversationAttachmentServiceImpl
     private AiConversationGeneratedUploadResult uploadGenerated(
             GeneratedUploadPlan plan,
             GeneratedUploadSession session) {
+        GeneratedUploadProgressReporter progressReporter = session.progressReporter(plan);
         if (!plan.valid()) {
             recordStorageFailure("generated");
+            progressReporter.failed();
             return failedGeneratedResult(plan);
         }
         try {
-            String publicUrl = retry(() -> storage.putPublic(
-                    plan.finalKey(),
-                    plan.bytes(),
-                    plan.contentType()));
+            String publicUrl = retry(attempt -> {
+                progressReporter.started(attempt);
+                if (storage instanceof AiConversationAttachmentProgressObjectStorage progressStorage) {
+                    return progressStorage.putPublic(
+                            plan.finalKey(),
+                            plan.bytes(),
+                            plan.contentType(),
+                            progressReporter.progressListener());
+                }
+                return storage.putPublic(
+                        plan.finalKey(),
+                        plan.bytes(),
+                        plan.contentType());
+            });
             // Session 进入中止态后不再接纳对象；晚到的 OSS 成功必须立即补偿，避免留下无人引用对象。
             if (!session.acceptCreated(plan.finalKey())) {
                 compensateCreatedObjects(List.of(plan.finalKey()));
+                progressReporter.failed();
                 return failedGeneratedResult(plan);
             }
+            progressReporter.completed();
             return new AiConversationGeneratedUploadResult(
                     plan.outputIndex(),
                     AiConversationAttachment.available(
@@ -341,6 +364,7 @@ public final class AiConversationAttachmentServiceImpl
                     plan.finalKey());
         } catch (RuntimeException exception) {
             recordStorageFailure("generated");
+            progressReporter.failed();
             return failedGeneratedResult(plan);
         }
     }
@@ -452,7 +476,7 @@ public final class AiConversationAttachmentServiceImpl
         RuntimeException last = null;
         for (int attempt = 1; attempt <= properties.finalizationAttempts(); attempt++) {
             try {
-                return action.run();
+                return action.run(attempt);
             } catch (RuntimeException exception) {
                 last = exception;
             }
@@ -563,7 +587,7 @@ public final class AiConversationAttachmentServiceImpl
      * 把一次 Generation 的槽位提交、共同截止时间和晚到 OSS 成功纳入同一补偿边界。
      */
     private final class GeneratedUploadSession
-            implements AiConversationGeneratedUploadSession {
+            implements AiConversationGeneratedUploadProgressAwareSession {
 
         private final String userPublicId;
         private final String conversationPublicId;
@@ -572,6 +596,8 @@ public final class AiConversationAttachmentServiceImpl
                 futures = new TreeMap<>();
         private final List<String> acceptedKeys = new ArrayList<>();
         private GeneratedUploadSessionState state = GeneratedUploadSessionState.OPEN;
+        private volatile AiConversationGeneratedUploadProgressListener progressListener =
+                AiConversationGeneratedUploadProgressListener.noOp();
         private long reservedBytes;
 
         private GeneratedUploadSession(
@@ -581,6 +607,24 @@ public final class AiConversationAttachmentServiceImpl
             this.userPublicId = Objects.requireNonNull(userPublicId);
             this.conversationPublicId = Objects.requireNonNull(conversationPublicId);
             this.messagePublicId = Objects.requireNonNull(messagePublicId);
+        }
+
+        @Override
+        public synchronized void setProgressListener(
+                AiConversationGeneratedUploadProgressListener progressListener) {
+            if (state != GeneratedUploadSessionState.OPEN || !futures.isEmpty()) {
+                throw new IllegalStateException(
+                        "Generated upload progress listener must be bound before submission.");
+            }
+            this.progressListener = Objects.requireNonNull(progressListener);
+        }
+
+        private GeneratedUploadProgressReporter progressReporter(GeneratedUploadPlan plan) {
+            return new GeneratedUploadProgressReporter(
+                    plan.outputIndex(),
+                    plan.bytes().length,
+                    properties.finalizationAttempts(),
+                    progressListener);
         }
 
         @Override
@@ -767,6 +811,119 @@ public final class AiConversationAttachmentServiceImpl
 
     @FunctionalInterface
     private interface StorageAction {
-        String run();
+        String run(int attempt);
+    }
+
+    /**
+     * 把 OSS SDK 的单次请求回调转换成图片槽位进度；回调发布失败不能反向中断已经开始的对象上传。
+     */
+    private static final class GeneratedUploadProgressReporter {
+
+        private final short outputIndex;
+        private final long totalBytes;
+        private final int maxAttempts;
+        private final AiConversationGeneratedUploadProgressListener listener;
+        private final AtomicLong sequence = new AtomicLong();
+        private int attempt = 1;
+        private long transferredBytes;
+        private boolean verifying;
+        private AiConversationMediaUploadProgressThrottle throttle =
+                new AiConversationMediaUploadProgressThrottle(System::currentTimeMillis);
+
+        private GeneratedUploadProgressReporter(
+                short outputIndex,
+                long totalBytes,
+                int maxAttempts,
+                AiConversationGeneratedUploadProgressListener listener) {
+            this.outputIndex = outputIndex;
+            this.totalBytes = totalBytes;
+            this.maxAttempts = maxAttempts;
+            this.listener = listener;
+        }
+
+        private void started(int attempt) {
+            this.attempt = attempt;
+            this.transferredBytes = 0L;
+            this.verifying = false;
+            // 每次实际重传都从零开始展示，不能把上一次失败的字节误当作本次已传输。
+            this.throttle = new AiConversationMediaUploadProgressThrottle(System::currentTimeMillis);
+            publish(AiConversationMediaUploadState.UPLOADING, 0L, 0, null);
+        }
+
+        private ProgressListener progressListener() {
+            return new ProgressListener() {
+                @Override
+                public void onProgress(long increment, long transferred, long total) {
+                    long safeTransferred = Math.min(totalBytes, Math.max(0L, transferred));
+                    transferredBytes = Math.max(transferredBytes, safeTransferred);
+                    publish(
+                            AiConversationMediaUploadState.UPLOADING,
+                            transferredBytes,
+                            percentage(transferredBytes),
+                            null);
+                }
+
+                @Override
+                public void onFinish() {
+                    verify();
+                }
+            };
+        }
+
+        private void completed() {
+            if (!verifying) {
+                verify();
+            }
+            publish(AiConversationMediaUploadState.COMPLETED, totalBytes, 100, null);
+        }
+
+        private void verify() {
+            verifying = true;
+            transferredBytes = totalBytes;
+            publish(AiConversationMediaUploadState.VERIFYING, totalBytes, 99, null);
+        }
+
+        private void failed() {
+            publish(
+                    AiConversationMediaUploadState.FAILED,
+                    transferredBytes,
+                    percentage(transferredBytes),
+                    AiConversationAttachment.STORAGE_FAILURE_CODE);
+        }
+
+        private int percentage(long transferred) {
+            if (totalBytes <= 0L) {
+                return 0;
+            }
+            return Math.min(99, (int) ((transferred * 100L) / totalBytes));
+        }
+
+        private void publish(
+                AiConversationMediaUploadState state,
+                long transferred,
+                Integer percent,
+                String errorCode) {
+            long candidateSequence = sequence.get() + 1L;
+            AiConversationMediaUploadProgress progress = new AiConversationMediaUploadProgress(
+                    AiConversationMediaType.IMAGE,
+                    outputIndex,
+                    attempt,
+                    maxAttempts,
+                    state,
+                    Math.min(totalBytes, Math.max(0L, transferred)),
+                    totalBytes,
+                    percent,
+                    candidateSequence,
+                    errorCode);
+            if (!throttle.shouldPublish(progress)) {
+                return;
+            }
+            sequence.incrementAndGet();
+            try {
+                listener.onProgress(progress);
+            } catch (RuntimeException ignored) {
+                // 进度只影响展示；OSS 结果仍由当前上传事务决定。
+            }
+        }
     }
 }

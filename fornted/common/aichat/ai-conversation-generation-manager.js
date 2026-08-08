@@ -32,7 +32,8 @@ function persist() {
 		storage()?.setItem(STORAGE_KEY, JSON.stringify({
 			// 中间图只属于当前页面内存，禁止把完整 Base64 写进 sessionStorage。
 			tasks: [...tasks.values()].map(task => {
-				const { previewImage, previewImages, ...persisted } = task
+				// 上传百分比只在当前页面短暂断线时保留；刷新后不得从 sessionStorage 恢复旧进度。
+				const { previewImage, previewImages, mediaUploadProgressByKey, ...persisted } = task
 				return persisted
 			}),
 			pendingRequests: [...pendingRequests.values()]

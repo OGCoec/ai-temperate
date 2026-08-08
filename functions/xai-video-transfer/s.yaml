@@ -19,12 +19,22 @@ resources:
       functionName: ${env('ALIYUN_FC_VIDEO_TRANSFER_FUNCTION_NAME')}
       # 函数职责说明不包含任何来源 URL、对象 Key 或密钥。
       description: xAI 视频到 OSS 的有界流式搬运与 MP4 元数据探测
-      # 内置 Java 11 是当前 FC 官方支持且兼容 StreamRequestHandler 的 Java 运行时。
-      runtime: java11
-      # 部署 Maven Shade 生成的独立可执行依赖包，不引用主应用模块。
-      code: ./target/xai-video-transfer-0.0.1-SNAPSHOT.jar
-      # Java 事件函数入口同时兼容原生同步 Invoke 和 HTTP Trigger 信封。
-      handler: com.example.temperate.functions.video.XaiVideoTransferHandler::handleRequest
+      # 自定义 Debian 11 运行时允许 FC Web Function 将 HTTP 流直接转发给本进程，避免事件信封缓冲整个 NDJSON 响应。
+      runtime: custom.debian11
+      # 部署 target 目录，以便同时携带 Shade 包与 bootstrap；不引用主应用模块。
+      code: ./target
+      # Web Function 通过 bootstrap 启动 Shade 包中的 HTTP Server，包内已包含 OSS 与 JSON 依赖。
+      customRuntimeConfig:
+        # FC 将公网 HTTP 请求透传给 9000 端口，并支持在一个响应中持续输出 NDJSON 帧。
+        port: 9000
+        # bootstrap 会执行 Java 11 并显式启用轻量 HTTP Server 模块。
+        command:
+          # 经 shell 启动可避免 Windows 侧构建产物丢失 bootstrap 可执行权限。
+          - sh
+          # 运行部署到 /code 的启动脚本。
+          - /code/bootstrap
+      # FC 资源模型仍要求声明 handler；自定义运行时实际以 customRuntimeConfig.command 为准，不加载该符号。
+      handler: index.handler
       # 默认五百一十二 MiB 内存可覆盖八 MiB 分片和有界三十二 MiB moov 探测。
       memorySize: 512
       # 单次同步搬运最多运行九百秒，与主业务调用超时保持一致。

@@ -18,6 +18,10 @@ import {
 	persistedImageAttachments
 } from './ai-conversation-image-generation.js'
 import {
+	initialVideoUploadProgress,
+	mergeMediaUploadProgress
+} from './ai-conversation-media-upload-progress.js'
+import {
 	asyncGenerationEnabled,
 	bindGenerationObserver,
 	getGeneration,
@@ -193,6 +197,13 @@ export async function openAiConversationStream(command, handlers = {}) {
 						item?.status === 'FAILED')
 				})
 			}
+			if (event.type === 'media_upload_progress' && generationPublicId) {
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					mediaUploadProgressByKey: mergeMediaUploadProgress(
+						current?.mediaUploadProgressByKey, event.data)
+				})
+			}
 			if (event.type === 'video_generation_progress' && generationPublicId) {
 				updateGeneration(generationPublicId, {
 					videoProgress: Math.max(0, Math.min(100,
@@ -200,7 +211,12 @@ export async function openAiConversationStream(command, handlers = {}) {
 				})
 			}
 			if (event.type === 'video_transfer_started' && generationPublicId) {
-				updateGeneration(generationPublicId, { videoTransferring: true })
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					videoTransferring: true,
+					mediaUploadProgressByKey: mergeMediaUploadProgress(
+						current?.mediaUploadProgressByKey, initialVideoUploadProgress())
+				})
 			}
 			if ((event.type === 'video_ready' || event.type === 'video_failed')
 				&& generationPublicId) {
@@ -410,6 +426,13 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 						item?.status === 'FAILED')
 				})
 			}
+			if (event.type === 'media_upload_progress') {
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					mediaUploadProgressByKey: mergeMediaUploadProgress(
+						current?.mediaUploadProgressByKey, event.data)
+				})
+			}
 			if (event.type === 'video_generation_progress') {
 				updateGeneration(generationPublicId, {
 					videoProgress: Math.max(0, Math.min(100,
@@ -417,7 +440,12 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 				})
 			}
 			if (event.type === 'video_transfer_started') {
-				updateGeneration(generationPublicId, { videoTransferring: true })
+				const current = getGeneration(generationPublicId)
+				updateGeneration(generationPublicId, {
+					videoTransferring: true,
+					mediaUploadProgressByKey: mergeMediaUploadProgress(
+						current?.mediaUploadProgressByKey, initialVideoUploadProgress())
+				})
 			}
 			if (event.type === 'video_ready' || event.type === 'video_failed') {
 				updateGeneration(generationPublicId, {

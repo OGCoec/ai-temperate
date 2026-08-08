@@ -80,21 +80,23 @@ final class FcVideoSafetyContractTest {
     }
 
     @Test
-    void obtainsTemporaryOssCredentialsOnlyFromFcExecutionContext()
+    void obtainsTemporaryOssCredentialsOnlyFromFcWebFunctionEnvironment()
             throws IOException {
-        String handler = source("XaiVideoTransferHandler.java");
+        String handler = source("XaiVideoTransferWebServer.java");
         String ossUploader = source("OssMultipartUploader.java");
 
-        assertTrue(handler.contains("context.getExecutionCredentials()"));
-        assertTrue(handler.contains("executionCredentials.getAccessKeyId()"));
-        assertTrue(handler.contains("executionCredentials.getAccessKeySecret()"));
-        assertTrue(handler.contains("executionCredentials.getSecurityToken()"));
+        assertTrue(handler.contains("ALIBABA_CLOUD_ACCESS_KEY_ID"));
+        assertTrue(handler.contains("ALIBABA_CLOUD_ACCESS_KEY_SECRET"));
+        assertTrue(handler.contains("ALIBABA_CLOUD_SECURITY_TOKEN"));
+        assertTrue(handler.contains("System.getenv(TEMPORARY_ACCESS_KEY_ID)"));
+        assertTrue(handler.contains("System.getenv(TEMPORARY_ACCESS_KEY_SECRET)"));
+        assertTrue(handler.contains("System.getenv(TEMPORARY_SECURITY_TOKEN)"));
         assertTrue(handler.contains("new StaticCredentialsProvider("));
         assertFalse(ossUploader.contains("EnvironmentVariableCredentialsProvider"));
     }
 
     @Test
-    void targetsTheSupportedBuiltInJava11Runtime() throws IOException {
+    void targetsTheSupportedCustomJava11WebRuntime() throws IOException {
         String pom = Files.readString(Path.of("pom.xml"));
         String deployment = Files.readString(Path.of("s.yaml"));
         List<String> mainSources;
@@ -111,12 +113,15 @@ final class FcVideoSafetyContractTest {
         }
 
         assertTrue(pom.contains("<maven.compiler.release>11</maven.compiler.release>"));
-        assertTrue(deployment.contains("runtime: java11"));
+        assertTrue(deployment.contains("runtime: custom.debian11"));
         assertTrue(deployment.contains("memorySize: 512"));
         assertTrue(deployment.contains("timeout: 900"));
-        assertTrue(deployment.contains(
-                "handler: com.example.temperate.functions.video."
-                        + "XaiVideoTransferHandler::handleRequest"));
+        assertTrue(deployment.contains("port: 9000"));
+        assertTrue(deployment.contains("- /code/bootstrap"));
+        assertTrue(Files.readString(Path.of("bootstrap"))
+                .contains("--add-modules jdk.httpserver"));
+        assertTrue(pom.contains(
+                "com.example.temperate.functions.video.XaiVideoTransferWebServer"));
         assertFalse(mainSources.stream().anyMatch(source ->
                 source.contains(" record ")
                         || source.contains("public record ")

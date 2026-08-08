@@ -153,8 +153,12 @@
 									:key="attachment.attachmentId"
 									class="attachment-card"
 									:class="{ 'is-video': previewVideo(attachment) }"
-									:style="previewVideo(attachment) ? generatedVideoCardStyle(attachment, message.videoMetadata) : null"
 								>
+									<view
+										class="attachment-media-frame"
+										:class="{ 'is-video': previewVideo(attachment) }"
+										:style="previewVideo(attachment) ? generatedVideoCardStyle(attachment, message.videoMetadata) : null"
+									>
 									<view
 										v-if="attachment.imageSlot && !attachment.url"
 										class="image-output-slot"
@@ -187,6 +191,24 @@
 									<text v-if="attachment.volatilePreview && attachment.url" class="image-preview-state">
 										{{ attachment.phase === 'FINAL' ? '最终图片正在保存到 OSS…' : '生成中的完整预览，仅最终图片会保存' }}
 									</text>
+									</view>
+									<user-media-upload-progress
+										v-if="mediaUploadProgressForAttachment(message, attachment)"
+										:progress="mediaUploadProgressForAttachment(message, attachment)"
+										@dismiss="dismissMediaUploadProgress(message, mediaUploadProgressForAttachment(message, attachment))"
+									/>
+								</view>
+							</view>
+							<view v-if="videoUploadProgress(message) && !hasRenderedVideo(message)" class="attachment-grid media-upload-pending-grid">
+								<view class="attachment-card is-video media-upload-pending-card">
+									<view class="attachment-media-frame is-video media-upload-video-placeholder" role="status">
+										<uni-icons type="videocam" size="28" color="#8fdcbe" aria-hidden="true" />
+										<text>视频正在保存到 OSS</text>
+									</view>
+									<user-media-upload-progress
+										:progress="videoUploadProgress(message)"
+										@dismiss="dismissMediaUploadProgress(message, videoUploadProgress(message))"
+									/>
 								</view>
 							</view>
 							<text v-if="message.imageOutputSummary" class="image-output-summary" role="status">{{ message.imageOutputSummary }}</text>
@@ -411,6 +433,7 @@
 	} from '@/common/aichat/ai-conversation-stream.js'
 	import {
 		asyncGenerationEnabled,
+		getGeneration,
 		listActiveGenerations,
 		listPendingGenerationRequests,
 		registerPendingGeneration,
@@ -447,6 +470,12 @@
 		supportedImageAspectOptions,
 		upsertImageOutputAttachment
 	} from '@/common/aichat/ai-conversation-image-generation.js'
+	import {
+		initialVideoUploadProgress,
+		mediaUploadProgressKey,
+		mergeMediaUploadProgress,
+		removeMediaUploadProgress
+	} from '@/common/aichat/ai-conversation-media-upload-progress.js'
 	import {
 		modelSupportsVideoGeneration,
 		normalizeVideoDuration,
@@ -505,6 +534,7 @@
 	import UserConversationTurnRail from './user-conversation-turn-rail.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
+	import UserMediaUploadProgress from './user-media-upload-progress.vue'
 	import UserSourceChip from './user-source-chip.vue'
 	import {
 		appendLocalMessage,
@@ -536,7 +566,7 @@
 	const REASONING_EFFORT_STORAGE_KEY = 'ait.user.ai.reasoning-effort.v1'
 	const IMAGE_ASPECT_STORAGE_KEY = 'ait.user.ai.image-aspect.v1'
 	const IMAGE_OUTPUT_COUNT_STORAGE_KEY = 'ait.user.ai.image-output-count.v1'
-	const GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX = 1080
+	const GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX = 720
 	const GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX = 1080
 	const GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO = 0.7
 	const GENERATED_VIDEO_MAX_WIDTH_PX = 720
@@ -684,7 +714,7 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserSourceChip },
+		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserMediaUploadProgress, UserSourceChip },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -2185,9 +2215,51 @@
 					}
 				}
 			},
+			mediaUploadProgressForAttachment(message, attachment) {
+				const mediaType = this.previewVideo(attachment) ? 'VIDEO' : 'IMAGE'
+				const key = mediaUploadProgressKey({
+					mediaType,
+					outputIndex: mediaType === 'VIDEO' ? 0 : Number(attachment?.outputIndex || 0)
+				})
+				return key ? message?.mediaUploadProgressByKey?.[key] || null : null
+			},
+			videoUploadProgress(message) {
+				return message?.mediaUploadProgressByKey?.['video:0'] || null
+			},
+			hasRenderedVideo(message) {
+				return (message?.responseAttachments || []).some(attachment => this.previewVideo(attachment))
+			},
+			applyMediaUploadProgress(localId, progress) {
+				const current = this.messages.find(message => message.localId === localId)
+				if (!current) return
+				this.applyStore(patchLocalMessage(localId, {
+					mediaUploadProgressByKey: mergeMediaUploadProgress(
+						current.mediaUploadProgressByKey, progress)
+				}))
+			},
+			dismissMediaUploadProgress(message, progress) {
+				if (progress?.state !== 'COMPLETED' || !message?.localId) return
+				const key = mediaUploadProgressKey(progress)
+				if (!key) return
+				this.applyStore(patchLocalMessage(message.localId, {
+					mediaUploadProgressByKey: removeMediaUploadProgress(
+						message.mediaUploadProgressByKey, key)
+				}))
+				const task = getGeneration(this.activeGenerationPublicId)
+				if (task?.mediaUploadProgressByKey?.[key]) {
+					updateGeneration(this.activeGenerationPublicId, {
+						mediaUploadProgressByKey: removeMediaUploadProgress(
+							task.mediaUploadProgressByKey, key)
+					})
+				}
+			},
 			onStreamEvent(localId, event) {
 				// 后台任务由全局 Manager 持续收集；旧会话事件不能覆盖用户当前打开会话的局部状态。
 				if (asyncGenerationEnabled() && localId !== this.activeLocalId) return
+				if (event.type === 'media_upload_progress') {
+					this.applyMediaUploadProgress(localId, event.data)
+					return
+				}
 				if (event.type === 'accepted') {
 					this.applyStore(setAcceptedConversation(event.data.conversationPublicId))
 					this.activeResearchSession?.bindConversation?.(
@@ -2222,6 +2294,7 @@
 						modelActivity: { phase: 'VIDEO_GENERATION', progress }
 					}))
 				} else if (event.type === 'video_transfer_started') {
+					this.applyMediaUploadProgress(localId, initialVideoUploadProgress())
 					this.applyStore(patchLocalMessage(localId, {
 						streaming: false,
 						saving: true,
@@ -3005,6 +3078,7 @@
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: task.messagePublicId || '',
 							responseText: task.responseText || '',
+							mediaUploadProgressByKey: task.mediaUploadProgressByKey || {},
 							...(Array.isArray(task.previewImages) && task.previewImages.length
 								? { responseAttachments: task.previewImages }
 								: task.previewImage
@@ -3091,13 +3165,18 @@
 	.message-error, .message-warning, .composer-error { color: #f2a24d; font-size: 13px; }
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
-	.attachment-card { min-width: 0; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
-	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; max-height: min(68vh, 1080px); aspect-ratio: 16 / 9; justify-self: center; background: #000; }
+	.attachment-card { min-width: 0; overflow: hidden; display: flex; flex-direction: column; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
+	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; justify-self: center; background: #000; }
+	.attachment-media-frame { min-width: 0; overflow: hidden; }
+	.attachment-media-frame.is-video { width: 100%; max-width: 720px; max-height: min(68vh, 1080px); margin: 0 auto; background: #000; }
+	.media-upload-pending-grid { grid-template-columns: minmax(0, 1fr); }
+	.media-upload-pending-card { min-height: 0; }
+	.media-upload-video-placeholder { min-height: clamp(160px, 38vw, 405px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8fdcbe; font-size: 13px; }
 	.image-output-slot { min-height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #8fdcbe; font-size: 12px; text-align: center; }
 	.image-output-slot.is-failed { color: #ff9b94; background: rgba(125, 43, 39, .12); }
 	.image-output-summary { display: block; margin-top: 9px; color: #a9b5af; font-size: 12px; }
 	.attachment-image { width: 100%; height: 180px; display: block; }
-	.attachment-video { width: 100%; height: 100%; margin: 0 auto; display: block; object-fit: contain; background: #000; }
+	.attachment-video { width: 100%; height: 100%; max-height: min(68vh, 1080px); margin: 0 auto; display: block; object-fit: contain; background: #000; }
 	.attachment-image.generated-response-image { width: auto; max-width: 100%; height: auto; margin: 0 auto; display: block; }
 	.image-preview-state { display: block; padding: 8px 10px; color: #8fdcbe; font-size: 11px; line-height: 1.45; }
 	.image-count-picker { min-height: 34px; margin: 0; padding: 0 10px; border-radius: 10px; color: #cbd4cf; font-size: 12px; }

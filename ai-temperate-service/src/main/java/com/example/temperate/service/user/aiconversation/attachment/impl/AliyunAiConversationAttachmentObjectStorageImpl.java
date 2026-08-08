@@ -1,8 +1,10 @@
 package com.example.temperate.service.user.aiconversation.attachment.impl;
 
 import com.aliyun.sdk.service.oss2.exceptions.ServiceException;
+import com.aliyun.sdk.service.oss2.progress.ProgressListener;
 import com.example.temperate.common.aliyun.AliyunOssUtils;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentObjectStorage;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentProgressObjectStorage;
 import com.example.temperate.service.user.aiconversation.attachment.config.AiConversationAttachmentProperties;
 import java.util.Map;
 import java.util.Objects;
@@ -13,7 +15,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public final class AliyunAiConversationAttachmentObjectStorageImpl
-        implements AiConversationAttachmentObjectStorage {
+        implements AiConversationAttachmentObjectStorage,
+        AiConversationAttachmentProgressObjectStorage {
 
     private static final String IMMUTABLE_CACHE_CONTROL =
             "public, max-age=31536000, immutable";
@@ -110,6 +113,15 @@ public final class AliyunAiConversationAttachmentObjectStorageImpl
             String destinationObjectKey,
             byte[] bytes,
             String contentType) {
+        return putPublic(destinationObjectKey, bytes, contentType, null);
+    }
+
+    @Override
+    public String putPublic(
+            String destinationObjectKey,
+            byte[] bytes,
+            String contentType,
+            ProgressListener progressListener) {
         try {
             ossUtils.putObjectBytes(
                     properties.bucket(),
@@ -121,7 +133,8 @@ public final class AliyunAiConversationAttachmentObjectStorageImpl
                     IMMUTABLE_CACHE_CONTROL,
                     true,
                     properties.uploadConnectTimeout(),
-                    properties.uploadReadWriteTimeout());
+                    properties.uploadReadWriteTimeout(),
+                    progressListener);
             return properties.publicBaseUrl() + "/" + destinationObjectKey;
         } catch (RuntimeException exception) {
             throw map("OSS upload failed", exception);

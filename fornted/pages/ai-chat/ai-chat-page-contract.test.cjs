@@ -79,16 +79,15 @@ test('multi image controls use capability checks, one downstream stream and boun
 	assert.equal((stream.match(/openGenerationOnce\(/g) || []).length >= 1, true)
 })
 
-test('generated response images use responsive 1080px bounds without changing uploaded media thumbnails', () => {
+test('generated response images use responsive 720px by 1080px bounds without changing uploaded media thumbnails', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(page,
 		/message\.contentAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
 	assert.match(page,
-		/message\.responseAttachments\?\.length[\s\S]{0,900}<image[^>]*class="attachment-image generated-response-image"[^>]*:style="generatedResponseImageStyle\(attachment\)"[^>]*@load="handleGeneratedResponseImageLoad\(attachment, \$event\)"[^>]*mode="widthFix"/)
-	assert.match(page,
-		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
-	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*=\s*1080/)
+		/message\.responseAttachments\?\.length[\s\S]{0,1400}<image[^>]*class="attachment-image generated-response-image"[^>]*:style="generatedResponseImageStyle\(attachment\)"[^>]*@load="handleGeneratedResponseImageLoad\(attachment, \$event\)"[^>]*mode="widthFix"/)
+	assert.match(page, /\.attachment-image\s*\{[^}]*height:\s*180px/)
+	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*=\s*720/)
 	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX\s*=\s*1080/)
 	assert.match(page, /GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO\s*=\s*0\.7/)
 	assert.match(page,

@@ -11,6 +11,7 @@ import com.aliyun.sdk.service.oss2.OSSClient;
 import com.aliyun.sdk.service.oss2.models.PresignResult;
 import com.aliyun.sdk.service.oss2.models.PutObjectRequest;
 import com.aliyun.sdk.service.oss2.models.PutObjectResult;
+import com.aliyun.sdk.service.oss2.progress.ProgressListener;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -48,6 +49,33 @@ class AliyunOssUtilsTest {
         assertThat(request.getValue().cacheControl())
                 .isEqualTo("public, max-age=0, must-revalidate");
         assertThat(request.getValue().body().toBytes()).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void bindsSuppliedProgressListenerToTheActualPutRequest() {
+        OSSClient client = mock(OSSClient.class);
+        when(client.putObject(any(PutObjectRequest.class)))
+                .thenReturn(PutObjectResult.newBuilder().build());
+        AliyunOssUtils utils = new AliyunOssUtils(
+                (region, endpoint, connectTimeout, readWriteTimeout) -> client);
+        ProgressListener listener = mock(ProgressListener.class);
+
+        utils.putObjectBytes(
+                "ihaveaplan",
+                "us-west-1",
+                "https://oss-us-west-1.aliyuncs.com",
+                "ai-temperate/messages/AAAAAAAAJxE/generated.webp",
+                new byte[] {1, 2, 3},
+                "image/webp",
+                "public, max-age=31536000, immutable",
+                true,
+                Duration.ofSeconds(5),
+                Duration.ofSeconds(30),
+                listener);
+
+        ArgumentCaptor<PutObjectRequest> request = ArgumentCaptor.forClass(PutObjectRequest.class);
+        verify(client).putObject(request.capture());
+        assertThat(request.getValue().progressListener()).isSameAs(listener);
     }
 
     @Test
