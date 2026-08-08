@@ -145,12 +145,16 @@
 	}
 
 	.recent-content {
+		width: 100%;
+		min-width: 0;
 		min-height: 0;
 		flex: 1;
 		display: flex;
 	}
 
 	.recent-list {
+		width: 100%;
+		min-width: 0;
 		min-height: 0;
 		height: 100%;
 		flex: 1;
@@ -232,6 +236,25 @@
 
 	.recent-more {
 		width: 100%;
+	}
+
+	@media screen and (min-width: 768px) {
+		.recent-toggle {
+			padding-right: calc(12px + var(--sidebar-inline-padding, 0px));
+		}
+
+		.conversation-row {
+			margin-right: calc(4px + var(--sidebar-inline-padding, 0px));
+		}
+
+		.recent-status,
+		.recent-error {
+			padding-right: calc(12px + var(--sidebar-inline-padding, 0px));
+		}
+
+		.recent-more {
+			padding-right: calc(8px + var(--sidebar-inline-padding, 0px));
+		}
 	}
 
 	.recent-toggle:focus-visible,

@@ -31,6 +31,11 @@ public interface AiConversationGenerationPayloadMapper {
             @Param("ephemeralOrdinal") long ephemeralOrdinal,
             @Param("now") OffsetDateTime now);
 
+    int bindUpstreamRequestId(
+            @Param("generationId") byte[] generationId,
+            @Param("upstreamRequestId") String upstreamRequestId,
+            @Param("now") OffsetDateTime now);
+
     int deleteByGenerationIds(
             @Param("generationIds") List<byte[]> generationIds);
 
@@ -42,6 +47,8 @@ public interface AiConversationGenerationPayloadMapper {
             @Param("completionTokens") Long completionTokens,
             @Param("cachedPromptTokens") Long cachedPromptTokens,
             @Param("reasoningTokens") Long reasoningTokens,
+            @Param("providerCostTicks") Long providerCostTicks,
+            @Param("meteringEvidenceJson") String meteringEvidenceJson,
             @Param("modelFinishReason") String modelFinishReason,
             @Param("upstreamRequestId") String upstreamRequestId,
             @Param("now") OffsetDateTime now);

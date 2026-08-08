@@ -1,0 +1,116 @@
+import AudioFormat from 'android.media.AudioFormat'
+import AudioRecord from 'android.media.AudioRecord'
+import MediaRecorder from 'android.media.MediaRecorder'
+import ByteBuffer from 'java.nio.ByteBuffer'
+import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import Thread from 'java.lang.Thread'
+import { UTSAndroid } from 'io.dcloud.uts'
+
+import {
+  AitVoicePermissionOptions,
+  AitVoiceRecorderFailure,
+  AitVoiceRecorderOptions,
+  AitVoiceRecorderSession
+} from '../interface.uts'
+
+const RECORD_AUDIO = 'android.permission.RECORD_AUDIO'
+const SAMPLE_RATE = 16000
+const BYTES_PER_FRAME = 3200
+
+function failure(code: string, message: string): AitVoiceRecorderFailure {
+  return { code, message }
+}
+
+/**
+ * 使用系统权限 API 而不是页面层模拟授权，确保 Android 拒绝状态与真实录音权限一致。
+ */
+export function requestRecordPermission(options: AitVoicePermissionOptions): void {
+  const activity = UTSAndroid.getUniActivity()
+  if (activity == null) {
+    options.onDenied(false)
+    return
+  }
+  const permissions = [RECORD_AUDIO]
+  if (UTSAndroid.checkSystemPermissionGranted(activity, permissions)) {
+    options.onGranted()
+    return
+  }
+  UTSAndroid.requestSystemPermission(
+    activity,
+    permissions,
+    (allRight: boolean, _: string[]) => {
+      if (allRight) options.onGranted()
+      else options.onDenied(false)
+    },
+    (doNotAskAgain: boolean, _: string[]) => options.onDenied(doNotAskAgain))
+}
+
+/**
+ * AudioRecord 直接产出目标 PCM，避免经过有损容器编码后再解码造成延迟和额外复制。
+ */
+export function startRecording(options: AitVoiceRecorderOptions): AitVoiceRecorderSession {
+  const running = new AtomicBoolean(true)
+  const stopped = new AtomicBoolean(false)
+  const minimumBuffer = AudioRecord.getMinBufferSize(
+    SAMPLE_RATE,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT)
+  const nativeBufferBytes = Math.max(BYTES_PER_FRAME * 4, minimumBuffer).toInt()
+  const recorder = new AudioRecord(
+    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    SAMPLE_RATE,
+    AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_16BIT,
+    nativeBufferBytes)
+
+  const releaseRecorder = () => {
+    if (!stopped.compareAndSet(false, true)) return
+    running.set(false)
+    try { recorder.stop() } catch (_: Throwable) {}
+    try { recorder.release() } catch (_: Throwable) {}
+    options.onStopped()
+  }
+
+  if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+    releaseRecorder()
+    options.onError(failure('VOICE_RECORDER_FAILED', 'Android 录音设备初始化失败。'))
+    return { stop: releaseRecorder }
+  }
+
+  const worker = new Thread(() => {
+    try {
+      recorder.startRecording()
+      if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+        options.onError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风未进入录音状态。'))
+        return
+      }
+      options.onStarted()
+      const buffer = ByteArray(BYTES_PER_FRAME)
+      while (running.get()) {
+        const length = recorder.read(buffer, 0, buffer.size)
+        if (length > 0) {
+          // slice 把容量限制为本次真实读取长度，禁止把上一帧残留字节发送给服务端。
+          const byteBuffer = ByteBuffer.wrap(buffer, 0, length).slice()
+          options.onFrame(ArrayBuffer.fromByteBuffer(byteBuffer))
+        } else if (length < 0 && running.get()) {
+          options.onError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风读取失败。'))
+          return
+        }
+      }
+    } catch (_: Throwable) {
+      if (running.get()) options.onError(failure('VOICE_RECORDER_FAILED', 'Android 录音过程异常。'))
+    } finally {
+      releaseRecorder()
+    }
+  })
+  worker.setName('ait-voice-pcm-recorder')
+  worker.start()
+
+  return {
+    stop: () => {
+      running.set(false)
+      try { recorder.stop() } catch (_: Throwable) {}
+      worker.interrupt()
+    }
+  }
+}

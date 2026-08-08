@@ -16,6 +16,7 @@ import com.example.temperate.service.user.aiconversation.generation.AiConversati
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationDispatchEvent;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationObserverStatus;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStart;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationStage;
 import com.example.temperate.service.user.aiconversation.generation.AiConversationGenerationStatus;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationDetachedEvent;
 import com.example.temperate.service.user.aiconversation.generation.input.AiConversationGenerationInputCodec;
@@ -81,7 +82,7 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
                         command.conversationId(),
                         command.model(),
                         command.idempotencyDigest(),
-                        command.estimatedPromptTokens()));
+                        command.metering()));
         if (reservation.replay()) {
             AiConversationGeneration existing = generationMapper
                     .findOwnedByIdempotencyDigest(
@@ -116,7 +117,9 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
         generation.setUsageId(reservation.usageId());
         generation.setIdempotencyKeyDigest(command.idempotencyDigest());
         generation.setModelId(command.model().id());
-        generation.setGenerationStatus(AiConversationGenerationStatus.QUEUED.code());
+		generation.setGenerationStatus(AiConversationGenerationStatus.QUEUED.code());
+		generation.setVideoStage(command.videoGeneration() == null
+				? null : AiConversationVideoGenerationStage.QUEUED.name());
         // 事务提交与首个 SSE Observer 建立之间存在进程崩溃窗口，初始必须按失联处理并让真实 attach 使 epoch 失效。
         generation.setObserverStatus(AiConversationGenerationObserverStatus.DETACHED.code());
         generation.setObserverEpoch(0L);
@@ -140,8 +143,12 @@ public final class AiConversationGenerationCreationTransactionServiceImpl
         payload.setInputText(command.input().text());
         // 图片控制参数与附件共用现有 JSONB 版本化信封，禁止为媒体内容新增字段或把 Base64 写入数据库。
         payload.setInputAttachmentsJson(inputCodec.encode(
-                command.input().attachments(), command.imageGeneration()));
+                command.input().attachments(),
+                command.imageGeneration(),
+                command.videoGeneration(),
+                command.webSearchMode()));
         payload.setReasoningEffort(command.reasoningEffort());
+        payload.setMeteringBasis(command.metering().basis().code());
         payload.setUpdatedAt(now);
         if (payloadMapper.insert(payload) != 1) {
             throw new IllegalStateException("AI Generation payload insert did not affect one row.");

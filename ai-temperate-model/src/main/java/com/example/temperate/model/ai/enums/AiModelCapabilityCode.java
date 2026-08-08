@@ -20,7 +20,8 @@ public enum AiModelCapabilityCode {
     AUDIO_EDIT,
     VIDEO_INPUT,
     VIDEO_GENERATION,
-    VIDEO_EDIT;
+    VIDEO_EDIT,
+    VIDEO_EXTENSION;
 
     public static AiModelCapabilityCode fromExternalCode(String value) {
         if (value == null || value.isBlank()) {

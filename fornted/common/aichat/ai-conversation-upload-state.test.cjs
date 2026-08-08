@@ -98,3 +98,44 @@ test('send gate explains uploading, failed and incompatible blockers', async () 
 		generating: false
 	}).allowed, true)
 })
+
+test('image edit mode accepts PNG JPEG and WebP without IMAGE_INPUT capability', async () => {
+	const state = await loadState()
+	const model = { capabilities: ['IMAGE_GENERATION', 'IMAGE_EDIT'] }
+	for (const contentType of ['image/png', 'image/jpeg', 'image/webp']) {
+		assert.equal(state.deriveSendGate({
+			model,
+			text: 'edit this',
+			attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED, contentType)],
+			generating: false,
+			imageEditing: true
+		}).allowed, true)
+	}
+	assert.match(state.deriveSendGate({
+		model,
+		text: 'edit this',
+		attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED, 'image/svg+xml')],
+		generating: false,
+		imageEditing: true
+	}).reason, /PNG、JPEG 和 WebP/)
+})
+
+test('media operation delegates media compatibility to its dedicated mode gate', async () => {
+	const state = await loadState()
+	const model = { capabilities: ['VIDEO_GENERATION'] }
+
+	assert.equal(state.deriveSendGate({
+		model,
+		text: 'animate this image',
+		attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADED)],
+		generating: false,
+		mediaOperation: true
+	}).allowed, true)
+	assert.match(state.deriveSendGate({
+		model,
+		text: 'animate this image',
+		attachments: [attachment(state.ATTACHMENT_UPLOAD_STATES.UPLOADING)],
+		generating: false,
+		mediaOperation: true
+	}).reason, /正在上传/)
+})

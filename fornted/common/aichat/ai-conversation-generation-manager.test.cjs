@@ -73,10 +73,39 @@ test('keeps image previews in page memory without persisting Base64 to session s
 	manager.clearGenerationManager()
 	manager.registerGeneration({ generationPublicId: 'generation-image' })
 	manager.updateGeneration('generation-image', {
-		previewImage: { url: 'data:image/webp;base64,YWJj', volatilePreview: true }
+		previewImages: [
+			{ outputIndex: 0, url: 'data:image/webp;base64,YWJj', volatilePreview: true },
+			{ outputIndex: 1, url: 'data:image/webp;base64,REVG', volatilePreview: true }
+		]
 	})
 
-	assert.equal(manager.getGeneration('generation-image').previewImage.volatilePreview, true)
-	assert.equal([...values.values()].some(value => value.includes('YWJj')), false)
+	assert.equal(manager.getGeneration('generation-image').previewImages.length, 2)
+	assert.equal([...values.values()].some(value => value.includes('YWJj') || value.includes('REVG')), false)
 	delete globalThis.sessionStorage
+})
+
+test('clears terminal Base64 previews while preserving canonical OSS attachments', async () => {
+	const manager = await loadManager()
+	manager.clearGenerationManager()
+	manager.registerGeneration({ generationPublicId: 'generation-image-terminal' })
+	manager.updateGeneration('generation-image-terminal', {
+		previewImages: [{
+			outputIndex: 0,
+			url: 'data:image/png;base64,YWJj',
+			persistedUrl: 'https://oss.example.test/image.png'
+		}],
+		responseAttachments: [{
+			outputIndex: 0,
+			url: 'https://oss.example.test/image.png'
+		}]
+	})
+
+	manager.markGenerationTerminal('generation-image-terminal', 'COMPLETED')
+
+	const terminal = manager.getGeneration('generation-image-terminal')
+	assert.deepEqual(terminal.previewImages, [])
+	assert.equal(
+		terminal.responseAttachments[0].url,
+		'https://oss.example.test/image.png'
+	)
 })

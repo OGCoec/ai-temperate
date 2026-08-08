@@ -19,7 +19,8 @@
         <result property="cancelSource" column="cancel_source"/>
         <result property="terminalType" column="terminal_type"/>
         <result property="terminalReason" column="terminal_reason"/>
-        <result property="terminalVersion" column="terminal_version"/>
+		<result property="terminalVersion" column="terminal_version"/>
+		<result property="videoStage" column="video_stage"/>
         <result property="createdAt" column="created_at"/>
         <result property="startedAt" column="started_at"/>
         <result property="detachedAt" column="detached_at"/>
@@ -33,7 +34,7 @@
         id, login_identity_id, conversation_id, usage_id,
         idempotency_key_digest, model_id, generation_status,
         observer_status, observer_epoch, owner_instance_id,
-        cancel_source, terminal_type, terminal_reason, terminal_version,
+		cancel_source, terminal_type, terminal_reason, terminal_version, video_stage,
         created_at, started_at, detached_at, cancel_requested_at,
         terminal_at, settled_at, updated_at
     </sql>
@@ -43,13 +44,14 @@
         INSERT INTO ai_conversation_generation (
             id, login_identity_id, conversation_id, usage_id,
             idempotency_key_digest, model_id, generation_status,
-            observer_status, observer_epoch, detached_at, created_at, updated_at
+			observer_status, observer_epoch, detached_at, video_stage, created_at, updated_at
         ) VALUES (
             #{id,jdbcType=BINARY}, #{loginIdentityId,jdbcType=BIGINT},
             #{conversationId,jdbcType=BINARY}, #{usageId,jdbcType=BINARY},
             #{idempotencyKeyDigest,jdbcType=BINARY}, #{modelId,jdbcType=BIGINT},
             #{generationStatus,jdbcType=SMALLINT}, #{observerStatus,jdbcType=SMALLINT},
-            #{observerEpoch,jdbcType=BIGINT}, #{detachedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+			#{observerEpoch,jdbcType=BIGINT}, #{detachedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+			#{videoStage,jdbcType=VARCHAR},
             #{createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         )
@@ -209,6 +211,8 @@
     <update id="completeBilling">
         UPDATE ai_conversation_generation
         SET generation_status = #{finalStatus,jdbcType=SMALLINT},
+            terminal_reason = COALESCE(
+                #{terminalReason,jdbcType=VARCHAR}, terminal_reason),
             settled_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             updated_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         WHERE id = #{generationId,jdbcType=BINARY}
@@ -227,5 +231,11 @@
           <foreach collection="expectedStatuses" item="status" open="(" separator="," close=")">
               #{status,jdbcType=SMALLINT}
           </foreach>
-    </update>
+	</update>
+
+	<update id="updateVideoStage">
+		UPDATE ai_conversation_generation
+		SET video_stage = #{videoStage,jdbcType=VARCHAR}
+		WHERE id = #{generationId,jdbcType=BINARY}
+	</update>
 </mapper>

@@ -93,10 +93,10 @@ public record NetworkRiskProperties(
         return secureOrigin(ip2LocationBaseUrl) && secureOrigin(ipingBaseUrl);
     }
 
-    @AssertTrue(message = "WebRTC probe settings must use the fixed STUN order and a fifteen second timeout")
+    @AssertTrue(message = "WebRTC settings must use the fixed STUN order and a report window no longer than fifteen seconds")
     public boolean isWebRtcConfigValid() {
         return webRtc != null
-                && Duration.ofSeconds(15).equals(webRtc.probeTimeout())
+                && webRtc.pendingWindow().compareTo(Duration.ofSeconds(15)) <= 0
                 && webRtc.maxReportedIps() == 8
                 && webRtc.stunUrls().stream().map(URI::toString).toList()
                         .equals(REQUIRED_STUN_URLS);
@@ -159,19 +159,29 @@ public record NetworkRiskProperties(
      * 约束客户端 WebRTC 探测的固定 STUN 清单、有界等待时间、报告数量和独立加密密钥。
      */
     public record WebRtc(
+            @NotNull Duration startGrace,
             @NotNull Duration probeTimeout,
+            @NotNull Duration reportGrace,
             @NotNull List<@NotNull URI> stunUrls,
             @Min(1) @Max(32) int maxReportedIps,
             String ipEncryptionKeyBase64) {
 
         public WebRtc {
+            requirePositive(startGrace, "webRtc.startGrace");
             requirePositive(probeTimeout, "webRtc.probeTimeout");
+            requirePositive(reportGrace, "webRtc.reportGrace");
             stunUrls = stunUrls == null ? List.of() : List.copyOf(stunUrls);
+        }
+
+        public Duration pendingWindow() {
+            return probeTimeout.plus(reportGrace);
         }
 
         @Override
         public String toString() {
             return "WebRtc[probeTimeout=" + probeTimeout
+                    + ", startGrace=" + startGrace
+                    + ", reportGrace=" + reportGrace
                     + ", stunUrls=" + stunUrls
                     + ", maxReportedIps=" + maxReportedIps
                     + ", ipEncryptionKeyBase64=redacted]";

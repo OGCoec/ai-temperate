@@ -10,6 +10,7 @@ import com.example.temperate.service.admin.session.AdminSessionStore;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.RiskSessionType;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
+import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -84,7 +85,7 @@ public final class RedisAdminSessionStore implements AdminSessionStore {
                 and preauth[3] == 'ANONYMOUS'
                 and preauth[4] == 'NONE'
                 and (not preauth[5] or preauth[5] == '')
-            if preauth[1] ~= '4'
+            if preauth[1] ~= ARGV[11]
                 or preauth[2] ~= ARGV[5]
                 or preauth[6] ~= ARGV[8]
                 or (not alreadyBound and not anonymousRecovery) then
@@ -226,7 +227,8 @@ public final class RedisAdminSessionStore implements AdminSessionStore {
                     binding.sessionRefDigest().value(),
                     binding.deviceDigest().value(),
                     Long.toString(binding.ttl().toMillis()),
-                    binding.promoteAnonymous() ? "1" : "0");
+                    binding.promoteAnonymous() ? "1" : "0",
+                    Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION));
             if ("__PREAUTH_MISMATCH__".equals(value)) {
                 throw new AdminException(
                         AdminErrorCode.ADMIN_PREAUTH_REQUIRED,

@@ -15,7 +15,8 @@ import org.springframework.stereotype.Component;
 @Component
 public final class AiConversationPersistedGeneratedAttachmentCodec {
 
-    private static final int SCHEMA_VERSION = 1;
+    private static final int LEGACY_SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
     private final ObjectMapper objectMapper;
 
     public AiConversationPersistedGeneratedAttachmentCodec(
@@ -38,7 +39,8 @@ public final class AiConversationPersistedGeneratedAttachmentCodec {
     public List<AiConversationAttachment> decode(String json) {
         try {
             Envelope envelope = objectMapper.readValue(json, Envelope.class);
-            if (envelope.schemaVersion() != SCHEMA_VERSION) {
+            if (envelope.schemaVersion() != LEGACY_SCHEMA_VERSION
+                    && envelope.schemaVersion() != SCHEMA_VERSION) {
                 throw new IllegalArgumentException(
                         "Unsupported generated image attachment schema version");
             }
@@ -53,9 +55,9 @@ public final class AiConversationPersistedGeneratedAttachmentCodec {
             List<AiConversationAttachment> attachments) {
         List<AiConversationAttachment> safe = List.copyOf(
                 attachments == null ? List.of() : attachments);
-        if (safe.size() > 1) {
+        if (safe.size() > 10) {
             throw new IllegalArgumentException(
-                    "First image generation version persists at most one image");
+                    "Image generation persists at most ten images");
         }
         for (AiConversationAttachment attachment : safe) {
             if (attachment == null
@@ -65,7 +67,7 @@ public final class AiConversationPersistedGeneratedAttachmentCodec {
                     || attachment.url() == null
                     || !attachment.url().startsWith("https://")) {
                 throw new IllegalArgumentException(
-                        "Generated image attachment must contain one public HTTPS image URL");
+                        "Each generated image attachment must contain a public HTTPS image URL");
             }
         }
         return safe;

@@ -32,7 +32,9 @@ import {
 import {
 	ensureAdminWebRtcVerified,
 	invalidateAdminWebRtcVerification,
-	presentAdminWebRtcFailure
+	observeAdminWebRtcVerificationHeaders,
+	presentAdminWebRtcFailure,
+	startAdminWebRtcVerificationInBackground
 } from './admin-webrtc-verification.js'
 import { serializeStructuredJsonRequestBody } from './admin-request-body.js'
 
@@ -119,7 +121,6 @@ function adminHeaders(path, method, options, platform, includeClientContext, jso
 export async function prepareAdminEventStream(path, lastRevision = 0) {
 	await ensureAdminCookieScopeMigration()
 	await ensureAdminPreAuth()
-	await ensureAdminWebRtcVerified()
 	const platform = adminClientPlatform()
 	const headers = adminHeaders(
 		path,
@@ -157,8 +158,6 @@ export async function adminRequest(path, options = {}, retryState = {}) {
 		requireActiveAdminRequestScope(options)
 		await ensureAdminPreAuth()
 		requireActiveAdminRequestScope(options)
-		await ensureAdminWebRtcVerified()
-		requireActiveAdminRequestScope(options)
 		const includeClientContext = options.includeClientContext !== false
 		const headers = adminHeaders(path, method, options, platform, includeClientContext, true)
 		return await request(path, method, options, headers, platform, includeClientContext)
@@ -170,7 +169,7 @@ export async function adminRequest(path, options = {}, retryState = {}) {
 		if (presentAdminRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentAdminWebRtcFailure(error)
 		if (!retryState.webRtc && isWebRtcRetryCode(error.code)) {
-			await recoverAdminWebRtc(error)
+			recoverAdminWebRtc(error)
 			return adminRequest(path, options, { ...retryState, webRtc: true })
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
@@ -181,6 +180,7 @@ export async function adminRequest(path, options = {}, retryState = {}) {
 			invalidateAdminPreAuth()
 			invalidateAdminWebRtcVerification()
 			await ensureAdminPreAuth()
+			void startAdminWebRtcVerificationInBackground().catch(() => {})
 			return adminRequest(path, options, { ...retryState, preAuth: true })
 		}
 		if (platform === 'H5'
@@ -201,7 +201,6 @@ export async function adminUploadFile(path, options = {}, retryState = {}) {
 	await ensureAdminPreAuth()
 	const platform = adminClientPlatform()
 	try {
-		await ensureAdminWebRtcVerified()
 		const method = String(options.method || 'POST').toUpperCase()
 		if (method !== 'POST') {
 			const error = new Error('当前跨端文件上传通道只支持 POST。')
@@ -216,7 +215,7 @@ export async function adminUploadFile(path, options = {}, retryState = {}) {
 		if (presentAdminRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentAdminWebRtcFailure(error)
 		if (!retryState.webRtc && isWebRtcRetryCode(error.code)) {
-			await recoverAdminWebRtc(error)
+			recoverAdminWebRtc(error)
 			return adminUploadFile(path, options, { ...retryState, webRtc: true })
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') beginAdminRiskChallenge(error)
@@ -225,6 +224,7 @@ export async function adminUploadFile(path, options = {}, retryState = {}) {
 			invalidateAdminPreAuth()
 			invalidateAdminWebRtcVerification()
 			await ensureAdminPreAuth()
+			void startAdminWebRtcVerificationInBackground().catch(() => {})
 			return adminUploadFile(path, options, { ...retryState, preAuth: true })
 		}
 		if (platform === 'H5'
@@ -252,6 +252,8 @@ function request(path, method, options, headers, platform, includeClientContext)
 			timeout: options.timeout || 10000,
 			withCredentials: true,
 			success(response) {
+				observeAdminWebRtcVerificationHeaders(
+					response.header || response.headers || {})
 				if (options.scope && !options.scope.isActive()) {
 					reject(adminRequestAbortedError())
 					return
@@ -308,6 +310,8 @@ function uploadFile(path, method, options, headers, platform, includeClientConte
 			timeout: options.timeout || 15000,
 			withCredentials: true,
 			success(response) {
+				observeAdminWebRtcVerificationHeaders(
+					response.header || response.headers || {})
 				const data = parseUploadPayload(response.data)
 				if (response.statusCode >= 200 && response.statusCode < 300) {
 					if (platform === 'H5' && includeClientContext) {
@@ -369,17 +373,12 @@ function adminResponseError(path, statusCode, data) {
 	return error
 }
 
-async function recoverAdminWebRtc(error) {
+function recoverAdminWebRtc(error) {
 	invalidateAdminWebRtcVerification()
-	try {
-		return await ensureAdminWebRtcVerified({
-			force: error.code === 'WEBRTC_NETWORK_CHANGED'
-		})
-	} catch (verificationError) {
-		if (presentAdminRiskBlock(verificationError)) throw verificationError
+	void ensureAdminWebRtcVerified().catch(verificationError => {
+		if (presentAdminRiskBlock(verificationError)) return
 		if (isWebRtcFailureCode(verificationError.code)) {
 			presentAdminWebRtcFailure(verificationError)
 		}
-		throw verificationError
-	}
+	})
 }

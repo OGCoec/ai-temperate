@@ -27,6 +27,7 @@ public interface AiModelUsageMapper {
             @Param("completionTokens") Long completionTokens,
             @Param("cachedPromptTokens") Long cachedPromptTokens,
             @Param("reasoningTokens") Long reasoningTokens,
+            @Param("providerCostTicks") Long providerCostTicks,
             @Param("chargedQuotaMinor") Long chargedQuotaMinor,
             @Param("finishReason") String finishReason,
             @Param("failureCode") String failureCode,

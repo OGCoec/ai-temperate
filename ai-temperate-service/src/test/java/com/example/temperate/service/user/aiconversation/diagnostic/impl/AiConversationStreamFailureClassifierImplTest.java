@@ -3,9 +3,11 @@ package com.example.temperate.service.user.aiconversation.diagnostic.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureClassification;
+import com.example.temperate.service.user.aiconversation.diagnostic.AiUpstreamErrorDiagnostic;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationStreamFailureReason;
+import com.example.temperate.service.user.aiconversation.exception.AiUpstreamHttpStatusException;
 import com.fasterxml.jackson.core.JsonParseException;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
@@ -83,6 +85,81 @@ final class AiConversationStreamFailureClassifierImplTest {
         assertReason(
                 Exceptions.failWithOverflow(),
                 AiConversationStreamFailureReason.STREAM_BACKPRESSURE_OVERFLOW);
+    }
+
+    @Test
+    void preservesSanitizedDiagnosticThroughAControlledExceptionWrapper() {
+        AiUpstreamErrorDiagnostic diagnostic = new AiUpstreamErrorDiagnostic(
+                "invalid_request_error",
+                "extra_forbidden",
+                "body.tools.0.search_context_size",
+                "Extra inputs are not permitted",
+                "req-safe",
+                "application/json",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                128,
+                false);
+        AiUpstreamHttpStatusException upstream =
+                new AiUpstreamHttpStatusException(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        diagnostic);
+        AiConversationException wrapped = new AiConversationException(
+                AiConversationErrorCode.AI_UPSTREAM_STREAM_FAILED,
+                "模型联网响应未能完成",
+                true,
+                upstream);
+
+        AiConversationStreamFailureClassification result =
+                classifier.classify(wrapped);
+
+        assertThat(result.reason()).isEqualTo(
+                AiConversationStreamFailureReason
+                        .UPSTREAM_TOOL_CONFIGURATION_UNSUPPORTED);
+        assertThat(result.upstreamStatus()).isEqualTo(422);
+        assertThat(result.upstreamDiagnostic()).isEqualTo(diagnostic);
+        assertThat(result.rootCauseType()).isEqualTo(
+                AiUpstreamHttpStatusException.class.getName());
+        assertThat(result.stackFingerprint()).isNotBlank();
+    }
+
+    @Test
+    void classifiesOnlyExplicitCompatibilityParametersFor400And422() {
+        assertCompatibility("generation_config.thinking_level",
+                AiConversationStreamFailureReason
+                        .UPSTREAM_REASONING_LEVEL_UNSUPPORTED);
+        assertCompatibility("response_format.image_size",
+                AiConversationStreamFailureReason
+                        .UPSTREAM_IMAGE_RESOLUTION_UNSUPPORTED);
+        assertCompatibility("body.tool_choice",
+                AiConversationStreamFailureReason
+                        .UPSTREAM_TOOL_CONFIGURATION_UNSUPPORTED);
+
+        AiUpstreamHttpStatusException unknown = new AiUpstreamHttpStatusException(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                diagnostic("body.input.0.content.0.text"));
+        assertReason(unknown,
+                AiConversationStreamFailureReason.UNKNOWN_STREAM_FAILURE);
+    }
+
+    private void assertCompatibility(
+            String parameter,
+            AiConversationStreamFailureReason expected) {
+        assertReason(new AiUpstreamHttpStatusException(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                diagnostic(parameter)), expected);
+    }
+
+    private static AiUpstreamErrorDiagnostic diagnostic(String parameter) {
+        return new AiUpstreamErrorDiagnostic(
+                "invalid_request_error",
+                "unsupported_value",
+                parameter,
+                "Unsupported parameter value",
+                "req-safe",
+                "application/json",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                128,
+                false);
     }
 
     private void assertReason(

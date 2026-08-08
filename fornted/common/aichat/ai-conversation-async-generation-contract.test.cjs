@@ -72,3 +72,15 @@ test('transport reconnects with GET and never turns an SSE error into a refund c
 	assert.doesNotMatch(stream, /REFUND_FULL|REFUND_REQUESTED/)
 	assert.match(stream, /handlers\.onGenerationId\?\.\(event\.data\.generationPublicId\)/)
 })
+
+test('persisted image events update one slot without becoming a terminal event', () => {
+	const stream = source('ai-conversation-stream.js')
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+
+	assert.match(stream, /event\.type === 'image-persisted'/)
+	assert.match(stream, /mergePersistedImageOutput\(/)
+	assert.match(panel, /event\.type === 'image-persisted'/)
+	assert.match(panel, /beginImageUpgrade\(/)
+	assert.match(panel, /activeToken\?\.persistedUrl === attachment\.persistedUrl/)
+	assert.doesNotMatch(stream, /image-persisted'[\s\S]{0,160}terminalStatus\s*=/)
+})

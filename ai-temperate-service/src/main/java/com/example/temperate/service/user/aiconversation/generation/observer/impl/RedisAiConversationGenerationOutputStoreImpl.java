@@ -140,7 +140,7 @@ public final class RedisAiConversationGenerationOutputStoreImpl
             details.put("redisAppendEndElapsedMs", elapsedMillis(appendEnd - timingContext.startedNanos()));
             details.put("redisPublishStartElapsedMs", elapsedMillis(publishStart - timingContext.startedNanos()));
             details.put("redisPublishEndElapsedMs", elapsedMillis(publishEnd - timingContext.startedNanos()));
-            transportDiagnosticService.record(
+            transportDiagnosticService.recordSafely(
                     timingContext,
                     "ai_stream_redis_delta_published",
                     details);
@@ -168,7 +168,7 @@ public final class RedisAiConversationGenerationOutputStoreImpl
         details.put("failureStage", failureStage);
         details.put("failureType", failure.getClass().getName());
         details.put("redisAppendElapsedMs", elapsedMillis(timingClock.nanoTime() - startedNanos));
-        transportDiagnosticService.record(
+        transportDiagnosticService.recordSafely(
                 timingContext,
                 "ai_stream_redis_delta_failed",
                 details);
@@ -185,6 +185,19 @@ public final class RedisAiConversationGenerationOutputStoreImpl
                 "terminal:event", eventName,
                 "terminal:data", dataJson));
         redisTemplate.expire(key, properties.terminalRetention());
+        publish(new AiConversationGenerationOutputEvent(
+                AiConversationGenerationOutputEvent.CURRENT_SCHEMA_VERSION,
+                generationPublicId,
+                currentRevision(generationPublicId),
+                eventName,
+                dataJson));
+    }
+
+    @Override
+    public void publishEvent(
+            String generationPublicId,
+            String eventName,
+            String dataJson) {
         publish(new AiConversationGenerationOutputEvent(
                 AiConversationGenerationOutputEvent.CURRENT_SCHEMA_VERSION,
                 generationPublicId,

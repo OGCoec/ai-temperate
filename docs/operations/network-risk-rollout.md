@@ -36,13 +36,16 @@ PreAuth 中的完整候选 IP 集合，禁止复用前述任一密钥。
 `AUTH_PHONE_COUNTRY_BIN_PATH` 指向本地 IP2Location LITE DB11 BIN，是第三方地理信息缺失时的
 最后本地降级来源。
 
-PreAuth v4 的 WebRTC 可选字段使用上述独立加密 Secret。距离阈值可按部署环境使用
+PreAuth v6 的 WebRTC 候选集合密文字段使用上述独立加密 Secret。距离阈值可按部署环境使用
 `NETWORK_RISK_IMPOSSIBLE_TRAVEL_MINIMUM_DISTANCE_KM` 覆盖，未配置时为二百公里；时间窗口继续
 使用 `NETWORK_RISK_IMPOSSIBLE_TRAVEL_WINDOW`，未配置时为二十四小时。这两个变量都不是密钥。
 
 ## 3. 分阶段切换
 
 ### 3.1 后端兼容部署
+
+PreAuth v6、带 `probeGeneration` 的 Start/Report 协议和两个前端后台探测器必须作为同一发布批次上线；
+本版本不接受缺少 generation 的旧 Report，也不提供 v4/v5 双读，禁止长期混跑新后端与旧前端。
 
 1. 配置本节列出的全部 Secret，并确认 WebRTC 密钥与其他安全域完全独立。
 2. 设置 `NETWORK_RISK_MODE=OBSERVE`。
@@ -70,8 +73,15 @@ Host-only、Secure、HttpOnly；浏览器 JavaScript 不读取其原值。
 
 PreAuth 网络风险通过后，客户端从普通或管理员 WebRTC Start 接口取得固定四个 STUN 地址，使用
 浏览器或 Android 系统 WebView 在最长15秒内收集所有公网 `srflx` IPv4/IPv6，再一次性 Report。
-后端不向 STUN 发请求；同一 HTTP IP 已校验成功时客户端不得重复创建 PeerConnection。Android
-只使用本地 `hybrid/html` 页面、内存 nonce 与实时消息，不新增原生插件或媒体权限。
+后端不向 STUN 发请求。普通端和管理员端都把探测作为后台任务：PreAuth 建立后即可加载页面并发送
+业务 HTTP 请求，不等待 Report；服务端在固定20秒窗口内把 `PENDING` 视为临时放行，Report 失败或
+服务端超时形成 `FAILED` 后，只拦截后续新请求，已经进入 Controller 的请求不做中途撤销。
+同一 HTTP IP 已校验成功时客户端不得重复创建 PeerConnection。
+
+Android 只使用屏幕外的本地 `hybrid/html` WebView、内存 nonce 和一次性 AES-256-GCM Key；候选集合
+通过受控自定义 scheme 以密文返回 JS Service，处理完成立即销毁 WebView，不新增原生插件或媒体权限。
+校验失败为当前 PreAuth 的终态，失败页不提供人工重试；只有 HTTP 出口变化才由 Lua 增加 generation
+并开启新的后台探测窗口。
 
 `NETWORK_RISK_MODE=DISABLED` 时 Bootstrap 返回 `status=DISABLED`，不创建 Redis PreAuth 或
 Cookie；这用于 localhost 和紧急回滚。切换到 OBSERVE/ENFORCE 后，前端会重新建立真实 PreAuth。
@@ -83,7 +93,7 @@ Android 使用 `X-AIT-PreAuth`，原始值只保存在 AndroidKeyStore 加密载
 path、query 和 hash，不自动重放非幂等请求。普通端和管理员端共享三轮有限状态机：每轮返回
 只复查一次 PreAuth，第三轮仍返回 Challenge 时进入可恢复的失败安全门，禁止第四次自动导航。
 
-### 3.4 二进制 IP HMAC v2、IP 缓存 v3 与 PreAuth v4 单 Hash
+### 3.4 二进制 IP HMAC v2、IP 缓存 v3 与 PreAuth v6 单 Hash
 
 IP 风险身份不再使用 IP 展示字符串参与 HMAC。固定输入格式为
 `UTF8("risk-ip:v2") + 0x00 + 地址族标识 + 地址网络字节`：IPv4 使用 `0x04 + 4 bytes`，
@@ -97,11 +107,11 @@ ait:<env>:risk:ipintel:v3:ip:<IP摘要>
 ait:<env>:risk:ipintel:v3:single-flight:<IP摘要>
 ```
 
-普通与管理员使用彼此隔离的 PreAuth v4 命名空间：
+普通与管理员使用彼此隔离的 PreAuth v6 命名空间：
 
 ```text
-ait:<env>:risk:preauth-user:v4:token:<PreAuth摘要>
-ait:<env>:risk:preauth-admin:v4:token:<PreAuth摘要>
+ait:<env>:risk:preauth-user:v6:token:<PreAuth摘要>
+ait:<env>:risk:preauth-admin:v6:token:<PreAuth摘要>
 ```
 
 首次 Bootstrap 必须先执行共享 IP 缓存、IP2Location、iPing、本地 BIN 和默认六十分的降级链，
@@ -109,19 +119,33 @@ ait:<env>:risk:preauth-admin:v4:token:<PreAuth摘要>
 首次基础分低于四十分时阻断三十分钟，四十至五十九分进入 Challenge，六十分及以上建立可信基线。
 首次请求不计算不可能旅行。
 
-v4 Hash 同时保存不可能旅行事件的有界 JSON、派生事件数、Challenge 签发/通过次数以及活动
+v6 Hash 同时保存不可能旅行事件的有界 JSON、派生事件数、Challenge 签发/通过次数以及活动
 Challenge 的 Nonce、IP 摘要、上下文摘要和过期时间。不再创建独立 Travel ZSet 或 Challenge
 引用 Key；状态不再保存 `evaluatedAt/currentIpEvaluatedAt`，业务层也不再计算固定六小时新鲜度。
-WebRTC 只增加 `webRtcStatus` 与 `webRtcIps` 两个可选字段；后者是绑定作用域、PreAuth Token 摘要
-和当前 HTTP IP 摘要的 AES-256-GCM 密文。HTTP IP 摘要变化时 Lua 原子清除这两个字段，登录旋转
-时先解密并使用新 Token 摘要重新加密，避免复制旧 AAD 密文后失效。
+WebRTC 使用 `webRtcPhase`、`webRtcGeneration`、`webRtcDeadlineAt`、`webRtcFailureReason` 与
+`webRtcIps` 建模 `REQUIRED → PENDING → VERIFIED/FAILED` 四态异步门禁；候选集合是绑定作用域、
+PreAuth Token 摘要和当前 HTTP IP 摘要的 AES-256-GCM 密文。创建或 HTTP IP 摘要变化时，Lua
+原子建立八秒 `REQUIRED` start grace；GET start 才使用 Redis `TIME` 开启最长十五秒的
+`PENDING` report 窗口，重复 start 不续期。业务 GET/POST/PUT/PATCH/DELETE 在 REQUIRED/PENDING
+期间全部放行，只有 FAILED 从下一次请求起拦截；认证、Session、CSRF 与 PreAuth 绑定仍同步执行。
+
+登录旋转只在旧状态为 VERIFIED 且 HTTP IP 相同时继承成功，候选集合先解密再使用新 Token 摘要
+加密，避免复制旧 AAD 密文后失效；其他阶段在新 Token 上建立新的 REQUIRED generation。Report
+与超时通过 Lua 原子竞争，等于 deadline 时仍接受 report，大于 deadline 才写 START_TIMEOUT 或
+REPORT_TIMEOUT。任何终态都不能被迟到结果覆盖，旧 generation 或旧 HTTP IP 的 report 返回 409。
+服务端通过 `X-AIT-WebRTC-State` 与 `X-AIT-WebRTC-Generation` 通知 H5/Android 后台执行，响应头
+不得携带原始 IP、Token、设备 ID 或候选集合。
 正向 TTL、fallback TTL 与抖动只决定 Redis 写入期限；管理员手动延长 TTL 或设置永久 Key 后，
 只要 v2 JSON 结构合法，该评分就继续有效。部署期间不轮换 HMAC Secret，也不双读或原地改写旧状态。
 
 项目上线前必须受控清空旧 IP 情报、single-flight、普通 PreAuth 和管理员 PreAuth Key，再以
-`NETWORK_RISK_MODE=OBSERVE` 发布并重新加载两端以建立 v4 PreAuth。旧版本不提供在线迁移或双读；
+`NETWORK_RISK_MODE=OBSERVE` 发布并重新加载两端以建立 v6 PreAuth。旧版本不提供在线迁移或双读；
 确认 PreAuth 初始化、IPv6 摘要、
 登录状态码和 Challenge 指标正常后才能恢复 `ENFORCE`。
+
+WebRTC 状态迁移统一观察 `webrtc_state_transition_total`，transition 仅允许
+`required_created/required_started/required_timeout/pending_verified/pending_failed/stale_report/generation_changed`；
+标签只允许 `scope/platform/reason/mode`，禁止加入 generation、IP、Token 或设备摘要。
 
 后续请求只要能读取合法 Redis IP 快照就直接复用；Key 缺失、损坏或版本不匹配才重新进入共享查询链。
 不可能旅行
@@ -189,6 +213,8 @@ webrtc_interceptor_total
 
 指标标签不得包含明文 IP、完整摘要、Token、设备标识、API Key 或第三方原始响应。
 WebRTC 指标仅允许固定的 scope、outcome/decision、platform 与 mode 标签，也不得使用 STUN URL。
+上线观察必须区分 `pending_allowed`、`matched`、`mismatch`、`timeout`、`stale` 与 `network_changed`，
+确认普通端和管理员端在 PENDING 期间均没有因为等待 Report 产生请求阻塞。
 
 ## 6. 回滚
 
@@ -199,7 +225,7 @@ WebRTC 指标仅允许固定的 scope、outcome/decision、platform 与 mode 标
 4. 前端停止自动 Challenge 导航；如风险模式已禁用，可暂时保留 PreAuth Bootstrap。
 5. 不恢复明文 API Key，不删除加密 Key 池；通过管理员接口停用或删除异常 Key。
 
-回滚不会恢复已经过期或撤销的 PreAuth、Refresh Session 或管理员 Session。旧程序看不到新建的 v4 PreAuth，
+回滚不会恢复已经过期或撤销的 PreAuth、Refresh Session 或管理员 Session。旧程序看不到新建的 v5 PreAuth，
 因此回滚后也会再次触发 Bootstrap 和重新登录；旧 IP 情报命名空间若仍存在，也只由对应旧程序读取。
 
 ## 7. 第二阶段验证候选范围
@@ -216,7 +242,7 @@ mvn -pl ai-temperate-web -am `
   -Dsurefire.failIfNoSpecifiedTests=false test
 
 mvn -pl ai-temperate-service,ai-temperate-web -am `
-  -Dtest=WebRtcVerificationServiceImplTest,RedisPreAuthStoreWebRtcTest,WebRtcVerificationInterceptorTest,WebRtcEdgeControllerTest `
+  -Dtest=RedisKeyFactoryTest,NetworkRiskPropertiesTest,PreAuthV5SingleHashContractTest,WebRtcVerificationServiceImplTest,RedisPreAuthStoreWebRtcTest,WebRtcVerificationInterceptorTest,WebRtcVerificationInterceptorAsyncIdempotencyTest,WebRtcEdgeControllerTest `
   -Dsurefire.failIfNoSpecifiedTests=false test
 
 Push-Location cloudflare/api-gateway

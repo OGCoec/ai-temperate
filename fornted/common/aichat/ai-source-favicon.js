@@ -28,5 +28,7 @@ export function normalizeAiSourceFaviconDomain(value) {
 
 export function buildAiSourceFaviconUrl(value) {
 	const hostname = normalizeAiSourceFaviconDomain(value)
-	return hostname ? `https://${hostname}/favicon.ico` : ''
+	return hostname
+		? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(`https://${hostname}`)}&sz=128`
+		: ''
 }

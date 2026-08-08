@@ -12,11 +12,13 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentCategory;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentFinalization;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentObjectKeyFactory;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentObjectStorage;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentState;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachmentUploadReference;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedMedia;
+import com.example.temperate.service.user.aiconversation.attachment.AiConversationGeneratedUploadSession;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationPreuploadFile;
 import com.example.temperate.service.user.aiconversation.attachment.config.AiConversationAttachmentProperties;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
@@ -26,6 +28,14 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -123,8 +133,516 @@ final class AiConversationAttachmentServiceImplTest {
                 .putPublic(anyString(), any(byte[].class), anyString());
     }
 
+    @Test
+    void persistsAtMostTenGeneratedImagesWithoutReusingInputLimit() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        AiConversationAttachmentServiceImpl service = service(storage);
+        List<AiConversationGeneratedMedia> generated = IntStream.range(0, 11)
+                .mapToObj(index -> new AiConversationGeneratedMedia(
+                        "generated-" + (index + 1) + ".webp",
+                        "image/webp",
+                        new byte[] {(byte) index}))
+                .toList();
+
+        var result = service.finalizeAttachments(
+                "AAAAAAAAAAE",
+                "AAAAAAAAAAAAAAAAAAAAAQ",
+                "AAAAAAAAAAI",
+                List.of(),
+                generated);
+
+        assertThat(result.responseAttachments()).hasSize(11);
+        assertThat(result.responseAttachments().subList(0, 10))
+                .allMatch(attachment -> attachment.state()
+                        == AiConversationAttachmentState.AVAILABLE);
+        assertThat(result.responseAttachments().get(10).state())
+                .isEqualTo(AiConversationAttachmentState.STORAGE_FAILED);
+        assertThat(result.createdObjectKeys()).hasSize(10);
+        verify(storage, times(10))
+                .putPublic(anyString(), any(byte[].class), anyString());
+    }
+
+    @Test
+    void retainsSuccessfulGeneratedObjectWhenAnotherUploadFails() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenReturn("https://public-oss.example.test/generated-1.webp")
+                .thenThrow(new AiConversationAttachmentObjectStorage.StorageException(
+                        "second output failed",
+                        null));
+        AiConversationAttachmentServiceImpl service = service(storage);
+
+        var result = service.finalizeAttachments(
+                "AAAAAAAAAAE",
+                "AAAAAAAAAAAAAAAAAAAAAQ",
+                "AAAAAAAAAAI",
+                List.of(),
+                List.of(
+                        new AiConversationGeneratedMedia(
+                                "generated-1.webp",
+                                "image/webp",
+                                new byte[] {1}),
+                        new AiConversationGeneratedMedia(
+                                "generated-2.webp",
+                                "image/webp",
+                                new byte[] {2})));
+
+        assertThat(result.partialFailure()).isTrue();
+        assertThat(result.responseAttachments())
+                .extracting(AiConversationAttachment::state)
+                .containsExactly(
+                        AiConversationAttachmentState.AVAILABLE,
+                        AiConversationAttachmentState.STORAGE_FAILED);
+        assertThat(result.createdObjectKeys()).singleElement()
+                .asString()
+                .endsWith(".webp");
+        verify(storage, times(4))
+                .putPublic(anyString(), any(byte[].class), anyString());
+    }
+
+    @Test
+    void compensationDeletesEveryUnreferencedCreatedObject() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        AiConversationAttachmentServiceImpl service = service(storage);
+
+        service.compensateCreatedObjects(List.of("object-a", "object-b"));
+
+        verify(storage).deleteObject("object-a");
+        verify(storage).deleteObject("object-b");
+    }
+
+    @Test
+    void totalByteLimitRejectsOversizedSlotButAllowsLaterSmallImage() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        AiConversationAttachmentServiceImpl service = service(storage, 4L, 5L);
+
+        var result = service.finalizeAttachments(
+                "AAAAAAAAAAE",
+                "AAAAAAAAAAAAAAAAAAAAAQ",
+                "AAAAAAAAAAI",
+                List.of(),
+                List.of(
+                        new AiConversationGeneratedMedia(
+                                "generated-1.webp", "image/webp", new byte[4]),
+                        new AiConversationGeneratedMedia(
+                                "generated-2.webp", "image/webp", new byte[2]),
+                        new AiConversationGeneratedMedia(
+                                "generated-3.webp", "image/webp", new byte[1])));
+
+        assertThat(result.responseAttachments())
+                .extracting(AiConversationAttachment::state)
+                .containsExactly(
+                        AiConversationAttachmentState.AVAILABLE,
+                        AiConversationAttachmentState.STORAGE_FAILED,
+                        AiConversationAttachmentState.AVAILABLE);
+        assertThat(result.createdObjectKeys()).hasSize(2);
+        verify(storage, times(2))
+                .putPublic(anyString(), any(byte[].class), anyString());
+    }
+
+    @Test
+    void uploadsAtMostThreeGeneratedObjectsConcurrentlyAndKeepsOutputOrder()
+            throws Exception {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        CountDownLatch firstWaveStarted = new CountDownLatch(3);
+        CountDownLatch releaseUploads = new CountDownLatch(1);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximumActive = new AtomicInteger();
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> {
+                    int current = active.incrementAndGet();
+                    maximumActive.accumulateAndGet(current, Math::max);
+                    firstWaveStarted.countDown();
+                    try {
+                        if (!releaseUploads.await(2, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("test upload release timed out");
+                        }
+                        return "https://public-oss.example.test/"
+                                + invocation.getArgument(0, String.class);
+                    } finally {
+                        active.decrementAndGet();
+                    }
+                });
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        AiConversationAttachmentServiceImpl service = service(
+                storage, 104_857_600L, 209_715_200L, executor);
+        AtomicReference<AiConversationAttachmentFinalization> result = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = Thread.startVirtualThread(() -> {
+            try {
+                result.set(service.finalizeAttachments(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI",
+                        List.of(),
+                        IntStream.range(0, 5)
+                                .mapToObj(index -> new AiConversationGeneratedMedia(
+                                        "generated-" + (index + 1) + ".webp",
+                                        "image/webp",
+                                        new byte[] {(byte) index}))
+                                .toList(),
+                        Duration.ofSeconds(5)));
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        });
+        try {
+            assertThat(firstWaveStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(active.get()).isEqualTo(3);
+            releaseUploads.countDown();
+            caller.join(3_000L);
+
+            assertThat(failure.get()).isNull();
+            assertThat(maximumActive.get()).isEqualTo(3);
+            assertThat(result.get().responseAttachments())
+                    .extracting(AiConversationAttachment::fileName)
+                    .containsExactly(
+                            "generated-1.webp",
+                            "generated-2.webp",
+                            "generated-3.webp",
+                            "generated-4.webp",
+                            "generated-5.webp");
+        } finally {
+            releaseUploads.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalizationTimeoutDeletesObjectCreatedByLateUpload() throws Exception {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        CountDownLatch uploadStarted = new CountDownLatch(1);
+        CountDownLatch releaseUpload = new CountDownLatch(1);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> {
+                    uploadStarted.countDown();
+                    boolean released = false;
+                    while (!released) {
+                        try {
+                            released = releaseUpload.await(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException ignored) {
+                            // 模拟底层 SDK 在同步请求返回前不能立即响应 Future.cancel 的边界。
+                        }
+                    }
+                    return "https://public-oss.example.test/"
+                            + invocation.getArgument(0, String.class);
+                });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        AiConversationAttachmentServiceImpl service = service(
+                storage, 104_857_600L, 209_715_200L, executor);
+        try {
+            assertThatThrownBy(() -> service.finalizeAttachments(
+                    "AAAAAAAAAAE",
+                    "AAAAAAAAAAAAAAAAAAAAAQ",
+                    "AAAAAAAAAAI",
+                    List.of(),
+                    List.of(new AiConversationGeneratedMedia(
+                            "generated-1.webp",
+                            "image/webp",
+                            new byte[] {1})),
+                    Duration.ofMillis(50)))
+                    .isInstanceOf(AiConversationException.class)
+                    .hasMessageContaining("超时");
+            assertThat(uploadStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            releaseUpload.countDown();
+
+            org.mockito.ArgumentCaptor<String> uploadedKey =
+                    org.mockito.ArgumentCaptor.forClass(String.class);
+            verify(storage).putPublic(
+                    uploadedKey.capture(), any(byte[].class), anyString());
+            verify(storage, org.mockito.Mockito.timeout(1000))
+                    .deleteObject(uploadedKey.getValue());
+        } finally {
+            releaseUpload.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void generatedUploadSessionStartsBeforeTheBatchIsFinished() throws Exception {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        CountDownLatch uploadStarted = new CountDownLatch(1);
+        CountDownLatch releaseUpload = new CountDownLatch(1);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> {
+                    uploadStarted.countDown();
+                    if (!releaseUpload.await(2, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test upload release timed out");
+                    }
+                    return "https://public-oss.example.test/"
+                            + invocation.getArgument(0, String.class);
+                });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        AiConversationAttachmentServiceImpl service = service(
+                storage, 104_857_600L, 209_715_200L, executor);
+        AiConversationGeneratedUploadSession session =
+                service.openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+        try {
+            session.submit(
+                    (short) 0,
+                    new AiConversationGeneratedMedia(
+                            "generated-1.webp", "image/webp", new byte[] {1}));
+
+            assertThat(uploadStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            releaseUpload.countDown();
+            assertThat(session.finish(Duration.ofSeconds(2)))
+                    .singleElement()
+                    .satisfies(result -> {
+                        assertThat(result.outputIndex()).isZero();
+                        assertThat(result.successful()).isTrue();
+                    });
+            session.commit();
+        } finally {
+            releaseUpload.countDown();
+            session.abortAndCompensate();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void generatedUploadSessionReturnsResultsInOutputOrderAndKeepsSlotFailures() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        AiConversationAttachmentServiceImpl service = service(storage, 4L, 5L);
+        AiConversationGeneratedUploadSession session =
+                service.openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        session.submit(
+                (short) 2,
+                new AiConversationGeneratedMedia(
+                        "generated-3.webp", "image/webp", new byte[] {1}));
+        session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[5]));
+        var results = session.finish(Duration.ofSeconds(1));
+
+        assertThat(results).extracting(result -> result.outputIndex())
+                .containsExactly((short) 0, (short) 2);
+        assertThat(results).extracting(result -> result.attachment().state())
+                .containsExactly(
+                        AiConversationAttachmentState.STORAGE_FAILED,
+                        AiConversationAttachmentState.AVAILABLE);
+        session.commit();
+    }
+
+    @Test
+    void generatedUploadSessionSortsFiveOutOfOrderSubmissionsAfterOutOfOrderCompletion() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        List<Runnable> queued = new java.util.ArrayList<>();
+        AiConversationGeneratedUploadSession session = service(
+                        storage, 104_857_600L, 209_715_200L, queued::add)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        for (short outputIndex : new short[] {4, 1, 3, 0, 2}) {
+            session.submit(
+                    outputIndex,
+                    new AiConversationGeneratedMedia(
+                            "generated-" + (outputIndex + 1) + ".webp",
+                            "image/webp",
+                            new byte[] {(byte) outputIndex}));
+        }
+        for (int index = queued.size() - 1; index >= 0; index--) {
+            queued.get(index).run();
+        }
+
+        assertThat(session.finish(Duration.ofSeconds(1)))
+                .extracting(result -> result.outputIndex())
+                .containsExactly((short) 0, (short) 1, (short) 2, (short) 3, (short) 4);
+        session.commit();
+    }
+
+    @Test
+    void abortGeneratedUploadSessionDeletesCompletedObject() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        AiConversationGeneratedUploadSession session = service(storage)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        String createdObjectKey = session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {1}))
+                .join()
+                .createdObjectKey();
+        session.abortAndCompensate();
+        session.abortAndCompensate();
+
+        verify(storage).deleteObject(createdObjectKey);
+    }
+
+    @Test
+    void committedGeneratedUploadSessionNeverCompensatesItsObjects() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenAnswer(invocation -> "https://public-oss.example.test/"
+                        + invocation.getArgument(0, String.class));
+        AiConversationGeneratedUploadSession session = service(storage)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+        session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {1}));
+
+        session.finish(Duration.ofSeconds(1));
+        session.commit();
+        session.abortAndCompensate();
+
+        verify(storage, org.mockito.Mockito.never()).deleteObject(anyString());
+    }
+
+    @Test
+    void generatedUploadSessionRejectsDuplicateOutputIndex() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        when(storage.putPublic(anyString(), any(byte[].class), anyString()))
+                .thenReturn("https://public-oss.example.test/generated.webp");
+        AiConversationGeneratedUploadSession session = service(storage)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+        session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {1}));
+
+        assertThatThrownBy(() -> session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {2})))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("output index");
+        session.abortAndCompensate();
+    }
+
+    @Test
+    void generatedUploadSessionRejectsAnEleventhOutputSlot() {
+        AiConversationGeneratedUploadSession session = service(
+                        mock(AiConversationAttachmentObjectStorage.class))
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        assertThatThrownBy(() -> session.submit(
+                (short) 10,
+                new AiConversationGeneratedMedia(
+                        "generated-11.webp", "image/webp", new byte[] {1})))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+        session.abortAndCompensate();
+    }
+
+    @Test
+    void generatedUploadSessionTreatsExecutorRejectionAsSystemFailure() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        Executor rejectingExecutor = ignored -> {
+            throw new java.util.concurrent.RejectedExecutionException("queue full");
+        };
+        AiConversationGeneratedUploadSession session = service(
+                        storage, 104_857_600L, 209_715_200L, rejectingExecutor)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        assertThatThrownBy(() -> session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {1})))
+                .isInstanceOf(AiConversationException.class)
+                .hasMessageContaining("队列繁忙");
+        session.abortAndCompensate();
+        verify(storage, org.mockito.Mockito.never())
+                .putPublic(anyString(), any(byte[].class), anyString());
+    }
+
+    @Test
+    void generatedUploadSessionReturnsBoundaryFailureWithoutEnteringExecutor() {
+        AiConversationAttachmentObjectStorage storage =
+                mock(AiConversationAttachmentObjectStorage.class);
+        Executor rejectingExecutor = ignored -> {
+            throw new AssertionError("invalid media must not enter the executor");
+        };
+        AiConversationGeneratedUploadSession session = service(
+                        storage, 1L, 1L, rejectingExecutor)
+                .openGeneratedUploadSession(
+                        "AAAAAAAAAAE",
+                        "AAAAAAAAAAAAAAAAAAAAAQ",
+                        "AAAAAAAAAAI");
+
+        session.submit(
+                (short) 0,
+                new AiConversationGeneratedMedia(
+                        "generated-1.webp", "image/webp", new byte[] {1, 2}));
+
+        assertThat(session.finish(Duration.ofSeconds(1)))
+                .singleElement()
+                .satisfies(result -> assertThat(result.attachment().state())
+                        .isEqualTo(AiConversationAttachmentState.STORAGE_FAILED));
+        session.commit();
+        verify(storage, org.mockito.Mockito.never())
+                .putPublic(anyString(), any(byte[].class), anyString());
+    }
+
     private static AiConversationAttachmentServiceImpl service(
             AiConversationAttachmentObjectStorage storage) {
+        return service(storage, 104_857_600L, 209_715_200L);
+    }
+
+    private static AiConversationAttachmentServiceImpl service(
+            AiConversationAttachmentObjectStorage storage,
+            long maxFileBytes,
+            long maxTotalBytes) {
+        return service(storage, maxFileBytes, maxTotalBytes, Runnable::run);
+    }
+
+    private static AiConversationAttachmentServiceImpl service(
+            AiConversationAttachmentObjectStorage storage,
+            long maxFileBytes,
+            long maxTotalBytes,
+            Executor executor) {
         return new AiConversationAttachmentServiceImpl(
                 storage,
                 new AiConversationAttachmentObjectKeyFactory(),
@@ -135,9 +653,9 @@ final class AiConversationAttachmentServiceImplTest {
                         "https://public-oss.example.test",
                         Duration.ofMinutes(10),
                         Duration.ofMinutes(10),
-                        104_857_600L,
+                        maxFileBytes,
                         8,
-                        209_715_200L,
+                        maxTotalBytes,
                         3,
                         Duration.ofSeconds(5),
                         Duration.ofSeconds(30),
@@ -149,6 +667,7 @@ final class AiConversationAttachmentServiceImplTest {
                         Duration.ofSeconds(2),
                         Duration.ofSeconds(10),
                         2),
-                CLOCK);
+                CLOCK,
+                executor);
     }
 }

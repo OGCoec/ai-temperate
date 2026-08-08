@@ -202,7 +202,7 @@ test('risk flow pages clear expired state without being intercepted by the admin
 		const navigation = await loadNavigationModule()
 		navigation.handleAdminSessionInvalid(
 			{ code: 'ADMIN_SESSION_INVALID', statusCode: 401 },
-			{ currentRoute: '/pages/risk/webrtc-probe' })
+			{ currentRoute: '/pages/risk/webrtc-failed' })
 		assert.equal(redirects, 0)
 	} finally {
 		delete globalThis.uni

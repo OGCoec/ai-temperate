@@ -160,7 +160,11 @@ public final class SpringAiCliProxyConversationModelClient
     }
 
     @Override
-    public String compact(String modelName, String compactionPrompt) {
+    public String compact(
+            com.example.temperate.service.user.aiconversation.model.AiModelProvider provider,
+            String modelName,
+            String compactionPrompt) {
+        Objects.requireNonNull(provider);
         if (!properties.enabled()) {
             throw new AiConversationException(
                     AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE,

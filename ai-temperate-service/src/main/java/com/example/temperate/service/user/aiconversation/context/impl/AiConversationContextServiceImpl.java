@@ -72,15 +72,20 @@ public final class AiConversationContextServiceImpl
     }
 
     @Override
+    public AiConversationContextSnapshot load(
+            byte[] conversationId,
+            String conversationPublicId) {
+        return loadSnapshot(conversationId, conversationPublicId);
+    }
+
+    @Override
     public AiConversationPromptSnapshot prepareNew(
             AiModelCacheEntry model,
             AiConversationContent currentInput) {
-        long estimated = tokenEstimator.estimate(
-                properties.systemPrompt(),
-                null,
-                null,
-                List.of(),
-                currentInput);
+        long estimated = Math.addExact(
+                tokenEstimator.estimateContext(
+                        properties.systemPrompt(), null, null, List.of()),
+                tokenEstimator.estimateCurrentInput(currentInput));
         verifyBudget(model, estimated);
         return new AiConversationPromptSnapshot(
                 properties.systemPrompt(),
@@ -104,12 +109,9 @@ public final class AiConversationContextServiceImpl
         List<AiConversationTurn> promptTurns = snapshot.turns().stream()
                 .filter(AiConversationTurn::includedInPrompt)
                 .toList();
-        long estimated = tokenEstimator.estimate(
-                properties.systemPrompt(),
-                snapshot.durableCompactionJson(),
-                snapshot.ephemeralCompactionJson(),
-                promptTurns,
-                currentInput);
+        long estimated = Math.addExact(
+                snapshot.estimatedContextTokens(),
+                tokenEstimator.estimateCurrentInput(currentInput));
         verifyBudget(model, estimated);
         return new AiConversationPromptSnapshot(
                 properties.systemPrompt(),
@@ -132,12 +134,8 @@ public final class AiConversationContextServiceImpl
                     "模型缺少上下文窗口或最大输出限制",
                     false);
         }
-        long budget = Math.floorDiv(
-                Math.multiplyExact(
-                        model.contextWindowTokens(),
-                        properties.preCompactionPercent()),
-                100L);
-        if (Math.addExact(estimated, model.maxOutputTokens()) > budget) {
+        if (Math.addExact(estimated, model.maxOutputTokens())
+                > model.contextWindowTokens()) {
             throw new AiConversationException(
                     AiConversationErrorCode.AI_CONTEXT_TOO_LARGE,
                     "当前会话超过模型上下文限制，需要先完成压缩",
@@ -147,12 +145,10 @@ public final class AiConversationContextServiceImpl
 
     private boolean reachesCompactionThreshold(
             AiModelCacheEntry model, long estimated) {
-        long threshold = Math.floorDiv(
-                Math.multiplyExact(
+        return Math.multiplyExact(estimated, 100L)
+                >= Math.multiplyExact(
                         model.contextWindowTokens(),
-                        properties.preCompactionPercent()),
-                100L);
-        return Math.addExact(estimated, model.maxOutputTokens()) >= threshold;
+                        properties.preCompactionPercent());
     }
 
     private AiConversationContextSnapshot rebuild(
@@ -192,14 +188,27 @@ public final class AiConversationContextServiceImpl
         }
         OffsetDateTime createdAt =
                 clock.instant().atOffset(ZoneOffset.UTC);
+        long durableCompactionTokens = tokenEstimator.estimateCompaction(
+                conversation.getCompactedContextJson());
+        long estimatedContextTokens = tokenEstimator.estimateContext(
+                properties.systemPrompt(),
+                conversation.getCompactedContextJson(),
+                null,
+                turns);
         AiConversationContextSnapshot rebuilt =
                 new AiConversationContextSnapshot(
-                        1,
+                        2,
                         UUID.randomUUID().toString(),
                         createdAt,
                         createdAt.plus(properties.contextTtl()),
                         checkpoint,
                         cursor,
+                        estimatedContextTokens,
+                        1L,
+                        durableCompactionTokens,
+                        0L,
+                        createdAt,
+                        null,
                         conversation.getCompactedContextJson(),
                         null,
                         turns,
@@ -303,15 +312,19 @@ public final class AiConversationContextServiceImpl
                     message.getContentAttachmentsJson(), ATTACHMENT_LIST);
             List<AiConversationAttachment> assistantAttachments = objectMapper.readValue(
                     message.getResponseAttachmentsJson(), ATTACHMENT_LIST);
+            AiConversationContent user = new AiConversationContent(
+                    message.getContentText(), userAttachments);
+            AiConversationContent assistant = new AiConversationContent(
+                    message.getQuestionTokens(), assistantAttachments);
             return new AiConversationTurn(
                     Long.toString(message.getId()),
                     message.getId(),
                     null,
-                    new AiConversationContent(
-                            message.getContentText(), userAttachments),
-                    new AiConversationContent(
-                            message.getQuestionTokens(), assistantAttachments),
-                    AiConversationTurnState.PERSISTED);
+                    user,
+                    assistant,
+                    AiConversationTurnState.PERSISTED,
+                    null,
+                    tokenEstimator.estimateTurn(user, assistant));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException(
                     "Persisted AI conversation message JSON is invalid.",

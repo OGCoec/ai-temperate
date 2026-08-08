@@ -122,6 +122,10 @@ final class UserAiModelCatalogServiceImplTest {
              assertThat(item.icon()).isEqualTo("https://example.test/model.svg");
              assertThat(item.modelNameMatchedTokens()).containsExactly("mini");
             assertThat(item.descriptionMatchedTokens()).containsExactly("mini");
+            assertThat(item.contextWindowTokens()).isEqualTo(256_000L);
+            assertThat(item.contextWindowK()).isEqualTo(256L);
+            assertThat(item.maxOutputTokens()).isEqualTo(32_000L);
+            assertThat(item.maxOutputK()).isEqualTo(32L);
             assertThat(item.capabilities()).containsExactly(AiModelCapabilityCode.RESPONSES);
         });
         assertThat(result.total()).isEqualTo(1);
@@ -172,6 +176,22 @@ final class UserAiModelCatalogServiceImplTest {
     }
 
     @Test
+    void exposesXaiReasoningAndImageLevelsFromVendorWithoutModelNameGuessing() {
+        when(cacheService.getOrLoadEnabledSnapshot()).thenReturn(snapshot(
+                entry(53L, "custom-admin-name", "xai",
+                        List.of(AiModelCapabilityCode.IMAGE_GENERATION))));
+        UserAiModelCatalogServiceImpl service = service();
+
+        var result = service.detail(publicIdCodec.encode(53L));
+
+        assertThat(result.supportedReasoningEffortLevels())
+                .containsExactly((short) 1, (short) 2, (short) 3);
+        assertThat(result.defaultReasoningEffortLevel()).isEqualTo((short) 2);
+        assertThat(result.supportedImageGenerationLevels())
+                .containsExactly((short) 1, (short) 3);
+    }
+
+    @Test
     void rejectsInvalidPaginationBeforeReadingCache() {
         UserAiModelCatalogServiceImpl service = service();
 
@@ -206,10 +226,18 @@ final class UserAiModelCatalogServiceImplTest {
             long id,
             String name,
             List<AiModelCapabilityCode> capabilities) {
+        return entry(id, name, "openai", capabilities);
+    }
+
+    private static AiModelCacheEntry entry(
+            long id,
+            String name,
+            String vendor,
+            List<AiModelCapabilityCode> capabilities) {
         return new AiModelCacheEntry(
                 id,
                 name,
-                "openai",
+                vendor,
                 "完整模型描述",
                 "https://example.test/model.svg",
                 List.of("代码", "推理"),
@@ -231,7 +259,20 @@ final class UserAiModelCatalogServiceImplTest {
                 new ObjectMapper(),
                 new AiConversationImageProfileServiceImpl(),
                 new AiConversationImageGenerationProperties(
-                        true, "/v1/images/generations", 33_554_432));
+                        true,
+                        "/v1/images/generations",
+                        "/v1/images/edits",
+                        33_554_432,
+                        384_000,
+						768,
+						70,
+						268_435_456L),
+				new com.example.temperate.service.user.aiconversation.video.impl
+						.AiConversationVideoProfileServiceImpl(
+							com.example.temperate.service.user.aiconversation.config
+								.AiConversationVideoGenerationProperties.officialDefaults()),
+				com.example.temperate.service.user.aiconversation.config
+						.AiConversationVideoGenerationProperties.officialDefaults());
     }
 
     private static AiModelSearchCriteria emptyCriteria() {
@@ -251,6 +292,8 @@ final class UserAiModelCatalogServiceImplTest {
         model.setInputRatio(new BigDecimal("1.00000000"));
         model.setCachedInputRatio(new BigDecimal("0.25000000"));
         model.setOutputRatio(new BigDecimal("4.00000000"));
+        model.setContextWindowTokens(256_000L);
+        model.setMaxOutputTokens(32_000L);
         model.setEnabled(true);
         model.setCreatedAt(LocalDate.of(2026, 7, 31));
         model.setUpdatedAt(LocalDate.of(2026, 7, 31));

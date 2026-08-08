@@ -7,24 +7,49 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 PreAuth WebRTC 两字段由专用 Lua 原子维护，且 IP 评估变化会清除旧网络结果。
+ * 验证 PreAuth v6 WebRTC phase、generation 和截止时间全部通过专用 Lua 原子维护。
  */
 class RedisPreAuthStoreWebRtcTest {
 
     @Test
-    void assessmentScriptClearsExactlyTheTwoWebRtcFieldsWhenIpChanges()
+    void assessmentScriptStartsANewRequiredGenerationWhenIpChanges()
             throws Exception {
         String script = Files.readString(Path.of(
                 "src/main/resources/lua/network-risk/preauth_record_assessment.lua"));
 
         assertThat(script)
-                .contains("currentIpDigest", "webRtcStatus", "webRtcIps", "HDEL")
-                .doesNotContain("webRtcSeenAt", "webRtcMismatchCount", "webRtcRiskLevel");
+                .contains(
+                        "currentIpDigest",
+                        "webRtcPhase', 'REQUIRED'",
+                        "webRtcGeneration",
+                        "webRtcDeadlineAt",
+                        "webRtcFailureReason",
+                        "webRtcIps")
+                .doesNotContain("webRtcStatus");
     }
 
     @Test
-    void webRtcScriptChecksAllBindingsAndWritesBothFieldsTogether()
+    void beginScriptUsesRedisTimeAndNeverExtendsAnExistingPendingWindow()
             throws Exception {
+        String script = Files.readString(Path.of(
+                "src/main/resources/lua/network-risk/preauth_begin_webrtc.lua"));
+
+        assertThat(script)
+                .contains(
+                        "redis.call('TIME')",
+                        "currentPhase ~= 'REQUIRED'",
+                        "currentPhase == 'PENDING'",
+                        "webRtcDeadlineAt",
+                        "PENDING",
+                        "START_TIMEOUT",
+                        "REPORT_TIMEOUT")
+                .doesNotContain("webRtcPendingUntil");
+        assertThat(script.indexOf("currentPhase == 'PENDING'"))
+                .isLessThan(script.lastIndexOf("webRtcDeadlineAt"));
+    }
+
+    @Test
+    void reportScriptChecksGenerationDeadlineAndAllBindings() throws Exception {
         String script = Files.readString(Path.of(
                 "src/main/resources/lua/network-risk/preauth_write_webrtc.lua"));
 
@@ -34,44 +59,63 @@ class RedisPreAuthStoreWebRtcTest {
                         "deviceDigest",
                         "scope",
                         "currentIpDigest",
-                        "webRtcStatus",
-                        "webRtcIps",
-                        "PEXPIRE")
-                .contains("HSET")
-                .contains(
-                        "previousStatus == 'true'",
-                        "ARGV[4] == 'false'",
-                        "ARGV[6] == '0'",
-                        "return 2",
-                        "return 3")
-                .doesNotContain("webRtcSeenAt", "webRtcMismatchCount", "webRtcRiskLevel");
+                        "webRtcGeneration",
+                        "webRtcDeadlineAt",
+                        "REPORT_TIMEOUT",
+                        "redis.call('TIME')",
+                        "return -2",
+                        "return 4")
+                .contains("HSET", "PEXPIRE")
+                .doesNotContain("webRtcStatus");
+        assertThat(script.indexOf("if currentPhase == 'FAILED'"))
+                .isGreaterThanOrEqualTo(0)
+                .isLessThan(script.indexOf("if ARGV[6] == 'VERIFIED'"));
     }
 
     @Test
-    void creationOmitsWebRtcFieldsAndRotationOverwritesReencryptedState()
+    void timeoutScriptExpiresRequiredAndPendingWithDifferentReasons() throws Exception {
+        String script = Files.readString(Path.of(
+                "src/main/resources/lua/network-risk/preauth_expire_webrtc.lua"));
+
+        assertThat(script)
+                .contains(
+                        "currentPhase ~= 'REQUIRED' and currentPhase ~= 'PENDING'",
+                        "webRtcGeneration",
+                        "webRtcDeadlineAt",
+                        "START_TIMEOUT",
+                        "REPORT_TIMEOUT",
+                        "redis.call('TIME')")
+                .contains("HDEL", "webRtcIps");
+    }
+
+    @Test
+    void rotationPreservesVerifiedOrCreatesANewRequiredGeneration()
             throws Exception {
-        String create = Files.readString(Path.of(
-                "src/main/resources/lua/network-risk/preauth_create.lua"));
         String rotate = Files.readString(Path.of(
                 "src/main/resources/lua/network-risk/preauth_rotate_authenticated.lua"));
 
-        assertThat(create).doesNotContain("webRtcStatus", "webRtcIps");
         assertThat(rotate)
                 .contains(
                         "HGETALL",
-                        "'webRtcStatus', ARGV[7]",
-                        "'webRtcIps', ARGV[8]")
-                .contains("HDEL", "webRtcStatus", "webRtcIps");
+                        "sourcePhase ~= ARGV[8]",
+                        "sourceGeneration ~= expectedSourceGeneration",
+                        "webRtcPhase', ARGV[10]",
+                        "webRtcGeneration', ARGV[11]",
+                        "webRtcDeadlineAt",
+                        "webRtcIps', ARGV[12]",
+                        "redis.call('TIME')")
+                .doesNotContain("webRtcStatus");
     }
 
     @Test
-    void v4HashReadsMissingOptionalWebRtcFieldsAsNull() throws Exception {
+    void v6HashRequiresExplicitPhaseGenerationAndGenericDeadline() throws Exception {
         String store = Files.readString(Path.of(
                 "src/main/java/com/example/temperate/service/risk/preauth/"
                         + "store/impl/RedisPreAuthStore.java"));
 
         assertThat(store).contains(
-                "nullableBoolean(values, \"webRtcStatus\")",
-                "nullable(values, \"webRtcIps\")");
+                "PreAuthWebRtcPhase.valueOf(value(values, \"webRtcPhase\"))",
+                "Long.parseLong(value(values, \"webRtcGeneration\"))",
+                "nullableEpochMillis(values, \"webRtcDeadlineAt\")");
     }
 }

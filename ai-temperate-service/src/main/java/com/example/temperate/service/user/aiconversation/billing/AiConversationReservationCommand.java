@@ -10,12 +10,28 @@ public record AiConversationReservationCommand(
         byte[] conversationId,
         AiModelCacheEntry model,
         byte[] idempotencyDigest,
-        long estimatedPromptTokens) {
+        AiConversationReservationMetering metering) {
 
     public AiConversationReservationCommand {
         conversationId = conversationId == null ? null : conversationId.clone();
         idempotencyDigest = idempotencyDigest == null
                 ? null
                 : idempotencyDigest.clone();
+        metering = java.util.Objects.requireNonNull(metering);
+    }
+
+    public AiConversationReservationCommand(
+            long userId,
+            byte[] conversationId,
+            AiModelCacheEntry model,
+            byte[] idempotencyDigest,
+            long estimatedPromptTokens) {
+        this(userId, conversationId, model, idempotencyDigest,
+                new TokenReservationMetering(
+                        estimatedPromptTokens,
+                        model.maxOutputTokens(),
+                        model.inputRatio(),
+                        model.cachedInputRatio(),
+                        model.outputRatio()));
     }
 }

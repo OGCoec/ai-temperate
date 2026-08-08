@@ -19,11 +19,14 @@ import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthIssue;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.service.auth.totp.login.TotpLoginService;
 import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -77,7 +80,8 @@ class LoginControllerTokenTransportTest {
                 preAuthService,
                 preAuthTransport,
                 riskContextResolver,
-                riskProperties);
+                riskProperties,
+                new WebRtcVerificationTransport());
         when(strategies.login(eq(LoginStrategyType.PASSWORD), any()))
                 .thenReturn(result());
         when(codeFlowService.verifyTurnstile(any(), any()))
@@ -99,8 +103,7 @@ class LoginControllerTokenTransportTest {
                 servletResponse,
                 "access-value",
                 "refresh-value",
-                "csrf-value",
-                REFRESH_EXPIRES_AT);
+                "csrf-value");
         assertThat(response.accessToken()).isNull();
         assertThat(response.refreshToken()).isNull();
         assertThat(response.csrfToken()).isNull();
@@ -124,7 +127,7 @@ class LoginControllerTokenTransportTest {
                 new MockHttpServletRequest(),
                 servletResponse);
 
-        verify(cookieWriter, never()).writeSession(any(), any(), any(), any(), any());
+        verify(cookieWriter, never()).writeSession(any(), any(), any(), any());
         assertThat(response.accessToken()).isEqualTo("access-value");
         assertThat(response.refreshToken()).isEqualTo("refresh-value");
         assertThat(response.csrfToken()).isEqualTo("csrf-value");
@@ -146,9 +149,10 @@ class LoginControllerTokenTransportTest {
 
         assertThat(response.status()).isEqualTo(LoginFlowStatus.TOTP_REQUIRED);
         assertThat(response.totpFlowToken()).isNull();
+        assertThat(response.totpExpiresAt()).isEqualTo(expiresAt);
         verify(flowCookieWriter).writeTotpLoginFlow(
-                servletResponse, "totp-flow", expiresAt);
-        verify(cookieWriter, never()).writeSession(any(), any(), any(), any(), any());
+                servletResponse, "totp-flow");
+        verify(cookieWriter, never()).writeSession(any(), any(), any(), any());
         verify(preAuthService, never()).promoteAuthenticated(any(), any(), any(), any());
     }
 
@@ -179,7 +183,7 @@ class LoginControllerTokenTransportTest {
                         servletResponse))
                 .isInstanceOf(IllegalStateException.class);
 
-        verify(cookieWriter, never()).writeSession(any(), any(), any(), any(), any());
+        verify(cookieWriter, never()).writeSession(any(), any(), any(), any());
     }
 
     @Test
@@ -208,8 +212,43 @@ class LoginControllerTokenTransportTest {
                 servletResponse,
                 "access-value",
                 "refresh-value",
-                "csrf-value",
-                REFRESH_EXPIRES_AT);
+                "csrf-value");
+    }
+
+    @Test
+    void authenticatedPreAuthRotationPublishesBackgroundVerificationHeaders() {
+        when(riskProperties.mode()).thenReturn(NetworkRiskMode.ENFORCE);
+        when(riskContextResolver.resolve(any())).thenReturn(Optional.of(
+                new TrustedNetworkObservation(
+                        "203.0.113.10",
+                        "US",
+                        64500L,
+                        new BigDecimal("41.8781"),
+                        new BigDecimal("-87.6298"),
+                        Instant.parse("2026-07-25T12:00:00Z"))));
+        when(preAuthService.promoteAuthenticated(any(), any(), any(), any()))
+                .thenReturn(new PreAuthIssue(
+                        "rotated-preauth",
+                        Instant.parse("2026-07-25T12:30:00Z"),
+                        PreAuthWebRtcPhase.REQUIRED,
+                        5L));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        controller.password(
+                passwordRequest(),
+                "device-1",
+                "H5",
+                request,
+                response);
+
+        assertThat(response.getHeader(WebRtcVerificationTransport.STATE_HEADER))
+                .isEqualTo("REQUIRED");
+        assertThat(response.getHeader(WebRtcVerificationTransport.GENERATION_HEADER))
+                .isEqualTo("5");
     }
 
     @Test

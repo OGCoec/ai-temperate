@@ -60,6 +60,7 @@
 	import UserProfilePanel from './workspace/user-profile-panel.vue'
 
 	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile'])
+	const DESKTOP_SIDEBAR_MIN_WIDTH = 768
 
 	export default {
 		components: {
@@ -143,7 +144,7 @@
 					if (destination === 'chat') {
 						const windowWidth = Number(
 							uni.getSystemInfoSync().windowWidth || 0)
-						if (windowWidth < 1024) {
+						if (windowWidth < DESKTOP_SIDEBAR_MIN_WIDTH) {
 							this.openConversationDrawer()
 						} else {
 							this.toggleRecentConversations()
@@ -281,18 +282,23 @@
 	.user-workspace {
 		@include user-safe-viewport;
 		width: 100%;
+		min-width: 0;
+		max-width: 100%;
 		height: 100dvh;
 		display: flex;
+		flex-direction: row;
 		overflow: hidden;
 		background: #0b0d0c;
 		color: #f3f5f4;
 	}
 
 	.user-workspace-content {
+		width: 0;
+		max-width: 100%;
 		min-width: 0;
 		min-height: 0;
 		height: 100%;
-		flex: 1;
+		flex: 1 1 0%;
 		overflow: hidden;
 	}
 </style>

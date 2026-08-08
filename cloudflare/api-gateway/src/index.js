@@ -8,6 +8,12 @@ const AI_CONVERSATION_MESSAGES_PATH =
 	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/messages$/
 const AI_CONVERSATION_RESPONSE_PATH =
 	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/responses$/
+const AI_CONVERSATION_CONTEXT_USAGE_PATH =
+	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/context-usage$/
+const AI_CONVERSATION_COMPACTION_PATH =
+	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/compactions$/
+const AI_CONVERSATION_CONTEXT_EVENTS_PATH =
+	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/context\/events$/
 const AI_CONVERSATION_GENERATION_EVENTS_PATH =
 	/^\/api\/ai\/conversations\/generations\/([A-Za-z0-9_-]{22})\/events$/
 const AI_CONVERSATION_GENERATION_DIAGNOSTICS_PATH =
@@ -191,6 +197,16 @@ function classifyRoute(url) {
 					'/api/ai/conversations/generations/{generationId}/events'
 			}
 		}
+		if (AI_CONVERSATION_CONTEXT_EVENTS_PATH.test(url.pathname)) {
+			return {
+				allowed: true,
+				migration: false,
+				surface: 'root',
+				streaming: true,
+				routeTemplate:
+					'/api/ai/conversations/{conversationId}/context/events'
+			}
+		}
 		if (AI_CONVERSATION_GENERATION_DIAGNOSTICS_PATH.test(url.pathname)) {
 			return { allowed: true, migration: false, surface: 'root' }
 		}
@@ -205,6 +221,8 @@ function classifyRoute(url) {
 			|| url.pathname === '/api/ai/conversations'
 			|| url.pathname === '/api/ai/conversations/responses/cancel'
 			|| AI_CONVERSATION_MESSAGES_PATH.test(url.pathname)
+			|| AI_CONVERSATION_CONTEXT_USAGE_PATH.test(url.pathname)
+			|| AI_CONVERSATION_COMPACTION_PATH.test(url.pathname)
 			|| url.pathname === '/api/ai/conversation-attachments/preuploads'
 			|| url.pathname === '/api/ai/conversations/stream-diagnostics'
 		if (url.pathname === '/api/health'

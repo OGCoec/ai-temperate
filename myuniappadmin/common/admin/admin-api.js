@@ -1,7 +1,10 @@
 import { adminClientPlatform } from './admin-config.js'
 import { adminRequest, hasBrowserAdminFlow } from './admin-http.js'
 import { invalidateAdminPreAuth } from './admin-pre-auth.js'
-import { invalidateAdminWebRtcVerification } from './admin-webrtc-verification.js'
+import {
+	invalidateAdminWebRtcVerification,
+	startAdminWebRtcVerificationInBackground
+} from './admin-webrtc-verification.js'
 import {
 	clearAdminFlow,
 	clearAdminSession,
@@ -103,6 +106,8 @@ export const adminApi = {
 				preAuthToken: response.preAuthToken
 			})
 		}
+		invalidateAdminWebRtcVerification()
+		void startAdminWebRtcVerificationInBackground().catch(() => {})
 		clearAdminFlow('login')
 		return response
 	},

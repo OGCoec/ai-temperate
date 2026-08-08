@@ -9,6 +9,7 @@ import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.web.admin.security.AdminClientPlatformResolver;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
+import com.example.temperate.web.risk.PreAuthTransport;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -36,9 +37,10 @@ class AdminWebExceptionHandlerTest {
                 Path.of("target/admin-web-exception-handler-test/complete.yaml"));
         AdminWebExceptionHandler handler = new AdminWebExceptionHandler(
                 clock,
-                new AdminCookieWriter(properties, clock),
+                new AdminCookieWriter(properties),
                 new AdminClientPlatformResolver(),
-                mock(AdminExceptionLogger.class));
+                mock(AdminExceptionLogger.class),
+                new PreAuthTransport());
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Origin", "https://admin.niko000o.site");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -62,7 +64,8 @@ class AdminWebExceptionHandlerTest {
                 .anyMatch(value -> value.startsWith("admin_register_token="))
                 .anyMatch(value -> value.startsWith("admin_login_flow="))
                 .noneMatch(value -> value.startsWith("admin_session="))
-                .noneMatch(value -> value.startsWith("ADMIN-XSRF-TOKEN="));
+                .noneMatch(value -> value.startsWith("ADMIN-XSRF-TOKEN="))
+                .noneMatch(value -> value.startsWith("__Host-ait-admin-preauth="));
     }
 
     @Test
@@ -72,9 +75,10 @@ class AdminWebExceptionHandlerTest {
                 Path.of("target/admin-web-exception-handler-test/complete.yaml"));
         AdminWebExceptionHandler handler = new AdminWebExceptionHandler(
                 clock,
-                new AdminCookieWriter(properties, clock),
+                new AdminCookieWriter(properties),
                 new AdminClientPlatformResolver(),
-                mock(AdminExceptionLogger.class));
+                mock(AdminExceptionLogger.class),
+                new PreAuthTransport());
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Origin", "https://admin.niko000o.site");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -90,6 +94,8 @@ class AdminWebExceptionHandlerTest {
         assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))
                 .anyMatch(value -> value.startsWith("admin_session="))
                 .anyMatch(value -> value.startsWith("ADMIN-XSRF-TOKEN="))
+                .anyMatch(value -> value.startsWith("__Host-ait-admin-preauth=")
+                        && value.contains("Max-Age=0"))
                 .noneMatch(value -> value.startsWith("admin_register_token="))
                 .noneMatch(value -> value.startsWith("admin_login_flow="));
     }

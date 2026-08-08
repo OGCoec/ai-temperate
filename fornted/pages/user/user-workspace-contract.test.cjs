@@ -46,6 +46,17 @@ test('workspace owns one sidebar and switches already-mounted content panels wit
 	assert.doesNotMatch(workspace, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
 })
 
+test('workspace reserves only the remaining flex width for protected page content', () => {
+	const workspace = read('components/user/user-workspace.vue')
+
+	assert.match(workspace, /DESKTOP_SIDEBAR_MIN_WIDTH\s*=\s*768/)
+	assert.match(workspace, /windowWidth\s*<\s*DESKTOP_SIDEBAR_MIN_WIDTH/)
+	assert.match(workspace,
+		/\.user-workspace\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%[^}]*flex-direction:\s*row/)
+	assert.match(workspace,
+		/\.user-workspace-content\s*\{[^}]*width:\s*0[^}]*max-width:\s*100%[^}]*min-width:\s*0[^}]*flex:\s*1 1 0%/)
+})
+
 test('workspace keeps navigation visible while authentication and panel data are pending', () => {
 	const workspace = read('components/user/user-workspace.vue')
 	const profilePanel = read('components/user/workspace/user-profile-panel.vue')
@@ -110,4 +121,28 @@ test('all ordinary user pages use a custom navigation bar and one viewport shell
 		assert.equal(page.style?.navigationStyle, 'custom')
 		assert.equal(page.style?.backgroundColor, '#0b0d0c')
 	}
+})
+
+test('chat video previews preserve their aspect ratio and stay within the available viewport', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const videoCardBindings = chatPanel.match(
+		/:class="\{ 'is-video': previewVideo\(attachment\) \}"/g) || []
+	const videoStyleBindings = chatPanel.match(
+		/:style="previewVideo\(attachment\) \? generatedVideoCardStyle\(attachment(?:, message\.videoMetadata)?\) : null"/g) || []
+	const metadataBindings = chatPanel.match(
+		/@loadedmetadata="handleGeneratedVideoMetadata\(attachment, \$event\)"/g) || []
+
+	assert.equal(videoCardBindings.length, 2)
+	assert.equal(videoStyleBindings.length, 2)
+	assert.equal(metadataBindings.length, 2)
+	assert.match(chatPanel, /GENERATED_VIDEO_MAX_WIDTH_PX\s*=\s*720/)
+	assert.match(chatPanel, /GENERATED_VIDEO_MAX_HEIGHT_PX\s*=\s*1080/)
+	assert.match(chatPanel, /GENERATED_VIDEO_VIEWPORT_HEIGHT_RATIO\s*=\s*0\.68/)
+	assert.match(chatPanel, /generatedVideoDisplaySize\(/)
+	assert.match(chatPanel,
+		/\.attachment-card\.is-video\s*\{[^}]*width:\s*min\(100%,\s*720px\)[^}]*max-height:\s*min\(68vh,\s*1080px\)[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*justify-self:\s*center/)
+	assert.match(chatPanel,
+		/\.attachment-video\s*\{[^}]*width:\s*100%[^}]*height:\s*100%[^}]*object-fit:\s*contain/)
+	assert.doesNotMatch(chatPanel,
+		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
 })

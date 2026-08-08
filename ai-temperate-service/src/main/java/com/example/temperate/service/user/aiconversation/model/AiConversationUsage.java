@@ -7,7 +7,7 @@ public record AiConversationUsage(
         long promptTokens,
         long cachedPromptTokens,
         long completionTokens,
-        long reasoningTokens) {
+        long reasoningTokens) implements AiConversationMeteredUsage {
 
     public AiConversationUsage {
         if (promptTokens < 0
@@ -17,5 +17,10 @@ public record AiConversationUsage(
                 || cachedPromptTokens > promptTokens) {
             throw new IllegalArgumentException("AI usage values are invalid.");
         }
+    }
+
+    @Override
+    public AiConversationMeteringBasis basis() {
+        return AiConversationMeteringBasis.TOKEN;
     }
 }

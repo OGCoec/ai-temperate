@@ -11,11 +11,12 @@ end
 local ordinal = redis.call('HINCRBY', KEYS[1], 'sequence:ephemeral', 1)
 local root = 'ephemeral:' .. ordinal
 local meta = cjson.encode({
-    schemaVersion = 1,
+    schemaVersion = 2,
     state = 'STREAMING',
     ordinal = ordinal,
     usagePublicId = ARGV[2],
-    createdAt = ARGV[3]
+    createdAt = ARGV[3],
+    estimatedTokens = 0
 })
 redis.call('HSET', KEYS[1], root .. ':meta', meta)
 

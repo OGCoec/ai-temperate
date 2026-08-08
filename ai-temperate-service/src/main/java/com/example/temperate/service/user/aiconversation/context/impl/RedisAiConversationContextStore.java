@@ -12,6 +12,7 @@ import com.example.temperate.service.user.aiconversation.context.AiConversationE
 import com.example.temperate.service.user.aiconversation.context.AiConversationInterruptionSource;
 import com.example.temperate.service.user.aiconversation.context.AiConversationTurn;
 import com.example.temperate.service.user.aiconversation.context.AiConversationTurnState;
+import com.example.temperate.service.user.aiconversation.context.AiConversationTokenEstimator;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,7 +50,7 @@ public final class RedisAiConversationContextStore
 
     private static final Logger LOGGER =
             LoggerFactory.getLogger(RedisAiConversationContextStore.class);
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
     private static final int FIELD_CHUNK_BYTES = 4 * 1024;
     // 参数体预留 RESP 编码、Lua SHA 和 Key 开销，确保完整 Redis 请求仍低于 1 MiB。
     private static final int MAX_COMMAND_BYTES = 880 * 1024;
@@ -69,8 +70,6 @@ public final class RedisAiConversationContextStore
             script("lua/ai-conversation/append_fields.lua");
     private static final DefaultRedisScript<Long> START_EPHEMERAL_SCRIPT =
             script("lua/ai-conversation/start_ephemeral.lua");
-    private static final DefaultRedisScript<Long> MARK_INTERRUPTED_SCRIPT =
-            script("lua/ai-conversation/mark_ephemeral_interrupted.lua");
     private static final DefaultRedisScript<Long> SAVE_INTERRUPTED_SCRIPT =
             script("lua/ai-conversation/save_ephemeral_interrupted.lua");
     private static final DefaultRedisScript<Long> COMMIT_SCRIPT =
@@ -82,6 +81,7 @@ public final class RedisAiConversationContextStore
     private final RedisKeyFactory keyFactory;
     private final ObjectMapper objectMapper;
     private final AiConversationProperties properties;
+    private final AiConversationTokenEstimator tokenEstimator;
     private final Clock clock;
     private final AiConversationMetrics metrics;
 
@@ -90,12 +90,14 @@ public final class RedisAiConversationContextStore
             RedisKeyFactory keyFactory,
             ObjectMapper objectMapper,
             AiConversationProperties properties,
+            AiConversationTokenEstimator tokenEstimator,
             Clock clock,
             AiConversationMetrics metrics) {
         this.redisTemplate = Objects.requireNonNull(redisTemplate);
         this.keyFactory = Objects.requireNonNull(keyFactory);
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.properties = Objects.requireNonNull(properties);
+        this.tokenEstimator = Objects.requireNonNull(tokenEstimator);
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
     }
@@ -314,27 +316,6 @@ public final class RedisAiConversationContextStore
     }
 
     @Override
-    public AiConversationContextWriteOutcome markEphemeralInterrupted(
-            String conversationPublicId,
-            String generation,
-            long ephemeralOrdinal) {
-        try {
-            Long result = redisTemplate.execute(
-                    MARK_INTERRUPTED_SCRIPT,
-                    List.of(key(conversationPublicId)),
-                    generation,
-                    Long.toString(ephemeralOrdinal));
-            return Long.valueOf(1L).equals(result)
-                    ? AiConversationContextWriteOutcome.APPLIED
-                    : Long.valueOf(0L).equals(result)
-                            ? AiConversationContextWriteOutcome.GENERATION_MISMATCH
-                            : AiConversationContextWriteOutcome.UNAVAILABLE;
-        } catch (RuntimeException failure) {
-            return AiConversationContextWriteOutcome.UNAVAILABLE;
-        }
-    }
-
-    @Override
     public AiConversationContextWriteOutcome saveInterruptedTurn(
             String conversationPublicId,
             String generation,
@@ -344,6 +325,24 @@ public final class RedisAiConversationContextStore
         Objects.requireNonNull(interruptionSource);
         List<String> chunks = assistantChunks == null
                 ? List.of() : List.copyOf(assistantChunks);
+        AiConversationTurn interrupted = find(conversationPublicId)
+                .filter(snapshot -> snapshot.generation().equals(generation))
+                .flatMap(snapshot -> snapshot.turns().stream()
+                        .filter(AiConversationTurn::ephemeral)
+                        .filter(turn -> Objects.equals(
+                                turn.ordinal(), ephemeralOrdinal))
+                        .findFirst())
+                .orElse(null);
+        if (interrupted == null) {
+            return AiConversationContextWriteOutcome.GENERATION_MISMATCH;
+        }
+        long estimatedTurnTokens = interruptionSource
+                        == AiConversationInterruptionSource.USER_STOP
+                ? tokenEstimator.estimateTurn(
+                        interrupted.user(),
+                        new AiConversationContent(
+                                String.join("", chunks), List.of()))
+                : 0L;
         int commandBytes = chunks.stream()
                 .mapToInt(chunk -> Objects.requireNonNull(chunk)
                         .getBytes(StandardCharsets.UTF_8).length)
@@ -352,10 +351,12 @@ public final class RedisAiConversationContextStore
                 || chunks.size() + 2 > properties.maxHashFields()) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
-        List<String> arguments = new ArrayList<>(5 + chunks.size());
+        List<String> arguments = new ArrayList<>(7 + chunks.size());
         arguments.add(generation);
         arguments.add(Long.toString(ephemeralOrdinal));
         arguments.add(interruptionSource.name());
+        arguments.add(Long.toString(estimatedTurnTokens));
+        arguments.add(clock.instant().atOffset(ZoneOffset.UTC).toString());
         arguments.add(Integer.toString(chunks.size()));
         arguments.add(Integer.toString(properties.maxHashFields()));
         arguments.addAll(chunks);
@@ -382,6 +383,7 @@ public final class RedisAiConversationContextStore
             long ephemeralOrdinal,
             AiConversationContent user,
             AiConversationContent assistant) {
+        long estimatedTurnTokens = tokenEstimator.estimateTurn(user, assistant);
         AiConversationContextSnapshot current = find(conversationPublicId)
                 .filter(snapshot -> snapshot.generation().equals(generation))
                 .orElse(null);
@@ -391,13 +393,32 @@ public final class RedisAiConversationContextStore
         Map<String, String> writes = new LinkedHashMap<>();
         putChunked(writes, "persistent:" + messageId + ":user", json(user));
         putChunked(writes, "persistent:" + messageId + ":assistant", json(assistant));
+        writes.put("persistent:" + messageId + ":tokens",
+                Long.toString(estimatedTurnTokens));
+        long replacedEphemeralTokens = current.turns().stream()
+                .filter(AiConversationTurn::ephemeral)
+                .filter(turn -> Objects.equals(turn.ordinal(), ephemeralOrdinal))
+                .mapToLong(AiConversationTurn::estimatedTokens)
+                .findFirst()
+                .orElse(0L);
+        OffsetDateTime updatedAt = clock.instant().atOffset(ZoneOffset.UTC);
         CacheMeta meta = new CacheMeta(
                 SCHEMA_VERSION,
                 generation,
                 current.createdAt(),
                 current.expiresAt(),
                 current.lastCompactedMessageId(),
-                Math.max(current.latestPersistedMessageId(), messageId));
+                Math.max(current.latestPersistedMessageId(), messageId),
+                nonNegative(Math.addExact(
+                        Math.subtractExact(
+                                current.estimatedContextTokens(),
+                                replacedEphemeralTokens),
+                        estimatedTurnTokens)),
+                Math.addExact(current.contextRevision(), 1L),
+                current.durableCompactionTokens(),
+                current.ephemeralCompactionTokens(),
+                updatedAt,
+                current.lastCompactedAt());
         List<String> deletes = fieldsWithPrefix(
                 conversationPublicId, "ephemeral:" + ephemeralOrdinal + ":");
         if (!writeWithinLimits(writes, 0)
@@ -407,8 +428,9 @@ public final class RedisAiConversationContextStore
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
         List<String> arguments =
-                new ArrayList<>(4 + writes.size() * 2 + deletes.size());
+                new ArrayList<>(5 + writes.size() * 2 + deletes.size());
         arguments.add(generation);
+        arguments.add(Long.toString(current.contextRevision()));
         arguments.add(json(meta));
         arguments.add(Integer.toString(properties.maxHashFields()));
         arguments.add(Integer.toString(writes.size()));
@@ -437,6 +459,8 @@ public final class RedisAiConversationContextStore
             String generation,
             long cutoffMessageId,
             String compactedContextJson) {
+        long compactedContextTokens = tokenEstimator.estimateCompaction(
+                compactedContextJson);
         AiConversationContextSnapshot current = find(conversationPublicId)
                 .filter(snapshot -> snapshot.generation().equals(generation))
                 .orElse(null);
@@ -454,13 +478,33 @@ public final class RedisAiConversationContextStore
                     deletes.size());
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
+        long removedTurnTokens = current.turns().stream()
+                .filter(turn -> !turn.ephemeral())
+                .filter(turn -> turn.messageId() != null
+                        && turn.messageId() <= cutoffMessageId)
+                .mapToLong(AiConversationTurn::estimatedTokens)
+                .sum();
+        long estimatedContextTokens = nonNegative(Math.addExact(
+                Math.subtractExact(
+                        Math.subtractExact(
+                                current.estimatedContextTokens(),
+                                removedTurnTokens),
+                        current.durableCompactionTokens()),
+                compactedContextTokens));
+        OffsetDateTime compactedAt = clock.instant().atOffset(ZoneOffset.UTC);
         CacheMeta meta = new CacheMeta(
                 SCHEMA_VERSION,
                 generation,
                 current.createdAt(),
                 current.expiresAt(),
                 cutoffMessageId,
-                current.latestPersistedMessageId());
+                current.latestPersistedMessageId(),
+                estimatedContextTokens,
+                Math.addExact(current.contextRevision(), 1L),
+                compactedContextTokens,
+                current.ephemeralCompactionTokens(),
+                compactedAt,
+                compactedAt);
         List<String> compactionFields = new ArrayList<>(fieldsWithPrefix(
                 conversationPublicId, DURABLE_COMPACT_FIELD));
         compactionFields.addAll(fieldsWithPrefix(
@@ -471,6 +515,7 @@ public final class RedisAiConversationContextStore
                 DURABLE_COMPACT_FIELD,
                 compactedContextJson,
                 meta,
+                current.contextRevision(),
                 current.fieldCount(),
                 mergeDistinct(compactionFields, deletes));
     }
@@ -482,6 +527,8 @@ public final class RedisAiConversationContextStore
             String compactedContextJson,
             long throughEphemeralOrdinal,
             List<Long> compactedEphemeralOrdinals) {
+        long compactedContextTokens = tokenEstimator.estimateCompaction(
+                compactedContextJson);
         AiConversationContextSnapshot current = find(conversationPublicId)
                 .filter(snapshot -> snapshot.generation().equals(generation))
                 .orElse(null);
@@ -499,13 +546,32 @@ public final class RedisAiConversationContextStore
         if (deletes.size() > properties.maxHashFields()) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
+        long removedTurnTokens = current.turns().stream()
+                .filter(AiConversationTurn::ephemeral)
+                .filter(turn -> selectedOrdinals.contains(turn.ordinal()))
+                .mapToLong(AiConversationTurn::estimatedTokens)
+                .sum();
+        long estimatedContextTokens = nonNegative(Math.addExact(
+                Math.subtractExact(
+                        Math.subtractExact(
+                                current.estimatedContextTokens(),
+                                removedTurnTokens),
+                        current.ephemeralCompactionTokens()),
+                compactedContextTokens));
+        OffsetDateTime compactedAt = clock.instant().atOffset(ZoneOffset.UTC);
         CacheMeta meta = new CacheMeta(
                 SCHEMA_VERSION,
                 generation,
                 current.createdAt(),
                 current.expiresAt(),
                 current.lastCompactedMessageId(),
-                current.latestPersistedMessageId());
+                current.latestPersistedMessageId(),
+                estimatedContextTokens,
+                Math.addExact(current.contextRevision(), 1L),
+                current.durableCompactionTokens(),
+                compactedContextTokens,
+                compactedAt,
+                compactedAt);
         List<String> compactionFields = fieldsWithPrefix(
                 conversationPublicId, EPHEMERAL_COMPACT_FIELD);
         return replaceCompaction(
@@ -514,6 +580,7 @@ public final class RedisAiConversationContextStore
                 EPHEMERAL_COMPACT_FIELD,
                 compactedContextJson,
                 meta,
+                current.contextRevision(),
                 current.fieldCount(),
                 mergeDistinct(compactionFields, deletes));
     }
@@ -549,6 +616,7 @@ public final class RedisAiConversationContextStore
             String compactField,
             String compactedContextJson,
             CacheMeta meta,
+            long expectedContextRevision,
             int currentFieldCount,
             List<String> deletes) {
         Map<String, String> writes = new LinkedHashMap<>();
@@ -561,8 +629,9 @@ public final class RedisAiConversationContextStore
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
         List<String> arguments = new ArrayList<>(
-                5 + deletes.size() + writes.size() * 2);
+                6 + deletes.size() + writes.size() * 2);
         arguments.add(generation);
+        arguments.add(Long.toString(expectedContextRevision));
         arguments.add(json(meta));
         arguments.add(Integer.toString(properties.maxHashFields()));
         arguments.add(Integer.toString(deletes.size()));
@@ -595,7 +664,13 @@ public final class RedisAiConversationContextStore
                 snapshot.createdAt(),
                 snapshot.expiresAt(),
                 snapshot.lastCompactedMessageId(),
-                snapshot.latestPersistedMessageId());
+                snapshot.latestPersistedMessageId(),
+                snapshot.estimatedContextTokens(),
+                snapshot.contextRevision(),
+                snapshot.durableCompactionTokens(),
+                snapshot.ephemeralCompactionTokens(),
+                snapshot.updatedAt(),
+                snapshot.lastCompactedAt());
         fields.put(META_FIELD, json(meta));
         if (snapshot.durableCompactionJson() != null) {
             putCompactionChunked(
@@ -615,6 +690,10 @@ public final class RedisAiConversationContextStore
                     : "persistent:" + turn.messageId();
             putChunked(fields, root + ":user", json(turn.user()));
             putChunked(fields, root + ":assistant", json(turn.assistant()));
+            if (!turn.ephemeral()) {
+                fields.put(root + ":tokens",
+                        Long.toString(turn.estimatedTokens()));
+            }
             if (turn.ephemeral()) {
                 fields.put(
                         root + ":meta",
@@ -626,7 +705,8 @@ public final class RedisAiConversationContextStore
                                 snapshot.createdAt(),
                                 turn.interruptionSource() == null
                                         ? null : turn.interruptionSource().name(),
-                                0)));
+                                0,
+                                turn.estimatedTokens())));
             }
         }
         return fields;
@@ -647,8 +727,6 @@ public final class RedisAiConversationContextStore
         fields.forEach((field, value) -> collectTurnPart(turns, field, value));
         List<AiConversationTurn> decodedTurns = turns.entrySet().stream()
                 .map(entry -> decodeTurn(entry.getKey(), entry.getValue()))
-                .filter(turn -> turn.state()
-                        != AiConversationTurnState.STREAMING)
                 .sorted(Comparator
                         .comparing(AiConversationTurn::ephemeral)
                         .thenComparing(turn -> turn.ephemeral()
@@ -662,6 +740,12 @@ public final class RedisAiConversationContextStore
                 meta.expiresAt(),
                 meta.lastCompactedMessageId(),
                 meta.latestPersistedMessageId(),
+                meta.estimatedContextTokens(),
+                meta.contextRevision(),
+                meta.durableCompactionTokens(),
+                meta.ephemeralCompactionTokens(),
+                meta.updatedAt(),
+                meta.lastCompactedAt(),
                 compactionValue(
                         fields,
                         DURABLE_COMPACT_FIELD,
@@ -686,6 +770,10 @@ public final class RedisAiConversationContextStore
         TurnParts parts = turns.computeIfAbsent(reference, ignored -> new TurnParts());
         if ("meta".equals(segments[2])) {
             parts.meta = value;
+            return;
+        }
+        if ("tokens".equals(segments[2])) {
+            parts.estimatedTokens = value;
             return;
         }
         if (segments.length < 4) {
@@ -721,7 +809,9 @@ public final class RedisAiConversationContextStore
                         null,
                         user,
                         assistant,
-                        AiConversationTurnState.PERSISTED);
+                        AiConversationTurnState.PERSISTED,
+                        null,
+                        parseTokenEstimate(parts.estimatedTokens));
             }
             EphemeralMeta meta = objectMapper.readValue(
                     parts.meta, EphemeralMeta.class);
@@ -732,7 +822,9 @@ public final class RedisAiConversationContextStore
                     user,
                     assistant,
                     AiConversationTurnState.valueOf(meta.state()),
-                    interruptionSource(meta.interruptionSource()));
+                    interruptionSource(meta.interruptionSource()),
+                    meta.estimatedTokens() == null
+                            ? 0L : meta.estimatedTokens());
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException(
                     "AI conversation turn cache is invalid.", exception);
@@ -769,6 +861,10 @@ public final class RedisAiConversationContextStore
             String value) {
         return value == null || value.isBlank()
                 ? null : AiConversationInterruptionSource.valueOf(value);
+    }
+
+    private static long parseTokenEstimate(String value) {
+        return value == null || value.isBlank() ? 0L : Long.parseLong(value);
     }
 
     private void putChunked(
@@ -867,7 +963,8 @@ public final class RedisAiConversationContextStore
         if (Long.valueOf(1L).equals(result)) {
             return AiConversationContextWriteOutcome.APPLIED;
         }
-        if (Long.valueOf(0L).equals(result)) {
+        if (Long.valueOf(0L).equals(result)
+                || Long.valueOf(2L).equals(result)) {
             return AiConversationContextWriteOutcome.GENERATION_MISMATCH;
         }
         return AiConversationContextWriteOutcome.UNAVAILABLE;
@@ -921,17 +1018,32 @@ public final class RedisAiConversationContextStore
         }
     }
 
+    private static long nonNegative(long value) {
+        if (value < 0L) {
+            throw new IllegalStateException(
+                    "AI conversation context token snapshot underflowed.");
+        }
+        return value;
+    }
+
     private record CacheMeta(
             int schemaVersion,
             String generation,
             OffsetDateTime createdAt,
             OffsetDateTime expiresAt,
             long lastCompactedMessageId,
-            long latestPersistedMessageId) {
+            long latestPersistedMessageId,
+            long estimatedContextTokens,
+            long contextRevision,
+            long durableCompactionTokens,
+            long ephemeralCompactionTokens,
+            OffsetDateTime updatedAt,
+            OffsetDateTime lastCompactedAt) {
 
         private CacheMeta {
             Objects.requireNonNull(createdAt, "createdAt");
             Objects.requireNonNull(expiresAt, "expiresAt");
+            Objects.requireNonNull(updatedAt, "updatedAt");
         }
     }
 
@@ -942,12 +1054,14 @@ public final class RedisAiConversationContextStore
             String usagePublicId,
             OffsetDateTime createdAt,
             String interruptionSource,
-            Integer assistantChunkCount) {
+            Integer assistantChunkCount,
+            Long estimatedTokens) {
     }
 
     private static final class TurnParts {
         private final Map<String, String> user = new HashMap<>();
         private final Map<String, String> assistant = new HashMap<>();
         private String meta;
+        private String estimatedTokens;
     }
 }

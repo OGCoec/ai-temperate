@@ -12,6 +12,7 @@ const GENERATION_STATES = new Set([
 	'SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED'
 ])
 const OBSERVER_STATES = new Set(['ATTACHED', 'DETACHED'])
+const COMPACTION_STATES = new Set(['IDLE', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'])
 
 function error(code, message) {
 	const value = new Error(message)
@@ -57,6 +58,63 @@ function nullableDecimal(value, field) {
 		throw error('AI_CONVERSATION_RESPONSE_INVALID', `${field} 无效。`)
 	}
 	return normalized
+}
+
+function safeInteger(value, field, minimum = 0) {
+	const candidate = typeof value === 'string' && DECIMAL.test(value)
+		? Number(value)
+		: value
+	if (!Number.isSafeInteger(candidate) || candidate < minimum) {
+		throw error('AI_CONVERSATION_RESPONSE_INVALID', `${field} 无效。`)
+	}
+	return candidate
+}
+
+export function normalizeAiConversationContextUsage(value) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		throw error('AI_CONVERSATION_RESPONSE_INVALID', '上下文用量响应无效。')
+	}
+	const compactionStatus = requiredText(
+		value.compactionStatus, 'compactionStatus')
+	if (!COMPACTION_STATES.has(compactionStatus)) {
+		throw error('AI_CONVERSATION_RESPONSE_INVALID', '上下文压缩状态无效。')
+	}
+	const usagePercent = Number(value.usagePercent)
+	if (!Number.isFinite(usagePercent) || usagePercent < 0) {
+		throw error('AI_CONVERSATION_RESPONSE_INVALID', 'usagePercent 无效。')
+	}
+	if (typeof value.thresholdReached !== 'boolean'
+		|| typeof value.hardLimitExceeded !== 'boolean') {
+		throw error('AI_CONVERSATION_RESPONSE_INVALID', '上下文限制状态无效。')
+	}
+	return Object.freeze({
+		conversationPublicId: publicId(
+			value.conversationPublicId, HYBRID_PUBLIC_ID, 'conversationPublicId'),
+		modelPublicId: publicId(
+			value.modelPublicId, LONG_PUBLIC_ID, 'modelPublicId'),
+		estimatedContextTokens: safeInteger(
+			value.estimatedContextTokens, 'estimatedContextTokens'),
+		estimatedContextK: safeInteger(
+			value.estimatedContextK, 'estimatedContextK'),
+		contextWindowTokens: safeInteger(
+			value.contextWindowTokens, 'contextWindowTokens', 1),
+		contextWindowK: safeInteger(
+			value.contextWindowK, 'contextWindowK', 1),
+		usagePercent,
+		thresholdPercent: safeInteger(
+			value.thresholdPercent, 'thresholdPercent', 1),
+		thresholdReached: value.thresholdReached,
+		hardLimitExceeded: value.hardLimitExceeded,
+		contextRevision: safeInteger(value.contextRevision, 'contextRevision'),
+		compactionStatus,
+		compactionOperationPublicId: value.compactionOperationPublicId == null
+			? null
+			: publicId(
+				value.compactionOperationPublicId,
+				HYBRID_PUBLIC_ID,
+				'compactionOperationPublicId'),
+		updatedAt: requiredText(value.updatedAt, 'updatedAt')
+	})
 }
 
 function attachment(value) {
@@ -229,6 +287,60 @@ export const aiConversationApi = Object.freeze({
 		return authorizedRequest('/api/ai/conversations/responses/cancel', {
 			method: 'POST',
 			headers: { 'Idempotency-Key': key }
+		})
+	},
+	async contextUsage(conversationPublicId, modelPublicId) {
+		publicId(conversationPublicId, HYBRID_PUBLIC_ID, 'conversationPublicId')
+		publicId(modelPublicId, LONG_PUBLIC_ID, 'modelPublicId')
+		const query = new URLSearchParams({ modelPublicId })
+		return normalizeAiConversationContextUsage(await authorizedRequest(
+			`/api/ai/conversations/${encodeURIComponent(conversationPublicId)}/context-usage?${query}`,
+			{ method: 'GET' }
+		))
+	},
+	async requestCompaction(
+		conversationPublicId,
+		modelPublicId,
+		idempotencyKey
+	) {
+		publicId(conversationPublicId, HYBRID_PUBLIC_ID, 'conversationPublicId')
+		publicId(modelPublicId, LONG_PUBLIC_ID, 'modelPublicId')
+		const response = await authorizedRequest(
+			`/api/ai/conversations/${encodeURIComponent(conversationPublicId)}/compactions`,
+			{
+				method: 'POST',
+				headers: { 'Idempotency-Key': requiredText(
+					idempotencyKey, 'idempotencyKey') },
+				data: { modelPublicId }
+			}
+		)
+		const status = requiredText(response?.status, 'status')
+		if (!new Set([
+			'NOT_REQUIRED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'
+		]).has(status)) {
+			throw error('AI_CONVERSATION_RESPONSE_INVALID', '压缩请求状态无效。')
+		}
+		let operation = null
+		if (response?.operation != null) {
+			const operationStatus = requiredText(
+				response.operation.status, 'operation.status')
+			if (!COMPACTION_STATES.has(operationStatus)
+				|| operationStatus === 'IDLE') {
+				throw error('AI_CONVERSATION_RESPONSE_INVALID', '压缩任务状态无效。')
+			}
+			operation = Object.freeze({
+				...response.operation,
+				operationPublicId: publicId(
+					response.operation.operationPublicId,
+					HYBRID_PUBLIC_ID,
+					'operationPublicId'),
+				status: operationStatus
+			})
+		}
+		return Object.freeze({
+			status,
+			usage: normalizeAiConversationContextUsage(response?.usage),
+			operation
 		})
 	},
 	async createPreuploads(files) {

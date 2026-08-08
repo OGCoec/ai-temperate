@@ -93,11 +93,22 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
                     command.finishReason(),
                     command.failureCode());
             finalStatus = AiConversationGenerationStatus.REFUNDED.code();
+        } else if (command.mode()
+                == AiConversationGenerationBillingMode.RECONCILE_ONLY) {
+            // 上游是否受理或实际成本无法确认时保留全部预扣，禁止猜测退款或伪造零成本。
+            settlementService.markReconcileRequired(
+                    generation.getUsageId(), command.failureCode());
+            finalStatus = AiConversationGenerationStatus.RECONCILE_REQUIRED.code();
         } else if (command.mode() == AiConversationGenerationBillingMode.COMPLETE) {
             settlementResult = settlementService.complete(command.settlementCommand());
             finalStatus = settlementResult.requiresReconciliation()
                     ? AiConversationGenerationStatus.RECONCILE_REQUIRED.code()
                     : AiConversationGenerationStatus.SETTLED.code();
+        } else if (command.mode()
+                == AiConversationGenerationBillingMode.COMPLETE_RECONCILE) {
+            settlementResult = settlementService.completeReconcile(
+                    command.settlementCommand(), command.failureCode());
+            finalStatus = AiConversationGenerationStatus.RECONCILE_REQUIRED.code();
         } else {
             settlementResult = settlementService.settleInterrupted(
                     command.settlementCommand());
@@ -111,6 +122,12 @@ public final class AiConversationGenerationBillingTransactionServiceImpl
                 command.terminalVersion(),
                 AiConversationGenerationStatus.TERMINAL_PENDING_BILLING.code(),
                 finalStatus,
+                command.mode()
+                                == AiConversationGenerationBillingMode.COMPLETE_RECONCILE
+                                || command.mode()
+                                        == AiConversationGenerationBillingMode.RECONCILE_ONLY
+                        ? command.failureCode()
+                        : null,
                 now) != 1) {
             throw new IllegalStateException("AI Generation billing CAS did not affect one row.");
         }

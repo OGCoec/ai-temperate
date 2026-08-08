@@ -3,10 +3,12 @@ package com.example.temperate.web.admin.api;
 import com.example.temperate.service.admin.AdminErrorCode;
 import com.example.temperate.service.admin.AdminException;
 import com.example.temperate.service.risk.ip2location.exception.Ip2LocationApiKeyCapacityExceededException;
+import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.web.admin.security.AdminClientPlatformResolver;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
+import com.example.temperate.web.risk.PreAuthTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Clock;
@@ -21,7 +23,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * 将管理员领域异常映射为稳定 HTTP 状态和脱敏错误体，并清理已终止的 H5 Flow 或会话 Cookie。
+ * 将管理员领域异常映射为稳定 HTTP 状态和脱敏错误体，并清理已终止的 H5 Flow、会话或 PreAuth Cookie。
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice
@@ -31,16 +33,19 @@ public final class AdminWebExceptionHandler {
     private final AdminCookieWriter cookieWriter;
     private final AdminClientPlatformResolver platformResolver;
     private final AdminExceptionLogger exceptionLogger;
+    private final PreAuthTransport preAuthTransport;
 
     public AdminWebExceptionHandler(
             Clock clock,
             AdminCookieWriter cookieWriter,
             AdminClientPlatformResolver platformResolver,
-            AdminExceptionLogger exceptionLogger) {
+            AdminExceptionLogger exceptionLogger,
+            PreAuthTransport preAuthTransport) {
         this.clock = Objects.requireNonNull(clock);
         this.cookieWriter = Objects.requireNonNull(cookieWriter);
         this.platformResolver = Objects.requireNonNull(platformResolver);
         this.exceptionLogger = Objects.requireNonNull(exceptionLogger);
+        this.preAuthTransport = Objects.requireNonNull(preAuthTransport);
     }
 
     @ExceptionHandler(
@@ -67,6 +72,7 @@ public final class AdminWebExceptionHandler {
             }
             if (exception.clearSession()) {
                 cookieWriter.clearSession(response);
+                preAuthTransport.clearCookie(response, RiskScope.ADMIN);
             }
         }
         return ResponseEntity.status(httpStatus)

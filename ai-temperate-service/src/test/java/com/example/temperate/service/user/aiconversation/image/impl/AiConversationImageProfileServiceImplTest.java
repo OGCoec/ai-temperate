@@ -8,11 +8,12 @@ import com.example.temperate.service.user.aiconversation.image.AiConversationIma
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageProfile;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageQuality;
 import com.example.temperate.service.user.aiconversation.model.AiConversationReasoningEffort;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证两个图片模型只开放三档受控质量与标准尺寸，并拒绝客户端伪造更高档位。
+ * 验证所有由管理员授予图片能力的协议兼容模型共享三档受控质量与标准尺寸。
  */
 final class AiConversationImageProfileServiceImplTest {
 
@@ -51,13 +52,13 @@ final class AiConversationImageProfileServiceImplTest {
     }
 
     @Test
-    void rejectsUnknownImageModel() {
-        assertThatThrownBy(() -> service.required(
-                "unknown-image-model",
-                AiConversationReasoningEffort.LOW,
-                AiConversationImageAspect.SQUARE))
-                .isInstanceOf(AiConversationException.class)
-                .hasMessageContaining("图片生成");
+    void doesNotUseModelNameAsRuntimeWhitelist() {
+        assertTier("vendor-compatible-image-model", 1,
+                AiConversationImageQuality.LOW,
+                supportedSizes(),
+                AiConversationReasoningEffort.LOW);
+        assertThat(service.supports("vendor-compatible-image-model")).isTrue();
+        assertThat(service.supports("  ")).isFalse();
     }
 
     @Test
@@ -68,6 +69,49 @@ final class AiConversationImageProfileServiceImplTest {
                 .containsExactly((short) 1, (short) 2, (short) 3);
         assertThat(service.supportedAspects("gpt-image-2"))
                 .containsExactly(AiConversationImageAspect.values());
+    }
+
+    @Test
+    void xaiExposesOnlyOneAndThreeAndRejectsLevelTwo() {
+        assertThat(service.supportedLevels(AiModelProvider.XAI, "xai-image"))
+                .containsExactly((short) 1, (short) 3);
+        assertThat(service.required(
+                        AiModelProvider.XAI,
+                        "xai-image",
+                        AiConversationReasoningEffort.HIGH,
+                        AiConversationImageAspect.SQUARE)
+                .size()).isEqualTo("2048x2048");
+        assertThatThrownBy(() -> service.required(
+                AiModelProvider.XAI,
+                "xai-image",
+                AiConversationReasoningEffort.MEDIUM,
+                AiConversationImageAspect.SQUARE))
+                .isInstanceOf(AiConversationException.class)
+                .hasMessageContaining("1k 和 2k");
+    }
+
+    @Test
+    void googleExposesFourResolutionTiers() {
+        assertThat(service.supportedLevels(AiModelProvider.GOOGLE, "gemini-image"))
+                .containsExactly((short) 1, (short) 2, (short) 3, (short) 4);
+        assertThat(service.required(AiModelProvider.GOOGLE, "gemini-image",
+                AiConversationReasoningEffort.LOW,
+                AiConversationImageAspect.SQUARE).size()).isEqualTo("512x512");
+        assertThat(service.required(AiModelProvider.GOOGLE, "gemini-image",
+                AiConversationReasoningEffort.MEDIUM,
+                AiConversationImageAspect.LANDSCAPE).size()).isEqualTo("1264x848");
+        assertThat(service.required(AiModelProvider.GOOGLE, "gemini-image",
+                AiConversationReasoningEffort.HIGH,
+                AiConversationImageAspect.PORTRAIT).size()).isEqualTo("1696x2528");
+        assertThat(service.required(AiModelProvider.GOOGLE, "gemini-image",
+                AiConversationReasoningEffort.EXTRA_HIGH,
+                AiConversationImageAspect.LANDSCAPE).size()).isEqualTo("5056x3392");
+        assertThat(service.required(AiModelProvider.GOOGLE, "gemini-image",
+                AiConversationReasoningEffort.EXTRA_HIGH,
+                AiConversationImageAspect.SQUARE).quality())
+                .isEqualTo(AiConversationImageQuality.ULTRA);
+        assertThat(service.supports(AiModelProvider.ANTHROPIC, "claude"))
+                .isFalse();
     }
 
     private void assertTier(

@@ -49,15 +49,31 @@ final class AiConversationCompactionContractTest {
     }
 
     @Test
-    void emergencyBudgetPathCompressesEphemeralBeforeDurable()
+    void requestPathNeverRunsCompactionSynchronously()
             throws IOException {
         String response = read(
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/response/impl/AiConversationResponseServiceImpl.java");
+        String service = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/compaction/AiConversationCompactionService.java");
 
-        int ephemeral = response.indexOf("compactEphemeralSynchronously(");
-        int durable = response.indexOf("compactSynchronously(", ephemeral);
-        assertThat(ephemeral).isGreaterThanOrEqualTo(0);
-        assertThat(durable).isGreaterThan(ephemeral);
+        assertThat(response)
+                .doesNotContain("prepareExistingWithEmergencyCompaction")
+                .doesNotContain("compactEphemeralSynchronously(")
+                .doesNotContain("compactSynchronously(");
+        assertThat(service)
+                .doesNotContain("compactSynchronously(")
+                .doesNotContain("compactEphemeralSynchronously(");
+    }
+
+    @Test
+    void completedOperationKeepsThePostCompactionContextRevision()
+            throws IOException {
+        String coordinator = read(
+                "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/compaction/impl/AiConversationCompactionCoordinatorImpl.java");
+
+        assertThat(coordinator)
+                .contains("completed.contextRevision()")
+                .doesNotContain("operation.contextRevision()");
     }
 
     @Test

@@ -9,6 +9,10 @@ import {
 } from './android-flow-keystore.js'
 import { beginTotpLoginFlow, clearTotpLoginFlow } from './totp-login-flow.js'
 import {
+	invalidateWebRtcVerification,
+	startWebRtcVerificationInBackground
+} from './webrtc-verification.js'
+import {
 	beginRegistrationFlow,
 	clearRegistrationFlowState,
 	handleRegistrationFlowError
@@ -86,6 +90,9 @@ function handleLoginResponse(response) {
 	if (response?.status === 'AUTHENTICATED') {
 		clearTotpLoginFlow()
 		saveSession(response)
+		// 登录轮换 PreAuth 后建立新的任务 epoch；后台校验不得读取旧 Token 或复用旧 Promise。
+		invalidateWebRtcVerification()
+		void startWebRtcVerificationInBackground().catch(() => {})
 	}
 	return response
 }

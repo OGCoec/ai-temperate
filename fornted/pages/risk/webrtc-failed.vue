@@ -46,21 +46,13 @@
 
 			<view class="guidance" role="note">
 				<text>请确认浏览器允许 WebRTC，UDP 未被禁用。</text>
-				<text>如正在使用 VPN 或代理，请确保浏览器与 HTTP 请求使用同一公网出口。</text>
+				<text>如正在使用 VPN 或代理，请结束当前会话，并在统一网络出口下重新建立安全会话。</text>
 			</view>
 
 			<text v-if="errorMessage" class="inline-error" role="alert">
 				{{ errorMessage }}
 			</text>
-			<button
-				class="retry-button"
-				:disabled="loading"
-				aria-label="重新检测 WebRTC 网络一致性"
-				@click="retry"
-			>
-				{{ loading ? '正在检测…' : '重新检测' }}
-			</button>
-			<text class="safe-exit-copy">检测通过后返回安全会话入口</text>
+			<text class="safe-exit-copy">当前会话不允许再次开启临时放行窗口</text>
 		</view>
 	</view>
 </template>
@@ -71,13 +63,13 @@
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import {
 		currentWebRtcFailure,
-		ensureWebRtcVerified,
 		refreshWebRtcFailure
 	} from '@/common/auth/webrtc-verification.js'
 
 	const FAILURE_CODES = new Set([
 		'WEBRTC_IP_MISMATCH',
-		'WEBRTC_VERIFICATION_FAILED'
+		'WEBRTC_VERIFICATION_FAILED',
+		'WEBRTC_VERIFICATION_TIMEOUT'
 	])
 
 	export default {
@@ -93,7 +85,7 @@
 					message: '',
 					httpIp: '',
 					webRtcIps: [],
-					retryable: true
+					retryable: false
 				}
 			}
 		},
@@ -170,25 +162,7 @@
 					} else if (FAILURE_CODES.has(error?.code)) {
 						this.details = this.mergeDetails(this.details, this.fromError(error))
 					}
-					this.errorMessage = error?.message || '校验详情加载失败，请重新检测。'
-				} finally {
-					this.loading = false
-				}
-			},
-			async retry() {
-				if (this.loading) return
-				this.loading = true
-				this.errorMessage = ''
-				try {
-					await ensurePreAuth()
-					await ensureWebRtcVerified({ force: true })
-					this.leaveGate()
-				} catch (error) {
-					if (presentRiskBlock(error)) return
-					if (FAILURE_CODES.has(error?.code)) {
-						this.details = this.mergeDetails(this.details, this.fromError(error))
-					}
-					this.errorMessage = error?.message || '重新检测失败，请检查网络后重试。'
+					this.errorMessage = error?.message || '校验详情加载失败。'
 				} finally {
 					this.loading = false
 				}
@@ -205,7 +179,7 @@
 					webRtcIps: preserveMismatchIps
 						? [...(current.webRtcIps || [])]
 						: [...incomingIps],
-					retryable: next.retryable !== false
+					retryable: false
 				}
 			},
 			fromError(error) {
@@ -214,7 +188,7 @@
 					message: error?.message || '',
 					httpIp: error?.httpIp || '',
 					webRtcIps: Array.isArray(error?.webRtcIps) ? [...error.webRtcIps] : [],
-					retryable: error?.retryable !== false
+					retryable: false
 				}
 			}
 		}
@@ -383,27 +357,6 @@
 		line-height: 1.55;
 	}
 
-	.retry-button {
-		@include user-frosted-control;
-		min-height: 88rpx;
-		margin-top: 32rpx;
-		border: 1px solid rgba(123, 238, 190, .36);
-		border-radius: 16rpx;
-		background: rgba(55, 211, 154, .82);
-		color: #06120d;
-		font-size: 28rpx;
-		font-weight: 780;
-		line-height: 1.2;
-	}
-
-	.retry-button:active {
-		transform: scale(0.98);
-	}
-
-	.retry-button[disabled] {
-		opacity: 0.58;
-	}
-
 	.safe-exit-copy {
 		margin-top: 18rpx;
 		color: #64756c;
@@ -411,9 +364,4 @@
 		text-align: center;
 	}
 
-	@media (prefers-reduced-motion: reduce) {
-		.retry-button {
-			transition: opacity 140ms;
-		}
-	}
 </style>

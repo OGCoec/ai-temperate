@@ -15,6 +15,7 @@ class PreAuthSessionAtomicityContractTest {
     void refreshSessionScriptsValidateAndRenewBoundPreAuthInOneExecution()
             throws Exception {
         for (String script : new String[] {
+                "validate_access_session_with_preauth.lua",
                 "validate_refresh_session_with_preauth.lua",
                 "update_refresh_session_csrf_with_preauth.lua"
         }) {
@@ -23,21 +24,25 @@ class PreAuthSessionAtomicityContractTest {
             assertThat(source)
                     .contains(
                             "KEYS[2]",
-                            "preAuth[1] ~= '4'",
+                            "expectedPreAuthSchemaVersion",
+                            "preAuth[1] ~= expectedPreAuthSchemaVersion",
                             "'scope'",
                             "'authState'",
                             "'sessionType'",
                             "'sessionRefDigest'",
-                            "'deviceDigest'",
-                            "local anonymousRecovery = promoteAnonymous",
-                            "'authState', 'AUTHENTICATED'",
-                            "redis.call('PEXPIREAT', KEYS[1]",
-                            "redis.call('PEXPIREAT', KEYS[2]");
+                            "'deviceDigest'");
+            if (!script.startsWith("validate_access")) {
+                assertThat(source).contains(
+                        "local anonymousRecovery = promoteAnonymous",
+                        "'authState', 'AUTHENTICATED'",
+                        "redis.call('PEXPIREAT', KEYS[1]",
+                        "redis.call('PEXPIREAT', KEYS[2]");
+            }
         }
     }
 
     @Test
-    void eventAndChallengeStateUseOnlyThePreAuthV4Hash()
+    void eventAndChallengeStateUseOnlyThePreAuthV6Hash()
             throws Exception {
         String event = Files.readString(Path.of(
                 "src/main/resources/lua/network-risk/"
@@ -80,13 +85,20 @@ class PreAuthSessionAtomicityContractTest {
         assertThat(rotate)
                 .contains(
                         "redis.call('HGETALL', KEYS[1])",
-                        "'lastDecisionContextDigest', ARGV[6]",
+                        "'lastDecisionContextDigest', ARGV[7]",
+                        "'schemaVersion', ARGV[1]",
                         "'activeChallengeNonce', ''",
                         "'activeChallengeIpDigest', ''",
                         "'activeChallengeContextDigest', ''",
                         "'activeChallengeExpiresAt', ''",
-                        "'webRtcStatus', ARGV[7]",
-                        "'webRtcIps', ARGV[8]",
+                        "sourcePhase ~= ARGV[8]",
+                        "sourceGeneration ~= expectedSourceGeneration",
+                        "'webRtcPhase', ARGV[10]",
+                        "'webRtcGeneration', ARGV[11]",
+                        "'webRtcDeadlineAt'",
+                        "'webRtcIps', ARGV[12]",
+                        "sourcePhase ~= 'VERIFIED'",
+                        "generation ~= sourceGeneration + 1",
                         "redis.call('UNLINK', KEYS[1])")
                 .doesNotContain(
                         "'impossibleTravelCount', '0'",
@@ -107,7 +119,8 @@ class PreAuthSessionAtomicityContractTest {
                         "keyFactory.adminSessionTokensKey()",
                         "keyFactory.adminPreAuthKey(binding.tokenDigest())",
                         "local anonymousRecovery = ARGV[10] == '1'",
-                        "preauth[1] ~= '4'",
+                        "preauth[1] ~= ARGV[11]",
+                        "PreAuthState.CURRENT_SCHEMA_VERSION",
                         "'authState', 'AUTHENTICATED'",
                         "redis.call('HEXPIRE', KEYS[1]",
                         "redis.call('PEXPIRE', KEYS[2]");

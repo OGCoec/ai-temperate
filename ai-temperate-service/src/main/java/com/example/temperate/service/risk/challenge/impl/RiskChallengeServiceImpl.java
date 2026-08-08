@@ -19,7 +19,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 在 PreAuth v4 单 Hash 内签发或复用活动 Challenge，并在验证成功后原子推进可信网络。
+ * 在 PreAuth v6 单 Hash 内签发或复用活动 Challenge，并在验证成功后原子推进可信网络。
  *
  * <p>客户端引用由服务器 HMAC 从 PreAuth、决策上下文和随机 Nonce 派生；Redis 不保存原始引用，
  * 重复请求相同上下文不会增加签发计数，成功引用只能消费一次。</p>

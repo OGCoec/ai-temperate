@@ -212,18 +212,35 @@ function tableRows(section) {
 		.map(row => row.children.filter(cell => cell.type === 'tableCell'))
 }
 
+function emptyTableCell(header) {
+	return {
+		type: 'tableCell',
+		header,
+		alignment: null,
+		children: []
+	}
+}
+
+function normalizeTableRow(row, width, header) {
+	const cells = row.map(normalizeNode)
+	while (cells.length < width) {
+		cells.push(emptyTableCell(header))
+	}
+	return cells
+}
+
 function normalizeTable(node) {
 	const head = node.children.find(child => child.type === 'tableHead')
 	const body = node.children.find(child => child.type === 'tableBody')
 	const headers = tableRows(head)[0] || []
 	const rows = tableRows(body)
 	const alignments = headers.map(cell => cell.alignment || null)
-	const width = Math.max(headers.length, ...rows.map(row => row.length), 0)
+	const width = Math.max(headers.length, ...rows.map(row => row.length), alignments.length, 0)
 	while (alignments.length < width) alignments.push(null)
 	return {
 		type: 'table',
-		headers: headers.map(normalizeNode),
-		rows: rows.map(row => row.map(normalizeNode)),
+		headers: normalizeTableRow(headers, width, true),
+		rows: rows.map(row => normalizeTableRow(row, width, false)),
 		alignments
 	}
 }

@@ -37,6 +37,36 @@ final class AiConversationPersistenceContractTest {
     }
 
     @Test
+    void tokenAndProviderCostMeteringRemainMutuallyExclusive()
+            throws IOException {
+        String usage = read("sql/007_create_ai_model_usage.sql");
+        String detail = read("sql/008_create_ai_model_usage_detail.sql");
+        String payload = read(
+                "sql/012_create_ai_conversation_generation_payload.sql");
+        String migration = read(
+                "sql/migrations/024_add_ai_conversation_metering_basis.sql");
+
+        assertThat(usage)
+                .contains("metering_basis SMALLINT NOT NULL DEFAULT 0")
+                .contains("provider_cost_ticks BIGINT")
+                .contains("chk_ai_model_usage_metering_fields");
+        assertThat(detail)
+                .contains("requested_output_count SMALLINT")
+                .contains("requested_output_count BETWEEN 1 AND 10")
+                .contains("estimated_prompt_tokens IS NULL")
+                .contains("requested_output_count IS NULL");
+        assertThat(payload)
+                .contains("metering_evidence JSONB")
+                .contains("provider_cost_ticks BIGINT")
+                .contains("chk_ai_conversation_generation_payload_metering_fields");
+        assertThat(migration)
+                .contains("ALTER COLUMN estimated_prompt_tokens DROP NOT NULL")
+                .contains("ADD COLUMN metering_basis SMALLINT NOT NULL DEFAULT 0")
+                .doesNotContain("FOREIGN KEY")
+                .doesNotContain("REFERENCES");
+    }
+
+    @Test
     void messageQueriesUseBoundedSetReadsInsteadOfPerMessageIo() throws IOException {
         String mapper = read(
                 "ai-temperate-mapper/src/main/resources/mapper/ai/AiConversationMessageMapper.xml");

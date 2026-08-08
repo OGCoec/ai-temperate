@@ -65,10 +65,10 @@ class PasswordResetControllerTokenTransportTest {
 
         verify(flowCookieWriter).writePasswordResetFlow(
                 servletResponse,
-                "reset-flow-token",
-                START_EXPIRES_AT);
+                "reset-flow-token");
         assertThat(response.resetFlowToken()).isNull();
         assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(START_EXPIRES_AT);
         String json = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .writeValueAsString(response);
@@ -88,9 +88,10 @@ class PasswordResetControllerTokenTransportTest {
                 new MockHttpServletRequest(),
                 servletResponse);
 
-        verify(flowCookieWriter, never()).writePasswordResetFlow(any(), any(), any());
+        verify(flowCookieWriter, never()).writePasswordResetFlow(any(), any());
         assertThat(response.resetFlowToken()).isEqualTo("reset-flow-token");
         assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(START_EXPIRES_AT);
     }
 
     @Test
@@ -110,9 +111,9 @@ class PasswordResetControllerTokenTransportTest {
 
         verify(flowCookieWriter).writeForgetToken(
                 servletResponse,
-                "forget-token",
-                FORGET_EXPIRES_AT);
+                "forget-token");
         assertThat(response.forgetToken()).isNull();
+        assertThat(response.expiresAt()).isEqualTo(FORGET_EXPIRES_AT);
         String json = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .writeValueAsString(response);
@@ -132,8 +133,9 @@ class PasswordResetControllerTokenTransportTest {
                 new MockHttpServletRequest(),
                 servletResponse);
 
-        verify(flowCookieWriter, never()).writeForgetToken(any(), any(), any());
+        verify(flowCookieWriter, never()).writeForgetToken(any(), any());
         assertThat(response.forgetToken()).isEqualTo("forget-token");
+        assertThat(response.expiresAt()).isEqualTo(FORGET_EXPIRES_AT);
     }
 
     @Test

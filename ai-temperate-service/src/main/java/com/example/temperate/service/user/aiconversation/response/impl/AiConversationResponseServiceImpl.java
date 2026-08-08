@@ -23,7 +23,10 @@ import com.example.temperate.service.user.aiconversation.billing.AiConversationR
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementCommand;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementResult;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationSettlementService;
-import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionService;
+import com.example.temperate.service.user.aiconversation.billing.TokenReservationMetering;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionCoordinator;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionRequestResult;
+import com.example.temperate.service.user.aiconversation.compaction.AiConversationCompactionTrigger;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationProperties;
 import com.example.temperate.service.user.aiconversation.config.AiConversationWebSearchProperties;
@@ -54,14 +57,17 @@ import com.example.temperate.service.user.aiconversation.lease.AiConversationLea
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseService;
 import com.example.temperate.service.user.aiconversation.lease.AiConversationLeaseType;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelChunk;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
 import com.example.temperate.service.user.aiconversation.model.AiConversationModelRequest;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityPhase;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationActivityStatus;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingProtocol;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategyRegistry;
+import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingStrategy;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationActivityData;
@@ -115,6 +121,7 @@ import org.slf4j.MDC;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 import org.reactivestreams.Subscription;
 
 /**
@@ -153,7 +160,7 @@ public final class AiConversationResponseServiceImpl
             lifecycleDiagnosticService;
     private final AiConversationConcurrencyService concurrencyService;
     private final AiConversationLeaseService leaseService;
-    private final AiConversationCompactionService compactionService;
+    private final AiConversationCompactionCoordinator compactionCoordinator;
     private final AiConversationStreamingStrategyRegistry streamingStrategies;
     private final AiConversationTextTokenizer tokenizer;
     private final AiConversationIdempotencyHasher idempotencyHasher;
@@ -189,7 +196,7 @@ public final class AiConversationResponseServiceImpl
                     lifecycleDiagnosticService,
             AiConversationConcurrencyService concurrencyService,
             AiConversationLeaseService leaseService,
-            AiConversationCompactionService compactionService,
+            AiConversationCompactionCoordinator compactionCoordinator,
             AiConversationStreamingStrategyRegistry streamingStrategies,
             AiConversationTextTokenizer tokenizer,
             AiConversationIdempotencyHasher idempotencyHasher,
@@ -226,7 +233,7 @@ public final class AiConversationResponseServiceImpl
                 lifecycleDiagnosticService);
         this.concurrencyService = Objects.requireNonNull(concurrencyService);
         this.leaseService = Objects.requireNonNull(leaseService);
-        this.compactionService = Objects.requireNonNull(compactionService);
+        this.compactionCoordinator = Objects.requireNonNull(compactionCoordinator);
         this.streamingStrategies = Objects.requireNonNull(streamingStrategies);
         this.tokenizer = Objects.requireNonNull(tokenizer);
         this.idempotencyHasher = Objects.requireNonNull(idempotencyHasher);
@@ -272,6 +279,7 @@ public final class AiConversationResponseServiceImpl
                             command.reasoningEffort(),
                             command.webSearchMode(),
                             command.imageGeneration(),
+                            command.videoGeneration(),
                             command.idempotencyKey(),
                             command.input().validated(attachments));
             return respondValidated(prepared, traceContext);
@@ -293,11 +301,52 @@ public final class AiConversationResponseServiceImpl
         }
     }
 
+    @Override
+    public Mono<AiConversationResponseStream> respondAsync(
+            AiConversationResponseCommand command) {
+        return Mono.defer(() -> {
+            try {
+                return Mono.just(respond(command));
+            } catch (AiConversationException failure) {
+                if (failure.code() != AiConversationErrorCode.AI_CONTEXT_TOO_LARGE
+                        || command.conversationId() == null) {
+                    return Mono.error(failure);
+                }
+                String conversationPublicId = hybridIdCodec.encode(
+                        command.conversationId());
+                AiConversationCompactionRequestResult request =
+                        compactionCoordinator.request(
+                                command.conversationId(),
+                                conversationPublicId,
+                                publicIdCodec.decode(command.modelPublicId()),
+                                AiConversationCompactionTrigger.HARD_LIMIT_WAIT);
+                if (request.operation() == null) {
+                    return Mono.error(failure);
+                }
+                // 等待成功后只重新准备一次；第二次仍超限必须直接返回 409，禁止形成压缩循环。
+                return compactionCoordinator.awaitTerminal(
+                                conversationPublicId,
+                                request.operation().operationPublicId())
+                        .then(Mono.fromCallable(() -> respond(command))
+                                .subscribeOn(Schedulers.boundedElastic()));
+            }
+        });
+    }
+
     private AiConversationResponseStream respondValidated(
             AiConversationResponseCommand command,
             AiConversationLifecycleTraceContext requestTraceContext) {
         AiModelCacheEntry model = requiredModel(
                 publicIdCodec.decode(command.modelPublicId()));
+        AiModelProvider provider = AiModelProvider.fromVendor(model.vendor());
+        provider.validateReasoningEffort(command.reasoningEffort());
+        AiConversationStreamingProtocol protocol = command.webSearchMode()
+                        == AiConversationWebSearchMode.OFF
+                ? AiConversationStreamingProtocol.CHAT_COMPLETIONS
+                : AiConversationStreamingProtocol.RESPONSES_WEB_SEARCH;
+        // 供应商、协议和推理等级必须在预扣前完成验证，避免不支持的请求先占用用户额度。
+        AiConversationStreamingStrategy streamingStrategy =
+                streamingStrategies.getRequired(provider, protocol);
         validateProtocolCapabilities(model, command.webSearchMode());
         validateWebSearchEnabled(command.webSearchMode());
         AiConversationLifecycleTraceContext validatedTraceContext =
@@ -307,8 +356,11 @@ public final class AiConversationResponseServiceImpl
         AiConversationPromptSnapshot preliminary =
                 command.conversationId() == null
                         ? contextService.prepareNew(model, command.input())
-                        : prepareExistingWithEmergencyCompaction(
-                                command, model);
+                        : contextService.prepare(
+                                command.conversationId(),
+                                hybridIdCodec.encode(command.conversationId()),
+                                model,
+                                command.input());
         AiConversationConcurrencyPermit concurrencyPermit = concurrencyService
                 .tryAcquire(command.userId())
                 .orElseThrow(() -> new AiConversationException(
@@ -319,6 +371,13 @@ public final class AiConversationResponseServiceImpl
         lifecycleDiagnosticService.record(
                 validatedTraceContext, "RESERVATION_STARTED");
         try {
+            if (streamingStrategy.meteringBasis()
+                    != AiConversationMeteringBasis.TOKEN) {
+                throw new AiConversationException(
+                        AiConversationErrorCode.AI_MODEL_NOT_AVAILABLE,
+                        "当前同步会话链路不支持该模型计量方式",
+                        false);
+            }
             reservation = billingService.reserve(
                     new AiConversationReservationCommand(
                             command.userId(),
@@ -326,7 +385,12 @@ public final class AiConversationResponseServiceImpl
                             model,
                             idempotencyHasher.digest(
                                     command.userId(), command.idempotencyKey()),
-                            preliminary.estimatedPromptTokens()));
+                            new TokenReservationMetering(
+                                    preliminary.estimatedPromptTokens(),
+                                    model.maxOutputTokens(),
+                                    model.inputRatio(),
+                                    model.cachedInputRatio(),
+                                    model.outputRatio())));
         } catch (RuntimeException failure) {
             lifecycleDiagnosticService.record(
                     validatedTraceContext,
@@ -458,6 +522,8 @@ public final class AiConversationResponseServiceImpl
         Flux<AiConversationStreamEvent> core = generation(
                 command,
                 model,
+                provider,
+                streamingStrategy,
                 reservation,
                 activePrompt,
                 conversationPublicId,
@@ -474,6 +540,8 @@ public final class AiConversationResponseServiceImpl
     private Flux<AiConversationStreamEvent> generation(
             AiConversationResponseCommand command,
             AiModelCacheEntry model,
+            AiModelProvider provider,
+            AiConversationStreamingStrategy streamingStrategy,
             AiConversationReservation reservation,
             AiConversationPromptSnapshot prompt,
             String conversationPublicId,
@@ -523,16 +591,10 @@ public final class AiConversationResponseServiceImpl
                     lifecycle.markConnecting();
                     lifecycleDiagnosticService.record(
                             traceContext, "UPSTREAM_SUBSCRIBE_STARTED");
-                    AiConversationStreamingProtocol protocol =
-                            command.webSearchMode()
-                                            == AiConversationWebSearchMode.OFF
-                                    ? AiConversationStreamingProtocol
-                                            .CHAT_COMPLETIONS
-                                    : AiConversationStreamingProtocol
-                                            .RESPONSES_WEB_SEARCH;
                     AiConversationStreamingRequest streamingRequest =
                             new AiConversationStreamingRequest(
                                     new AiConversationModelRequest(
+                                            provider,
                                             model.modelName(),
                                             model.maxOutputTokens(),
                                             command.reasoningEffort(),
@@ -540,8 +602,7 @@ public final class AiConversationResponseServiceImpl
                                     command.webSearchMode());
                     return lifecycleDiagnosticService.withContext(
                             traceContext,
-                            () -> streamingStrategies.required(protocol)
-                                    .stream(streamingRequest))
+                            () -> streamingStrategy.stream(streamingRequest))
                             .doOnNext(ignored -> {
                                 if (state.firstByteRecorded.compareAndSet(
                                         false, true)) {
@@ -669,6 +730,7 @@ public final class AiConversationResponseServiceImpl
                                             lifecycle.state(),
                                             signal));
                             markInterruptedCacheBestEffort(
+                                    reservation.conversationId(),
                                     conversationPublicId,
                                     state,
                                     interruptionSource);
@@ -1053,17 +1115,12 @@ public final class AiConversationResponseServiceImpl
                 finalizedUser,
                 assistant,
                 state);
-        if (prompt.shouldCompactAfterCompletion()) {
-            try {
-                compactionService.schedule(
+        AiConversationCompactionRequestResult contextRefresh =
+                refreshContextAfterTerminal(
                         reservation.conversationId(),
                         conversationPublicId,
-                        state.cacheGeneration.get(),
-                        settlement.messageId());
-            } catch (RuntimeException ignoredFailure) {
-                // 压缩是可重建派生数据，调度失败不能覆盖已经提交的消息和结算。
-            }
-        }
+                        publicIdCodec.decode(command.modelPublicId()),
+                        AiConversationCompactionTrigger.ANSWER_COMPLETED);
         return AiConversationStreamEvent.completed(
                 new AiConversationCompletedData(
                         conversationPublicId,
@@ -1082,7 +1139,11 @@ public final class AiConversationResponseServiceImpl
                                         || state.generatedMediaRejected
                                 ? List.of("ATTACHMENT_STORAGE_PARTIAL")
                                 : List.of(),
-                        state.sequence.incrementAndGet()));
+                        state.sequence.incrementAndGet(),
+                        contextRefresh == null ? null : contextRefresh.usage(),
+                        contextRefresh == null || contextRefresh.operation() == null
+                                ? null
+                                : contextRefresh.operation().operationPublicId()));
     }
 
     private void commitPersistedCache(
@@ -1236,6 +1297,7 @@ public final class AiConversationResponseServiceImpl
                         interruption, state.lifecycle));
         // Redis 草稿只是可恢复派生数据，失败不能阻止已经取得所有权的额度退款事务。
         markInterruptedCacheBestEffort(
+                reservation.conversationId(),
                 conversationPublicId,
                 state,
                 AiConversationInterruptionSource.SYSTEM_FAILURE);
@@ -1395,6 +1457,7 @@ public final class AiConversationResponseServiceImpl
     }
 
     private void markInterruptedCache(
+            byte[] conversationId,
             String conversationPublicId,
             StreamState state,
             AiConversationInterruptionSource interruptionSource) {
@@ -1425,20 +1488,47 @@ public final class AiConversationResponseServiceImpl
         }
         if (outcome == AiConversationContextWriteOutcome.APPLIED
                 && interruptionSource == AiConversationInterruptionSource.USER_STOP) {
-            compactionService.scheduleEphemeral(
-                    conversationPublicId, state.cacheGeneration.get());
+            refreshContextAfterTerminal(
+                    conversationId,
+                    conversationPublicId,
+                    publicIdCodec.decode(state.modelPublicId),
+                    AiConversationCompactionTrigger.USER_STOP);
         }
     }
 
     private void markInterruptedCacheBestEffort(
+            byte[] conversationId,
             String conversationPublicId,
             StreamState state,
             AiConversationInterruptionSource interruptionSource) {
         try {
             markInterruptedCache(
-                    conversationPublicId, state, interruptionSource);
+                    conversationId,
+                    conversationPublicId,
+                    state,
+                    interruptionSource);
         } catch (RuntimeException ignoredFailure) {
             // PostgreSQL 计费终态优先于 Redis 草稿；缓存失败由绝对 TTL 和历史重建收敛。
+        }
+    }
+
+    /**
+     * 在持久轮次或用户主动停止草稿完成原子写入后读取权威快照，并按最新版本发布用量或调度单飞压缩。
+     * 该派生链路失败不能回滚已提交消息、已完成结算或用户停止语义。
+     */
+    private AiConversationCompactionRequestResult refreshContextAfterTerminal(
+            byte[] conversationId,
+            String conversationPublicId,
+            long modelId,
+            AiConversationCompactionTrigger trigger) {
+        try {
+            return compactionCoordinator.request(
+                    conversationId,
+                    conversationPublicId,
+                    modelId,
+                    trigger);
+        } catch (RuntimeException ignoredFailure) {
+            return null;
         }
     }
 
@@ -1943,7 +2033,9 @@ public final class AiConversationResponseServiceImpl
                                 persistedAttachmentWarnings(
                                         inputAttachments,
                                         responseAttachments),
-                                terminalEvents.size() + 1L));
+                                terminalEvents.size() + 1L,
+                                null,
+                                null));
         terminalEvents.add(completed);
         return new AiConversationResponseStream(
                 accepted, Flux.fromIterable(terminalEvents));
@@ -2031,57 +2123,6 @@ public final class AiConversationResponseServiceImpl
             concurrencyService.release(permit);
         } catch (RuntimeException ignoredFailure) {
             // 释放失败由 ZSET 成员绝对过期时间收敛，不能覆盖业务结果。
-        }
-    }
-
-    private AiConversationPromptSnapshot prepareExistingWithEmergencyCompaction(
-            AiConversationResponseCommand command,
-            AiModelCacheEntry model) {
-        String conversationPublicId =
-                hybridIdCodec.encode(command.conversationId());
-        try {
-            return contextService.prepare(
-                    command.conversationId(),
-                    conversationPublicId,
-                    model,
-                    command.input());
-        } catch (AiConversationException exception) {
-            if (exception.code() != AiConversationErrorCode.AI_CONTEXT_TOO_LARGE) {
-                throw exception;
-            }
-            String generation = contextStore.find(conversationPublicId)
-                    .map(snapshot -> snapshot.generation())
-                    .orElse(null);
-            if (generation != null
-                    && compactionService.compactEphemeralSynchronously(
-                            conversationPublicId, generation)) {
-                try {
-                    return contextService.prepare(
-                            command.conversationId(),
-                            conversationPublicId,
-                            model,
-                            command.input());
-                } catch (AiConversationException afterEphemeral) {
-                    if (afterEphemeral.code()
-                            != AiConversationErrorCode.AI_CONTEXT_TOO_LARGE) {
-                        throw afterEphemeral;
-                    }
-                }
-            }
-            if (!compactionService.compactSynchronously(
-                    command.conversationId(),
-                    conversationPublicId,
-                    generation)) {
-                throw new AiConversationException(
-                        AiConversationErrorCode.AI_CONTEXT_COMPACTION_FAILED,
-                        "会话上下文压缩失败",
-                        true);
-            }
-            return contextService.prepare(
-                    command.conversationId(),
-                    conversationPublicId,
-                    model,
-                    command.input());
         }
     }
 

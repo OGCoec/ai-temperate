@@ -40,10 +40,47 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class WebRtcVerificationInterceptorTest {
 
     @Test
-    void enforceModeReturns428ForUnverifiedPreAuth() throws Exception {
+    void requiredAndPendingAllowEveryBusinessHttpMethodImmediately() throws Exception {
+        for (WebRtcVerificationDecision decision : List.of(
+                WebRtcVerificationDecision.required(),
+                WebRtcVerificationDecision.pending(
+                        3L,
+                        Instant.parse("2026-07-25T12:00:20Z")))) {
+            Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+            when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                    .thenReturn(decision);
+
+            for (String method : List.of("GET", "POST", "PUT", "PATCH", "DELETE")) {
+                MockHttpServletRequest request = new MockHttpServletRequest(
+                        method,
+                        "/api/catalog/items");
+                request.addHeader("X-Client-Platform", "H5");
+                request.setAttribute(
+                        NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                        mock(PreAuthAccess.class));
+                MockHttpServletResponse response = new MockHttpServletResponse();
+
+                assertThat(fixture.interceptor().preHandle(
+                                request,
+                                response,
+                                new Object()))
+                        .as(
+                                "%s must be allowed while WebRTC is %s",
+                                method,
+                                decision.verificationState())
+                        .isTrue();
+                assertThat(response.getStatus()).isEqualTo(200);
+            }
+        }
+    }
+
+    @Test
+    void enforceModeAllowsPendingPreAuthWithoutWaitingForReport() throws Exception {
         Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
         when(fixture.service().inspect(any(), eq("8.8.8.8")))
-                .thenReturn(WebRtcVerificationDecision.required());
+                .thenReturn(WebRtcVerificationDecision.pending(
+                        7L,
+                        Instant.parse("2026-07-25T12:00:20Z")));
         MockHttpServletRequest request = request();
         request.setAttribute(
                 NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
@@ -55,13 +92,59 @@ class WebRtcVerificationInterceptorTest {
                 response,
                 new Object());
 
-        assertThat(allowed).isFalse();
-        assertThat(response.getStatus()).isEqualTo(428);
-        assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
-        assertThat(response.getContentAsString())
-                .contains("WEBRTC_VERIFICATION_REQUIRED")
-                .contains("/api/_edge/webrtc/start")
-                .contains("15000");
+        assertThat(allowed).isTrue();
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getHeader(WebRtcVerificationTransport.STATE_HEADER))
+                .isEqualTo("PENDING");
+        assertThat(response.getHeader(WebRtcVerificationTransport.GENERATION_HEADER))
+                .isEqualTo("7");
+        assertThat(fixture.meterRegistry()
+                        .get("webrtc_interceptor_total")
+                        .tags(
+                                "scope", "user",
+                                "decision", "pending_allowed",
+                                "platform", "h5",
+                                "mode", "enforce")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0d);
+    }
+
+    @Test
+    void recordsGenerationChangeFromTheAtomicNetworkAssessment() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.required(
+                        4L,
+                        Instant.parse("2026-07-25T12:00:08Z")));
+        MockHttpServletRequest request = request();
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        request.setAttribute(
+                NetworkRiskInterceptor.WEBRTC_GENERATION_CHANGED_ATTRIBUTE,
+                Boolean.TRUE);
+
+        assertThat(fixture.interceptor().preHandle(
+                        request,
+                        new MockHttpServletResponse(),
+                        new Object()))
+                .isTrue();
+
+        assertThat(fixture.meterRegistry()
+                        .get("webrtc_state_transition_total")
+                        .tags(
+                                "scope", "user",
+                                "transition", "generation_changed",
+                                "platform", "h5",
+                                "reason", "network_changed",
+                                "mode", "enforce")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0d);
+        assertThat(request.getAttribute(
+                NetworkRiskInterceptor.WEBRTC_GENERATION_CHANGED_ATTRIBUTE))
+                .isNull();
     }
 
     @Test
@@ -134,9 +217,11 @@ class WebRtcVerificationInterceptorTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         assertThat(fixture.interceptor().preHandle(request, response, new Object()))
-                .isFalse();
+                .isTrue();
 
-        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getHeader(WebRtcVerificationTransport.STATE_HEADER))
+                .isEqualTo("REQUIRED");
         verify(fixture.service(), times(1)).inspect(access, "8.8.8.8");
     }
 
@@ -158,9 +243,9 @@ class WebRtcVerificationInterceptorTest {
         request.setDispatcherType(DispatcherType.ASYNC);
         request.setRequestURI("/api/catalog/other");
         assertThat(fixture.interceptor().preHandle(request, response, new Object()))
-                .isFalse();
+                .isTrue();
 
-        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getStatus()).isEqualTo(200);
         verify(fixture.service(), times(2)).inspect(access, "8.8.8.8");
     }
 
@@ -168,7 +253,9 @@ class WebRtcVerificationInterceptorTest {
         NetworkRiskProperties properties = mock(NetworkRiskProperties.class);
         when(properties.mode()).thenReturn(mode);
         when(properties.webRtc()).thenReturn(new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),
@@ -192,7 +279,8 @@ class WebRtcVerificationInterceptorTest {
                 service,
                 contextResolver,
                 new ObjectMapper(),
-                new WebRtcMetrics(meterRegistry));
+                new WebRtcMetrics(meterRegistry),
+                new WebRtcVerificationTransport());
         return new Fixture(interceptor, service, contextResolver, meterRegistry);
     }
 

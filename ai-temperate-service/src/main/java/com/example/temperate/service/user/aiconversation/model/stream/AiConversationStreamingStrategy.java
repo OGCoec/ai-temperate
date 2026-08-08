@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.aiconversation.model.stream;
 
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteringBasis;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import reactor.core.publisher.Flux;
 
 /**
@@ -7,7 +9,11 @@ import reactor.core.publisher.Flux;
  */
 public interface AiConversationStreamingStrategy {
 
+    AiModelProvider provider();
+
     AiConversationStreamingProtocol protocol();
+
+    AiConversationMeteringBasis meteringBasis();
 
     Flux<AiConversationModelEvent> stream(AiConversationStreamingRequest request);
 }

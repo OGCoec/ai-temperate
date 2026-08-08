@@ -6,9 +6,12 @@ package com.example.temperate.service.user.aiconversation.image;
 public record AiConversationImagePreviewData(
         String imageId,
         String phase,
-        int index,
+        short outputIndex,
+        Short partialImageIndex,
         String contentType,
         int width,
         int height,
+        String previewKind,
+        boolean requiresUpgrade,
         String base64) {
 }

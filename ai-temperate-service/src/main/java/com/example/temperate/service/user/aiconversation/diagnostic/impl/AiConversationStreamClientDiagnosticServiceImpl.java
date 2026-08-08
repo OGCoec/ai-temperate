@@ -71,7 +71,7 @@ public final class AiConversationStreamClientDiagnosticServiceImpl
                 UNAVAILABLE,
                 AiConversationStreamTimingPath.BROWSER_CLIENT,
                 timingClock.nanoTime());
-        transportDiagnosticService.record(
+        transportDiagnosticService.recordSafely(
                 context,
                 "ai_stream_browser_summary",
                 Map.ofEntries(

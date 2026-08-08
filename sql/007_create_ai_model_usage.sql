@@ -5,10 +5,12 @@ CREATE TABLE ai_model_usage (
     login_identity_id BIGINT NOT NULL,
     ai_model_id BIGINT NOT NULL,
     billing_status SMALLINT NOT NULL DEFAULT 0,
+    metering_basis SMALLINT NOT NULL DEFAULT 0,
     prompt_tokens BIGINT,
     completion_tokens BIGINT,
     cached_prompt_tokens BIGINT,
     reasoning_tokens BIGINT,
+    provider_cost_ticks BIGINT,
     charged_quota_minor BIGINT,
     finish_reason VARCHAR(64),
     failure_code VARCHAR(64),
@@ -21,6 +23,8 @@ CREATE TABLE ai_model_usage (
         CHECK (OCTET_LENGTH(id) = 16),
     CONSTRAINT chk_ai_model_usage_billing_status
         CHECK (billing_status BETWEEN 0 AND 4),
+    CONSTRAINT chk_ai_model_usage_metering_basis
+        CHECK (metering_basis IN (0, 1)),
     CONSTRAINT chk_ai_model_usage_prompt_tokens
         CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),
     CONSTRAINT chk_ai_model_usage_completion_tokens
@@ -29,6 +33,20 @@ CREATE TABLE ai_model_usage (
         CHECK (cached_prompt_tokens IS NULL OR cached_prompt_tokens >= 0),
     CONSTRAINT chk_ai_model_usage_reasoning_tokens
         CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
+    CONSTRAINT chk_ai_model_usage_provider_cost_ticks
+        CHECK (provider_cost_ticks IS NULL OR provider_cost_ticks >= 0),
+    CONSTRAINT chk_ai_model_usage_metering_fields
+        CHECK (
+            (metering_basis = 0 AND provider_cost_ticks IS NULL)
+            OR (
+                metering_basis = 1
+                AND prompt_tokens IS NULL
+                AND completion_tokens IS NULL
+                AND cached_prompt_tokens IS NULL
+                AND reasoning_tokens IS NULL
+                AND (billing_status <> 1 OR provider_cost_ticks IS NOT NULL)
+            )
+        ),
     CONSTRAINT chk_ai_model_usage_cached_within_prompt
         CHECK (
             cached_prompt_tokens IS NULL
@@ -102,6 +120,8 @@ COMMENT ON COLUMN ai_model_usage.ai_model_id IS
     '逻辑关联 ai_model.id 的调用模型 ID；模型名称通过模型表查询，不在消费表重复保存';
 COMMENT ON COLUMN ai_model_usage.billing_status IS
     '结算状态：0=RESERVED，1=SETTLED，2=FAILED_REFUNDED，3=RECONCILE_REQUIRED，4=REFUNDED';
+COMMENT ON COLUMN ai_model_usage.metering_basis IS
+    '计量依据：0=TOKEN，1=PROVIDER_COST_TICKS；历史记录统一为 TOKEN';
 COMMENT ON COLUMN ai_model_usage.prompt_tokens IS
     '上游最终 Usage 返回的实际输入 Token；NULL 表示尚未结算或上游未报告';
 COMMENT ON COLUMN ai_model_usage.completion_tokens IS
@@ -110,6 +130,8 @@ COMMENT ON COLUMN ai_model_usage.cached_prompt_tokens IS
     '上游 Prompt Cache 命中的输入 Token，是 prompt_tokens 的子集，与本项目 Redis 无关';
 COMMENT ON COLUMN ai_model_usage.reasoning_tokens IS
     '上游报告的思考 Token；供应商已将其包含于 completion_tokens 时不得重复累计';
+COMMENT ON COLUMN ai_model_usage.provider_cost_ticks IS
+    '供应商返回的精确美元成本 ticks；仅成本计量且证据完整的已结算记录允许非空';
 COMMENT ON COLUMN ai_model_usage.charged_quota_minor IS
     '最终实际扣除的内部额度最小单位整数值；NULL 表示尚未完成结算';
 COMMENT ON COLUMN ai_model_usage.finish_reason IS

@@ -100,7 +100,7 @@ function normalizedOptionalImageGenerationLevels(value) {
 		throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
 	}
 	const levels = value.map((level) => {
-		if (!Number.isSafeInteger(level) || level < 1 || level > 3) {
+		if (!Number.isSafeInteger(level) || level < 1 || level > 4) {
 			throw responseError('模型响应中的 supportedImageGenerationLevels 无效。')
 		}
 		return level
@@ -126,6 +126,30 @@ function normalizedOptionalImageAspects(value) {
 	return aspects
 }
 
+function normalizedOptionalEnumList(value, field, allowedValues) {
+	if (value == null) return []
+	if (!Array.isArray(value)) throw responseError(`模型响应中的 ${field} 无效。`)
+	const allowed = new Set(allowedValues)
+	const normalized = value.map(item => normalizedRequiredText(item, field).toUpperCase())
+	if (normalized.some(item => !allowed.has(item))
+		|| new Set(normalized).size !== normalized.length) {
+		throw responseError(`模型响应中的 ${field} 无效。`)
+	}
+	return normalized
+}
+
+function normalizedOptionalVideoDuration(value) {
+	if (value == null) return null
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		throw responseError('模型响应中的 videoDuration 无效。')
+	}
+	const minimumSeconds = normalizedSafeInteger(
+		value.minimumSeconds, 'videoDuration.minimumSeconds', 1)
+	const maximumSeconds = normalizedSafeInteger(
+		value.maximumSeconds, 'videoDuration.maximumSeconds', minimumSeconds)
+	return Object.freeze({ minimumSeconds, maximumSeconds })
+}
+
 function normalizedModel(value) {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw responseError('模型响应中的模型条目无效。')
@@ -138,6 +162,19 @@ function normalizedModel(value) {
 		normalizedOptionalImageGenerationLevels(value.supportedImageGenerationLevels)
 	const supportedImageAspects =
 		normalizedOptionalImageAspects(value.supportedImageAspects)
+	const supportedVideoModes = normalizedOptionalEnumList(
+		value.supportedVideoModes,
+		'supportedVideoModes',
+		['TEXT_TO_VIDEO', 'IMAGE_TO_VIDEO', 'REFERENCE_TO_VIDEO', 'VIDEO_EDIT', 'VIDEO_EXTEND'])
+	const supportedVideoResolutions = normalizedOptionalEnumList(
+		value.supportedVideoResolutions,
+		'supportedVideoResolutions',
+		['P480', 'P720', 'P1080'])
+	const supportedVideoAspectRatios = normalizedOptionalEnumList(
+		value.supportedVideoAspectRatios,
+		'supportedVideoAspectRatios',
+		['RATIO_1_1', 'RATIO_16_9', 'RATIO_9_16', 'RATIO_4_3', 'RATIO_3_4', 'RATIO_3_2', 'RATIO_2_3'])
+	const videoDuration = normalizedOptionalVideoDuration(value.videoDuration)
 	const defaultReasoningEffortLevel = value.defaultReasoningEffortLevel
 	if (!Number.isSafeInteger(defaultReasoningEffortLevel)
 		|| defaultReasoningEffortLevel < 1
@@ -148,6 +185,14 @@ function normalizedModel(value) {
 	return Object.freeze({
 		publicId,
 		modelName: normalizedRequiredText(value.modelName, 'modelName'),
+		contextWindowTokens: normalizedSafeInteger(
+			value.contextWindowTokens, 'contextWindowTokens', 1),
+		contextWindowK: normalizedSafeInteger(
+			value.contextWindowK, 'contextWindowK', 1),
+		maxOutputTokens: normalizedSafeInteger(
+			value.maxOutputTokens, 'maxOutputTokens', 1),
+		maxOutputK: normalizedSafeInteger(
+			value.maxOutputK, 'maxOutputK', 1),
 		modelNameMatchedTokens: Object.freeze(normalizedOptionalStringList(
 			value.modelNameMatchedTokens,
 			'modelNameMatchedTokens'
@@ -167,6 +212,10 @@ function normalizedModel(value) {
 		supportedReasoningEffortLevels: Object.freeze(supportedReasoningEffortLevels),
 		supportedImageGenerationLevels: Object.freeze(supportedImageGenerationLevels),
 		supportedImageAspects: Object.freeze(supportedImageAspects),
+		supportedVideoModes: Object.freeze(supportedVideoModes),
+		supportedVideoResolutions: Object.freeze(supportedVideoResolutions),
+		supportedVideoAspectRatios: Object.freeze(supportedVideoAspectRatios),
+		videoDuration,
 		defaultReasoningEffortLevel
 	})
 }

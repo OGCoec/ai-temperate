@@ -27,6 +27,10 @@ class AiConversationGenerationObserverSourceContractTest {
                 .contains("AiConversationStreamTimingBoundary.SSE_EVENT_READY")
                 .contains("AiConversationStreamTimingPath.ASYNC_GENERATION_OBSERVER")
                 .contains("timingDiagnosticService.withSession(")
+                .contains("P6_OBSERVER_RECEIVED")
+                .contains("P7_SSE_READY")
+                .contains("recordSafely(")
+                .contains("releasePreviewSafely(")
                 .doesNotContain("refundFailed(")
                 .doesNotContain("terminalService.freeze(")
                 .doesNotContain("modelClient.stream(");

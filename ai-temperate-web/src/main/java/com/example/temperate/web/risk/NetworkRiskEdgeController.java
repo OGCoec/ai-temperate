@@ -6,13 +6,16 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskDecision;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
+import com.example.temperate.service.risk.observability.WebRtcMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthBootstrapOutcome;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.service.PreAuthRiskBootstrapService;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -56,6 +59,8 @@ public final class NetworkRiskEdgeController {
     private final NetworkRiskProperties properties;
     private final AuthCookieWriter authCookieWriter;
     private final AdminCookieWriter adminCookieWriter;
+    private final WebRtcVerificationTransport webRtcTransport;
+    private final WebRtcMetrics webRtcMetrics;
     private final Clock clock;
 
     public NetworkRiskEdgeController(
@@ -67,6 +72,8 @@ public final class NetworkRiskEdgeController {
             NetworkRiskProperties properties,
             AuthCookieWriter authCookieWriter,
             AdminCookieWriter adminCookieWriter,
+            WebRtcVerificationTransport webRtcTransport,
+            WebRtcMetrics webRtcMetrics,
             Clock clock) {
         this.bootstrapService = Objects.requireNonNull(bootstrapService);
         this.preAuthService = Objects.requireNonNull(preAuthService);
@@ -76,6 +83,8 @@ public final class NetworkRiskEdgeController {
         this.properties = Objects.requireNonNull(properties);
         this.authCookieWriter = Objects.requireNonNull(authCookieWriter);
         this.adminCookieWriter = Objects.requireNonNull(adminCookieWriter);
+        this.webRtcTransport = Objects.requireNonNull(webRtcTransport);
+        this.webRtcMetrics = Objects.requireNonNull(webRtcMetrics);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -185,6 +194,15 @@ public final class NetworkRiskEdgeController {
                             null,
                             null));
         }
+        webRtcTransport.write(response, outcome.issue());
+        if (outcome.issue().webRtcPhase() == PreAuthWebRtcPhase.REQUIRED) {
+            webRtcMetrics.transition(
+                    scope,
+                    "required_created",
+                    h5 ? "h5" : "android",
+                    "none",
+                    properties.mode());
+        }
         if (h5) {
             if (outcome.reauthenticationRequired()) {
                 // v1 Cookie 或显式重置必须清除不可由前端读取的旧登录 Cookie，确保迁移后统一重新登录。
@@ -193,9 +211,7 @@ public final class NetworkRiskEdgeController {
             transport.writeCookie(
                     response,
                     scope,
-                    outcome.issue().rawToken(),
-                    outcome.issue().expiresAt(),
-                    clock.instant());
+                    outcome.issue().rawToken());
         }
         if (properties.mode() == NetworkRiskMode.OBSERVE
                 || outcome.assessment().decision() == RiskDecision.ALLOW) {

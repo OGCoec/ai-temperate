@@ -9,6 +9,12 @@ import { reportAiConversationStreamDiagnostics } from './ai-conversation-stream-
 import { createAiConversationLifecycleDiagnostics } from './ai-conversation-lifecycle-diagnostics.js'
 import {
 	imagePreviewAttachment,
+	createImageOutputSlots,
+	failImageOutputAttachment,
+	mergeCompletedImageOutputs,
+	mergeImagePreviewOutput,
+	mergePersistedImageOutput,
+	persistedImageOutputAttachment,
 	persistedImageAttachments
 } from './ai-conversation-image-generation.js'
 import {
@@ -105,12 +111,17 @@ export async function openAiConversationStream(command, handlers = {}) {
 				idempotencyKey: command.idempotencyKey,
 				localId: command.localId,
 				inputText: command.inputText,
+				requestedImageCount: Number(command.requestedImageCount || 0),
+				previewImages: Number(command.requestedImageCount || 0) > 0
+					? createImageOutputSlots(command.requestedImageCount)
+					: [],
 				status: 'QUEUED'
 			})
 			if (publicHandle) bindGenerationObserver(value, publicHandle)
 			handlers.onGenerationId?.(value)
 		},
 		onEvent(event) {
+			let terminalStatus = null
 			if (event.type === 'accepted') {
 				accepted = true
 				diagnostics.bindUsagePublicId?.(event.data?.usagePublicId)
@@ -129,6 +140,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 						idempotencyKey: command.idempotencyKey,
 						localId: command.localId,
 						inputText: command.inputText,
+						requestedImageCount: Number(command.requestedImageCount || 0),
 						status: 'RUNNING'
 					})
 					if (publicHandle) {
@@ -153,18 +165,99 @@ export async function openAiConversationStream(command, handlers = {}) {
 			}
 			if (event.type === 'image-preview' && generationPublicId) {
 				const previewImage = imagePreviewAttachment(event.data)
-				if (previewImage) updateGeneration(generationPublicId, { previewImage })
+				if (previewImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergeImagePreviewOutput(
+							current?.previewImages || [], previewImage)
+					})
+				}
+			}
+			if (event.type === 'image-persisted' && generationPublicId) {
+				const persistedImage = persistedImageOutputAttachment(event.data)
+				if (persistedImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergePersistedImageOutput(
+							current?.previewImages || [], persistedImage)
+					})
+				}
+			}
+			if (event.type === 'image-output-status' && generationPublicId) {
+				const current = getGeneration(generationPublicId)
+				const failedImages = failImageOutputAttachment(
+					current?.previewImages || [], event.data)
+				updateGeneration(generationPublicId, {
+					previewImages: failedImages,
+					failedImageOutputs: failedImages.filter(item =>
+						item?.status === 'FAILED')
+				})
+			}
+			if (event.type === 'video_generation_progress' && generationPublicId) {
+				updateGeneration(generationPublicId, {
+					videoProgress: Math.max(0, Math.min(100,
+						Number(event.data?.progress || 0)))
+				})
+			}
+			if (event.type === 'video_transfer_started' && generationPublicId) {
+				updateGeneration(generationPublicId, { videoTransferring: true })
+			}
+			if ((event.type === 'video_ready' || event.type === 'video_failed')
+				&& generationPublicId) {
+				updateGeneration(generationPublicId, {
+					messagePublicId: event.data?.messagePublicId || '',
+					responseAttachments: event.type === 'video_ready'
+						&& Array.isArray(event.data?.attachments)
+						? event.data.attachments : [],
+					videoMetadata: event.type === 'video_ready' ? {
+						durationMillis: Number(event.data?.durationMillis || 0),
+						width: Number(event.data?.width || 0),
+						height: Number(event.data?.height || 0),
+						byteSize: Number(event.data?.byteSize || 0),
+						videoCodec: String(event.data?.videoCodec || '')
+					} : null,
+					videoTransferring: false,
+					videoError: event.type === 'video_failed'
+						? String(event.data?.failureStage
+							|| event.data?.terminalReason || 'VIDEO_FAILED') : '',
+					videoErrorCode: event.type === 'video_failed'
+						? String(event.data?.errorCode
+							|| event.data?.terminalReason || 'AI_VIDEO_FAILED') : ''
+				})
+				terminalStatus = event.data?.status || (event.type === 'video_ready'
+					? 'SETTLED' : 'RECONCILE_REQUIRED')
 			}
 			if (asyncGenerationEnabled() && event.type === 'completed'
 				&& generationPublicId) {
+				const current = getGeneration(generationPublicId)
+				const terminalAttachmentEvidenceComplete =
+					Array.isArray(event.data?.attachments)
+				const persisted = persistedImageAttachments(event.data)
+				const requestedImageCount = Number(
+					event.data?.requestedImageCount
+						|| current?.requestedImageCount || 0)
+				const displayAttachments = mergeCompletedImageOutputs(
+					current?.previewImages,
+					persisted,
+					terminalAttachmentEvidenceComplete
+						? requestedImageCount : 0)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data.terminalType,
 					terminalReason: event.data.terminalReason,
-					responseAttachments: persistedImageAttachments(event.data),
+					responseAttachments: mergeCompletedImageOutputs(
+						current?.failedImageOutputs,
+						persisted,
+						terminalAttachmentEvidenceComplete
+							? requestedImageCount : 0),
+					previewImages: displayAttachments,
+					requestedImageCount,
+					messagePublicId: event.data?.messagePublicId || '',
+					terminalAttachmentEvidenceComplete,
+					successfulImageCount: persisted.length,
 					warnings: event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
-				markGenerationTerminal(generationPublicId, event.data.status || 'COMPLETED')
+				terminalStatus = event.data.status || 'COMPLETED'
 			}
 			if (event.type === 'delta' && event.data?.type === 'TEXT'
 				&& String(event.data?.text || '').length > 0) {
@@ -186,7 +279,12 @@ export async function openAiConversationStream(command, handlers = {}) {
 					? String(event.data?.text || '').length
 					: 0
 			})
-			handlers.onEvent?.(event)
+			try {
+				handlers.onEvent?.(event)
+			} finally {
+				if (terminalStatus) markGenerationTerminal(
+					generationPublicId, terminalStatus)
+			}
 		}
 	}
 
@@ -267,6 +365,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		diagnostics,
 		lifecycleDiagnostics,
 		onEvent(event) {
+			let terminalStatus = null
 			if (event.type === 'snapshot') {
 				updateGeneration(generationPublicId, {
 					revision: Number(event.data?.revision || 0),
@@ -283,17 +382,97 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 			}
 			if (event.type === 'image-preview') {
 				const previewImage = imagePreviewAttachment(event.data)
-				if (previewImage) updateGeneration(generationPublicId, { previewImage })
+				if (previewImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergeImagePreviewOutput(
+							current?.previewImages || [], previewImage)
+					})
+				}
+			}
+			if (event.type === 'image-persisted') {
+				const persistedImage = persistedImageOutputAttachment(event.data)
+				if (persistedImage) {
+					const current = getGeneration(generationPublicId)
+					updateGeneration(generationPublicId, {
+						previewImages: mergePersistedImageOutput(
+							current?.previewImages || [], persistedImage)
+					})
+				}
+			}
+			if (event.type === 'image-output-status') {
+				const current = getGeneration(generationPublicId)
+				const failedImages = failImageOutputAttachment(
+					current?.previewImages || [], event.data)
+				updateGeneration(generationPublicId, {
+					previewImages: failedImages,
+					failedImageOutputs: failedImages.filter(item =>
+						item?.status === 'FAILED')
+				})
+			}
+			if (event.type === 'video_generation_progress') {
+				updateGeneration(generationPublicId, {
+					videoProgress: Math.max(0, Math.min(100,
+						Number(event.data?.progress || 0)))
+				})
+			}
+			if (event.type === 'video_transfer_started') {
+				updateGeneration(generationPublicId, { videoTransferring: true })
+			}
+			if (event.type === 'video_ready' || event.type === 'video_failed') {
+				updateGeneration(generationPublicId, {
+					messagePublicId: event.data?.messagePublicId || '',
+					responseAttachments: event.type === 'video_ready'
+						&& Array.isArray(event.data?.attachments)
+						? event.data.attachments : [],
+					videoMetadata: event.type === 'video_ready' ? {
+						durationMillis: Number(event.data?.durationMillis || 0),
+						width: Number(event.data?.width || 0),
+						height: Number(event.data?.height || 0),
+						byteSize: Number(event.data?.byteSize || 0),
+						videoCodec: String(event.data?.videoCodec || '')
+					} : null,
+					videoTransferring: false,
+					videoError: event.type === 'video_failed'
+						? String(event.data?.failureStage
+							|| event.data?.terminalReason || 'VIDEO_FAILED') : '',
+					videoErrorCode: event.type === 'video_failed'
+						? String(event.data?.errorCode
+							|| event.data?.terminalReason || 'AI_VIDEO_FAILED') : ''
+				})
+				terminalStatus = event.data?.status || (event.type === 'video_ready'
+					? 'SETTLED' : 'RECONCILE_REQUIRED')
 			}
 			if (event.type === 'completed') {
+				const current = getGeneration(generationPublicId)
+				const terminalAttachmentEvidenceComplete =
+					Array.isArray(event.data?.attachments)
+				const persisted = persistedImageAttachments(event.data)
+				const requestedImageCount = Number(
+					event.data?.requestedImageCount
+						|| current?.requestedImageCount || 0)
+				const displayAttachments = mergeCompletedImageOutputs(
+					current?.previewImages,
+					persisted,
+					terminalAttachmentEvidenceComplete
+						? requestedImageCount : 0)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data?.terminalType,
 					terminalReason: event.data?.terminalReason,
-					responseAttachments: persistedImageAttachments(event.data),
+					responseAttachments: mergeCompletedImageOutputs(
+						current?.failedImageOutputs,
+						persisted,
+						terminalAttachmentEvidenceComplete
+							? requestedImageCount : 0),
+					previewImages: displayAttachments,
+					requestedImageCount,
+					messagePublicId: event.data?.messagePublicId || '',
+					terminalAttachmentEvidenceComplete,
+					successfulImageCount: persisted.length,
 					warnings: event.data?.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 				})
-				markGenerationTerminal(generationPublicId, event.data?.status || 'COMPLETED')
+				terminalStatus = event.data?.status || 'COMPLETED'
 			}
 			diagnostics.record?.('BROWSER_SSE_PARSED', {
 				eventType: event.type,
@@ -302,7 +481,12 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					? String(event.data?.text || '').length
 					: 0
 			})
-			handlers.onEvent?.(event)
+			try {
+				handlers.onEvent?.(event)
+			} finally {
+				if (terminalStatus) markGenerationTerminal(
+					generationPublicId, terminalStatus)
+			}
 		}
 	}
 	let active = await openGenerationOnce(generationPublicId, wrapped, lifecycleDiagnostics)

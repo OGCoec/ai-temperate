@@ -11,6 +11,7 @@ import com.example.temperate.service.auth.session.refresh.store.RefreshSessionSt
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.RiskSessionType;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
+import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -169,7 +170,8 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                 binding.scope().name(),
                 binding.deviceDigest().value(),
                 binding.sessionType().name(),
-                binding.sessionRefDigest().value()));
+                binding.sessionRefDigest().value(),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION)));
     }
 
     @Override
@@ -233,7 +235,8 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                 binding.sessionType().name(),
                 binding.sessionRefDigest().value(),
                 Long.toString(binding.ttl().toMillis()),
-                binding.promoteAnonymous() ? "1" : "0"));
+                binding.promoteAnonymous() ? "1" : "0",
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION)));
     }
 
     @Override
@@ -261,7 +264,8 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                 binding.sessionType().name(),
                 binding.sessionRefDigest().value(),
                 Long.toString(binding.ttl().toMillis()),
-                binding.promoteAnonymous() ? "1" : "0"));
+                binding.promoteAnonymous() ? "1" : "0",
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION)));
     }
 
     @Override

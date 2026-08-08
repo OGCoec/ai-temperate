@@ -7,7 +7,25 @@ import java.time.Instant;
  */
 public record PreAuthIssue(
         String rawToken,
-        Instant expiresAt) {
+        Instant expiresAt,
+        PreAuthWebRtcPhase webRtcPhase,
+        long webRtcGeneration) {
+
+    public PreAuthIssue {
+        if (rawToken == null || rawToken.isBlank()
+                || expiresAt == null
+                || webRtcPhase == null
+                || webRtcGeneration <= 0) {
+            throw new IllegalArgumentException("PreAuth issue is invalid.");
+        }
+    }
+
+    /**
+     * 为不关心 WebRTC 传输头的既有调用补齐默认 REQUIRED generation；生产签发路径应使用完整构造器。
+     */
+    public PreAuthIssue(String rawToken, Instant expiresAt) {
+        this(rawToken, expiresAt, PreAuthWebRtcPhase.REQUIRED, 1L);
+    }
 
     @Override
     public String toString() {

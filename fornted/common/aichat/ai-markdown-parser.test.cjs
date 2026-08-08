@@ -23,6 +23,48 @@ function childTypes(node) {
 	return (node.children || []).map(child => child.type)
 }
 
+function tableCellTokens(tag, value, alignment = null) {
+	const style = alignment ? [['style', 'text-align:' + alignment]] : []
+	const tokens = [{ type: tag + '_open', nesting: 1, attrs: style }]
+	if (value !== null) {
+		tokens.push({
+			type: 'inline',
+			nesting: 0,
+			children: [{ type: 'text', nesting: 0, content: value }]
+		})
+	}
+	tokens.push({ type: tag + '_close', nesting: -1 })
+	return tokens
+}
+
+function tableRowTokens(tag, cells) {
+	return [
+		{ type: 'tr_open', nesting: 1 },
+		...cells.flatMap(cell => tableCellTokens(tag, cell.value, cell.alignment)),
+		{ type: 'tr_close', nesting: -1 }
+	]
+}
+
+function tableTokens(headers, rows) {
+	return [
+		{ type: 'table_open', nesting: 1 },
+		{ type: 'thead_open', nesting: 1 },
+		...tableRowTokens('th', headers),
+		{ type: 'thead_close', nesting: -1 },
+		{ type: 'tbody_open', nesting: 1 },
+		...rows.flatMap(row => tableRowTokens('td', row)),
+		{ type: 'tbody_close', nesting: -1 },
+		{ type: 'table_close', nesting: -1 }
+	]
+}
+
+async function parseTableTokens(tokens) {
+	const { createAiMarkdownParser } = await loadParser()
+	return createAiMarkdownParser({
+		markdown: { parse: () => tokens }
+	}).parse('table').children[0]
+}
+
 test('parses block and inline Markdown into the project AST', async () => {
 	const { parseAiMarkdown } = await loadParser()
 	const fence = String.fromCharCode(96).repeat(3)
@@ -81,6 +123,51 @@ test('parses fenced code, language metadata, GFM tables, and task items', async 
 	assert.equal(ast.children[2].children[0].type, 'taskItem')
 	assert.equal(ast.children[2].children[0].checked, true)
 	assert.equal(ast.children[2].children[1].checked, false)
+})
+
+test('normalizes missing and explicit empty table cells into rectangular rows', async () => {
+	const table = await parseTableTokens(tableTokens(
+		[
+			{ value: 'Name', alignment: 'left' },
+			{ value: 'Score', alignment: 'right' },
+			{ value: 'Notes', alignment: null }
+		],
+		[
+			[{ value: 'Ada', alignment: null }],
+			[
+				{ value: 'Lin', alignment: null },
+				{ value: null, alignment: null }
+			]
+		]
+	))
+
+	assert.equal(table.headers.length, 3)
+	assert.deepEqual(table.rows.map(row => row.length), [3, 3])
+	assert.deepEqual(table.rows[0][1], {
+		type: 'tableCell',
+		header: false,
+		alignment: null,
+		children: []
+	})
+	assert.deepEqual(table.rows[1][1], table.rows[1][2])
+	assert.deepEqual(table.alignments, ['left', 'right', null])
+})
+
+test('uses the widest data row when normalizing table alignment length', async () => {
+	const table = await parseTableTokens(tableTokens(
+		[{ value: 'Name', alignment: 'center' }],
+		[[
+			{ value: 'Ada', alignment: null },
+			{ value: '10', alignment: null },
+			{ value: 'Ready', alignment: null }
+		]]
+	))
+
+	assert.equal(table.headers.length, 3)
+	assert.equal(table.rows[0].length, 3)
+	assert.equal(table.headers[1].header, true)
+	assert.equal(table.headers[2].header, true)
+	assert.deepEqual(table.alignments, ['center', null, null])
 })
 
 test('propagates assistant streaming state to fenced code blocks', async () => {

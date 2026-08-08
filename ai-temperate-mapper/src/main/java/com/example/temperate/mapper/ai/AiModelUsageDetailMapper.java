@@ -25,7 +25,7 @@ public interface AiModelUsageDetailMapper {
             @Param("usageId") byte[] usageId,
             @Param("conversationMessageId") Long conversationMessageId,
             @Param("upstreamRequestId") String upstreamRequestId,
-            @Param("settlementDeltaMinor") long settlementDeltaMinor);
+            @Param("settlementDeltaMinor") Long settlementDeltaMinor);
 
     int finalizeHistoricalRefunds(
             @Param("candidates") List<AiModelUsageRefundCandidate> candidates);

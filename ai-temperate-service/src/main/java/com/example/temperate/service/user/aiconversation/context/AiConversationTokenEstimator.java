@@ -5,10 +5,32 @@ package com.example.temperate.service.user.aiconversation.context;
  */
 public interface AiConversationTokenEstimator {
 
-    long estimate(
+    default long estimate(
             String systemPrompt,
             String durableCompactionJson,
             String ephemeralCompactionJson,
             java.util.List<AiConversationTurn> turns,
-            AiConversationContent currentInput);
+            AiConversationContent currentInput) {
+        return Math.addExact(
+                estimateContext(
+                        systemPrompt,
+                        durableCompactionJson,
+                        ephemeralCompactionJson,
+                        turns),
+                estimateCurrentInput(currentInput));
+    }
+
+    long estimateContext(
+            String systemPrompt,
+            String durableCompactionJson,
+            String ephemeralCompactionJson,
+            java.util.List<AiConversationTurn> turns);
+
+    long estimateCurrentInput(AiConversationContent currentInput);
+
+    long estimateTurn(
+            AiConversationContent user,
+            AiConversationContent assistant);
+
+    long estimateCompaction(String compactedContextJson);
 }

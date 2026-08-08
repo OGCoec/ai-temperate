@@ -1,0 +1,19 @@
+package com.example.temperate.service.user.voice;
+
+/**
+ * 定义语音票据和实时转写边界向上层暴露的稳定错误分类。
+ */
+public enum VoiceErrorCode {
+    VOICE_TICKET_INVALID,
+    VOICE_TICKET_RATE_LIMITED,
+    VOICE_PROTOCOL_INVALID,
+    VOICE_AUDIO_FORMAT_INVALID,
+    VOICE_FRAME_TOO_LARGE,
+    VOICE_BUSY,
+    VOICE_QUEUE_FULL,
+    VOICE_QUEUE_TIMEOUT,
+    VOICE_BACKPRESSURE,
+    VOICE_UPSTREAM_UNAVAILABLE,
+    VOICE_TRANSCRIPTION_FAILED,
+    VOICE_INFRASTRUCTURE_UNAVAILABLE
+}

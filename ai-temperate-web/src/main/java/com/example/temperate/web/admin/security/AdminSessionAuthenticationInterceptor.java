@@ -164,7 +164,7 @@ public final class AdminSessionAuthenticationInterceptor implements HandlerInter
                 if (csrf == null || csrf.isBlank()) {
                     csrf = tokenGenerator.newFlowCsrf();
                 }
-                cookieWriter.refreshSession(response, rawToken, csrf, profile.expiresAt());
+                cookieWriter.refreshSession(response, rawToken, csrf);
             }
             return true;
         } catch (AdminException exception) {

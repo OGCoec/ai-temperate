@@ -4,9 +4,7 @@ import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
@@ -16,7 +14,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>用途：把短期流程凭据限制在浏览器 HttpOnly Cookie 传输边界内，避免 H5 JavaScript 和持久化存储接触
  * register/reset/forget/TOTP 登录挑战等原文材料；Android 不使用这些 Cookie，继续通过显式 Header 与
- * Keystore 协作。</p>
+ * Keystore 协作。正常写入使用会话 Cookie，流程有效期仍完全由服务端 Redis 状态控制。</p>
  */
 @Component
 public final class AuthFlowCookieWriter {
@@ -29,26 +27,22 @@ public final class AuthFlowCookieWriter {
     public static final String TOTP_LOGIN_FLOW_COOKIE = "totp_login_flow";
 
     private final AuthSecurityProperties properties;
-    private final Clock clock;
 
-    public AuthFlowCookieWriter(AuthSecurityProperties properties, Clock clock) {
+    public AuthFlowCookieWriter(AuthSecurityProperties properties) {
         this.properties = properties;
-        this.clock = clock;
     }
 
     public void writeRegistration(
             HttpServletResponse response,
             String registerToken,
             String flowCsrf,
-            String challengeHandle,
-            Instant expiresAt) {
-        // 注册流程三份材料必须按同一到期时间写入，避免 H5 只残留其中一部分造成不可恢复的半流程状态。
-        Duration maxAge = remaining(expiresAt);
-        add(response, REGISTER_TOKEN_COOKIE, registerToken, maxAge,
+            String challengeHandle) {
+        // 注册三份材料必须同时写为会话 Cookie；后端流程 TTL 不得复制为浏览器自动删除时间。
+        add(response, REGISTER_TOKEN_COOKIE, registerToken, null,
                 properties.cookies().registerFlow());
-        add(response, REGISTER_CSRF_COOKIE, flowCsrf, maxAge,
+        add(response, REGISTER_CSRF_COOKIE, flowCsrf, null,
                 properties.cookies().registerFlow());
-        add(response, REGISTER_CHALLENGE_COOKIE, challengeHandle, maxAge,
+        add(response, REGISTER_CHALLENGE_COOKIE, challengeHandle, null,
                 properties.cookies().registerChallenge());
     }
 
@@ -60,17 +54,15 @@ public final class AuthFlowCookieWriter {
 
     public void writePasswordResetFlow(
             HttpServletResponse response,
-            String resetFlowToken,
-            Instant expiresAt) {
-        add(response, RESET_FLOW_COOKIE, resetFlowToken, remaining(expiresAt),
+            String resetFlowToken) {
+        add(response, RESET_FLOW_COOKIE, resetFlowToken, null,
                 properties.cookies().passwordResetFlow());
     }
 
     public void writeForgetToken(
             HttpServletResponse response,
-            String forgetToken,
-            Instant expiresAt) {
-        add(response, FORGET_TOKEN_COOKIE, forgetToken, remaining(expiresAt),
+            String forgetToken) {
+        add(response, FORGET_TOKEN_COOKIE, forgetToken, null,
                 properties.cookies().passwordResetForget());
     }
 
@@ -89,9 +81,8 @@ public final class AuthFlowCookieWriter {
 
     public void writeTotpLoginFlow(
             HttpServletResponse response,
-            String rawFlowToken,
-            Instant expiresAt) {
-        add(response, TOTP_LOGIN_FLOW_COOKIE, rawFlowToken, remaining(expiresAt),
+            String rawFlowToken) {
+        add(response, TOTP_LOGIN_FLOW_COOKIE, rawFlowToken, null,
                 properties.cookies().totpLoginFlow());
     }
 
@@ -116,11 +107,6 @@ public final class AuthFlowCookieWriter {
 
     public String forgetToken(HttpServletRequest request) {
         return cookieValue(request, FORGET_TOKEN_COOKIE);
-    }
-
-    private Duration remaining(Instant expiresAt) {
-        Duration maxAge = Duration.between(clock.instant(), expiresAt);
-        return maxAge.isNegative() || maxAge.isZero() ? Duration.ofSeconds(1) : maxAge;
     }
 
     private void clear(

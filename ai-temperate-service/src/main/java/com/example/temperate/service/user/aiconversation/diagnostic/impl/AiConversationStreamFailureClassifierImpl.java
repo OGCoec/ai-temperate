@@ -2,9 +2,11 @@ package com.example.temperate.service.user.aiconversation.diagnostic.impl;
 
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureClassification;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureClassifier;
+import com.example.temperate.service.user.aiconversation.diagnostic.AiUpstreamErrorDiagnostic;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationStreamFailureReason;
+import com.example.temperate.service.user.aiconversation.exception.AiUpstreamHttpStatusException;
 import java.io.EOFException;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -38,9 +40,10 @@ public final class AiConversationStreamFailureClassifierImpl
         Objects.requireNonNull(failure);
         List<Throwable> chain = causeChain(failure);
         int status = statusCode(chain);
+        AiUpstreamErrorDiagnostic diagnostic = upstreamDiagnostic(chain);
         AiConversationStreamFailureReason reason = explicitReason(chain);
         if (reason == null) {
-            reason = classifyReason(chain, status);
+            reason = classifyReason(chain, status, diagnostic);
         }
         Throwable root = chain.get(chain.size() - 1);
         return new AiConversationStreamFailureClassification(
@@ -49,7 +52,8 @@ public final class AiConversationStreamFailureClassifierImpl
                 failure.getClass().getName(),
                 root.getClass().getName(),
                 topApplicationFrame(chain),
-                stackFingerprint(chain, status));
+                stackFingerprint(chain, status),
+                diagnostic);
     }
 
     private static AiConversationStreamFailureReason explicitReason(
@@ -66,7 +70,9 @@ public final class AiConversationStreamFailureClassifierImpl
     }
 
     private static AiConversationStreamFailureReason classifyReason(
-            List<Throwable> chain, int status) {
+            List<Throwable> chain,
+            int status,
+            AiUpstreamErrorDiagnostic diagnostic) {
         if (hasBackpressureOverflow(chain)) {
             return AiConversationStreamFailureReason.STREAM_BACKPRESSURE_OVERFLOW;
         }
@@ -81,6 +87,11 @@ public final class AiConversationStreamFailureClassifierImpl
         }
         if (status == 429) {
             return AiConversationStreamFailureReason.UPSTREAM_RATE_LIMITED;
+        }
+        AiConversationStreamFailureReason compatibility =
+                compatibilityReason(status, diagnostic);
+        if (compatibility != null) {
+            return compatibility;
         }
         if (hasConnectionClosed(chain)) {
             return AiConversationStreamFailureReason.UPSTREAM_CONNECTION_CLOSED;
@@ -108,6 +119,45 @@ public final class AiConversationStreamFailureClassifierImpl
             }
         }
         return AiConversationStreamFailureReason.UNKNOWN_STREAM_FAILURE;
+    }
+
+    private static AiConversationStreamFailureReason compatibilityReason(
+            int status, AiUpstreamErrorDiagnostic diagnostic) {
+        if ((status != 400 && status != 422) || diagnostic == null) {
+            return null;
+        }
+        // 兼容性分类只读取已脱敏的有限字段，并要求参数路径明确命中，不能把所有 400/422 猜成模型能力错误。
+        String evidence = String.join(" ",
+                diagnostic.providerCode(),
+                diagnostic.providerType(),
+                diagnostic.providerParam(),
+                diagnostic.sanitizedMessage()).toLowerCase(java.util.Locale.ROOT);
+        String parameter = diagnostic.providerParam()
+                .toLowerCase(java.util.Locale.ROOT)
+                .replace('/', '.')
+                .replace('[', '.')
+                .replace("]", "");
+        if ((parameter.contains("output_config")
+                && parameter.contains("effort"))
+                || parameter.contains("thinking_level")) {
+            return AiConversationStreamFailureReason
+                    .UPSTREAM_REASONING_LEVEL_UNSUPPORTED;
+        }
+        if (parameter.contains("image_size")) {
+            return AiConversationStreamFailureReason
+                    .UPSTREAM_IMAGE_RESOLUTION_UNSUPPORTED;
+        }
+        if (parameter.contains("tool_choice")
+                || parameter.contains("google_search")
+                || parameter.equals("tools")
+                || parameter.startsWith("tools.")
+                || parameter.contains(".tools.")
+                || (evidence.contains("google_search")
+                        && evidence.contains("unsupported"))) {
+            return AiConversationStreamFailureReason
+                    .UPSTREAM_TOOL_CONFIGURATION_UNSUPPORTED;
+        }
+        return null;
     }
 
     private static boolean hasBackpressureOverflow(List<Throwable> chain) {
@@ -177,6 +227,16 @@ public final class AiConversationStreamFailureClassifierImpl
             }
         }
         return 0;
+    }
+
+    private static AiUpstreamErrorDiagnostic upstreamDiagnostic(
+            List<Throwable> chain) {
+        for (Throwable current : chain) {
+            if (current instanceof AiUpstreamHttpStatusException upstream) {
+                return upstream.diagnostic();
+            }
+        }
+        return AiUpstreamErrorDiagnostic.unavailable();
     }
 
     private static Object invoke(Object target, String methodName) {

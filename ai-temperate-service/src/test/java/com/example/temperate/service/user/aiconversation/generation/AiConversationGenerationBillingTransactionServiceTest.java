@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,7 +34,8 @@ class AiConversationGenerationBillingTransactionServiceTest {
     void fullRefundUpdatesGenerationOnlyAfterSettlementReturns() {
         Fixture fixture = fixture();
         when(fixture.mapper.completeBilling(
-                any(), anyInt(), anyInt(), anyInt(), any(OffsetDateTime.class)))
+                any(), anyInt(), anyInt(), anyInt(), isNull(),
+                any(OffsetDateTime.class)))
                 .thenReturn(1);
 
         var result = fixture.service.settle(refundCommand());
@@ -49,6 +51,7 @@ class AiConversationGenerationBillingTransactionServiceTest {
                 any(), eq(1),
                 eq(AiConversationGenerationStatus.TERMINAL_PENDING_BILLING.code()),
                 eq(AiConversationGenerationStatus.REFUNDED.code()),
+                isNull(),
                 any(OffsetDateTime.class));
     }
 
@@ -62,7 +65,7 @@ class AiConversationGenerationBillingTransactionServiceTest {
         assertThatThrownBy(() -> fixture.service.settle(refundCommand()))
                 .isInstanceOf(IllegalStateException.class);
         verify(fixture.mapper, never()).completeBilling(
-                any(), anyInt(), anyInt(), anyInt(), any());
+                any(), anyInt(), anyInt(), anyInt(), any(), any());
     }
 
     private static AiConversationGenerationBillingCommand refundCommand() {

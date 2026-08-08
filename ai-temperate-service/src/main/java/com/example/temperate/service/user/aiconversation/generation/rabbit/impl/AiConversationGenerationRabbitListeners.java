@@ -70,7 +70,10 @@ public final class AiConversationGenerationRabbitListeners {
     }
 
     @RabbitListener(
-            queues = AiConversationGenerationRabbitNames.GENERATION_QUEUE,
+            queues = {
+                    AiConversationGenerationRabbitNames.GENERATION_QUEUE,
+                    "#{aiConversationGenerationWorkerV2Queue.name}"
+            },
             containerFactory = "aiConversationGenerationWorkerListenerFactory")
     public void generation(
             AiConversationGenerationEnvelope<AiConversationGenerationRequested> envelope,
@@ -126,7 +129,10 @@ public final class AiConversationGenerationRabbitListeners {
     }
 
     @RabbitListener(
-            queues = AiConversationGenerationRabbitNames.TERMINAL_QUEUE,
+            queues = {
+                    AiConversationGenerationRabbitNames.TERMINAL_QUEUE,
+                    AiConversationGenerationRabbitNames.TERMINAL_QUEUE_V2
+            },
             containerFactory = "aiConversationGenerationTerminalListenerFactory")
     public void terminal(
             AiConversationGenerationEnvelope<AiConversationGenerationTerminated> envelope,

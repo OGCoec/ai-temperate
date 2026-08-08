@@ -50,7 +50,8 @@ class PhoneCountryControllerTest {
         GlobalExceptionHandler exceptionHandler = new GlobalExceptionHandler(
                 Clock.systemUTC(),
                 mock(AuthCookieWriter.class),
-                mock(AuthFlowCookieWriter.class));
+                mock(AuthFlowCookieWriter.class),
+                mock(com.example.temperate.web.risk.PreAuthTransport.class));
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new PhoneCountryController(service, resolver))
                 .setControllerAdvice(exceptionHandler)

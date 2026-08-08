@@ -172,7 +172,8 @@ class AdminIp2LocationKeyControllerTest {
                                 Instant.parse("2026-07-26T00:00:00Z"),
                                 ZoneOffset.UTC),
                         mock(AuthCookieWriter.class),
-                        mock(AuthFlowCookieWriter.class)))
+                        mock(AuthFlowCookieWriter.class),
+                        mock(com.example.temperate.web.risk.PreAuthTransport.class)))
                 .build();
 
         mockMvc.perform(post("/api/admin/risk/ip2location/keys/batch")

@@ -12,6 +12,7 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.user.aiconversation.compaction.model.AiConversationCompactionModelRef;
+import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
@@ -32,16 +33,23 @@ final class AiConversationCompactionModelCatalogImplTest {
     private AiModelAvailabilityService availabilityService;
 
     @Test
-    void returnsEveryStillEnabledModelWithoutCapabilityFiltering() {
+    void returnsOnlyEnabledChatModelsForImplementedProviders() {
         AiModelCacheSnapshot snapshot = new AiModelCacheSnapshot(
                 AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION,
                 List.of(
-                        model(11L, "text-model", AiModelCapabilityCode.RESPONSES),
-                        model(12L, "disabled-after-cache", AiModelCapabilityCode.CHAT_COMPLETIONS),
-                        model(13L, "media-model", AiModelCapabilityCode.VIDEO_INPUT)));
+                        model(11L, "text-model", "openai",
+                                AiModelCapabilityCode.CHAT_COMPLETIONS),
+                        model(12L, "disabled-after-cache", "xai",
+                                AiModelCapabilityCode.CHAT_COMPLETIONS),
+                        model(13L, "media-model", "openai",
+                                AiModelCapabilityCode.VIDEO_INPUT),
+                        model(14L, "xai-text", "xai",
+                                AiModelCapabilityCode.CHAT_COMPLETIONS),
+                        model(15L, "unsupported", "anthropic",
+                                AiModelCapabilityCode.CHAT_COMPLETIONS)));
         when(cacheService.getOrLoadEnabledSnapshot()).thenReturn(snapshot);
-        when(availabilityService.findEnabledIds(List.of(11L, 12L, 13L)))
-                .thenReturn(Set.of(11L, 13L));
+        when(availabilityService.findEnabledIds(List.of(11L, 12L, 13L, 14L, 15L)))
+                .thenReturn(Set.of(11L, 13L, 14L, 15L));
         AiConversationCompactionModelCatalogImpl catalog =
                 new AiConversationCompactionModelCatalogImpl(
                         cacheService, availabilityService);
@@ -49,9 +57,12 @@ final class AiConversationCompactionModelCatalogImplTest {
         List<AiConversationCompactionModelRef> result = catalog.enabledModels();
 
         assertThat(result).containsExactly(
-                new AiConversationCompactionModelRef(11L, "text-model"),
-                new AiConversationCompactionModelRef(13L, "media-model"));
-        verify(availabilityService).findEnabledIds(List.of(11L, 12L, 13L));
+                new AiConversationCompactionModelRef(
+                        11L, AiModelProvider.OPENAI, "text-model"),
+                new AiConversationCompactionModelRef(
+                        14L, AiModelProvider.XAI, "xai-text"));
+        verify(availabilityService).findEnabledIds(
+                List.of(11L, 12L, 13L, 14L, 15L));
         assertThatThrownBy(() -> result.add(
                 new AiConversationCompactionModelRef(14L, "mutated")))
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -74,11 +85,12 @@ final class AiConversationCompactionModelCatalogImplTest {
     private static AiModelCacheEntry model(
             long id,
             String modelName,
+            String vendor,
             AiModelCapabilityCode capability) {
         return new AiModelCacheEntry(
                 id,
                 modelName,
-                "test-vendor",
+                vendor,
                 "test model",
                 null,
                 List.of(),

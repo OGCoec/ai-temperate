@@ -56,6 +56,9 @@ DECLARE
     foreign_key_count INTEGER;
     missing_comment_count INTEGER;
     missing_index_count INTEGER;
+    missing_metering_column_count INTEGER;
+	missing_metering_constraint_count INTEGER;
+	missing_video_stage_count INTEGER;
 BEGIN
     SELECT COUNT(*)
       INTO table_count
@@ -124,5 +127,58 @@ BEGIN
     IF missing_index_count <> 0 THEN
         RAISE EXCEPTION 'AI Generation schema is missing % required indexes', missing_index_count;
     END IF;
+
+    -- 成本计量字段是异步图片恢复与对账的权威证据，缺少任一列都不得继续发布。
+    SELECT COUNT(*)
+      INTO missing_metering_column_count
+      FROM (VALUES
+          ('ai_conversation_generation_payload', 'metering_basis'),
+          ('ai_conversation_generation_payload', 'provider_cost_ticks'),
+          ('ai_conversation_generation_payload', 'metering_evidence')
+      ) AS required(table_name, column_name)
+      LEFT JOIN information_schema.columns actual
+        ON actual.table_schema = 'public'
+       AND actual.table_name = required.table_name
+       AND actual.column_name = required.column_name
+     WHERE actual.column_name IS NULL;
+    IF missing_metering_column_count <> 0 THEN
+        RAISE EXCEPTION 'AI Generation schema is missing % metering columns', missing_metering_column_count;
+    END IF;
+
+    SELECT COUNT(*)
+      INTO missing_metering_constraint_count
+      FROM (VALUES
+          ('chk_ai_conversation_generation_payload_metering_basis'),
+          ('chk_ai_conversation_generation_payload_provider_cost'),
+          ('chk_ai_conversation_generation_payload_metering_fields')
+      ) AS required(constraint_name)
+      LEFT JOIN pg_constraint actual
+        ON actual.conname = required.constraint_name
+     WHERE actual.conname IS NULL;
+	IF missing_metering_constraint_count <> 0 THEN
+		RAISE EXCEPTION 'AI Generation schema is missing % metering constraints', missing_metering_constraint_count;
+	END IF;
+
+	-- 视频阶段列和白名单约束用于诊断 xAI 与 OSS 边界，但不会保存临时 URL。
+	SELECT COUNT(*)
+	  INTO missing_video_stage_count
+	  FROM (VALUES
+		  ('video_stage'),
+		  ('chk_ai_conversation_generation_video_stage')
+	  ) AS required(object_name)
+	  LEFT JOIN (
+		  SELECT column_name AS object_name
+		  FROM information_schema.columns
+		  WHERE table_schema = 'public'
+			AND table_name = 'ai_conversation_generation'
+		  UNION ALL
+		  SELECT conname
+		  FROM pg_constraint
+	  ) actual
+		ON actual.object_name = required.object_name
+	 WHERE actual.object_name IS NULL;
+	IF missing_video_stage_count <> 0 THEN
+		RAISE EXCEPTION 'AI Generation schema is missing % video stage objects', missing_video_stage_count;
+	END IF;
 END
 $verification$;

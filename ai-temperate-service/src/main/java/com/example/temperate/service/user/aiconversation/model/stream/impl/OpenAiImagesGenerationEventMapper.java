@@ -4,7 +4,6 @@ import com.example.temperate.service.user.aiconversation.image.AiConversationGen
 import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImageFormat;
 import com.example.temperate.service.user.aiconversation.image.AiConversationGeneratedImagePhase;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
-import com.example.temperate.service.user.aiconversation.model.AiConversationModelChunk;
 import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationModelEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -35,32 +34,125 @@ final class OpenAiImagesGenerationEventMapper {
 
     List<AiConversationModelEvent> map(
             OpenAiResponsesSseEvent event,
-            AiConversationImageGenerationOptions options) {
+            AiConversationImageGenerationOptions options,
+            short outputIndex) {
+        return mapDetailed(event, options, outputIndex).events();
+    }
+
+    OpenAiImagesGenerationMappingResult mapDetailed(
+            OpenAiResponsesSseEvent event,
+            AiConversationImageGenerationOptions options,
+            short outputIndex) {
         Objects.requireNonNull(options);
-        if (event == null || event.data() == null
-                || "[DONE]".equals(event.data().trim())) {
-            return List.of();
+        if (event == null || event.data() == null) {
+            return result(
+                    event,
+                    null,
+                    null,
+                    "none",
+                    0,
+                    OpenAiImagesGenerationMappingOutcome.EMPTY,
+                    List.of());
+        }
+        if ("[DONE]".equals(event.data().trim())) {
+            return result(
+                    event,
+                    null,
+                    null,
+                    "none",
+                    0,
+                    OpenAiImagesGenerationMappingOutcome.DONE,
+                    List.of());
         }
         JsonNode root = parse(event.data());
         String type = text(root, "type");
         if (type == null || type.isBlank()) {
             type = event.name();
         }
-        return switch (type) {
-            case "image_generation.partial_image" ->
-                    partial(root, options);
-            case "image_generation.completed" -> completed(root, options);
-            case "error" -> List.of(
-                    new AiConversationModelEvent.Failure(
-                            "UPSTREAM_IMAGE_RESPONSE_FAILED"));
-            default -> List.of();
-        };
+        Integer partialImageIndex = diagnosticPartialIndex(root);
+        ImagePayloadMetadata payload = imagePayload(root);
+        OpenAiImagesGenerationMappingOutcome outcome;
+        List<AiConversationModelEvent> events;
+        switch (type == null ? "" : type) {
+            case "image_generation.partial_image",
+                    "image_edit.partial_image" -> {
+                outcome = OpenAiImagesGenerationMappingOutcome.PARTIAL;
+                events = partial(root, options, outputIndex);
+            }
+            case "image_generation.completed",
+                    "image_edit.completed" -> {
+                outcome = OpenAiImagesGenerationMappingOutcome.FINAL;
+                events = completed(root, options, outputIndex);
+            }
+            case "error" -> {
+                outcome = OpenAiImagesGenerationMappingOutcome.FAILURE;
+                events = List.of(new AiConversationModelEvent.Failure(
+                        "UPSTREAM_IMAGE_RESPONSE_FAILED"));
+            }
+            default -> {
+                outcome = OpenAiImagesGenerationMappingOutcome.IGNORED;
+                events = List.of();
+            }
+        }
+        return result(
+                event,
+                type,
+                partialImageIndex,
+                payload.field(),
+                payload.characters(),
+                outcome,
+                events);
+    }
+
+    private static OpenAiImagesGenerationMappingResult result(
+            OpenAiResponsesSseEvent event,
+            String jsonType,
+            Integer partialImageIndex,
+            String imagePayloadField,
+            int encodedImageCharacters,
+            OpenAiImagesGenerationMappingOutcome outcome,
+            List<AiConversationModelEvent> events) {
+        String data = event == null ? null : event.data();
+        return new OpenAiImagesGenerationMappingResult(
+                event == null ? null : event.name(),
+                jsonType,
+                partialImageIndex,
+                imagePayloadField,
+                data == null ? 0 : data.length(),
+                encodedImageCharacters,
+                outcome,
+                events);
+    }
+
+    private static Integer diagnosticPartialIndex(JsonNode root) {
+        JsonNode value = root.path("partial_image_index");
+        return value.isIntegralNumber() && value.canConvertToInt()
+                ? value.intValue()
+                : null;
+    }
+
+    private static ImagePayloadMetadata imagePayload(JsonNode root) {
+        String b64Json = text(root, "b64_json");
+        if (b64Json != null) {
+            return new ImagePayloadMetadata("b64_json", b64Json.length());
+        }
+        String partialImage = text(root, "partial_image_b64");
+        if (partialImage != null) {
+            return new ImagePayloadMetadata(
+                    "partial_image_b64", partialImage.length());
+        }
+        return new ImagePayloadMetadata("none", 0);
     }
 
     private List<AiConversationModelEvent> partial(
             JsonNode root,
-            AiConversationImageGenerationOptions options) {
-        int index = root.path("partial_image_index").asInt(-1);
+            AiConversationImageGenerationOptions options,
+            short outputIndex) {
+        JsonNode indexValue = root.path("partial_image_index");
+        if (!indexValue.isIntegralNumber() || !indexValue.canConvertToInt()) {
+            throw new IllegalStateException("Invalid partial image index");
+        }
+        int index = indexValue.intValue();
         if (index < 0
                 || index >= AiConversationImageGenerationOptions.MAXIMUM_PARTIAL_IMAGES) {
             throw new IllegalStateException("Invalid partial image index");
@@ -68,29 +160,38 @@ final class OpenAiImagesGenerationEventMapper {
         byte[] bytes = decode(text(root, "b64_json"));
         return List.of(new AiConversationModelEvent.Image(
                 image(root, options, AiConversationGeneratedImagePhase.PARTIAL,
-                        index, bytes)));
+                        outputIndex, (short) index, bytes)));
     }
 
     private List<AiConversationModelEvent> completed(
             JsonNode root,
-            AiConversationImageGenerationOptions options) {
+            AiConversationImageGenerationOptions options,
+            short outputIndex) {
         List<AiConversationModelEvent> result = new ArrayList<>();
         result.add(new AiConversationModelEvent.Image(
                 image(root, options,
                         AiConversationGeneratedImagePhase.FINAL,
-                        AiConversationImageGenerationOptions.MAXIMUM_PARTIAL_IMAGES,
+                        outputIndex,
+                        null,
                         decode(text(root, "b64_json")))));
         JsonNode usage = root.path("usage");
         if (!usage.isMissingNode() && !usage.isNull()) {
-            long prompt = number(usage, "input_tokens");
-            long completion = number(usage, "output_tokens");
-            result.add(new AiConversationModelEvent.Chunk(
-                    new AiConversationModelChunk(
-                            "",
-                            new AiConversationUsage(
-                                    prompt, 0L, completion, 0L),
-                            text(root, "id"),
-                            "STOP")));
+            long prompt = requiredNumber(usage, "input_tokens");
+            long cached = optionalNumber(
+                    usage,
+                    "cached_tokens",
+                    usage.path("input_tokens_details"));
+            long completion = requiredNumber(usage, "output_tokens");
+            long reasoning = optionalNumber(
+                    usage,
+                    "reasoning_tokens",
+                    usage.path("output_tokens_details"));
+            result.add(new AiConversationModelEvent.ImageUsage(
+                    outputIndex,
+                    new AiConversationUsage(
+                            prompt, cached, completion, reasoning),
+                    text(root, "id"),
+                    "STOP"));
         }
         return List.copyOf(result);
     }
@@ -99,14 +200,15 @@ final class OpenAiImagesGenerationEventMapper {
             JsonNode root,
             AiConversationImageGenerationOptions options,
             AiConversationGeneratedImagePhase phase,
-            int index,
+            short outputIndex,
+            Short partialImageIndex,
             byte[] bytes) {
         String imageId = text(root, "item_id");
         if (imageId == null || imageId.isBlank()) {
             imageId = text(root, "id");
         }
         if (imageId == null || imageId.isBlank()) {
-            imageId = "image-" + index;
+            imageId = "image-" + outputIndex;
         }
         // 请求格式只是偏好；预览、OSS 和数据库必须以解码后字节的真实格式为准。
         AiConversationGeneratedImageFormat format =
@@ -114,7 +216,8 @@ final class OpenAiImagesGenerationEventMapper {
         return new AiConversationGeneratedImage(
                 imageId,
                 phase,
-                index,
+                outputIndex,
+                partialImageIndex,
                 format.contentType(),
                 options.aspect().width(),
                 options.aspect().height(),
@@ -155,8 +258,33 @@ final class OpenAiImagesGenerationEventMapper {
         return value != null && value.isTextual() ? value.asText() : null;
     }
 
-    private static long number(JsonNode node, String field) {
+    private static long requiredNumber(JsonNode node, String field) {
         JsonNode value = node.path(field);
-        return value.isNumber() ? Math.max(0L, value.longValue()) : 0L;
+        if (!value.isIntegralNumber() || !value.canConvertToLong()
+                || value.longValue() < 0L) {
+            throw new IllegalStateException(
+                    "Image usage field is not a non-negative integer: " + field);
+        }
+        return value.longValue();
+    }
+
+    private static long optionalNumber(
+            JsonNode directParent,
+            String field,
+            JsonNode nestedParent) {
+        JsonNode direct = directParent.path(field);
+        if (!direct.isMissingNode() && !direct.isNull()) {
+            return requiredNumber(directParent, field);
+        }
+        JsonNode nested = nestedParent.path(field);
+        return nested.isMissingNode() || nested.isNull()
+                ? 0L
+                : requiredNumber(nestedParent, field);
+    }
+
+    /**
+     * 仅携带图片字段名称和字符数，防止诊断结果间接长期持有原始 Base64 字符串。
+     */
+    private record ImagePayloadMetadata(String field, int characters) {
     }
 }

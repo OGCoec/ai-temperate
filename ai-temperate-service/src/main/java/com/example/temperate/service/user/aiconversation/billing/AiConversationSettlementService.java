@@ -12,6 +12,10 @@ public interface AiConversationSettlementService {
     AiConversationSettlementResult settleInterrupted(
             AiConversationSettlementCommand command);
 
+    AiConversationSettlementResult completeReconcile(
+            AiConversationSettlementCommand command,
+            String failureCode);
+
     void refundFailed(byte[] usageId, String failureCode);
 
     void refundFailed(

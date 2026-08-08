@@ -24,9 +24,14 @@ class NetworkRiskPropertiesTest {
                         NetworkRiskProperties.class.getDeclaredConstructors())
                 .filter(constructor -> !constructor.isSynthetic())
                 .count();
+        long webRtcBindableConstructors = Arrays.stream(
+                        NetworkRiskProperties.WebRtc.class.getDeclaredConstructors())
+                .filter(constructor -> !constructor.isSynthetic())
+                .count();
 
         // Spring Boot 对只有一个构造器的配置 record 自动采用构造器绑定，避免退回无参 JavaBean 实例化。
         assertThat(bindableConstructors).isOne();
+        assertThat(webRtcBindableConstructors).isOne();
     }
 
     @Test
@@ -65,6 +70,21 @@ class NetworkRiskPropertiesTest {
                 .isTrue();
     }
 
+    @Test
+    void webRtcPendingWindowCombinesFifteenSecondProbeAndFiveSecondGrace() {
+        NetworkRiskProperties properties = properties(
+                NetworkRiskMode.ENFORCE,
+                VALID_SECRET,
+                VALID_SECRET,
+                WEBRTC_SECRET);
+
+        assertThat(properties.webRtc().startGrace()).isEqualTo(Duration.ofSeconds(8));
+        assertThat(properties.webRtc().probeTimeout()).isEqualTo(Duration.ofSeconds(12));
+        assertThat(properties.webRtc().reportGrace()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(properties.webRtc().pendingWindow()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(properties.isWebRtcConfigValid()).isTrue();
+    }
+
     private static NetworkRiskProperties properties(
             NetworkRiskMode mode,
             String hmacSecret,
@@ -90,7 +110,9 @@ class NetworkRiskPropertiesTest {
                 Duration.ofHours(24),
                 Duration.ofMinutes(10),
                 new NetworkRiskProperties.WebRtc(
-                        Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                         List.of(
                                 URI.create("stun:stun.l.google.com:19302"),
                                 URI.create("stun:stun.cloudflare.com:3478"),

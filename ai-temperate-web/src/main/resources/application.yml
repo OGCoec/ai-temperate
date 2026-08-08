@@ -169,6 +169,29 @@ spring:
         # 消费失败后禁止无限重新入队。
         default-requeue-rejected: false
 
+# Actuator 只对部署编排公开不含内部细节的存活与就绪探针。
+management:
+  # 单个健康端点禁止返回组件、异常、类路径或其他内部诊断信息。
+  endpoint:
+    # 健康端点同时承载 liveness 与 readiness 分组。
+    health:
+      # 匿名探针响应只保留整体状态，不展示任何组件详情。
+      show-details: never
+      # 即使未展示详情也禁止返回组件名称，避免泄露内部基础设施拓扑。
+      show-components: never
+      # Spring Boot 可用性探针必须显式启用，供实例摘流与重启编排使用。
+      probes:
+        # 类链接故障发布 REFUSING_TRAFFIC 后 readiness 立即返回非健康状态。
+        enabled: true
+  # Web 端点仅暴露健康检查，禁止通过默认配置扩大管理面。
+  endpoints:
+    # Actuator 的 HTTP 暴露边界配置。
+    web:
+      # 仅将 health 端点加入 Web 暴露集合。
+      exposure:
+        # liveness 与 readiness 是 health 的分组路径，不需要暴露其他端点。
+        include: health
+
 # MyBatis 持久化框架配置。
 mybatis:
   # Mapper XML 使用 classpath* 扫描所有模块资源，确保 mapper 子模块中的 SQL 映射被加载。
@@ -250,14 +273,26 @@ app:
     max-hash-fields: ${AI_CONVERSATION_MAX_HASH_FIELDS:5000}
     # 单个会话 Hash 达到一千字段时开始触发临时上下文压缩。
     compaction-hash-field-threshold: ${AI_CONVERSATION_COMPACTION_HASH_FIELD_THRESHOLD:1000}
-    # 单用户同时活跃生成上限为四个不同会话。
-    max-concurrent-per-user: ${AI_CONVERSATION_MAX_CONCURRENT_PER_USER:4}
+    # 单用户上游并发按真实流数量计权，默认允许一次最多十路图片子流原子占用。
+    max-concurrent-per-user: ${AI_CONVERSATION_MAX_CONCURRENT_PER_USER:10}
     # 全部应用实例共享的活跃生成总上限为一百二十八。
     max-concurrent-global: ${AI_CONVERSATION_MAX_CONCURRENT_GLOBAL:128}
     # 图片缺少厂商精确计数规则时采用保守固定 Token 估算。
     image-estimated-tokens: ${AI_CONVERSATION_IMAGE_ESTIMATED_TOKENS:2048}
     # 预计下一轮达到上下文窗口百分之八十时调度异步压缩。
     pre-compaction-percent: ${AI_CONVERSATION_PRE_COMPACTION_PERCENT:80}
+    # 上下文用量展示、硬容量等待和压缩任务状态使用独立的有限时长配置组。
+    context-usage:
+      # 只有绝对容量不足时才等待异步压缩，最长等待六十秒。
+      hard-limit-wait-timeout: ${AI_CONVERSATION_CONTEXT_HARD_LIMIT_WAIT_TIMEOUT:60s}
+      # 按需上下文 SSE 每十秒发送一次心跳以尽快识别失效连接。
+      event-heartbeat: ${AI_CONVERSATION_CONTEXT_EVENT_HEARTBEAT:10s}
+      # 单次按需上下文 SSE 最长保留七十秒，超时后由前端按需重连。
+      event-timeout: ${AI_CONVERSATION_CONTEXT_EVENT_TIMEOUT:70s}
+      # 排队或运行中的压缩状态最多保留十分钟，异常退出后由绝对 TTL 收敛。
+      operation-ttl: ${AI_CONVERSATION_CONTEXT_OPERATION_TTL:10m}
+      # 压缩成功或失败终态保留五分钟，供断线页面恢复最终展示。
+      terminal-retention: ${AI_CONVERSATION_CONTEXT_TERMINAL_RETENTION:5m}
     # RESERVED 超时判定在最大流时长之外额外保留两分钟安全缓冲。
     reservation-safety-buffer: ${AI_CONVERSATION_RESERVATION_SAFETY_BUFFER:2m}
     # 过期 RESERVED 扫描每分钟运行一次且不执行自动退款。
@@ -276,11 +311,23 @@ app:
       enabled: ${AI_CONVERSATION_WEB_SEARCH_ENABLED:true}
       # 专用客户端只允许在既有 CLIProxyAPI 基础地址下调用固定相对路径。
       responses-path: ${AI_CONVERSATION_WEB_SEARCH_RESPONSES_PATH:/v1/responses}
+    # Anthropic 原生 Messages 客户端复用 CLIProxyAPI 主机和认证信息，只维护供应商协议元数据。
+    anthropic:
+      # Messages 端点必须是 CLIProxyAPI 主机下的受控相对路径。
+      messages-path: ${AI_CONVERSATION_ANTHROPIC_MESSAGES_PATH:/v1/messages}
+      # Anthropic 协议版本使用官方稳定日期，便于部署时显式覆盖。
+      api-version: ${AI_CONVERSATION_ANTHROPIC_API_VERSION:2023-06-01}
+    # Google 原生 Interactions 客户端复用 CLIProxyAPI 主机和认证信息，只维护供应商协议元数据。
+    google:
+      # Interactions 端点必须是 CLIProxyAPI 主机下的受控相对路径。
+      interactions-path: ${AI_CONVERSATION_GOOGLE_INTERACTIONS_PATH:/v1beta/interactions}
+      # API 修订日期固定在配置中，禁止由用户请求控制请求头。
+      api-revision: ${AI_CONVERSATION_GOOGLE_API_REVISION:2026-05-20}
     # 后台异步 Generation 默认启用，为图片生成提供任务执行、预览事件和最终持久化链路。
     async-generation:
       # 新链路总开关默认开启；部署环境仍可显式设为 false 关闭异步 Generation。
       enabled: ${AI_CONVERSATION_ASYNC_GENERATION_ENABLED:true}
-      # 每个生产实例必须使用部署系统注入的唯一标识以定向路由取消命令。
+      # 每个生产实例必须使用部署系统注入的稳定唯一标识，以定向路由生成与取消；生产负载均衡还必须保持 SSE 重连会话粘性。
       instance-id: ${AI_CONVERSATION_INSTANCE_ID:local-single-instance}
       # SSE 失联允许三十秒重连，期间模型生成不得被观察者断开取消。
       detach-grace: ${AI_CONVERSATION_DETACH_GRACE:30s}
@@ -322,8 +369,80 @@ app:
       enabled: ${AI_CONVERSATION_IMAGE_GENERATION_ENABLED:true}
       # 图片生成通过 CLIProxyAPI Images Generation 端点请求最终图和中间预览。
       generations-path: ${AI_CONVERSATION_IMAGE_GENERATIONS_PATH:/v1/images/generations}
+      # 图片编辑通过兼容的 Images Edit JSON 端点复用短期签名输入图片引用。
+      edits-path: ${AI_CONVERSATION_IMAGE_EDITS_PATH:/v1/images/edits}
       # 单张上游图片解码后最多三十二 MiB，超限事件直接作为协议失败处理。
       maximum-decoded-image-bytes: ${AI_CONVERSATION_IMAGE_MAX_DECODED_BYTES:33554432}
+      # 原始图片不超过三十八万四千字节时直接通过 SSE 预览，对应 Base64 约五百 KiB。
+      maximum-inline-preview-bytes: ${AI_CONVERSATION_IMAGE_MAX_INLINE_PREVIEW_BYTES:384000}
+      # 超限图片缩略图最长边默认压到七百六十八像素，在传输体积和可辨识度之间取平衡。
+      thumbnail-max-edge-pixels: ${AI_CONVERSATION_IMAGE_THUMBNAIL_MAX_EDGE_PIXELS:768}
+      # 无透明通道的缩略图使用百分之七十 JPEG 质量，后续有限次数降级仍受字节硬上限约束。
+      thumbnail-jpeg-quality: ${AI_CONVERSATION_IMAGE_THUMBNAIL_JPEG_QUALITY:70}
+      # 单实例 Broker 最多常驻二百五十六 MiB 有界预览，超限槽位仍可实时发送但不进入重连缓存。
+      maximum-preview-retained-bytes: ${AI_CONVERSATION_IMAGE_MAX_PREVIEW_RETAINED_BYTES:268435456}
+    # xAI 视频使用异步任务和 FC 搬运，主业务 JVM 只处理小型 JSON 与 OSS 引用。
+    video-generation:
+      # 默认启用视频入口，部署环境仍可通过变量关闭并必须提供完整的 FC 与 RAM 安全配置。
+      enabled: ${AI_CONVERSATION_VIDEO_GENERATION_ENABLED:true}
+      # xAI pending 状态固定每五秒查询一次，单次网络失败不会自动重试。
+      poll-interval: ${AI_CONVERSATION_VIDEO_POLL_INTERVAL:5s}
+      # 单个视频任务最多等待十五分钟，超时保留 request ID 并进入人工对账。
+      maximum-polling-duration: ${AI_CONVERSATION_VIDEO_MAX_POLLING_DURATION:15m}
+      # xAI 创建和轮询 JSON 响应最多占用一 MiB，视频内容不进入该响应。
+      maximum-response-json-bytes: ${AI_CONVERSATION_VIDEO_MAX_RESPONSE_JSON_BYTES:1048576}
+      # xAI 视频 REST 路径只允许配置相对 API 路径，禁止改成任意外部 URL。
+      endpoints:
+        # 文本、单图和参考图视频共用官方 generations 路径。
+        generations: ${AI_CONVERSATION_VIDEO_GENERATIONS_PATH:/v1/videos/generations}
+        # 视频编辑使用官方 edits 路径。
+        edits: ${AI_CONVERSATION_VIDEO_EDITS_PATH:/v1/videos/edits}
+        # 视频延长使用官方 extensions 路径。
+        extensions: ${AI_CONVERSATION_VIDEO_EXTENSIONS_PATH:/v1/videos/extensions}
+        # 轮询路径必须保留 requestId 模板变量。
+        poll: ${AI_CONVERSATION_VIDEO_POLL_PATH:/v1/videos/{requestId}}
+      # grok-imagine-video-1.5 使用官方三档输出秒价和图片输入价，单位均为美元成本 ticks。
+      version15:
+        # 官方普通生成模型名称不得自动替换成其他模型。
+        model-name: ${AI_CONVERSATION_VIDEO_15_MODEL:grok-imagine-video-1.5}
+        # 480p 官方价格为每秒零点零八美元，即八亿 ticks。
+        p480-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P480_TICKS:800000000}
+        # 720p 官方价格为每秒零点一四美元，即十四亿 ticks。
+        p720-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P720_TICKS:1400000000}
+        # 1080p 官方价格为每秒零点二五美元，即二十五亿 ticks。
+        p1080-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_15_P1080_TICKS:2500000000}
+        # 每张图片输入官方价格为零点零一美元，即一亿 ticks。
+        image-input-ticks-each: ${AI_CONVERSATION_VIDEO_15_IMAGE_INPUT_TICKS:100000000}
+      # grok-imagine-video 使用官方编辑和延长价格，单位均为美元成本 ticks。
+      legacy:
+        # 官方视频编辑和延长模型名称不得自动替换成新模型。
+        model-name: ${AI_CONVERSATION_VIDEO_LEGACY_MODEL:grok-imagine-video}
+        # 480p 官方价格为每秒零点零五美元，即五亿 ticks。
+        p480-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_P480_TICKS:500000000}
+        # 720p 官方价格为每秒零点零七美元，即七亿 ticks。
+        p720-output-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_P720_TICKS:700000000}
+        # 每张图片输入官方价格为零点零零二美元，即两千万 ticks。
+        image-input-ticks-each: ${AI_CONVERSATION_VIDEO_LEGACY_IMAGE_INPUT_TICKS:20000000}
+        # 视频输入官方价格为每秒零点零一美元，即一亿 ticks。
+        video-input-ticks-per-second: ${AI_CONVERSATION_VIDEO_LEGACY_VIDEO_INPUT_TICKS:100000000}
+      # FC 只接收签名小型 JSON，并通过 RAM 角色把 xAI 视频流式写入固定 OSS 前缀。
+      function-compute:
+        # FC HTTPS 调用地址必须由部署环境提供，关闭视频时允许为空。
+        invocation-url: ${AI_CONVERSATION_VIDEO_FC_INVOCATION_URL:}
+        # 主业务到 FC 的独立 HMAC Secret 只允许由环境变量提供，不得写入默认值。
+        hmac-secret: ${AI_CONVERSATION_VIDEO_FC_HMAC_SECRET:}
+        # 主业务同步等待 FC 搬运最多十五分钟，期间只保留小型响应状态。
+        timeout: ${AI_CONVERSATION_VIDEO_FC_TIMEOUT:15m}
+        # FC 只允许写入该服务端固定对象前缀，客户端不能覆盖。
+        object-prefix: ${AI_CONVERSATION_VIDEO_OSS_OBJECT_PREFIX:ai/video/}
+        # 单个视频硬上限默认二 GiB，超限时 FC 中止 Multipart Upload。
+        maximum-video-bytes: ${AI_CONVERSATION_VIDEO_MAX_BYTES:2147483648}
+        # FC 只允许连接显式配置的 xAI 临时视频域名。
+        allowed-source-hosts:
+          # xAI 官方视频结果域名作为默认唯一来源。
+          - ${AI_CONVERSATION_VIDEO_XAI_SOURCE_HOST:vidgen.x.ai}
+          # 项目 OSS 签名输入视频域名只用于编辑和延长前的 FC 元数据探测。
+          - ${AI_CONVERSATION_VIDEO_OSS_SOURCE_HOST:ihaveaplan.oss-us-west-1.aliyuncs.com}
     # 会话通用附件使用独立配置组，所有对象路径仍只能由服务端工厂构造。
     attachments:
       # 会话附件沿用现有公共读 Bucket，真实 Bucket 名允许按部署环境覆盖。
@@ -340,7 +459,7 @@ app:
       signed-get-ttl: ${AI_CONVERSATION_ATTACHMENT_SIGNED_GET_TTL:10m}
       # 单个用户附件和单个模型生成媒体最大一百 MiB。
       max-file-bytes: ${AI_CONVERSATION_ATTACHMENT_MAX_FILE_BYTES:104857600}
-      # 单条用户输入或模型输出最多保留八个附件。
+      # 单条用户输入最多八个附件；模型生成输出在服务端使用独立的十张上限。
       max-files-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_FILES:8}
       # 单条用户输入或模型输出的附件总大小最多二百 MiB。
       max-total-bytes-per-message: ${AI_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:209715200}
@@ -370,6 +489,45 @@ app:
     security:
       # HMAC-SHA256 密钥必须是至少三十二字节的规范 Base64。
       idempotency-hmac-key-base64: ${AI_CONVERSATION_IDEMPOTENCY_HMAC_KEY_BASE64}
+
+  # 本地 Whisper 实时语音输入通过一次性票据和受信任 WSS 上游隔离公网客户端与 GPU 服务。
+  voice:
+    # 总开关关闭时不注册票据接口、公开 WebSocket 入口和本机 Whisper 上游客户端。
+    enabled: ${VOICE_ENABLED:true}
+    # 公网客户端只连接 Java 现有 HTTPS 端口下的固定 WebSocket 路径。
+    public-path: ${VOICE_PUBLIC_PATH:/ws/voice}
+    # 一次性票据仅保留三十秒，避免票据被截获后形成长期重放窗口。
+    ticket-ttl: ${VOICE_TICKET_TTL:30s}
+    # 用户和设备的票据申请计数按一分钟固定窗口收敛。
+    ticket-rate-window: ${VOICE_TICKET_RATE_WINDOW:1m}
+    # 每个用户和设备一分钟最多签发十张票据，防止绕过 GPU 会话限制进行排队攻击。
+    ticket-rate-limit: ${VOICE_TICKET_RATE_LIMIT:10}
+    # 单次录音固定限制为五分钟，Java 与 Python 同时执行字节数硬边界。
+    max-duration: ${VOICE_MAX_DURATION:5m}
+    # 临时转写目标每一千五百毫秒刷新一次，但不承诺逐字零延迟。
+    partial-interval: ${VOICE_PARTIAL_INTERVAL:1500ms}
+    # RTX 4070 默认同时承载三个实时识别会话，并与 Python 推理 Worker 数保持一致。
+    max-active-sessions: ${VOICE_MAX_ACTIVE_SESSIONS:3}
+    # 超出三路活动会话后最多保留五个仅等待准入且尚未采集音频的 WebSocket 连接。
+    waiting-queue-capacity: ${VOICE_WAITING_QUEUE_CAPACITY:5}
+    # 排队连接最多等待九十秒，超时后释放名额并提示客户端重试。
+    queue-wait-timeout: ${VOICE_QUEUE_WAIT_TIMEOUT:90s}
+    # H5 握手只接受下列精确来源；Android 原生连接不携带 Origin 并由票据中的平台约束。
+    allowed-origins:
+      # 本地 H5 开发服务器通过 localhost 安全上下文访问 Java WSS。
+      - ${VOICE_ALLOWED_ORIGIN_LOCAL:https://localhost:3000}
+      # 本地 H5 使用回环 IP 时保留独立精确来源，禁止通配符来源。
+      - ${VOICE_ALLOWED_ORIGIN_LOOPBACK:https://127.0.0.1:3000}
+      # 生产 H5 使用站点根域来源；部署域名变化时必须显式覆盖环境变量。
+      - ${VOICE_ALLOWED_ORIGIN_PRODUCTION:https://niko000o.site}
+    # Java 仅通过本机 TLS WebSocket 连接 Python，禁止把 7896 暴露给公网客户端。
+    upstream-uri: ${VOICE_UPSTREAM_URI:wss://127.0.0.1:7896/ws/transcribe}
+    # Java 使用指定 PEM 证书建立独立信任上下文，禁止 trust-all 或关闭主机名校验。
+    upstream-trust-certificate: ${VOICE_UPSTREAM_TRUST_CERTIFICATE:file:${user.home}/.ai-temperate/certs/local-https.pem}
+    # Java 与 Python 建立 WSS 握手最多等待五秒，超时后返回可重试的上游不可用错误。
+    upstream-connect-timeout: ${VOICE_UPSTREAM_CONNECT_TIMEOUT:5s}
+    # 提交完整五分钟音频后最多等待两分钟获得权威最终转写。
+    final-timeout: ${VOICE_FINAL_TIMEOUT:120s}
 
   # CLIProxyAPI 用户推理开关和服务层超时配置。
   ai-inference:
@@ -422,9 +580,9 @@ app:
     single-flight-ttl: ${NETWORK_RISK_SINGLE_FLIGHT_TTL:9s}
     # 单实例最多允许三十二个缓存未命中的外部风险查询并发。
     max-concurrent-lookups: ${NETWORK_RISK_MAX_CONCURRENT_LOOKUPS:32}
-    # 未登录 PreAuth 每次有效业务请求获得三十分钟滑动期限。
+    # 未登录 PreAuth 服务端状态每次有效业务请求获得三十分钟滑动期限，H5 会话 Cookie 不复制该 TTL。
     anonymous-pre-auth-ttl: ${NETWORK_RISK_ANONYMOUS_PREAUTH_TTL:30m}
-    # 登录成功关联后的 PreAuth 每次有效业务请求获得六小时滑动期限。
+    # 登录成功关联后的 PreAuth 服务端状态获得六小时滑动期限，H5 会话 Cookie 不复制该 TTL。
     authenticated-pre-auth-ttl: ${NETWORK_RISK_AUTHENTICATED_PREAUTH_TTL:6h}
     # 一次性 WAF Challenge 引用五分钟后失效。
     challenge-ttl: ${NETWORK_RISK_CHALLENGE_TTL:5m}
@@ -438,8 +596,12 @@ app:
     temporary-block-ttl: ${NETWORK_RISK_TEMPORARY_BLOCK_TTL:10m}
     # WebRTC 客户端探测只定义有界协议参数和加密材料，后端不会向 STUN 发起请求。
     web-rtc:
-      # 浏览器与 Android 系统 WebView 最多等待十五秒完成 ICE 候选收集。
-      probe-timeout: ${WEBRTC_PROBE_TIMEOUT:15s}
+      # 新 generation 创建后必须在八秒内调用幂等 start，否则下一次请求会观察到启动超时终态。
+      start-grace: ${WEBRTC_START_GRACE:8s}
+      # 浏览器与 Android 系统 WebView 最多等待十二秒完成 ICE 候选收集。
+      probe-timeout: ${WEBRTC_PROBE_TIMEOUT:12s}
+      # ICE 探测结束后预留三秒提交同一 generation 的 Report，start 后总窗口不超过十五秒。
+      report-grace: ${WEBRTC_REPORT_GRACE:3s}
       # STUN 地址按固定优先顺序下发，服务端校验客户端上报结果的并集。
       stun-urls:
         # Google STUN 作为第一个全局候选来源。
@@ -509,7 +671,7 @@ app:
         same-site: ${AUTH_CSRF_COOKIE_SAME_SITE:STRICT}
         # CSRF Cookie 作用于整个站点以保护全部写请求。
         path: ${AUTH_CSRF_COOKIE_PATH:/}
-      # 注册流程 Token Cookie 只允许注册端点自动携带。
+      # 注册流程 Token 使用会话 Cookie 且只允许注册端点自动携带，服务端流程 TTL 不控制浏览器删除时间。
       register-flow:
         # 注册流程 Token Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_REGISTER_FLOW_COOKIE_SECURE:true}
@@ -519,7 +681,7 @@ app:
         same-site: ${AUTH_REGISTER_FLOW_COOKIE_SAME_SITE:STRICT}
         # 注册流程 Token Cookie 仅作用于注册端点。
         path: ${AUTH_REGISTER_FLOW_COOKIE_PATH:/api/auth/register}
-      # 注册 Turnstile Challenge Cookie 仅用于 H5 刷新后由服务端恢复流程。
+      # 注册 Turnstile Challenge 使用会话 Cookie，仅用于 H5 刷新后由服务端恢复流程。
       register-challenge:
         # 注册 Challenge Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_REGISTER_CHALLENGE_COOKIE_SECURE:true}
@@ -529,7 +691,7 @@ app:
         same-site: ${AUTH_REGISTER_CHALLENGE_COOKIE_SAME_SITE:STRICT}
         # 注册 Challenge Cookie 仅作用于注册端点。
         path: ${AUTH_REGISTER_CHALLENGE_COOKIE_PATH:/api/auth/register}
-      # 找回密码流程 Token Cookie 只允许找回密码端点自动携带。
+      # 找回密码流程 Token 使用会话 Cookie 且只允许找回密码端点自动携带。
       password-reset-flow:
         # 找回密码流程 Token Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_SECURE:true}
@@ -539,7 +701,7 @@ app:
         same-site: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_SAME_SITE:STRICT}
         # 找回密码流程 Token Cookie 仅作用于找回密码端点。
         path: ${AUTH_PASSWORD_RESET_FLOW_COOKIE_PATH:/api/auth/password-reset}
-      # 找回密码一次性完成凭证 Cookie 只允许最终重置端点携带。
+      # 找回密码一次性完成凭证使用会话 Cookie 且只允许最终重置端点携带。
       password-reset-forget:
         # 找回密码一次性完成凭证 Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_SECURE:true}
@@ -549,7 +711,7 @@ app:
         same-site: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_SAME_SITE:STRICT}
         # 找回密码一次性完成凭证 Cookie 仅作用于完成端点。
         path: ${AUTH_PASSWORD_RESET_FORGET_COOKIE_PATH:/api/auth/password-reset/complete}
-      # TOTP 登录流程 Token Cookie 只允许二次认证端点自动携带。
+      # TOTP 登录流程 Token 使用会话 Cookie 且只允许二次认证端点自动携带。
       totp-login-flow:
         # TOTP 登录流程 Cookie 必须只通过 HTTPS 传输。
         secure: ${AUTH_TOTP_LOGIN_FLOW_COOKIE_SECURE:true}
@@ -565,7 +727,7 @@ app:
       allowed-origins: ${CORS_ALLOWED_ORIGINS}
     # 认证与缓存 TTL 边界配置。
     ttl:
-      # Access Token 默认使用十分钟生命周期，签发和 Cookie Max-Age 共用该配置。
+      # Access Token JWT 默认使用十分钟生命周期，H5 会话 Cookie 不复制该有效期。
       access-token: ${AUTH_ACCESS_TOKEN_TTL:10m}
       # 验证码 TTL 默认 5 分钟且限制在 30 秒至 15 分钟。
       verification-code: ${AUTH_VERIFICATION_CODE_TTL:5m}
@@ -587,7 +749,7 @@ app:
       allowed-drift-steps: ${TOTP_ALLOWED_DRIFT_STEPS:1}
       # 尚未确认的新密钥在 Redis 中最多暂存十分钟。
       setup-ttl: ${TOTP_SETUP_TTL:10m}
-      # 第一因子通过后的登录二次认证挑战最多保留五分钟。
+      # 第一因子通过后的 TOTP 登录挑战服务端状态最多保留五分钟，H5 会话 Cookie 不复制该 TTL。
       login-challenge-ttl: ${TOTP_LOGIN_CHALLENGE_TTL:5m}
       # 开启、轮换和关闭前的敏感操作复验凭证最多保留五分钟。
       step-up-ttl: ${TOTP_STEP_UP_TTL:5m}
@@ -622,13 +784,13 @@ app:
         max-models: ${CLI_PROXY_MAX_MODELS:500}
     # 管理员 Flow 和会话标识使用独立规范 Base64 HMAC 密钥，禁止复用 JWT 或普通用户 HMAC。
     session-hmac-secret-base64: ${ADMIN_SESSION_HMAC_SECRET_BASE64}
-    # 管理员不透明会话每次成功访问后滑动续期六小时。
+    # 管理员 Redis 不透明会话每次成功访问后滑动续期六小时，H5 会话 Cookie 不复制该 TTL。
     session-ttl: ${ADMIN_SESSION_TTL:6h}
     # 单管理员最多允许十个同时在线设备，超过上限拒绝新会话。
     max-sessions: ${ADMIN_MAX_SESSIONS:10}
-    # 管理员首次注册 Flow 固定十分钟有效。
+    # 管理员首次注册 Flow 服务端状态固定十分钟有效，H5 会话 Cookie 不复制该 TTL。
     registration-flow-ttl: ${ADMIN_REGISTRATION_FLOW_TTL:10m}
-    # 管理员登录 hCaptcha Flow 固定十分钟有效。
+    # 管理员登录 hCaptcha Flow 服务端状态固定十分钟有效，H5 会话 Cookie 不复制该 TTL。
     login-flow-ttl: ${ADMIN_LOGIN_FLOW_TTL:10m}
     # 管理员 API 只允许显式 HTTPS Origin 携带凭据访问。
     allowed-origins: ${ADMIN_ALLOWED_ORIGINS:https://admin.niko000o.site}
@@ -672,7 +834,7 @@ app:
         same-site: ${ADMIN_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员 CSRF Cookie 作用于整个站点以保护退出等写请求。
         path: ${ADMIN_CSRF_COOKIE_PATH:/}
-      # 管理员首次注册 Token 与 Challenge Cookie 配置。
+      # 管理员注册 Token 与 Challenge 使用会话 Cookie，服务端 TTL 独立生效。
       register-flow:
         # 管理员注册 Flow Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_REGISTER_FLOW_COOKIE_SECURE:true}
@@ -682,7 +844,7 @@ app:
         same-site: ${ADMIN_REGISTER_FLOW_COOKIE_SAME_SITE:Strict}
         # 管理员注册 Flow Cookie 仅发送到注册端点。
         path: ${ADMIN_REGISTER_FLOW_COOKIE_PATH:/api/admin/auth/register}
-      # 管理员注册 Flow 双提交 CSRF Cookie 配置。
+      # 管理员注册 Flow 双提交 CSRF 使用前端可读的会话 Cookie。
       register-csrf:
         # 管理员注册 CSRF Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_REGISTER_CSRF_COOKIE_SECURE:true}
@@ -692,7 +854,7 @@ app:
         same-site: ${ADMIN_REGISTER_CSRF_COOKIE_SAME_SITE:Strict}
         # 管理员页面必须能读取注册 CSRF Cookie；认证 Flow Token 仍由独立 HttpOnly 路径隔离。
         path: ${ADMIN_REGISTER_CSRF_COOKIE_PATH:/}
-      # 管理员登录 Flow Token 与 Challenge Cookie 配置。
+      # 管理员登录 Flow Token 与 Challenge 使用会话 Cookie，服务端 TTL 独立生效。
       login-flow:
         # 管理员登录 Flow Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_LOGIN_FLOW_COOKIE_SECURE:true}
@@ -702,7 +864,7 @@ app:
         same-site: ${ADMIN_LOGIN_FLOW_COOKIE_SAME_SITE:Strict}
         # 管理员登录 Flow Cookie 仅发送到登录端点。
         path: ${ADMIN_LOGIN_FLOW_COOKIE_PATH:/api/admin/auth/login}
-      # 管理员登录 Flow 双提交 CSRF Cookie 配置。
+      # 管理员登录 Flow 双提交 CSRF 使用前端可读的会话 Cookie。
       login-csrf:
         # 管理员登录 CSRF Cookie 必须只通过 HTTPS 传输。
         secure: ${ADMIN_LOGIN_CSRF_COOKIE_SECURE:true}
@@ -901,7 +1063,7 @@ app:
   auth-session:
     # 会话敏感标识使用独立 HMAC 密钥，缺失时必须启动失败。
     hmac-secret-base64: ${AUTH_SESSION_HMAC_SECRET_BASE64}
-    # 固定 Refresh Token 使用三小时滑动空闲有效期，每次成功刷新或会话恢复后重新获得完整三小时，不设置绝对截止时间。
+    # 固定 Refresh Token 的 Redis Session 使用三小时滑动空闲有效期，H5 会话 Cookie 不复制该 TTL。
     refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:3h}
     # 单个用户最多保留十个并发刷新会话。
     max-sessions-per-user: ${AUTH_MAX_SESSIONS_PER_USER:10}
@@ -941,7 +1103,7 @@ app:
     environment: ${APP_ENV:PROD}
     # 注册敏感标识使用的 HMAC 密钥必须由部署环境提供。
     hmac-secret-base64: ${AUTH_HMAC_SECRET_BASE64}
-    # 注册主流程使用十分钟空闲期限，仅白名单拦截器请求可续签且受三十分钟绝对期限约束。
+    # 注册服务端流程使用十分钟空闲期限且受三十分钟绝对期限约束，H5 会话 Cookie 不复制该 TTL。
     flow-ttl: ${REGISTRATION_FLOW_TTL:600s}
     # 冲突计数采用固定五分钟窗口，后续冲突不会重置窗口 TTL。
     conflict-window: ${REGISTRATION_CONFLICT_WINDOW:5m}

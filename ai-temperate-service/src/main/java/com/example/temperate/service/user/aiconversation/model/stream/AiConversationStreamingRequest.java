@@ -9,10 +9,31 @@ import java.util.Objects;
  */
 public record AiConversationStreamingRequest(
         AiConversationModelRequest modelRequest,
-        AiConversationWebSearchMode webSearchMode) {
+        AiConversationWebSearchMode webSearchMode,
+        AiConversationStreamingDiagnosticContext diagnosticContext,
+        String resumeUpstreamRequestId) {
+
+    public AiConversationStreamingRequest(
+            AiConversationModelRequest modelRequest,
+            AiConversationWebSearchMode webSearchMode,
+            AiConversationStreamingDiagnosticContext diagnosticContext) {
+        this(modelRequest, webSearchMode, diagnosticContext, null);
+    }
+
+    public AiConversationStreamingRequest(
+            AiConversationModelRequest modelRequest,
+            AiConversationWebSearchMode webSearchMode) {
+        this(modelRequest, webSearchMode, null, null);
+    }
 
     public AiConversationStreamingRequest {
         modelRequest = Objects.requireNonNull(modelRequest);
         webSearchMode = Objects.requireNonNull(webSearchMode);
+        if (resumeUpstreamRequestId != null) {
+            resumeUpstreamRequestId = resumeUpstreamRequestId.trim();
+            if (resumeUpstreamRequestId.isEmpty()) {
+                resumeUpstreamRequestId = null;
+            }
+        }
     }
 }

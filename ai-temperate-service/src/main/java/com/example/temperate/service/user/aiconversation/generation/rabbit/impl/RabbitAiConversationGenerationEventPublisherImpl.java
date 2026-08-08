@@ -68,7 +68,8 @@ public final class RabbitAiConversationGenerationEventPublisherImpl
             String traceId) {
         publish(
                 AiConversationGenerationRabbitNames.GENERATION_EXCHANGE,
-                AiConversationGenerationRabbitNames.GENERATION_ROUTING_KEY,
+                AiConversationGenerationRabbitNames.workerRoutingKeyV2(
+                        properties.instanceId()),
                 envelope(
                         REQUESTED,
                         traceId,
@@ -132,7 +133,7 @@ public final class RabbitAiConversationGenerationEventPublisherImpl
             String traceId) {
         publish(
                 AiConversationGenerationRabbitNames.TERMINAL_EXCHANGE,
-                AiConversationGenerationRabbitNames.TERMINAL_ROUTING_KEY,
+                AiConversationGenerationRabbitNames.TERMINAL_ROUTING_KEY_V2,
                 envelope(
                         TERMINATED,
                         traceId,

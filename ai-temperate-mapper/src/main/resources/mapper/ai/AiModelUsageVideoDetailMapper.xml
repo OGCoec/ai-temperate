@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper">
+
+    <resultMap id="AiModelUsageVideoDetailResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelUsageVideoDetail">
+        <id property="usageId" column="usage_id"/>
+        <result property="videoMode" column="video_mode"/>
+        <result property="videoResolution" column="video_resolution"/>
+        <result property="requestedDurationSeconds" column="requested_duration_seconds"/>
+        <result property="inputImageCount" column="input_image_count"/>
+        <result property="inputVideoDurationMillis" column="input_video_duration_millis"/>
+        <result property="outputCostTicksPerSecond" column="output_cost_ticks_per_second"/>
+        <result property="imageInputCostTicksEach" column="image_input_cost_ticks_each"/>
+        <result property="videoInputCostTicksPerSecond" column="video_input_cost_ticks_per_second"/>
+        <result property="estimatedProviderCostTicks" column="estimated_provider_cost_ticks"/>
+    </resultMap>
+
+    <sql id="VideoUsageDetailColumns">
+        video.usage_id AS usage_id,
+        video.video_mode AS video_mode,
+        video.video_resolution AS video_resolution,
+        video.requested_duration_seconds AS requested_duration_seconds,
+        video.input_image_count AS input_image_count,
+        video.input_video_duration_millis AS input_video_duration_millis,
+        video.output_cost_ticks_per_second AS output_cost_ticks_per_second,
+        video.image_input_cost_ticks_each AS image_input_cost_ticks_each,
+        video.video_input_cost_ticks_per_second AS video_input_cost_ticks_per_second,
+        video.estimated_provider_cost_ticks AS estimated_provider_cost_ticks
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModelUsageVideoDetail">
+        INSERT INTO ai_model_usage_video_detail (
+            usage_id,
+            video_mode,
+            video_resolution,
+            requested_duration_seconds,
+            input_image_count,
+            input_video_duration_millis,
+            output_cost_ticks_per_second,
+            image_input_cost_ticks_each,
+            video_input_cost_ticks_per_second,
+            estimated_provider_cost_ticks
+        )
+        VALUES (
+            #{usageId,jdbcType=BINARY},
+            #{videoMode,jdbcType=VARCHAR},
+            #{videoResolution,jdbcType=VARCHAR},
+            #{requestedDurationSeconds,jdbcType=INTEGER},
+            #{inputImageCount,jdbcType=INTEGER},
+            #{inputVideoDurationMillis,jdbcType=BIGINT},
+            #{outputCostTicksPerSecond,jdbcType=BIGINT},
+            #{imageInputCostTicksEach,jdbcType=BIGINT},
+            #{videoInputCostTicksPerSecond,jdbcType=BIGINT},
+            #{estimatedProviderCostTicks,jdbcType=BIGINT}
+        )
+    </insert>
+
+    <select id="findByUsageId" resultMap="AiModelUsageVideoDetailResultMap">
+        SELECT
+            <include refid="VideoUsageDetailColumns"/>
+        FROM ai_model_usage_video_detail video
+        JOIN ai_model_usage_detail usage_detail
+            ON usage_detail.usage_id = video.usage_id
+        WHERE video.usage_id = #{usageId,jdbcType=BINARY}
+    </select>
+
+</mapper>

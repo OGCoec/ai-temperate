@@ -93,12 +93,17 @@ public interface AiConversationGenerationMapper {
             @Param("expectedTerminalVersion") int expectedTerminalVersion,
             @Param("terminalPendingStatus") int terminalPendingStatus,
             @Param("finalStatus") int finalStatus,
+            @Param("terminalReason") String terminalReason,
             @Param("now") OffsetDateTime now);
 
-    int markReconcileRequired(
+	int markReconcileRequired(
             @Param("generationId") byte[] generationId,
             @Param("expectedStatuses") List<Integer> expectedStatuses,
             @Param("reconcileStatus") int reconcileStatus,
             @Param("terminalReason") String terminalReason,
-            @Param("now") OffsetDateTime now);
+			@Param("now") OffsetDateTime now);
+
+	int updateVideoStage(
+			@Param("generationId") byte[] generationId,
+			@Param("videoStage") String videoStage);
 }

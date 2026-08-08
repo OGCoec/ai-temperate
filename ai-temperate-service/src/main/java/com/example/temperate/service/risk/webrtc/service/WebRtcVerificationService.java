@@ -9,6 +9,10 @@ import java.util.List;
  */
 public interface WebRtcVerificationService {
 
+    WebRtcVerificationDecision begin(
+            PreAuthAccess access,
+            String currentHttpIp);
+
     WebRtcVerificationDecision inspect(
             PreAuthAccess access,
             String currentHttpIp);
@@ -16,5 +20,6 @@ public interface WebRtcVerificationService {
     WebRtcVerificationDecision report(
             PreAuthAccess access,
             String currentHttpIp,
+            String probeGeneration,
             List<String> reportedWebRtcIps);
 }

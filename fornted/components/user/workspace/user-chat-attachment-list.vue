@@ -78,13 +78,18 @@
 <script>
 	import {
 		attachmentCategory,
+		isImageEditAttachmentCompatible,
 		isAttachmentCompatible
 	} from '@/common/aichat/ai-conversation-upload-state.js'
+	import { isVideoAttachmentCompatible } from '@/common/aichat/ai-conversation-video-generation.js'
 
 	export default {
 		props: {
 			attachments: { type: Array, default: () => [] },
 			model: { type: Object, default: null },
+			imageEditing: { type: Boolean, default: false },
+			mediaOperation: { type: Boolean, default: false },
+			videoMode: { type: String, default: '' },
 			generating: { type: Boolean, default: false }
 		},
 		emits: ['remove', 'retry'],
@@ -95,7 +100,12 @@
 					&& Boolean(file.path)
 			},
 			compatible(file) {
-				return isAttachmentCompatible(file, this.model)
+				if (this.mediaOperation) {
+					return isVideoAttachmentCompatible(this.videoMode, file)
+				}
+				return this.imageEditing
+					? isImageEditAttachmentCompatible(file, this.model)
+					: isAttachmentCompatible(file, this.model)
 			},
 			kindIcon(file) {
 				return ({

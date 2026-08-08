@@ -4,16 +4,14 @@ import com.example.temperate.service.admin.config.properties.AdminProperties;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Objects;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
 
 /**
- * 统一写入、读取和清理管理员 H5 注册、登录、会话与双提交 CSRF Cookie。
+ * 统一写入、读取和清理管理员 H5 注册、登录、会话与双提交 CSRF 会话 Cookie。
  *
  * <p>Android 不调用写入方法；原始 Token 只允许短暂经过本组件进入 HttpOnly Cookie，禁止进入日志或前端存储。</p>
  */
@@ -30,25 +28,22 @@ public final class AdminCookieWriter {
     public static final String LOGIN_CHALLENGE_COOKIE = "admin_login_challenge";
 
     private final AdminProperties properties;
-    private final Clock clock;
 
-    public AdminCookieWriter(AdminProperties properties, Clock clock) {
+    public AdminCookieWriter(AdminProperties properties) {
         this.properties = Objects.requireNonNull(properties);
-        this.clock = Objects.requireNonNull(clock);
     }
 
     public void writeRegistration(
             HttpServletResponse response,
             String token,
             String csrf,
-            String challenge,
-            Instant expiresAt) {
-        Duration maxAge = remaining(expiresAt);
-        addSensitive(response, REGISTER_TOKEN_COOKIE, token, maxAge,
+            String challenge) {
+        // 管理员注册 Flow 的有效期只由服务端状态控制，三份浏览器材料统一写为会话 Cookie。
+        addSensitive(response, REGISTER_TOKEN_COOKIE, token, null,
                 properties.cookies().registerFlow());
-        addCsrf(response, REGISTER_CSRF_COOKIE, csrf, maxAge,
+        addCsrf(response, REGISTER_CSRF_COOKIE, csrf, null,
                 properties.cookies().registerCsrf());
-        addSensitive(response, REGISTER_CHALLENGE_COOKIE, challenge, maxAge,
+        addSensitive(response, REGISTER_CHALLENGE_COOKIE, challenge, null,
                 properties.cookies().registerFlow());
     }
 
@@ -56,34 +51,31 @@ public final class AdminCookieWriter {
             HttpServletResponse response,
             String token,
             String csrf,
-            String challenge,
-            Instant expiresAt) {
-        Duration maxAge = remaining(expiresAt);
-        addSensitive(response, LOGIN_TOKEN_COOKIE, token, maxAge,
+            String challenge) {
+        // 管理员登录 Flow 同样保留后端十分钟 TTL，但浏览器不得按该 TTL 自动删除流程材料。
+        addSensitive(response, LOGIN_TOKEN_COOKIE, token, null,
                 properties.cookies().loginFlow());
-        addCsrf(response, LOGIN_CSRF_COOKIE, csrf, maxAge,
+        addCsrf(response, LOGIN_CSRF_COOKIE, csrf, null,
                 properties.cookies().loginCsrf());
-        addSensitive(response, LOGIN_CHALLENGE_COOKIE, challenge, maxAge,
+        addSensitive(response, LOGIN_CHALLENGE_COOKIE, challenge, null,
                 properties.cookies().loginFlow());
     }
 
     public void writeSession(
             HttpServletResponse response,
             String token,
-            String csrf,
-            Instant expiresAt) {
-        Duration maxAge = remaining(expiresAt);
-        addSensitive(response, SESSION_COOKIE, token, maxAge,
+            String csrf) {
+        // 管理员 Redis Session 保持独立 TTL；浏览器会话内保留原始 Cookie，失效后由下一次请求统一清理。
+        addSensitive(response, SESSION_COOKIE, token, null,
                 properties.cookies().session());
-        addCsrf(response, CSRF_COOKIE, csrf, maxAge, properties.cookies().csrf());
+        addCsrf(response, CSRF_COOKIE, csrf, null, properties.cookies().csrf());
     }
 
     public void refreshSession(
             HttpServletResponse response,
             String token,
-            String csrf,
-            Instant expiresAt) {
-        writeSession(response, token, csrf, expiresAt);
+            String csrf) {
+        writeSession(response, token, csrf);
     }
 
     public RegistrationCookies registration(HttpServletRequest request) {
@@ -124,11 +116,6 @@ public final class AdminCookieWriter {
     public void clearSession(HttpServletResponse response) {
         clearSensitive(response, SESSION_COOKIE, properties.cookies().session());
         clearCsrf(response, CSRF_COOKIE, properties.cookies().csrf());
-    }
-
-    private Duration remaining(Instant expiresAt) {
-        Duration value = Duration.between(clock.instant(), expiresAt);
-        return value.isNegative() || value.isZero() ? Duration.ofSeconds(1) : value;
     }
 
     private void addSensitive(
@@ -186,8 +173,10 @@ public final class AdminCookieWriter {
                 .secure(settings.secure())
                 .httpOnly(settings.httpOnly())
                 .sameSite(settings.sameSite())
-                .path(settings.path())
-                .maxAge(maxAge);
+                .path(settings.path());
+        if (maxAge != null) {
+            builder.maxAge(maxAge);
+        }
         if (domain != null && !domain.isBlank()) {
             builder.domain(domain);
         }

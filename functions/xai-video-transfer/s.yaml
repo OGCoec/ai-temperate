@@ -1,0 +1,71 @@
+# Serverless Devs 配置规范版本，用于部署 FC 3.0 资源。
+edition: 3.0.0
+# 独立视频搬运应用名称，不与主 Spring Boot 服务共同部署。
+name: xai-video-transfer
+# 部署凭据别名必须由本机 Serverless Devs 配置提供，文件中禁止写入 AccessKey。
+access: ${env('ALIBABA_CLOUD_ACCESS_ALIAS')}
+
+# FC 资源集合，仅部署一个同步视频搬运函数。
+resources:
+  # xAI 视频搬运函数资源标识，只用于本地部署命令选择。
+  xai_video_transfer:
+    # 使用阿里云 FC 3.0 Serverless Devs 组件。
+    component: fc3
+    # 函数运行配置由部署环境变量和安全默认值共同确定。
+    props:
+      # 函数地域必须与目标 OSS Bucket 保持一致，减少跨地域流量。
+      region: ${env('ALIYUN_FC_REGION')}
+      # 函数名称由部署环境提供，避免不同环境互相覆盖。
+      functionName: ${env('ALIYUN_FC_VIDEO_TRANSFER_FUNCTION_NAME')}
+      # 函数职责说明不包含任何来源 URL、对象 Key 或密钥。
+      description: xAI 视频到 OSS 的有界流式搬运与 MP4 元数据探测
+      # 内置 Java 11 是当前 FC 官方支持且兼容 StreamRequestHandler 的 Java 运行时。
+      runtime: java11
+      # 部署 Maven Shade 生成的独立可执行依赖包，不引用主应用模块。
+      code: ./target/xai-video-transfer-0.0.1-SNAPSHOT.jar
+      # Java 事件函数入口同时兼容原生同步 Invoke 和 HTTP Trigger 信封。
+      handler: com.example.temperate.functions.video.XaiVideoTransferHandler::handleRequest
+      # 默认五百一十二 MiB 内存可覆盖八 MiB 分片和有界三十二 MiB moov 探测。
+      memorySize: 512
+      # 单次同步搬运最多运行九百秒，与主业务调用超时保持一致。
+      timeout: 900
+      # 单实例只处理一个视频，避免多个大文件共享内存和出口带宽。
+      instanceConcurrency: 1
+      # xAI 临时地址需要公网访问；OSS Endpoint 仍可配置为同地域内网地址。
+      internetAccess: true
+      # 最小权限 RAM 角色 ARN 由部署环境提供，用于生成 Context 短期 STS 凭证。
+      role: ${env('ALIYUN_FC_VIDEO_TRANSFER_ROLE_ARN')}
+      # 部署级环境变量固定 Bucket、对象前缀、来源主机和请求鉴权边界。
+      environmentVariables:
+        # 主业务与 FC 的独立 HMAC Secret 至少三十二字节，禁止提交默认值。
+        VIDEO_TRANSFER_HMAC_SECRET: ${env('VIDEO_TRANSFER_HMAC_SECRET')}
+        # 目标 OSS Bucket 只能由部署人员配置，客户端请求不能覆盖。
+        OSS_BUCKET: ${env('OSS_BUCKET')}
+        # OSS 地域必须与签名版本和 Bucket 实际地域一致。
+        OSS_REGION: ${env('OSS_REGION')}
+        # OSS HTTPS Endpoint 可使用同地域内网地址以减少公网流量。
+        OSS_ENDPOINT: ${env('OSS_ENDPOINT')}
+        # 所有生成视频只能写入该固定对象前缀。
+        OSS_OBJECT_PREFIX: ${env('OSS_OBJECT_PREFIX')}
+        # 单个来源视频最大字节数默认由部署环境显式配置为二 GiB。
+        VIDEO_MAXIMUM_BYTES: ${env('VIDEO_MAXIMUM_BYTES')}
+        # 逗号分隔的精确 HTTPS 来源主机必须覆盖 xAI 和项目 OSS 域名。
+        VIDEO_ALLOWED_SOURCE_HOSTS: ${env('VIDEO_ALLOWED_SOURCE_HOSTS')}
+      # HTTP Trigger 只用于主业务服务的同步小型 JSON 调用，不承载视频字节。
+      triggers:
+        # 唯一触发器使用 HMAC 应用鉴权并限制为 POST。
+        - triggerName: xai-video-transfer-http
+          # 标准 HTTP Trigger 提供主业务可调用的 HTTPS URL。
+          triggerType: http
+          # 始终调用当前部署版本，正式环境可改为固定别名。
+          qualifier: LATEST
+          # 网关边界只开放 POST，业务鉴权仍由 Handler 完成。
+          triggerConfig:
+            # 不使用 FC 网关签名，改由 Handler 校验独立 HMAC、时间戳和 nonce。
+            authType: anonymous
+            # 允许主业务通过 FC 默认公网 HTTPS URL 同步调用。
+            disableURLInternet: false
+            # 仅允许 POST，禁止浏览器 GET 或其他方法触发搬运。
+            methods:
+              # 主业务只发送一次同步 POST 小型 JSON。
+              - POST

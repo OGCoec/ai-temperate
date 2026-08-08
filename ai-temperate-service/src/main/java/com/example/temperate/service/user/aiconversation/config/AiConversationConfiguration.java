@@ -19,11 +19,15 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({
         AiConversationProperties.class,
+        AiConversationContextUsageProperties.class,
         AiConversationLifecycleDiagnosticsProperties.class,
         AiConversationStreamDiagnosticsProperties.class,
         AiConversationAsyncGenerationProperties.class,
         AiConversationWebSearchProperties.class,
         AiConversationImageGenerationProperties.class,
+        AiConversationVideoGenerationProperties.class,
+        AiConversationAnthropicProperties.class,
+        AiConversationGeminiProperties.class,
         AiConversationAttachmentProperties.class,
         AiConversationSecurityProperties.class,
         AiInferenceProperties.class
@@ -77,6 +81,46 @@ public class AiConversationConfiguration {
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(128);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * 最终图片上传会阻塞等待 OSS 响应，使用三条独立工作线程限制单实例外部写入并发和排队内存。
+     *
+     * @return 图片附件最终化执行器
+     */
+    @Bean
+    @Qualifier("aiConversationAttachmentFinalizationExecutor")
+    Executor aiConversationAttachmentFinalizationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("ai-conversation-attachment-finalize-");
+        executor.setCorePoolSize(3);
+        executor.setMaxPoolSize(3);
+        executor.setQueueCapacity(40);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * 大图预览解码与缩放使用独立小型有界池，避免占用模型流线程或 OSS 上传线程并限制瞬时堆内存。
+     *
+     * @return 图片预览派生执行器
+     */
+    @Bean
+    @Qualifier("aiConversationImagePreviewExecutor")
+    Executor aiConversationImagePreviewExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("ai-conversation-image-preview-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(16);
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setRejectedExecutionHandler(
                 new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());

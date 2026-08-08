@@ -10,7 +10,7 @@ import java.util.Locale;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证用户资料相关 SQL 映射符合约定的表结构与写入契约。
+ * 用于验证用户资料相关 SQL 映射符合约定的表结构、参数绑定和批量写入边界。
  */
 class PersistenceSqlContractTest {
 
@@ -155,8 +155,14 @@ class PersistenceSqlContractTest {
         assertFalse(identityMapper.contains("<foreach"));
         assertFalse(profileMapper.contains("<foreach"));
         assertFalse(membershipQuotaMapper.contains("$" + "{"));
-        assertFalse(membershipQuotaMapper.contains("<foreach"));
         assertFalse(identityMapper.contains("select *"));
+
+        // 历史退款必须在一次有界 SQL 中批量处理；允许 foreach 生成行占位符，但每个值仍须使用预编译参数绑定。
+        assertTrue(membershipQuotaMapper.contains("id=\"addhistoricalairefunds\""));
+        assertTrue(membershipQuotaMapper.contains(
+                "<foreach collection=\"candidates\" item=\"candidate\" separator=\",\">"));
+        assertTrue(membershipQuotaMapper.contains("#{candidate.loginidentityid"));
+        assertTrue(membershipQuotaMapper.contains("#{candidate.reservedquotaminor"));
 
         assertTrue(identityMapper.contains("id=\"findconflicts\""));
         assertTrue(identityMapper.contains("#{normalizedemail"));

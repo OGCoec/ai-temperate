@@ -29,6 +29,7 @@ import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -83,6 +84,7 @@ public final class LoginController {
     private final PreAuthTransport preAuthTransport;
     private final RiskRequestContextResolver riskContextResolver;
     private final NetworkRiskProperties networkRiskProperties;
+    private final WebRtcVerificationTransport webRtcTransport;
 
     public LoginController(
             LoginStrategyRegistry strategyRegistry,
@@ -93,7 +95,8 @@ public final class LoginController {
             PreAuthService preAuthService,
             PreAuthTransport preAuthTransport,
             RiskRequestContextResolver riskContextResolver,
-            NetworkRiskProperties networkRiskProperties) {
+            NetworkRiskProperties networkRiskProperties,
+            WebRtcVerificationTransport webRtcTransport) {
         this.strategyRegistry = strategyRegistry;
         this.codeFlowService = codeFlowService;
         this.totpLoginService = totpLoginService;
@@ -103,6 +106,7 @@ public final class LoginController {
         this.preAuthTransport = preAuthTransport;
         this.riskContextResolver = riskContextResolver;
         this.networkRiskProperties = networkRiskProperties;
+        this.webRtcTransport = webRtcTransport;
     }
 
     @PostMapping("/password")
@@ -235,12 +239,11 @@ public final class LoginController {
             boolean completingTotp) {
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store, private");
         if (!result.isAuthenticated()) {
-            // 第一因子成功但 TOTP 未完成时，只交付短期挑战，禁止创建或提升任何正式会话材料。
+            // 第一因子成功但 TOTP 未完成时，只以会话 Cookie交付短期挑战，禁止创建或提升任何正式会话材料。
             if (platform == AuthClientPlatform.H5) {
                 flowCookieWriter.writeTotpLoginFlow(
                         response,
-                        result.getTotpFlowToken(),
-                        result.getTotpExpiresAt());
+                        result.getTotpFlowToken());
             }
             return response(result, platform, null);
         }
@@ -255,8 +258,7 @@ public final class LoginController {
                     response,
                     result.getAccessToken(),
                     result.getRefreshToken(),
-                    result.getCsrfToken(),
-                    result.getRefreshExpiresAt());
+                    result.getCsrfToken());
             if (completingTotp) {
                 flowCookieWriter.clearTotpLoginFlow(response);
             }
@@ -306,13 +308,12 @@ public final class LoginController {
                 RiskSessionType.USER_REFRESH,
                 refreshToken,
                 observation.observedAt());
+        webRtcTransport.write(response, issue);
         if (platform == AuthClientPlatform.H5) {
             preAuthTransport.writeCookie(
                     response,
                     RiskScope.USER,
-                    issue.rawToken(),
-                    issue.expiresAt(),
-                    observation.observedAt());
+                    issue.rawToken());
         }
         return issue;
     }

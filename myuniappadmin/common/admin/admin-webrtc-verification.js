@@ -2,45 +2,118 @@ import {
 	WEBRTC_DEFAULT_TIMEOUT_MILLIS,
 	collectBrowserWebRtcIps,
 	isWebRtcFailureCode,
-	webRtcErrorFromResponse
+	isWebRtcRetryCode,
+	webRtcErrorFromResponse,
+	webRtcTriggerFromHeaders
 } from '@shared-auth/webrtc-verification-core.js'
+import {
+	collectAndroidWebRtcIpsInBackground
+} from '@shared-auth/android-webrtc-background-probe.js'
 import { ADMIN_API_BASE_URL, adminClientPlatform } from './admin-config.js'
 import { adminDeviceInstallationId } from './admin-device.js'
 import { currentAdminPreAuthToken } from './admin-pre-auth.js'
 
 const START_PATH = '/api/admin/_edge/webrtc/start'
 const FAILURE_PAGE = '/pages/risk/webrtc-failed'
-const PROBE_PAGE = '/pages/risk/webrtc-probe'
 
+let preAuthEpoch = 0
+let latestGeneration = ''
 let verifiedInMemory = false
-let verificationInFlight = null
+const verificationTasks = new Map()
 let latestFailure = null
 let failureNavigationInFlight = false
-let androidProbe = null
 
 export function invalidateAdminWebRtcVerification() {
+	preAuthEpoch += 1
+	latestGeneration = ''
 	verifiedInMemory = false
+	verificationTasks.clear()
+	latestFailure = null
+}
+
+export function observeAdminWebRtcVerificationHeaders(headers = {}) {
+	const trigger = webRtcTriggerFromHeaders(headers)
+	if (!trigger) return false
+	const generation = trigger.generation
+	if (compareGeneration(generation, latestGeneration) < 0) return true
+	latestGeneration = generation
+	if (trigger.state === 'VERIFIED') {
+		verifiedInMemory = true
+		latestFailure = null
+		return true
+	}
+	verifiedInMemory = false
+	if (trigger.state === 'REQUIRED' || trigger.state === 'PENDING') {
+		setTimeout(() => {
+			void startAdminWebRtcVerificationInBackground(trigger.generation)
+				.catch(error => {
+					if (isWebRtcFailureCode(error?.code)) presentAdminWebRtcFailure(error)
+				})
+		}, 0)
+	}
+	return true
 }
 
 export function currentAdminWebRtcFailure() {
 	return latestFailure ? { ...latestFailure, webRtcIps: [...latestFailure.webRtcIps] } : null
 }
 
-export async function ensureAdminWebRtcVerified(options = {}) {
-	const force = options.force === true
-	if (verifiedInMemory && !force) return { webRtcStatus: true }
-	if (!verificationInFlight) {
-		verificationInFlight = verify(force)
-			.finally(() => { verificationInFlight = null })
+export function startAdminWebRtcVerificationInBackground(expectedGeneration = '') {
+	if (verifiedInMemory && !expectedGeneration) {
+		return Promise.resolve({ verificationState: 'VERIFIED', webRtcStatus: true })
 	}
-	return verificationInFlight
+	const normalized = /^[1-9][0-9]{0,18}$/.test(String(expectedGeneration || ''))
+		? String(expectedGeneration)
+		: ''
+	if (normalized && compareGeneration(normalized, latestGeneration) > 0) {
+		latestGeneration = normalized
+	}
+	const epoch = preAuthEpoch
+	// 管理员端与普通端共享同一串行规则，新 generation 在当前任务完成后自动接续。
+	const activeEntry = [...verificationTasks.entries()]
+		.find(([taskKey]) => taskKey.startsWith(`${epoch}:`))
+	if (activeEntry) {
+		return activeEntry[1]
+	}
+	const key = `${epoch}:${normalized || 'discover'}`
+	if (!verificationTasks.has(key)) {
+		const attempt = { epoch, expectedGeneration: normalized, resolvedGeneration: '' }
+		const task = verify(attempt, true)
+			.finally(() => {
+				if (verificationTasks.get(key) === task) verificationTasks.delete(key)
+				const completedGeneration = attempt.resolvedGeneration
+					|| attempt.expectedGeneration
+				if (epoch === preAuthEpoch
+					&& completedGeneration
+					&& latestGeneration
+					&& compareGeneration(completedGeneration, latestGeneration) !== 0) {
+					setTimeout(() => {
+						void startAdminWebRtcVerificationInBackground(latestGeneration)
+							.catch(() => {})
+					}, 0)
+				}
+			})
+		verificationTasks.set(key, task)
+	}
+	return verificationTasks.get(key)
+}
+
+export function ensureAdminWebRtcVerified() {
+	return startAdminWebRtcVerificationInBackground(
+		latestGeneration)
 }
 
 export async function refreshAdminWebRtcFailure() {
 	const start = await requestEdge(START_PATH, 'GET')
-	if (start?.webRtcStatus === true || start?.mode === 'DISABLED') {
+	const state = verificationState(start)
+	if (start?.mode === 'OBSERVE' || start?.mode === 'DISABLED' || state === 'VERIFIED') {
 		verifiedInMemory = true
 		latestFailure = null
+		return null
+	}
+	if (state === 'PENDING') {
+		latestFailure = null
+		await startAdminWebRtcVerificationInBackground(String(start.probeGeneration || ''))
 		return null
 	}
 	latestFailure = failureFromPayload(start)
@@ -55,104 +128,96 @@ export function presentAdminWebRtcFailure(error) {
 	failureNavigationInFlight = true
 	uni.reLaunch({
 		url: FAILURE_PAGE,
-		complete() {
-			failureNavigationInFlight = false
-		}
+		complete() { failureNavigationInFlight = false }
 	})
 	return true
 }
 
-export function takeAdminAndroidWebRtcProbeConfiguration() {
-	if (!androidProbe) return null
-	return {
-		nonce: androidProbe.nonce,
-		stunUrls: [...androidProbe.stunUrls],
-		timeoutMillis: androidProbe.timeoutMillis
-	}
-}
-
-export function completeAdminAndroidWebRtcProbe(nonce, webRtcIps) {
-	if (!androidProbe || androidProbe.completed || nonce !== androidProbe.nonce) return false
-	androidProbe.completed = true
-	clearTimeout(androidProbe.safetyTimer)
-	const resolve = androidProbe.resolve
-	androidProbe = null
-	resolve(Array.isArray(webRtcIps) ? [...webRtcIps] : [])
-	return true
-}
-
-export function cancelAdminAndroidWebRtcProbe(nonce) {
-	return completeAdminAndroidWebRtcProbe(nonce, [])
-}
-
-async function verify(force) {
-	const start = await requestEdge(START_PATH, 'GET')
-	if (start?.mode === 'DISABLED') {
-		verifiedInMemory = true
-		latestFailure = null
-		return start
-	}
-	if (start?.webRtcStatus === true) {
-		verifiedInMemory = true
-		latestFailure = null
-		return start
-	}
-	if (start?.mode === 'OBSERVE' && start?.webRtcStatus === false) {
-		verifiedInMemory = true
-		return start
-	}
-	if (start?.webRtcStatus === false && !force) throw failureError(start)
-
-	const timeoutMillis = boundedTimeout(start?.timeoutMillis)
-	const webRtcIps = adminClientPlatform() === 'ANDROID'
-		? await collectAndroidWebRtcIps(start?.stunUrls, timeoutMillis)
-		: await collectBrowserWebRtcIps(start?.stunUrls, timeoutMillis)
-	const report = await requestEdge(
-		start?.reportPath || '/api/admin/_edge/webrtc/report',
-		'POST',
-		{ webRtcIps }
-	)
-	if (start?.mode === 'OBSERVE' || report?.webRtcStatus === true) {
-		verifiedInMemory = true
-		latestFailure = null
-		return report
-	}
-	throw failureError(report)
-}
-
-function collectAndroidWebRtcIps(stunUrls, timeoutMillis) {
-	if (androidProbe) return androidProbe.promise
-	const nonce = randomNonce()
-	let resolveProbe
-	const promise = new Promise(resolve => { resolveProbe = resolve })
-	androidProbe = {
-		nonce,
-		stunUrls: Array.isArray(stunUrls) ? [...stunUrls] : [],
-		timeoutMillis,
-		completed: false,
-		resolve: resolveProbe,
-		promise,
-		safetyTimer: setTimeout(
-			() => {
-				if (completeAdminAndroidWebRtcProbe(nonce, [])) uni.navigateBack()
-			},
-			timeoutMillis
-		)
-	}
-	uni.navigateTo({
-		url: PROBE_PAGE,
-		fail() {
-			completeAdminAndroidWebRtcProbe(nonce, [])
+async function verify(attempt, allowGenerationRefresh) {
+	try {
+		const start = await requestEdge(START_PATH, 'GET')
+		const state = verificationState(start)
+		const generation = String(start?.probeGeneration || '')
+		if (start?.mode === 'DISABLED' || state === 'VERIFIED') {
+			if (isInvocationCurrent(attempt)) {
+				verifiedInMemory = true
+				latestFailure = null
+			}
+			return start
 		}
-	})
-	return promise
+		if (start?.mode === 'OBSERVE' && state === 'FAILED') return start
+		if (state === 'FAILED') throw failureError(start)
+		if (state !== 'PENDING' || !/^[1-9][0-9]{0,18}$/.test(generation)) {
+			throw failureError(start)
+		}
+		attempt.resolvedGeneration = generation
+		const activeAttempt = { epoch: attempt.epoch, generation }
+		if (compareGeneration(generation, latestGeneration) > 0) {
+			latestGeneration = generation
+		}
+		if (!isAttemptActive(activeAttempt)) return ignoredResult()
+
+		const remainingMillis = nonNegativeNumber(
+			start?.pendingRemainingMillis,
+			Number(start?.timeoutMillis || 0) + Number(start?.reportGraceMillis || 0))
+		const reportGraceMillis = positiveNumber(start?.reportGraceMillis, 3000)
+		const probeMillis = Math.min(
+			boundedTimeout(start?.timeoutMillis),
+			Math.max(1, remainingMillis - reportGraceMillis))
+		const deadlineAt = Date.now() + remainingMillis
+		const webRtcIps = adminClientPlatform() === 'ANDROID'
+			? await collectAndroidWebRtcIpsInBackground({
+				attemptId: `${activeAttempt.epoch}:${generation}`,
+				webviewId: 'ait-admin-webrtc',
+				resourcePath: '/hybrid/html/webrtc-probe.html',
+				stunUrls: start?.stunUrls,
+				timeoutMillis: probeMillis
+			})
+			: await collectBrowserWebRtcIps(start?.stunUrls, probeMillis)
+		if (!isAttemptActive(activeAttempt)) return ignoredResult()
+		const report = await submitReport(
+			start?.reportPath || '/api/admin/_edge/webrtc/report',
+			{ probeGeneration: generation, webRtcIps },
+			deadlineAt)
+		if (!isAttemptActive(activeAttempt)) return ignoredResult()
+		if (start?.mode === 'OBSERVE' || report?.webRtcStatus === true) {
+			verifiedInMemory = true
+			latestFailure = null
+			return report
+		}
+		throw failureError(report)
+	} catch (error) {
+		if (!isInvocationCurrent(attempt)) return ignoredResult()
+		if (allowGenerationRefresh && isWebRtcRetryCode(error?.code)) {
+			verifiedInMemory = false
+			attempt.expectedGeneration = ''
+			attempt.resolvedGeneration = ''
+			return verify(attempt, false)
+		}
+		throw error
+	}
 }
 
-function requestEdge(path, method, data) {
+async function submitReport(path, data, deadlineAt) {
+	try {
+		return await requestEdge(path, 'POST', data, reportRequestTimeout(deadlineAt))
+	} catch (error) {
+		if (error?.code !== 'NETWORK_ERROR') throw error
+		const status = await requestEdge(START_PATH, 'GET')
+		const state = verificationState(status)
+		if (state === 'VERIFIED' || status?.mode === 'OBSERVE') return status
+		if (state === 'FAILED') throw failureError(status)
+		if (String(status?.probeGeneration || '') !== String(data.probeGeneration)
+			|| deadlineAt - Date.now() < 1000) throw error
+		return requestEdge(path, 'POST', data, reportRequestTimeout(deadlineAt))
+	}
+}
+
+function requestEdge(path, method, data, timeout = 10000) {
 	return new Promise((resolve, reject) => {
 		const platform = adminClientPlatform()
 		const headers = {
-			'Accept': 'application/json',
+			Accept: 'application/json',
 			'Content-Type': 'application/json',
 			'X-Client-Platform': platform,
 			'X-Device-Installation-Id': adminDeviceInstallationId()
@@ -165,7 +230,7 @@ function requestEdge(path, method, data) {
 			data,
 			header: headers,
 			withCredentials: true,
-			timeout: 10000,
+			timeout,
 			success(response) {
 				if (response.statusCode >= 200 && response.statusCode < 300) {
 					resolve(response.data)
@@ -173,13 +238,11 @@ function requestEdge(path, method, data) {
 				}
 				const error = webRtcErrorFromResponse(
 					response,
-					'管理员 WebRTC 网络校验失败。'
-				)
+					'管理员 WebRTC 网络校验失败。')
 				error.challengeRef = response.data?.challengeRef || ''
 				error.challengePath = response.data?.challengePath || ''
 				error.expiresAt = response.data?.expiresAt || ''
-				error.reauthenticationRequired =
-					response.data?.reauthenticationRequired === true
+				error.reauthenticationRequired = response.data?.reauthenticationRequired === true
 				reject(error)
 			},
 			fail(cause) {
@@ -192,11 +255,46 @@ function requestEdge(path, method, data) {
 	})
 }
 
+function isEpochActive(attempt) {
+	return attempt.epoch === preAuthEpoch
+}
+
+function isInvocationCurrent(attempt) {
+	return isEpochActive(attempt)
+		&& (!attempt.expectedGeneration
+			|| compareGeneration(attempt.expectedGeneration, latestGeneration) >= 0)
+}
+
+function isAttemptActive(attempt) {
+	return isEpochActive(attempt) && attempt.generation === latestGeneration
+}
+
+function compareGeneration(left, right) {
+	const normalizedLeft = String(left || '').replace(/^0+/, '')
+	const normalizedRight = String(right || '').replace(/^0+/, '')
+	if (normalizedLeft.length !== normalizedRight.length) {
+		return normalizedLeft.length - normalizedRight.length
+	}
+	return normalizedLeft === normalizedRight
+		? 0
+		: normalizedLeft > normalizedRight ? 1 : -1
+}
+
+function ignoredResult() {
+	return { verificationState: 'IGNORED', ignored: true }
+}
+
+function verificationState(payload) {
+	if (typeof payload?.verificationState === 'string') return payload.verificationState
+	if (payload?.webRtcStatus === true) return 'VERIFIED'
+	if (payload?.webRtcStatus === false) return 'FAILED'
+	return payload?.probeRequired === true ? 'PENDING' : 'REQUIRED'
+}
+
 function failureError(payload) {
 	const error = new Error(payload?.message || '管理员 WebRTC 网络校验失败。')
 	error.code = payload?.code || (Array.isArray(payload?.webRtcIps) && payload.webRtcIps.length
-		? 'WEBRTC_IP_MISMATCH'
-		: 'WEBRTC_VERIFICATION_FAILED')
+		? 'WEBRTC_IP_MISMATCH' : 'WEBRTC_VERIFICATION_FAILED')
 	error.webRtcStatus = payload?.webRtcStatus
 	error.httpIp = payload?.httpIp || ''
 	error.webRtcIps = Array.isArray(payload?.webRtcIps) ? [...payload.webRtcIps] : []
@@ -211,7 +309,7 @@ function failureFromPayload(payload) {
 		message: error.message || '管理员 WebRTC 网络校验失败。',
 		httpIp: error.httpIp || '',
 		webRtcIps: Array.isArray(error.webRtcIps) ? [...error.webRtcIps] : [],
-		retryable: error.retryable !== false
+		retryable: false
 	}
 }
 
@@ -222,13 +320,18 @@ function boundedTimeout(value) {
 		: WEBRTC_DEFAULT_TIMEOUT_MILLIS
 }
 
-function randomNonce() {
-	const bytes = new Uint8Array(16)
-	if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
-		globalThis.crypto.getRandomValues(bytes)
-		return [...bytes].map(value => value.toString(16).padStart(2, '0')).join('')
-	}
-	return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+function positiveNumber(value, fallback) {
+	const numeric = Number(value)
+	return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
+}
+
+function nonNegativeNumber(value, fallback) {
+	const numeric = Number(value)
+	return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback
+}
+
+function reportRequestTimeout(deadlineAt) {
+	return Math.max(1, Math.min(3000, deadlineAt - Date.now()))
 }
 
 function currentRoute() {

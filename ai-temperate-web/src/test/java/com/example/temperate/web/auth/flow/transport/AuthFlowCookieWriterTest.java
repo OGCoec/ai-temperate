@@ -6,10 +6,6 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import jakarta.servlet.http.Cookie;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -17,16 +13,14 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 /**
- * 验证 H5 注册和找回密码流程材料只能通过 HttpOnly Cookie 写入、读取与清理。
+ * 验证 H5 注册、找回密码和 TOTP 登录流程材料使用隔离的会话 Cookie 写入、读取与清理。
  *
  * <p>职责边界：本测试只检查 Web 传输层 Cookie 属性与路径，不替代服务层对流程令牌 HMAC、设备绑定和过期时间的校验。</p>
  */
 class AuthFlowCookieWriterTest {
 
-    private static final Instant NOW = Instant.parse("2026-07-18T00:00:00Z");
-
     @Test
-    void writesRegistrationFlowCookiesWithStrictHttpOnlyPolicy() {
+    void writesRegistrationFlowAsStrictHttpOnlySessionCookies() {
         AuthFlowCookieWriter writer = writerWithDomain("");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -34,53 +28,85 @@ class AuthFlowCookieWriterTest {
                 response,
                 "register-token",
                 "register-csrf",
-                "challenge-handle",
-                NOW.plus(Duration.ofMinutes(10)));
+                "challenge-handle");
 
         List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
         assertThat(cookie(cookies, AuthFlowCookieWriter.REGISTER_TOKEN_COOKIE))
                 .contains("register_flow_token=register-token")
                 .contains("Path=/api/auth/register")
-                .contains("Max-Age=600")
                 .contains("Secure")
                 .contains("HttpOnly")
                 .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
                 .doesNotContain("Domain=");
         assertThat(cookie(cookies, AuthFlowCookieWriter.REGISTER_CSRF_COOKIE))
                 .contains("register_flow_csrf=register-csrf")
                 .contains("Path=/api/auth/register")
-                .contains("HttpOnly");
+                .contains("Secure")
+                .contains("HttpOnly")
+                .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
+                .doesNotContain("Domain=");
         assertThat(cookie(cookies, AuthFlowCookieWriter.REGISTER_CHALLENGE_COOKIE))
                 .contains("register_challenge=challenge-handle")
                 .contains("Path=/api/auth/register")
-                .contains("HttpOnly");
+                .contains("Secure")
+                .contains("HttpOnly")
+                .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
+                .doesNotContain("Domain=");
     }
 
     @Test
-    void writesPasswordResetCookiesOnSeparateFlowAndCompletionPaths() {
+    void writesPasswordResetSessionCookiesOnSeparateFlowAndCompletionPaths() {
         AuthFlowCookieWriter writer = writerWithDomain("niko000o.site");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        writer.writePasswordResetFlow(
-                response, "reset-token", NOW.plus(Duration.ofMinutes(8)));
-        writer.writeForgetToken(
-                response, "forget-token", NOW.plus(Duration.ofMinutes(5)));
+        writer.writePasswordResetFlow(response, "reset-token");
+        writer.writeForgetToken(response, "forget-token");
 
         List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
         assertThat(cookie(cookies, AuthFlowCookieWriter.RESET_FLOW_COOKIE))
                 .contains("reset_flow_token=reset-token")
                 .contains("Path=/api/auth/password-reset")
-                .contains("Max-Age=480")
                 .contains("Domain=niko000o.site")
+                .contains("Secure")
                 .contains("HttpOnly")
-                .contains("SameSite=Strict");
+                .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires");
         assertThat(cookie(cookies, AuthFlowCookieWriter.FORGET_TOKEN_COOKIE))
                 .contains("forget_token=forget-token")
                 .contains("Path=/api/auth/password-reset/complete")
-                .contains("Max-Age=300")
                 .contains("Domain=niko000o.site")
+                .contains("Secure")
                 .contains("HttpOnly")
-                .contains("SameSite=Strict");
+                .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires");
+    }
+
+    @Test
+    void writesTotpLoginFlowAsStrictHttpOnlySessionCookie() {
+        AuthFlowCookieWriter writer = writerWithDomain("");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        writer.writeTotpLoginFlow(response, "totp-flow-token");
+
+        assertThat(cookie(
+                        List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE)),
+                        AuthFlowCookieWriter.TOTP_LOGIN_FLOW_COOKIE))
+                .contains("totp_login_flow=totp-flow-token")
+                .contains("Path=/api/auth/login/totp")
+                .contains("Secure")
+                .contains("HttpOnly")
+                .contains("SameSite=Strict")
+                .doesNotContain("Max-Age")
+                .doesNotContain("Expires")
+                .doesNotContain("Domain=");
     }
 
     @Test
@@ -92,7 +118,8 @@ class AuthFlowCookieWriterTest {
                 new Cookie(AuthFlowCookieWriter.REGISTER_CSRF_COOKIE, "register-csrf"),
                 new Cookie(AuthFlowCookieWriter.REGISTER_CHALLENGE_COOKIE, "challenge-handle"),
                 new Cookie(AuthFlowCookieWriter.RESET_FLOW_COOKIE, "reset-token"),
-                new Cookie(AuthFlowCookieWriter.FORGET_TOKEN_COOKIE, "forget-token"));
+                new Cookie(AuthFlowCookieWriter.FORGET_TOKEN_COOKIE, "forget-token"),
+                new Cookie(AuthFlowCookieWriter.TOTP_LOGIN_FLOW_COOKIE, "totp-flow-token"));
 
         AuthFlowCookieWriter.RegistrationFlowCookies registration =
                 writer.registration(request);
@@ -102,6 +129,7 @@ class AuthFlowCookieWriterTest {
         assertThat(registration.challengeHandle()).isEqualTo("challenge-handle");
         assertThat(writer.resetFlowToken(request)).isEqualTo("reset-token");
         assertThat(writer.forgetToken(request)).isEqualTo("forget-token");
+        assertThat(writer.totpLoginFlowToken(request)).isEqualTo("totp-flow-token");
     }
 
     @Test
@@ -111,6 +139,7 @@ class AuthFlowCookieWriterTest {
 
         writer.clearRegistration(response);
         writer.clearPasswordReset(response);
+        writer.clearTotpLoginFlow(response);
 
         List<String> cookies = List.copyOf(response.getHeaders(HttpHeaders.SET_COOKIE));
         assertThat(cookie(cookies, AuthFlowCookieWriter.REGISTER_TOKEN_COOKIE))
@@ -127,6 +156,9 @@ class AuthFlowCookieWriterTest {
                 .contains("Max-Age=0");
         assertThat(cookie(cookies, AuthFlowCookieWriter.FORGET_TOKEN_COOKIE))
                 .contains("Path=/api/auth/password-reset/complete")
+                .contains("Max-Age=0");
+        assertThat(cookie(cookies, AuthFlowCookieWriter.TOTP_LOGIN_FLOW_COOKIE))
+                .contains("Path=/api/auth/login/totp")
                 .contains("Max-Age=0");
     }
 
@@ -142,7 +174,7 @@ class AuthFlowCookieWriterTest {
                 cookie(true, "/api/auth/password-reset/complete"),
                 cookie(true, "/api/auth/login/totp"),
                 domain));
-        return new AuthFlowCookieWriter(properties, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new AuthFlowCookieWriter(properties);
     }
 
     private static AuthSecurityProperties.CookieSettings cookie(boolean httpOnly, String path) {

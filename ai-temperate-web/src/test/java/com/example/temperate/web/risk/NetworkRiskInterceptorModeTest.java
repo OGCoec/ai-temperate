@@ -3,6 +3,7 @@ package com.example.temperate.web.risk;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +17,7 @@ import com.example.temperate.service.risk.domain.RiskDecision;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.observability.NetworkRiskMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -112,6 +114,57 @@ class NetworkRiskInterceptorModeTest {
                 .issue(
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void ipChangeRefreshesRequestPreAuthBeforeDownstreamTokenRotation()
+            throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        HmacIdentifier oldIp = HmacIdentifier.fromProtectedValue("A".repeat(43));
+        HmacIdentifier newIp = HmacIdentifier.fromProtectedValue("B".repeat(43));
+        PreAuthState oldState = mock(PreAuthState.class);
+        when(oldState.currentIpDigest()).thenReturn(oldIp);
+        PreAuthAccess oldAccess = mock(PreAuthAccess.class);
+        when(oldAccess.state()).thenReturn(oldState);
+        PreAuthAccess refreshedAccess = mock(PreAuthAccess.class);
+        when(fixture.preAuthService().resolve(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(oldAccess), Optional.of(refreshedAccess));
+        TrustedNetworkObservation observation = new TrustedNetworkObservation(
+                "198.51.100.10",
+                "US",
+                64500L,
+                new BigDecimal("41.8781"),
+                new BigDecimal("-87.6298"),
+                Instant.parse("2026-07-25T12:00:00Z"));
+        when(fixture.contextResolver().resolve(
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(observation));
+        when(fixture.properties().lookupTimeout()).thenReturn(Duration.ofSeconds(8));
+        when(fixture.assessmentService().assess(oldAccess, observation))
+                .thenReturn(Mono.just(new RiskAssessment(
+                        RiskDecision.ALLOW,
+                        80,
+                        false,
+                        0,
+                        newIp,
+                        HmacIdentifier.fromProtectedValue("C".repeat(43)))));
+        MockHttpServletRequest request = request();
+
+        boolean allowed = fixture.interceptor().preHandle(
+                request,
+                new MockHttpServletResponse(),
+                new Object());
+
+        assertThat(allowed).isTrue();
+        assertThat(request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE))
+                .isSameAs(refreshedAccess);
+        verify(fixture.preAuthService(), times(2)).resolve(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
     }
 
     private static Fixture fixture(NetworkRiskMode mode) {

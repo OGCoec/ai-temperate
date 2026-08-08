@@ -11,13 +11,15 @@ function loadModule() {
 	return factory()
 }
 
-test('builds only an HTTPS root favicon URL for a safe DNS hostname', () => {
+test('builds a Google S2 favicon URL for a safe DNS hostname', () => {
 	const { buildAiSourceFaviconUrl } = loadModule()
 
 	assert.equal(buildAiSourceFaviconUrl('Docs.Oracle.COM.'),
-		'https://docs.oracle.com/favicon.ico')
+		'https://www.google.com/s2/favicons?domain=https%3A%2F%2Fdocs.oracle.com&sz=128')
 	assert.equal(buildAiSourceFaviconUrl('raw.githubusercontent.com'),
-		'https://raw.githubusercontent.com/favicon.ico')
+		'https://www.google.com/s2/favicons?domain=https%3A%2F%2Fraw.githubusercontent.com&sz=128')
+	assert.equal(buildAiSourceFaviconUrl('help.openai.com'),
+		'https://www.google.com/s2/favicons?domain=https%3A%2F%2Fhelp.openai.com&sz=128')
 })
 
 test('rejects local, IP, credential, port, path, and malformed favicon targets', () => {

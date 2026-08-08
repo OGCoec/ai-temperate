@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS ai_conversation_generation (
     cancel_source VARCHAR(32) NULL,
     terminal_type VARCHAR(32) NULL,
     terminal_reason VARCHAR(64) NULL,
-    terminal_version INTEGER NOT NULL DEFAULT 0,
+	terminal_version INTEGER NOT NULL DEFAULT 0,
+	video_stage VARCHAR(48) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMPTZ NULL,
     detached_at TIMESTAMPTZ NULL,
@@ -30,7 +31,14 @@ CREATE TABLE IF NOT EXISTS ai_conversation_generation (
     CONSTRAINT chk_ai_conversation_generation_status CHECK (generation_status BETWEEN 0 AND 6),
     CONSTRAINT chk_ai_conversation_generation_observer_status CHECK (observer_status BETWEEN 0 AND 1),
     CONSTRAINT chk_ai_conversation_generation_observer_epoch CHECK (observer_epoch >= 0),
-    CONSTRAINT chk_ai_conversation_generation_terminal_version CHECK (terminal_version >= 0),
+	CONSTRAINT chk_ai_conversation_generation_terminal_version CHECK (terminal_version >= 0),
+	CONSTRAINT chk_ai_conversation_generation_video_stage CHECK (
+		video_stage IS NULL OR video_stage IN (
+			'QUEUED', 'VALIDATING_MEDIA', 'RESERVED', 'XAI_SUBMITTING',
+			'XAI_PENDING', 'XAI_DONE', 'OSS_TRANSFERRING', 'OSS_READY',
+			'SUCCEEDED', 'MEDIA_VALIDATION_FAILED', 'XAI_REJECTED',
+			'XAI_FAILED', 'XAI_EXPIRED', 'XAI_RESULT_UNCERTAIN',
+			'OSS_TRANSFER_FAILED', 'BILLING_RECONCILE_REQUIRED')),
     CONSTRAINT chk_ai_conversation_generation_cancel_source CHECK (
         cancel_source IS NULL OR cancel_source IN (
             'USER_STOP', 'ADMIN_CANCEL', 'CLIENT_EXIT_TIMEOUT')),
@@ -97,7 +105,9 @@ COMMENT ON COLUMN ai_conversation_generation.terminal_type IS
 COMMENT ON COLUMN ai_conversation_generation.terminal_reason IS
     '受控终态原因代码；禁止保存第三方异常原文、正文、Token 或其他敏感内容';
 COMMENT ON COLUMN ai_conversation_generation.terminal_version IS
-    '终态版本号；通过预期版本更新保证多个终态竞争时只有一个终态取得所有权';
+	'终态版本号；通过预期版本更新保证多个终态竞争时只有一个终态取得所有权';
+COMMENT ON COLUMN ai_conversation_generation.video_stage IS
+	'视频任务跨 xAI 与 OSS 的安全阶段；普通对话和图片任务为空，不保存临时 URL 或授权信息';
 COMMENT ON COLUMN ai_conversation_generation.created_at IS
     'Generation、Payload 和 Usage 预扣事务创建成功的时间';
 COMMENT ON COLUMN ai_conversation_generation.started_at IS

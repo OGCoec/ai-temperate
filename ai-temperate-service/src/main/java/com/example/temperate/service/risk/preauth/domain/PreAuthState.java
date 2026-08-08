@@ -11,8 +11,8 @@ import java.time.Instant;
 /**
  * 保存普通或管理员 PreAuth 的有界网络风控状态，不包含明文 IP、设备、原始令牌或会话令牌。
  *
- * <p>WebRTC 只增加三态结果和 AES-256-GCM 密文两个可选字段；IP 分数有效期由 Redis Key
- * 存在性统一控制，状态中不再复制固定评估时间。</p>
+ * <p>WebRTC 状态包含四态、单调 generation、服务端绝对截止时间、受控失败原因和可选的
+ * AES-256-GCM 候选集合密文；IP 分数有效期仍由 Redis Key 存在性统一控制。</p>
  */
 public record PreAuthState(
         int schemaVersion,
@@ -51,10 +51,13 @@ public record PreAuthState(
         HmacIdentifier activeChallengeIpDigest,
         HmacIdentifier activeChallengeContextDigest,
         Instant activeChallengeExpiresAt,
-        Boolean webRtcStatus,
+        PreAuthWebRtcPhase webRtcPhase,
+        long webRtcGeneration,
+        Instant webRtcDeadlineAt,
+        PreAuthWebRtcFailureReason webRtcFailureReason,
         String webRtcIps) {
 
-    public static final int CURRENT_SCHEMA_VERSION = 4;
+    public static final int CURRENT_SCHEMA_VERSION = 6;
 
     public PreAuthState {
         if (schemaVersion != CURRENT_SCHEMA_VERSION
@@ -74,16 +77,28 @@ public record PreAuthState(
                 || impossibleTravelCount < 0
                 || challengeIssuedCount < 0
                 || challengePassedCount < 0) {
-            throw new IllegalArgumentException("PreAuth v4 state is invalid.");
+            throw new IllegalArgumentException("PreAuth v6 state is invalid.");
         }
-        if (webRtcStatus == null && webRtcIps != null) {
+        if (webRtcPhase == null || webRtcGeneration <= 0) {
             throw new IllegalArgumentException(
-                    "Unverified WebRTC state cannot retain encrypted IPs.");
+                    "WebRTC phase and generation are required.");
         }
-        if (webRtcStatus != null
-                && (webRtcIps == null || webRtcIps.isBlank())) {
-            throw new IllegalArgumentException(
-                    "Verified WebRTC state requires encrypted IPs.");
+        boolean validWebRtcState = switch (webRtcPhase) {
+            case REQUIRED, PENDING -> webRtcDeadlineAt != null
+                    && webRtcFailureReason == null
+                    && webRtcIps == null;
+            case VERIFIED -> webRtcDeadlineAt == null
+                    && webRtcFailureReason == null
+                    && webRtcIps != null
+                    && !webRtcIps.isBlank();
+            case FAILED -> webRtcFailureReason != null
+                    && webRtcDeadlineAt == null
+                    && (webRtcFailureReason == PreAuthWebRtcFailureReason.IP_MISMATCH
+                    ? webRtcIps != null && !webRtcIps.isBlank()
+                    : webRtcIps == null);
+        };
+        if (!validWebRtcState) {
+            throw new IllegalArgumentException("WebRTC state is inconsistent.");
         }
         impossibleTravelEvents =
                 impossibleTravelEvents == null || impossibleTravelEvents.isBlank()
@@ -96,7 +111,7 @@ public record PreAuthState(
     }
 
     /**
-     * 兼容未写入 WebRTC 可选字段的 v4 构造调用；缺少可选字段时按未校验状态读取。
+     * 为旧的非 WebRTC 测试构造调用补齐固定八秒 start grace；生产创建仍由 Redis Store 显式写入。
      */
     public PreAuthState(
             int schemaVersion,
@@ -172,7 +187,18 @@ public record PreAuthState(
                 activeChallengeIpDigest,
                 activeChallengeContextDigest,
                 activeChallengeExpiresAt,
+                PreAuthWebRtcPhase.REQUIRED,
+                1L,
+                lastSeenAt.plusSeconds(8),
                 null,
                 null);
+    }
+
+    public Boolean webRtcStatus() {
+        return switch (webRtcPhase) {
+            case REQUIRED, PENDING -> null;
+            case VERIFIED -> Boolean.TRUE;
+            case FAILED -> Boolean.FALSE;
+        };
     }
 }

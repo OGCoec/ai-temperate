@@ -3,7 +3,9 @@ package com.example.temperate.service.user.aiconversation.generation.observer.im
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.mapper.ai.AiConversationGenerationMapper;
+import com.example.temperate.mapper.ai.AiConversationGenerationPayloadMapper;
 import com.example.temperate.model.ai.entity.AiConversationGeneration;
+import com.example.temperate.model.ai.entity.AiConversationGenerationPayload;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.config.AiConversationAsyncGenerationProperties;
@@ -24,8 +26,12 @@ import com.example.temperate.service.user.aiconversation.generation.observer.AiC
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputSubscriber;
 import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationSnapshotData;
 import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewBroker;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePreviewData;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImagePersistedData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResult;
+import com.example.temperate.service.user.aiconversation.video.AiConversationPersistedVideoResultCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
@@ -72,6 +78,8 @@ public final class AiConversationGenerationObserverServiceImpl
     private final Clock clock;
     private final AiConversationMetrics metrics;
     private final AiConversationImagePreviewBroker previewBroker;
+    private final AiConversationGenerationPayloadMapper payloadMapper;
+    private final AiConversationPersistedVideoResultCodec persistedVideoResultCodec;
 
     public AiConversationGenerationObserverServiceImpl(
             AiConversationGenerationMapper generationMapper,
@@ -100,7 +108,43 @@ public final class AiConversationGenerationObserverServiceImpl
                 metrics,
                 clock,
                 AiConversationStreamTransportDiagnosticService.noOp(),
-                AiConversationImagePreviewBroker.noOp());
+                AiConversationImagePreviewBroker.noOp(),
+                null,
+                null);
+    }
+
+    public AiConversationGenerationObserverServiceImpl(
+            AiConversationGenerationMapper generationMapper,
+            AiConversationGenerationOutputStore outputStore,
+            AiConversationGenerationOutputSubscriber outputSubscriber,
+            AiConversationGenerationObserverStateService observerStateService,
+            AiConversationAsyncGenerationProperties asyncProperties,
+            HybridBase64UrlCodec idCodec,
+            PublicIdCodec publicIdCodec,
+            ObjectMapper objectMapper,
+            AiConversationStreamTimingDiagnosticService timingDiagnosticService,
+            AiConversationStreamTimingClock timingClock,
+            AiConversationMetrics metrics,
+            Clock clock,
+            AiConversationStreamTransportDiagnosticService transportDiagnosticService,
+            AiConversationImagePreviewBroker previewBroker) {
+        this(
+                generationMapper,
+                outputStore,
+                outputSubscriber,
+                observerStateService,
+                asyncProperties,
+                idCodec,
+                publicIdCodec,
+                objectMapper,
+                timingDiagnosticService,
+                timingClock,
+                metrics,
+                clock,
+                transportDiagnosticService,
+                previewBroker,
+                null,
+                null);
     }
 
     @Autowired
@@ -118,7 +162,9 @@ public final class AiConversationGenerationObserverServiceImpl
             AiConversationMetrics metrics,
             Clock clock,
             AiConversationStreamTransportDiagnosticService transportDiagnosticService,
-            AiConversationImagePreviewBroker previewBroker) {
+            AiConversationImagePreviewBroker previewBroker,
+            AiConversationGenerationPayloadMapper payloadMapper,
+            AiConversationPersistedVideoResultCodec persistedVideoResultCodec) {
         this.generationMapper = Objects.requireNonNull(generationMapper);
         this.outputStore = Objects.requireNonNull(outputStore);
         this.outputSubscriber = Objects.requireNonNull(outputSubscriber);
@@ -133,6 +179,8 @@ public final class AiConversationGenerationObserverServiceImpl
         this.metrics = Objects.requireNonNull(metrics);
         this.clock = Objects.requireNonNull(clock);
         this.previewBroker = Objects.requireNonNull(previewBroker);
+        this.payloadMapper = payloadMapper;
+        this.persistedVideoResultCodec = persistedVideoResultCodec;
     }
 
     @Override
@@ -201,7 +249,7 @@ public final class AiConversationGenerationObserverServiceImpl
         final AutoCloseable subscription;
         try {
             subscription = outputSubscriber.subscribe(generationPublicId, event -> {
-                transportDiagnosticService.record(
+                transportDiagnosticService.recordSafely(
                         timingContext,
                         "ai_stream_redis_observer_received",
                         Map.of(
@@ -252,23 +300,89 @@ public final class AiConversationGenerationObserverServiceImpl
         Flux<AiConversationStreamEvent> heartbeat = Flux.interval(asyncProperties.observerHeartbeat())
                 .map(ignored -> AiConversationStreamEvent.heartbeat());
         Flux<AiConversationStreamEvent> imagePreviews =
-                previewBroker.events(generationPublicId);
+                Flux.defer(() -> previewBroker.events(generationPublicId))
+                        .onErrorResume(RuntimeException.class, ignored -> Flux.empty())
+                        .doOnNext(event -> recordImagePreviewCheckpoint(
+                                timingContext,
+                                generationPublicId,
+                                event,
+                                "P6_OBSERVER_RECEIVED"));
         return Flux.merge(sink.asFlux(), heartbeat, imagePreviews)
                 .takeUntil(event -> terminalEvent(event.name()))
+                // 浏览器断线只分离观察者，不能清空仍在生成的多槽位预览；只有业务终态才释放 Broker。
+                .doOnNext(event -> {
+                    recordImagePreviewCheckpoint(
+                            timingContext,
+                            generationPublicId,
+                            event,
+                            "P7_SSE_READY");
+                    if (terminalEvent(event.name())) {
+                        releasePreviewSafely(generationPublicId);
+                    }
+                })
                 .doFinally(ignored -> {
                     closeQuietly(subscription);
-                    previewBroker.release(generationPublicId);
                 });
+    }
+
+    private void recordImagePreviewCheckpoint(
+            AiConversationStreamTimingContext timingContext,
+            String generationPublicId,
+            AiConversationStreamEvent event,
+            String checkpoint) {
+        if ("image-persisted".equals(event.name())
+                && event.data() instanceof AiConversationImagePersistedData data) {
+            long elapsedNanos = Math.max(
+                    0L, timingClock.nanoTime() - timingContext.startedNanos());
+            transportDiagnosticService.recordSafely(
+                    timingContext,
+                    "ai_image_stream_checkpoint",
+                    Map.of(
+                            "checkpoint", checkpoint,
+                            "outputIndex", data.outputIndex(),
+                            "mappedPhase", "PERSISTED",
+                            "durationMillis",
+                                    java.util.concurrent.TimeUnit.NANOSECONDS
+                                            .toMillis(elapsedNanos),
+                            "outcome", "ready"));
+            return;
+        }
+        if (!"image-preview".equals(event.name())
+                || !(event.data() instanceof AiConversationImagePreviewData data)) {
+            return;
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("generationPublicId", generationPublicId);
+        details.put("checkpoint", checkpoint);
+        details.put("outputIndex", data.outputIndex());
+        details.put("mappedPhase", data.phase());
+        if (data.partialImageIndex() != null) {
+            details.put("partialImageIndex", data.partialImageIndex());
+        }
+        transportDiagnosticService.recordSafely(
+                timingContext,
+                "ai_image_stream_checkpoint",
+                details);
+    }
+
+    private void releasePreviewSafely(String generationPublicId) {
+        try {
+            previewBroker.release(generationPublicId);
+        } catch (RuntimeException ignored) {
+            // Broker 是本机临时预览旁路，释放失败由其生命周期上限兜底，不能破坏已准备写出的终态 SSE。
+        }
     }
 
     private void emitIfNew(
             Sinks.Many<AiConversationStreamEvent> sink,
             AtomicLong deliveredRevision,
             AiConversationGenerationOutputEvent event) {
-        boolean terminal = "completed".equals(event.eventName())
-                || "error".equals(event.eventName())
-                || "cancelled".equals(event.eventName());
-        if (terminal || event.revision() > deliveredRevision.get()) {
+		boolean terminal = terminalEvent(event.eventName());
+		boolean transientVideoEvent = "video_generation_progress".equals(
+				event.eventName())
+				|| "video_transfer_started".equals(event.eventName());
+		if (terminal || transientVideoEvent
+				|| event.revision() > deliveredRevision.get()) {
             deliveredRevision.accumulateAndGet(event.revision(), Math::max);
             sink.tryEmitNext(event(event.eventName(), event.dataJson()));
             if (terminal) {
@@ -297,7 +411,53 @@ public final class AiConversationGenerationObserverServiceImpl
                 generation.getTerminalType(), "unavailable"));
         data.put("terminalReason", Objects.requireNonNullElse(
                 generation.getTerminalReason(), "unavailable"));
-        return new AiConversationStreamEvent("completed", data);
+        if (generation.getVideoStage() == null) {
+            return new AiConversationStreamEvent("completed", data);
+        }
+        AiConversationGenerationPayload payload = payloadMapper == null
+                ? null
+                : payloadMapper.findByGenerationId(generation.getId());
+        AiConversationPersistedVideoResult persisted = persistedVideoResult(payload);
+        if (persisted == null) {
+            data.put("errorCode", Objects.requireNonNullElse(
+                    generation.getTerminalReason(), "AI_VIDEO_RESULT_UNAVAILABLE"));
+            data.put("failureStage", generation.getVideoStage());
+            return new AiConversationStreamEvent("video_failed", data);
+        }
+        data.put("messagePublicId", persistedMessagePublicId(payload));
+        data.put("attachments", List.of(persisted.attachment()));
+        data.put("durationMillis", persisted.durationMillis());
+        data.put("width", persisted.width());
+        data.put("height", persisted.height());
+        data.put("byteSize", persisted.byteSize());
+        data.put("contentType", persisted.contentType());
+        data.put("videoCodec", persisted.videoCodec());
+        data.put("storageProvider", persisted.storageProvider());
+        return new AiConversationStreamEvent("video_ready", data);
+    }
+
+    private AiConversationPersistedVideoResult persistedVideoResult(
+            AiConversationGenerationPayload payload) {
+        if (payload == null || persistedVideoResultCodec == null) {
+            return null;
+        }
+        if (payload.getAssistantAttachmentsJson() == null
+                || !payload.getAssistantAttachmentsJson().stripLeading().startsWith("{")) {
+            return null;
+        }
+        try {
+            // Redis 终态丢失时只解码数据库中的 OSS 结果信封，禁止重新调用 xAI、FC 或下载视频。
+            return persistedVideoResultCodec.decode(
+                    payload.getAssistantAttachmentsJson());
+        } catch (RuntimeException invalidEnvelope) {
+            return null;
+        }
+    }
+
+    private String persistedMessagePublicId(AiConversationGenerationPayload payload) {
+        return payload == null || payload.getConversationMessageId() == null
+                ? ""
+                : publicIdCodec.encode(payload.getConversationMessageId());
     }
 
     private static void closeQuietly(AutoCloseable closeable) {
@@ -308,11 +468,13 @@ public final class AiConversationGenerationObserverServiceImpl
         }
     }
 
-    private static boolean terminalEvent(String eventName) {
-        return "completed".equals(eventName)
-                || "error".equals(eventName)
-                || "cancelled".equals(eventName);
-    }
+	private static boolean terminalEvent(String eventName) {
+		return "completed".equals(eventName)
+				|| "error".equals(eventName)
+				|| "cancelled".equals(eventName)
+				|| "video_ready".equals(eventName)
+				|| "video_failed".equals(eventName);
+	}
 
     private static AiConversationGenerationStatus generationStatus(int code) {
         for (AiConversationGenerationStatus status : AiConversationGenerationStatus.values()) {

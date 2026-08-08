@@ -227,7 +227,7 @@
 		box-sizing: border-box;
 	}
 
-	@media screen and (min-width: 1024px) {
+	@media screen and (min-width: 768px) {
 		.workspace-history-drawer,
 		.workspace-drawer-backdrop {
 			display: none !important;

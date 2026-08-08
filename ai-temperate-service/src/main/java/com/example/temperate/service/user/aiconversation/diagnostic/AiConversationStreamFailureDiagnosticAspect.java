@@ -25,7 +25,10 @@ public final class AiConversationStreamFailureDiagnosticAspect {
                     + "exceptionType={} rootCauseType={} upstreamStatus={} "
                     + "emittedDeltaCount={} emittedTextChars={} elapsedMs={} "
                     + "billingState={} refundOutcome={} topApplicationFrame={} "
-                    + "stackFingerprint={}";
+                    + "stackFingerprint={} upstreamErrorCode={} upstreamErrorType={} "
+                    + "upstreamErrorParam={} upstreamErrorMessage=\"{}\" "
+                    + "upstreamRequestId={} upstreamContentType={} upstreamBodySha256={} "
+                    + "upstreamCapturedBytes={} upstreamBodyTruncated={}";
 
     /**
      * 切面只观察诊断 Service 的同步分类结果；真正的异步异常已经由调用方作为参数显式传入。
@@ -65,6 +68,8 @@ public final class AiConversationStreamFailureDiagnosticAspect {
     private static void log(
             AiConversationStreamFailureContext context,
             AiConversationStreamFailureClassification classification) {
+        AiUpstreamErrorDiagnostic upstream =
+                classification.upstreamDiagnostic();
         Object[] arguments = {
             context.traceId(),
             context.usagePublicId(),
@@ -82,7 +87,16 @@ public final class AiConversationStreamFailureDiagnosticAspect {
             context.billingState(),
             context.refundOutcome(),
             classification.topApplicationFrame(),
-            classification.stackFingerprint()
+            classification.stackFingerprint(),
+            upstream.providerCode(),
+            upstream.providerType(),
+            upstream.providerParam(),
+            upstream.sanitizedMessage(),
+            upstream.requestId(),
+            upstream.contentType(),
+            upstream.bodySha256(),
+            upstream.capturedBytes(),
+            upstream.truncated()
         };
         if (classification.reason()
                         == AiConversationStreamFailureReason.UNKNOWN_STREAM_FAILURE

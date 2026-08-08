@@ -1,10 +1,13 @@
 package com.example.temperate.service.user.aiconversation.model.stream.impl;
 
 import com.example.temperate.service.user.aiconversation.image.AiConversationImageGenerationOptions;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageAction;
+import com.example.temperate.service.user.aiconversation.image.AiConversationImageQuality;
 import com.example.temperate.service.user.aiconversation.model.stream.AiConversationStreamingRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import java.util.Objects;
 
 /**
@@ -25,6 +28,10 @@ final class OpenAiImagesGenerationRequestFactory {
         AiConversationImageGenerationOptions image = Objects.requireNonNull(
                 request.modelRequest().imageGeneration(),
                 "Image generation options are required");
+        if (image.quality() == AiConversationImageQuality.ULTRA) {
+            throw new IllegalArgumentException(
+                    "OpenAI image generation does not support ULTRA quality");
+        }
         String prompt = request.modelRequest().prompt().currentInput().text();
         if (prompt == null || prompt.isBlank()) {
             throw new IllegalArgumentException("Image prompt must not be blank");
@@ -43,6 +50,20 @@ final class OpenAiImagesGenerationRequestFactory {
         // 预览协议固定最多三张，不能让旧快照中的兼容字段改变新端点合同。
         root.put("partial_images",
                 AiConversationImageGenerationOptions.MAXIMUM_PARTIAL_IMAGES);
+        if (image.action() == AiConversationImageAction.EDIT) {
+            if (request.modelRequest().imageInputUrls().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Image edit request requires signed input references");
+            }
+            ArrayNode images = root.putArray("images");
+            for (String imageUrl : request.modelRequest().imageInputUrls()) {
+                if (imageUrl == null || !imageUrl.startsWith("https://")) {
+                    throw new IllegalArgumentException(
+                            "Image edit reference must use HTTPS");
+                }
+                images.addObject().put("image_url", imageUrl);
+            }
+        }
         return root;
     }
 }

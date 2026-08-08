@@ -23,7 +23,8 @@ final class GlobalExceptionHandlerInputClassificationTest {
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler(
             Clock.systemUTC(),
             mock(AuthCookieWriter.class),
-            mock(AuthFlowCookieWriter.class));
+            mock(AuthFlowCookieWriter.class),
+            mock(com.example.temperate.web.risk.PreAuthTransport.class));
 
     @Test
     void controlledWebInputAndBindingErrorsRemainBadRequests() {

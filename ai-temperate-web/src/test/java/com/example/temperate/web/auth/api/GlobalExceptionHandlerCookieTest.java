@@ -18,8 +18,10 @@ import com.example.temperate.service.humanverification.exception.HumanVerificati
 import com.example.temperate.service.registration.enums.RegistrationDiagnosticCode;
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.exception.RegistrationException;
+import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.PreAuthTransport;
 import java.time.Clock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,13 +39,16 @@ class GlobalExceptionHandlerCookieTest {
 
     private AuthCookieWriter cookieWriter;
     private AuthFlowCookieWriter flowCookieWriter;
+    private PreAuthTransport preAuthTransport;
     private GlobalExceptionHandler handler;
 
     @BeforeEach
     void setUp() {
         cookieWriter = mock(AuthCookieWriter.class);
         flowCookieWriter = mock(AuthFlowCookieWriter.class);
-        handler = new GlobalExceptionHandler(Clock.systemUTC(), cookieWriter, flowCookieWriter);
+        preAuthTransport = mock(PreAuthTransport.class);
+        handler = new GlobalExceptionHandler(
+                Clock.systemUTC(), cookieWriter, flowCookieWriter, preAuthTransport);
     }
 
     @Test
@@ -90,6 +95,7 @@ class GlobalExceptionHandlerCookieTest {
                 response);
 
         verify(cookieWriter).clearSession(response);
+        verify(preAuthTransport).clearCookie(response, RiskScope.USER);
     }
 
     @Test
@@ -104,6 +110,7 @@ class GlobalExceptionHandlerCookieTest {
                 response);
 
         verify(cookieWriter).clearSession(response);
+        verify(preAuthTransport).clearCookie(response, RiskScope.USER);
     }
 
     @Test
@@ -118,6 +125,7 @@ class GlobalExceptionHandlerCookieTest {
                 response);
 
         verify(cookieWriter, never()).clearSession(response);
+        verify(preAuthTransport, never()).clearCookie(response, RiskScope.USER);
     }
 
     @Test
@@ -198,7 +206,7 @@ class GlobalExceptionHandlerCookieTest {
     }
 
     @Test
-    void csrfSessionErrorsUseTheStableForbiddenStatus() {
+    void csrfSessionErrorsUseTheStableUnauthorizedStatus() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Client-Platform", "H5");
 
@@ -207,20 +215,23 @@ class GlobalExceptionHandlerCookieTest {
                 request,
                 new MockHttpServletResponse());
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     @Test
     void sessionInfrastructureErrorsUseServiceUnavailableStatus() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Client-Platform", "ANDROID");
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse responseTarget = new MockHttpServletResponse();
 
         var response = handler.handleSession(
                 exception(SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE, false),
                 request,
-                new MockHttpServletResponse());
+                responseTarget);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(cookieWriter, never()).clearSession(responseTarget);
+        verify(preAuthTransport, never()).clearCookie(responseTarget, RiskScope.USER);
     }
 
     @Test
@@ -256,7 +267,7 @@ class GlobalExceptionHandlerCookieTest {
                         new IllegalStateException("simulated transport failure")),
                 request);
 
-        verifyNoInteractions(cookieWriter, flowCookieWriter);
+        verifyNoInteractions(cookieWriter, flowCookieWriter, preAuthTransport);
     }
 
     private static SessionAuthenticationException exception(

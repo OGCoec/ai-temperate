@@ -37,6 +37,20 @@ test('preserves readable unknown errors and falls back when empty', async () => 
 	)
 })
 
+test('maps provider compatibility errors to explicit safe messages', async () => {
+	const presentation = await loadPresentation()
+
+	assert.equal(presentation.aiConversationErrorMessage({
+		code: 'AI_MODEL_REASONING_LEVEL_UNSUPPORTED'
+	}), '当前模型不支持所选推理档位。')
+	assert.equal(presentation.aiConversationErrorMessage({
+		code: 'AI_IMAGE_RESOLUTION_UNSUPPORTED'
+	}), '当前模型不支持所选图片分辨率。')
+	assert.equal(presentation.aiConversationErrorMessage({
+		code: 'AI_PROVIDER_TOOL_UNSUPPORTED'
+	}), '当前模型不支持所选联网搜索配置。')
+})
+
 test('maps safe stream reason codes without exposing arbitrary server messages', async () => {
 	const presentation = await loadPresentation()
 	const reasons = {
@@ -46,6 +60,9 @@ test('maps safe stream reason codes without exposing arbitrary server messages',
 		UPSTREAM_CONNECTION_CLOSED: '模型响应未能完成：上游连接提前中断',
 		UPSTREAM_NETWORK_ERROR: '模型响应未能完成：上游网络通信失败',
 		UPSTREAM_PROTOCOL_ERROR: '模型响应未能完成：上游响应格式无法解析',
+		UPSTREAM_REASONING_LEVEL_UNSUPPORTED: '模型响应未能完成：当前模型不支持所选推理档位',
+		UPSTREAM_IMAGE_RESOLUTION_UNSUPPORTED: '模型响应未能完成：当前模型不支持所选图片分辨率',
+		UPSTREAM_TOOL_CONFIGURATION_UNSUPPORTED: '模型响应未能完成：当前模型不支持所选工具配置',
 		UPSTREAM_SERVER_ERROR: '模型响应未能完成：上游模型服务异常',
 		USAGE_DATA_UNAVAILABLE: '模型响应未能完成：上游未返回完整用量信息',
 		STREAM_BACKPRESSURE_OVERFLOW: '模型响应未能完成：服务端流式转发发生背压异常'

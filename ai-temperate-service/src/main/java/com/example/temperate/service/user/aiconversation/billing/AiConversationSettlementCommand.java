@@ -2,6 +2,8 @@ package com.example.temperate.service.user.aiconversation.billing;
 
 import com.example.temperate.service.user.aiconversation.context.AiConversationContent;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTraceContext;
+import com.example.temperate.service.user.aiconversation.model.AiConversationMeteredUsage;
+import com.example.temperate.service.user.aiconversation.model.AiConversationUsage;
 import java.util.List;
 
 /**
@@ -13,10 +15,7 @@ public record AiConversationSettlementCommand(
         AiConversationContent user,
         AiConversationContent assistant,
         List<String> userSearchTokens,
-        long promptTokens,
-        long cachedPromptTokens,
-        long completionTokens,
-        long reasoningTokens,
+        AiConversationMeteredUsage usage,
         String upstreamRequestId,
         String finishReason,
         AiConversationLifecycleTraceContext traceContext) {
@@ -49,12 +48,43 @@ public record AiConversationSettlementCommand(
                 user,
                 assistant,
                 userSearchTokens,
-                promptTokens,
-                cachedPromptTokens,
-                completionTokens,
-                reasoningTokens,
+                new AiConversationUsage(
+                        promptTokens,
+                        cachedPromptTokens,
+                        completionTokens,
+                        reasoningTokens),
                 upstreamRequestId,
                 finishReason,
                 AiConversationLifecycleTraceContext.unavailable());
+    }
+
+    public AiConversationSettlementCommand(
+            byte[] usageId,
+            Long messageId,
+            AiConversationContent user,
+            AiConversationContent assistant,
+            List<String> userSearchTokens,
+            long promptTokens,
+            long cachedPromptTokens,
+            long completionTokens,
+            long reasoningTokens,
+            String upstreamRequestId,
+            String finishReason,
+            AiConversationLifecycleTraceContext traceContext) {
+        this(usageId, messageId, user, assistant, userSearchTokens,
+                new AiConversationUsage(
+                        promptTokens,
+                        cachedPromptTokens,
+                        completionTokens,
+                        reasoningTokens),
+                upstreamRequestId, finishReason, traceContext);
+    }
+
+    public AiConversationUsage tokenUsage() {
+        if (usage instanceof AiConversationUsage tokenUsage) {
+            return tokenUsage;
+        }
+        throw new IllegalStateException(
+                "Settlement does not contain Token usage.");
     }
 }

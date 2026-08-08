@@ -7,6 +7,10 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
  */
 public interface AiConversationContextService {
 
+    AiConversationContextSnapshot load(
+            byte[] conversationId,
+            String conversationPublicId);
+
     AiConversationPromptSnapshot prepareNew(
             AiModelCacheEntry model,
             AiConversationContent currentInput);

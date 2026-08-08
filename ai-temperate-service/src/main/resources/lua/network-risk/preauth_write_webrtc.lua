@@ -1,52 +1,74 @@
--- KEYS[1] 为作用域隔离后的 PreAuth Hash。
--- ARGV 依次为设备摘要、作用域、当前 IP 摘要、状态、密文、是否有 IP 和 TTL。
-if redis.call('EXISTS', KEYS[1]) == 0 then
+-- 只允许当前 PENDING generation 写入 report，并用 Redis TIME 判定服务端截止时间。
+-- ARGV 依次为 schema、设备、作用域、HTTP IP、generation、目标阶段、失败原因、密文、是否有 IP 和 TTL。
+if redis.call('EXISTS', KEYS[1]) == 0
+        or redis.call('HGET', KEYS[1], 'schemaVersion') ~= ARGV[1]
+        or redis.call('HGET', KEYS[1], 'deviceDigest') ~= ARGV[2]
+        or redis.call('HGET', KEYS[1], 'scope') ~= ARGV[3] then
     return 0
 end
-if redis.call('HGET', KEYS[1], 'schemaVersion') ~= '4' then
-    return 0
-end
-if redis.call('HGET', KEYS[1], 'deviceDigest') ~= ARGV[1] then
-    return 0
-end
-if redis.call('HGET', KEYS[1], 'scope') ~= ARGV[2] then
-    return 0
-end
-if redis.call('HGET', KEYS[1], 'currentIpDigest') ~= ARGV[3] then
+if redis.call('HGET', KEYS[1], 'currentIpDigest') ~= ARGV[4] then
     return -1
 end
-if (ARGV[4] ~= 'true' and ARGV[4] ~= 'false') or ARGV[5] == '' then
+if redis.call('HGET', KEYS[1], 'webRtcGeneration') ~= ARGV[5] then
+    return -2
+end
+if (ARGV[6] ~= 'VERIFIED' and ARGV[6] ~= 'FAILED')
+        or (ARGV[9] ~= '0' and ARGV[9] ~= '1')
+        or tonumber(ARGV[10]) == nil or tonumber(ARGV[10]) <= 0 then
     return 0
 end
-if (ARGV[6] ~= '0' and ARGV[6] ~= '1')
-        or tonumber(ARGV[7]) == nil
-        or tonumber(ARGV[7]) <= 0 then
+if (ARGV[6] == 'VERIFIED' and (ARGV[7] ~= '' or ARGV[8] == '' or ARGV[9] ~= '1'))
+        or (ARGV[6] == 'FAILED' and ARGV[7] == '')
+        or (ARGV[7] == 'IP_MISMATCH' and (ARGV[8] == '' or ARGV[9] ~= '1'))
+        or (ARGV[7] ~= 'IP_MISMATCH' and ARGV[6] == 'FAILED'
+            and (ARGV[8] ~= '' or ARGV[9] ~= '0')) then
     return 0
 end
 
-local previousStatus = redis.call('HGET', KEYS[1], 'webRtcStatus')
-local previousIps = redis.call('HGET', KEYS[1], 'webRtcIps')
-
--- 同一 IP 已验证成功后，迟到的空结果或不匹配结果不能把可信状态降级。
-if previousStatus == 'true' and ARGV[4] == 'false' then
-    redis.call('PEXPIRE', KEYS[1], ARGV[7])
+local currentPhase = redis.call('HGET', KEYS[1], 'webRtcPhase')
+if currentPhase == 'VERIFIED' then
+    redis.call('PEXPIRE', KEYS[1], ARGV[10])
     return 2
 end
-
--- 已有失败详情不能被迟到的空报告覆盖；新的非空报告和成功报告仍可替换旧失败。
-if previousStatus == 'false'
-        and previousIps ~= false
-        and previousIps ~= ''
-        and ARGV[4] == 'false'
-        and ARGV[6] == '0' then
-    redis.call('PEXPIRE', KEYS[1], ARGV[7])
+if currentPhase == 'FAILED' then
+    redis.call('PEXPIRE', KEYS[1], ARGV[10])
     return 3
 end
+if currentPhase ~= 'PENDING' then
+    return 0
+end
 
-redis.call(
-        'HSET',
-        KEYS[1],
-        'webRtcStatus', ARGV[4],
-        'webRtcIps', ARGV[5])
-redis.call('PEXPIRE', KEYS[1], ARGV[7])
+local deadline = tonumber(redis.call('HGET', KEYS[1], 'webRtcDeadlineAt'))
+local redisTime = redis.call('TIME')
+local nowMillis = tonumber(redisTime[1]) * 1000
+        + math.floor(tonumber(redisTime[2]) / 1000)
+if deadline == nil or nowMillis > deadline then
+    redis.call(
+            'HSET', KEYS[1],
+            'webRtcPhase', 'FAILED',
+            'webRtcFailureReason', 'REPORT_TIMEOUT')
+    redis.call('HDEL', KEYS[1], 'webRtcDeadlineAt', 'webRtcIps')
+    redis.call('PEXPIRE', KEYS[1], ARGV[10])
+    return 4
+end
+
+if ARGV[6] == 'VERIFIED' then
+    redis.call(
+            'HSET', KEYS[1],
+            'webRtcPhase', 'VERIFIED',
+            'webRtcIps', ARGV[8])
+    redis.call('HDEL', KEYS[1], 'webRtcDeadlineAt', 'webRtcFailureReason')
+else
+    redis.call(
+            'HSET', KEYS[1],
+            'webRtcPhase', 'FAILED',
+            'webRtcFailureReason', ARGV[7])
+    redis.call('HDEL', KEYS[1], 'webRtcDeadlineAt')
+    if ARGV[9] == '1' then
+        redis.call('HSET', KEYS[1], 'webRtcIps', ARGV[8])
+    else
+        redis.call('HDEL', KEYS[1], 'webRtcIps')
+    end
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[10])
 return 1

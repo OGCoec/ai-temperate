@@ -16,6 +16,7 @@ import com.example.temperate.service.user.aiconversation.generation.cancellation
 import com.example.temperate.service.user.aiconversation.generation.rabbit.AiConversationGenerationEventPublisher;
 import com.example.temperate.service.user.aiconversation.generation.recovery.AiConversationGenerationRecoveryService;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
+import com.example.temperate.service.user.aiconversation.video.AiConversationVideoGenerationStage;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -177,11 +178,14 @@ public final class AiConversationGenerationRecoveryServiceImpl
                     && !generation.getCancelRequestedAt()
                             .plus(asyncProperties.maxWorkerDuration())
                             .isAfter(clock.instant().atOffset(ZoneOffset.UTC))) {
-                // Owner 永久失联时不能把取消命令无限投向孤儿队列；超过 Worker 上限后按系统失败全额退款收敛。
+                // Owner 永久失联后停止投递孤儿取消命令；视频无法证明供应商成本时转对账，其他请求沿用系统失败退款。
+                boolean uncertainVideo = markVideoOwnerLossUncertain(generation);
                 terminalService.freeze(new AiConversationGenerationTerminalCommand(
                         generation.getId(),
                         AiConversationGenerationTerminalType.SYSTEM_FAILED,
-                        "AI_GENERATION_CANCEL_OWNER_LOST",
+                        uncertainVideo
+                                ? "AI_VIDEO_XAI_RESULT_UNCERTAIN"
+                                : "AI_GENERATION_CANCEL_OWNER_LOST",
                         "",
                         "[]",
                         null,
@@ -209,10 +213,13 @@ public final class AiConversationGenerationRecoveryServiceImpl
             return true;
         }
         if (status == AiConversationGenerationStatus.RUNNING) {
+            boolean uncertainVideo = markVideoOwnerLossUncertain(generation);
             terminalService.freeze(new AiConversationGenerationTerminalCommand(
                     generation.getId(),
                     AiConversationGenerationTerminalType.SYSTEM_FAILED,
-                    "AI_GENERATION_OWNER_LOST",
+                    uncertainVideo
+                            ? "AI_VIDEO_XAI_RESULT_UNCERTAIN"
+                            : "AI_GENERATION_OWNER_LOST",
                     "",
                     "[]",
                     null,
@@ -222,6 +229,21 @@ public final class AiConversationGenerationRecoveryServiceImpl
             return true;
         }
         return false;
+    }
+
+    private boolean markVideoOwnerLossUncertain(
+            AiConversationGeneration generation) {
+        if (generation.getVideoStage() == null) {
+            return false;
+        }
+        // Owner 丢失后无法证明创建 POST 是否到达 xAI；保留预扣并进入人工对账，禁止按零成本退款。
+        if (generationMapper.updateVideoStage(
+                generation.getId(),
+                AiConversationVideoGenerationStage.XAI_RESULT_UNCERTAIN.name()) != 1) {
+            throw new IllegalStateException(
+                    "AI video owner-loss stage update did not affect one row.");
+        }
+        return true;
     }
 
     private AiConversationGenerationTerminalCommand cancellationTerminal(

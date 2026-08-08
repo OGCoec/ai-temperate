@@ -13,6 +13,12 @@ public record AiConversationContextSnapshot(
         OffsetDateTime expiresAt,
         long lastCompactedMessageId,
         long latestPersistedMessageId,
+        long estimatedContextTokens,
+        long contextRevision,
+        long durableCompactionTokens,
+        long ephemeralCompactionTokens,
+        OffsetDateTime updatedAt,
+        OffsetDateTime lastCompactedAt,
         String durableCompactionJson,
         String ephemeralCompactionJson,
         List<AiConversationTurn> turns,
@@ -20,5 +26,12 @@ public record AiConversationContextSnapshot(
 
     public AiConversationContextSnapshot {
         turns = turns == null ? List.of() : List.copyOf(turns);
+        if (estimatedContextTokens < 0L
+                || contextRevision < 0L
+                || durableCompactionTokens < 0L
+                || ephemeralCompactionTokens < 0L) {
+            throw new IllegalArgumentException(
+                    "AI conversation context token metadata must not be negative.");
+        }
     }
 }

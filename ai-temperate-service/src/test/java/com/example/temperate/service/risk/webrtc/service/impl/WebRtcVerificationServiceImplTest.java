@@ -13,6 +13,9 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcBeginResult;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcWriteResult;
 import com.example.temperate.service.risk.preauth.store.PreAuthStore;
 import com.example.temperate.service.risk.security.NetworkRiskIdentifier;
@@ -23,162 +26,154 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 WebRTC 三态解释、可信 HTTP IP 匹配以及迟到结果的并发优先级。
+ * 验证 WebRTC v6 完全异步门禁的 begin、临时放行、Redis 截止时间和 generation 写入语义。
  */
 class WebRtcVerificationServiceImplTest {
 
     private static final String HTTP_IP = "8.8.8.8";
+    private static final Instant DEADLINE = Instant.parse("2026-08-04T12:00:15Z");
     private static final HmacIdentifier TOKEN = digest('T');
     private static final HmacIdentifier DEVICE = digest('D');
 
     @Test
-    void sameIpVerifiedStateAllowsWithoutWritingAgain() {
+    void requiredAndPendingAllowBusinessRequestsWithoutStartingImplicitly() {
         Fixture fixture = fixture();
-        String ciphertext = fixture.protector().encrypt(
-                List.of(HTTP_IP),
-                RiskScope.USER,
-                TOKEN,
-                fixture.httpIpDigest());
-        PreAuthAccess access = access(fixture, true, ciphertext);
+        PreAuthAccess required = access(
+                fixture, PreAuthWebRtcPhase.REQUIRED, 7L, DEADLINE, null, null);
+        PreAuthAccess pending = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 8L, DEADLINE, null, null);
 
-        assertThat(fixture.service().inspect(access, HTTP_IP).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.VERIFIED);
-    }
-
-    @Test
-    void falseStateSeparatesMismatchFromEmptyVerificationFailure() {
-        Fixture fixture = fixture();
-        String mismatch = fixture.protector().encrypt(
-                List.of("1.1.1.1"),
-                RiskScope.USER,
-                TOKEN,
-                fixture.httpIpDigest());
-        String empty = fixture.protector().encrypt(
-                List.of(),
-                RiskScope.USER,
-                TOKEN,
-                fixture.httpIpDigest());
-
-        assertThat(fixture.service().inspect(
-                        access(fixture, false, mismatch),
-                        HTTP_IP).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
-        assertThat(fixture.service().inspect(
-                        access(fixture, false, empty),
-                        HTTP_IP).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_FAILED);
-    }
-
-    @Test
-    void changedHttpIpRequiresNewProbeBeforeAcceptingAReport() {
-        Fixture fixture = fixture();
-        PreAuthAccess access = access(fixture, true, fixture.protector().encrypt(
-                List.of(HTTP_IP),
-                RiskScope.USER,
-                TOKEN,
-                fixture.httpIpDigest()));
-
-        assertThat(fixture.service().inspect(access, "1.1.1.1").outcome())
+        assertThat(fixture.service().inspect(required, HTTP_IP).outcome())
                 .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_REQUIRED);
-        assertThat(fixture.service().report(
-                        access,
-                        "1.1.1.1",
-                        List.of("1.1.1.1")).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.NETWORK_CHANGED);
+        assertThat(fixture.service().inspect(pending, HTTP_IP).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_PENDING);
     }
 
     @Test
-    void matchingReportWritesEncryptedIpsAndCanUpgradeFalseToTrue() {
+    void beginUsesRedisRemainingMillisAndStartsOnlyCurrentGeneration() {
         Fixture fixture = fixture();
-        PreAuthAccess access = access(fixture, false, fixture.protector().encrypt(
-                List.of(),
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.REQUIRED, 9L, DEADLINE, null, null);
+        when(fixture.store().beginWebRtcVerification(
                 RiskScope.USER,
                 TOKEN,
-                fixture.httpIpDigest()));
+                DEVICE,
+                fixture.httpIpDigest(),
+                9L,
+                Duration.ofSeconds(15),
+                Duration.ofMinutes(30)))
+                .thenReturn(new PreAuthWebRtcBeginResult(
+                        PreAuthWebRtcBeginResult.Status.STARTED,
+                        9L,
+                        DEADLINE,
+                        15_000L));
+
+        var decision = fixture.service().begin(access, HTTP_IP);
+
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_PENDING);
+        assertThat(decision.pendingRemainingMillis()).isEqualTo(15_000L);
+    }
+
+    @Test
+    void expiredOpenStateReloadsTheRedisTerminalReason() {
+        Fixture fixture = fixture();
+        PreAuthAccess pending = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 10L, DEADLINE, null, null);
+        PreAuthAccess failed = access(
+                fixture,
+                PreAuthWebRtcPhase.FAILED,
+                10L,
+                null,
+                PreAuthWebRtcFailureReason.REPORT_TIMEOUT,
+                null);
+        when(fixture.store().expireWebRtcDeadline(
+                RiskScope.USER,
+                TOKEN,
+                DEVICE,
+                fixture.httpIpDigest(),
+                10L,
+                Duration.ofMinutes(30))).thenReturn(true);
+        when(fixture.store().find(RiskScope.USER, TOKEN))
+                .thenReturn(Optional.of(failed.state()));
+
+        assertThat(fixture.service().inspect(pending, HTTP_IP).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_TIMEOUT);
+        verify(fixture.store()).expireWebRtcDeadline(
+                RiskScope.USER,
+                TOKEN,
+                DEVICE,
+                fixture.httpIpDigest(),
+                10L,
+                Duration.ofMinutes(30));
+    }
+
+    @Test
+    void matchingReportCanOnlyCompleteTheCurrentPendingGeneration() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 11L, DEADLINE, null, null);
         when(fixture.store().writeWebRtcResult(
-                        eq(RiskScope.USER),
-                        eq(TOKEN),
-                        eq(DEVICE),
-                        eq(fixture.httpIpDigest()),
-                        eq(true),
-                        any(String.class),
-                        eq(true),
-                        eq(Duration.ofMinutes(30))))
+                eq(RiskScope.USER),
+                eq(TOKEN),
+                eq(DEVICE),
+                eq(fixture.httpIpDigest()),
+                eq(11L),
+                eq(true),
+                eq(null),
+                any(String.class),
+                eq(true),
+                eq(Duration.ofMinutes(30))))
                 .thenReturn(PreAuthWebRtcWriteResult.UPDATED);
 
         var decision = fixture.service().report(
                 access,
                 HTTP_IP,
-                List.of("::ffff:8.8.8.8", "2606:4700:4700::1111"));
+                "11",
+                List.of("::ffff:8.8.8.8"));
 
         assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.VERIFIED);
-        verify(fixture.store()).writeWebRtcResult(
-                eq(RiskScope.USER),
-                eq(TOKEN),
-                eq(DEVICE),
-                eq(fixture.httpIpDigest()),
-                eq(true),
-                any(String.class),
-                eq(true),
-                eq(Duration.ofMinutes(30)));
     }
 
     @Test
-    void corruptCiphertextIsClearedAndRequiresVerificationAgain() {
+    void reportCannotImplicitlyStartARequiredGeneration() {
         Fixture fixture = fixture();
-        PreAuthAccess access = access(fixture, true, "v1.invalid.invalid");
-        when(fixture.store().clearWebRtcResult(
-                        RiskScope.USER,
-                        TOKEN,
-                        DEVICE,
-                        fixture.httpIpDigest(),
-                        Duration.ofMinutes(30)))
-                .thenReturn(true);
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.REQUIRED, 12L, DEADLINE, null, null);
 
-        assertThat(fixture.service().inspect(access, HTTP_IP).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_REQUIRED);
-        verify(fixture.store()).clearWebRtcResult(
-                RiskScope.USER,
-                TOKEN,
-                DEVICE,
-                fixture.httpIpDigest(),
-                Duration.ofMinutes(30));
+        assertThat(fixture.service().report(
+                access,
+                HTTP_IP,
+                "12",
+                List.of(HTTP_IP)).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.STALE_REPORT);
     }
 
     @Test
-    void lateFailureCannotDowngradeAnAlreadyVerifiedState() {
+    void mismatchFailureRetainsEncryptedCandidatesWithoutADeadline() {
         Fixture fixture = fixture();
-        PreAuthAccess initial = access(fixture, null, null);
-        String verifiedCiphertext = fixture.protector().encrypt(
-                List.of(HTTP_IP),
+        String ciphertext = fixture.protector().encrypt(
+                List.of("1.1.1.1"),
                 RiskScope.USER,
                 TOKEN,
                 fixture.httpIpDigest());
-        PreAuthState verifiedState = state(
+        PreAuthAccess access = access(
                 fixture,
-                true,
-                verifiedCiphertext);
-        when(fixture.store().writeWebRtcResult(
-                        eq(RiskScope.USER),
-                        eq(TOKEN),
-                        eq(DEVICE),
-                        eq(fixture.httpIpDigest()),
-                        eq(false),
-                        any(String.class),
-                        eq(false),
-                        eq(Duration.ofMinutes(30))))
-                .thenReturn(PreAuthWebRtcWriteResult.VERIFIED_PRESERVED);
-        when(fixture.store().find(RiskScope.USER, TOKEN))
-                .thenReturn(Optional.of(verifiedState));
+                PreAuthWebRtcPhase.FAILED,
+                13L,
+                null,
+                PreAuthWebRtcFailureReason.IP_MISMATCH,
+                ciphertext);
 
-        assertThat(fixture.service().report(initial, HTTP_IP, List.of()).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+        assertThat(fixture.service().inspect(access, HTTP_IP).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
     }
 
     private static Fixture fixture() {
@@ -196,7 +191,9 @@ class WebRtcVerificationServiceImplTest {
         PreAuthStore store = mock(PreAuthStore.class);
         NetworkRiskProperties properties = mock(NetworkRiskProperties.class);
         when(properties.webRtc()).thenReturn(new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),
@@ -212,28 +209,27 @@ class WebRtcVerificationServiceImplTest {
                 identifier,
                 protector,
                 new WebRtcIpNormalizer());
-        return new Fixture(service, store, identifier, protector, ipDigest);
+        return new Fixture(service, store, protector, ipDigest);
     }
 
     private static PreAuthAccess access(
             Fixture fixture,
-            Boolean status,
-            String ciphertext) {
-        return new PreAuthAccess(TOKEN, state(fixture, status, ciphertext));
-    }
-
-    private static PreAuthState state(
-            Fixture fixture,
-            Boolean status,
+            PreAuthWebRtcPhase phase,
+            long generation,
+            Instant deadline,
+            PreAuthWebRtcFailureReason failureReason,
             String ciphertext) {
         PreAuthState state = mock(PreAuthState.class);
         when(state.scope()).thenReturn(RiskScope.USER);
         when(state.deviceDigest()).thenReturn(DEVICE);
         when(state.currentIpDigest()).thenReturn(fixture.httpIpDigest());
-        when(state.webRtcStatus()).thenReturn(status);
+        when(state.webRtcPhase()).thenReturn(phase);
+        when(state.webRtcGeneration()).thenReturn(generation);
+        when(state.webRtcDeadlineAt()).thenReturn(deadline);
+        when(state.webRtcFailureReason()).thenReturn(failureReason);
         when(state.webRtcIps()).thenReturn(ciphertext);
         when(state.authenticated()).thenReturn(false);
-        return state;
+        return new PreAuthAccess(TOKEN, state);
     }
 
     private static HmacIdentifier digest(char value) {
@@ -243,7 +239,6 @@ class WebRtcVerificationServiceImplTest {
     private record Fixture(
             WebRtcVerificationServiceImpl service,
             PreAuthStore store,
-            NetworkRiskIdentifier identifier,
             WebRtcIpProtector protector,
             HmacIdentifier httpIpDigest) {
     }

@@ -22,6 +22,10 @@ const PAGE_RESPONSE = {
 	models: [{
 		publicId: 'AAABi0VWeJ8',
 		modelName: 'gpt-5.4',
+		contextWindowTokens: 1000000,
+		contextWindowK: 1000,
+		maxOutputTokens: 128000,
+		maxOutputK: 128,
 		modelNameMatchedTokens: ['5.4'],
 		vendor: 'openai',
 		description: '用于代码与推理的模型。',
@@ -64,6 +68,10 @@ test('requests model pages through the authenticated client and normalizes safe 
 	]])
 	assert.equal(page.total, 21)
 	assert.equal(page.models[0].publicId, 'AAABi0VWeJ8')
+	assert.equal(page.models[0].contextWindowTokens, 1000000)
+	assert.equal(page.models[0].contextWindowK, 1000)
+	assert.equal(page.models[0].maxOutputTokens, 128000)
+	assert.equal(page.models[0].maxOutputK, 128)
 	assert.equal(page.models[0].icon, 'https://cdn.example.test/gpt-5.4.svg')
 	assert.equal(page.models[0].cachedInputRatio, '0.25')
 	assert.equal(page.models[0].outputRatio, '4')
@@ -96,12 +104,25 @@ test('normalizes image generation profile levels and supported aspects', async (
 	delete globalThis.__requestAiModels
 })
 
-test('rejects image generation levels above High', async () => {
+test('accepts the fourth Google image generation level', async () => {
 	const module = await loadAiModelApi(async () => ({
 		...PAGE_RESPONSE.models[0],
 		capabilities: ['IMAGE_GENERATION'],
 		supportedImageGenerationLevels: [1, 2, 3, 4],
 		supportedImageAspects: ['SQUARE', 'LANDSCAPE', 'PORTRAIT']
+	}))
+
+	const model = await module.aiModelApi.detail('AAABi0VWeJ8')
+	assert.deepEqual(model.supportedImageGenerationLevels, [1, 2, 3, 4])
+	delete globalThis.__requestAiModels
+})
+
+test('rejects image generation levels above the Google fourth tier', async () => {
+	const module = await loadAiModelApi(async () => ({
+		...PAGE_RESPONSE.models[0],
+		capabilities: ['IMAGE_GENERATION'],
+		supportedImageGenerationLevels: [1, 2, 3, 4, 5],
+		supportedImageAspects: ['SQUARE']
 	}))
 
 	await assert.rejects(

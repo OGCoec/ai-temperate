@@ -12,6 +12,8 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.observability.WebRtcMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthState;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
@@ -33,10 +35,13 @@ import org.springframework.mock.web.MockHttpServletRequest;
 class WebRtcEdgeControllerTest {
 
     @Test
-    void startReturnsOrderedStunUrlsAndRequiresProbeForNullState() {
+    void startActuallyBeginsGenerationAndReturnsRedisRemainingWindow() {
         Fixture fixture = fixture();
-        when(fixture.service().inspect(any(), eq("8.8.8.8")))
-                .thenReturn(WebRtcVerificationDecision.required());
+        when(fixture.service().begin(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.pending(
+                        12L,
+                        Instant.now().plusSeconds(15),
+                        15_000L));
 
         var response = fixture.controller().startUser(
                 "device-installation-0001",
@@ -47,7 +52,11 @@ class WebRtcEdgeControllerTest {
         assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().probeRequired()).isTrue();
-        assertThat(response.getBody().timeoutMillis()).isEqualTo(15_000L);
+        assertThat(response.getBody().verificationState()).isEqualTo("PENDING");
+        assertThat(response.getBody().probeGeneration()).isEqualTo("12");
+        assertThat(response.getBody().pendingRemainingMillis()).isEqualTo(15_000L);
+        assertThat(response.getBody().timeoutMillis()).isEqualTo(12_000L);
+        assertThat(response.getBody().reportGraceMillis()).isEqualTo(3_000L);
         assertThat(response.getBody().stunUrls()).containsExactly(
                 "stun:stun.l.google.com:19302",
                 "stun:stun.cloudflare.com:3478",
@@ -61,14 +70,20 @@ class WebRtcEdgeControllerTest {
         when(fixture.service().report(
                         any(),
                         eq("8.8.8.8"),
+                        eq("12"),
                         eq(List.of("1.1.1.1"))))
-                .thenReturn(WebRtcVerificationDecision.mismatch(
+                .thenReturn(WebRtcVerificationDecision.failed(
+                        12L,
+                        Instant.now().plusSeconds(20),
+                        com.example.temperate.service.risk.preauth.domain
+                                .PreAuthWebRtcFailureReason.IP_MISMATCH,
                         List.of("1.1.1.1")));
 
         var response = fixture.controller().reportUser(
                 "device-installation-0001",
                 "H5",
                 new WebRtcEdgeController.WebRtcReportRequest(
+                        "12",
                         List.of("1.1.1.1")),
                 request("POST", "/api/_edge/webrtc/report"));
 
@@ -95,7 +110,9 @@ class WebRtcEdgeControllerTest {
         NetworkRiskProperties properties = mock(NetworkRiskProperties.class);
         when(properties.mode()).thenReturn(NetworkRiskMode.ENFORCE);
         when(properties.webRtc()).thenReturn(new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),
@@ -132,9 +149,15 @@ class WebRtcEdgeControllerTest {
     private static MockHttpServletRequest request(String method, String path) {
         MockHttpServletRequest request = new MockHttpServletRequest(method, path);
         request.addHeader("Origin", "https://shop.example.test");
+        PreAuthAccess access = mock(PreAuthAccess.class);
+        PreAuthState state = mock(PreAuthState.class);
+        when(access.state()).thenReturn(state);
+        when(state.webRtcPhase()).thenReturn(path.endsWith("/report")
+                ? PreAuthWebRtcPhase.PENDING
+                : PreAuthWebRtcPhase.REQUIRED);
         request.setAttribute(
                 NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
-                mock(PreAuthAccess.class));
+                access);
         return request;
     }
 

@@ -32,22 +32,41 @@ public final class ConservativeAiConversationTokenEstimator
     }
 
     @Override
-    public long estimate(
+    public long estimateContext(
             String systemPrompt,
             String durableCompactionJson,
             String ephemeralCompactionJson,
-            List<AiConversationTurn> turns,
-            AiConversationContent currentInput) {
+            List<AiConversationTurn> turns) {
         long total = estimateText(systemPrompt) + MESSAGE_OVERHEAD_TOKENS;
         total = Math.addExact(total, estimateText(durableCompactionJson));
         total = Math.addExact(total, estimateText(ephemeralCompactionJson));
         for (AiConversationTurn turn : turns) {
-            total = Math.addExact(total, estimateContent(turn.user()));
-            total = Math.addExact(total, estimateContent(turn.assistant()));
-            total = Math.addExact(total, MESSAGE_OVERHEAD_TOKENS * 2L);
+            total = Math.addExact(total,
+                    turn.estimatedTokens() > 0L
+                            ? turn.estimatedTokens()
+                            : estimateTurn(turn.user(), turn.assistant()));
         }
-        total = Math.addExact(total, estimateContent(currentInput));
-        return Math.addExact(total, MESSAGE_OVERHEAD_TOKENS);
+        return total;
+    }
+
+    @Override
+    public long estimateCurrentInput(AiConversationContent currentInput) {
+        return Math.addExact(
+                estimateContent(currentInput), MESSAGE_OVERHEAD_TOKENS);
+    }
+
+    @Override
+    public long estimateTurn(
+            AiConversationContent user,
+            AiConversationContent assistant) {
+        long total = Math.addExact(
+                estimateContent(user), estimateContent(assistant));
+        return Math.addExact(total, MESSAGE_OVERHEAD_TOKENS * 2L);
+    }
+
+    @Override
+    public long estimateCompaction(String compactedContextJson) {
+        return estimateText(compactedContextJson);
     }
 
     private long estimateContent(AiConversationContent content) {

@@ -6,5 +6,6 @@ package com.example.temperate.service.user.aiconversation.model.stream;
 public enum AiConversationStreamingProtocol {
     CHAT_COMPLETIONS,
     RESPONSES_WEB_SEARCH,
-    IMAGES_GENERATION
+    IMAGES_GENERATION,
+    VIDEOS_GENERATION
 }

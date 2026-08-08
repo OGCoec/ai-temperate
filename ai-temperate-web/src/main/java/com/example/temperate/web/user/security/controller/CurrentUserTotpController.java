@@ -14,9 +14,11 @@ import com.example.temperate.service.auth.totp.management.dto.TotpStatusResult;
 import com.example.temperate.service.auth.totp.stepup.TotpStepUpService;
 import com.example.temperate.service.auth.totp.stepup.dto.TotpStepUpProofResult;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
+import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -63,6 +65,7 @@ public final class CurrentUserTotpController {
     private final TotpStepUpService stepUpService;
     private final LoginCodeFlowService codeFlowService;
     private final AuthCookieWriter cookieWriter;
+    private final PreAuthTransport preAuthTransport;
     private final RiskRequestContextResolver riskContextResolver;
 
     public CurrentUserTotpController(
@@ -70,11 +73,13 @@ public final class CurrentUserTotpController {
             TotpStepUpService stepUpService,
             LoginCodeFlowService codeFlowService,
             AuthCookieWriter cookieWriter,
+            PreAuthTransport preAuthTransport,
             RiskRequestContextResolver riskContextResolver) {
         this.managementService = managementService;
         this.stepUpService = stepUpService;
         this.codeFlowService = codeFlowService;
         this.cookieWriter = cookieWriter;
+        this.preAuthTransport = preAuthTransport;
         this.riskContextResolver = riskContextResolver;
     }
 
@@ -248,6 +253,7 @@ public final class CurrentUserTotpController {
             HttpServletResponse response) {
         if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
             cookieWriter.clearSession(response);
+            preAuthTransport.clearCookie(response, RiskScope.USER);
         }
     }
 

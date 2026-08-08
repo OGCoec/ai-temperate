@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS ai_conversation_generation_payload (
     input_text TEXT NOT NULL,
     input_attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
     reasoning_effort SMALLINT NOT NULL,
+    metering_basis SMALLINT NOT NULL DEFAULT 0,
     assistant_text TEXT NULL,
     assistant_attachments JSONB NULL,
     conversation_message_id BIGINT NULL,
@@ -14,11 +15,14 @@ CREATE TABLE IF NOT EXISTS ai_conversation_generation_payload (
     completion_tokens BIGINT NULL,
     cached_prompt_tokens BIGINT NULL,
     reasoning_tokens BIGINT NULL,
+    provider_cost_ticks BIGINT NULL,
+    metering_evidence JSONB NULL,
     model_finish_reason VARCHAR(32) NULL,
     upstream_request_id VARCHAR(255) NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_ai_conversation_generation_payload_id_length CHECK (octet_length(generation_id) = 16),
     CONSTRAINT chk_ai_conversation_generation_payload_reasoning CHECK (reasoning_effort BETWEEN 1 AND 5),
+    CONSTRAINT chk_ai_conversation_generation_payload_metering_basis CHECK (metering_basis IN (0, 1)),
     CONSTRAINT chk_ai_conversation_generation_payload_message_id CHECK (
         conversation_message_id IS NULL OR conversation_message_id > 0),
     CONSTRAINT chk_ai_conversation_generation_payload_ephemeral_ordinal CHECK (
@@ -30,7 +34,18 @@ CREATE TABLE IF NOT EXISTS ai_conversation_generation_payload (
         COALESCE(prompt_tokens, 0) >= 0
         AND COALESCE(completion_tokens, 0) >= 0
         AND COALESCE(cached_prompt_tokens, 0) >= 0
-        AND COALESCE(reasoning_tokens, 0) >= 0)
+        AND COALESCE(reasoning_tokens, 0) >= 0),
+    CONSTRAINT chk_ai_conversation_generation_payload_provider_cost CHECK (
+        provider_cost_ticks IS NULL OR provider_cost_ticks >= 0),
+    CONSTRAINT chk_ai_conversation_generation_payload_metering_fields CHECK (
+        (metering_basis = 0
+            AND provider_cost_ticks IS NULL
+            AND metering_evidence IS NULL)
+        OR (metering_basis = 1
+            AND prompt_tokens IS NULL
+            AND completion_tokens IS NULL
+            AND cached_prompt_tokens IS NULL
+            AND reasoning_tokens IS NULL))
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_generation_payload_message
@@ -44,9 +59,11 @@ COMMENT ON COLUMN ai_conversation_generation_payload.generation_id IS
 COMMENT ON COLUMN ai_conversation_generation_payload.input_text IS
     '经过业务校验的用户输入文字；只有附件没有文字时保存空字符串';
 COMMENT ON COLUMN ai_conversation_generation_payload.input_attachments IS
-    '经过业务校验的输入附件 JSONB 数组；Worker 恢复任务时读取，不在 RabbitMQ 消息中传输正文';
+    'schemaVersion=4 的输入快照 JSONB，冻结附件、图片参数与联网模式；Worker 恢复任务时读取，不在 RabbitMQ 中传输正文';
 COMMENT ON COLUMN ai_conversation_generation_payload.reasoning_effort IS
     '本次模型生成采用的推理强度代码，合法范围为 1 至 5';
+COMMENT ON COLUMN ai_conversation_generation_payload.metering_basis IS
+    '任务创建时冻结的计量依据：0=TOKEN，1=PROVIDER_COST_TICKS';
 COMMENT ON COLUMN ai_conversation_generation_payload.assistant_text IS
     'Generation 取得唯一终态时冻结的助手回答文字；流式生成过程中不逐片写入本字段';
 COMMENT ON COLUMN ai_conversation_generation_payload.assistant_attachments IS
@@ -65,6 +82,10 @@ COMMENT ON COLUMN ai_conversation_generation_payload.cached_prompt_tokens IS
     '上游 Prompt Cache 命中的输入 Token 数，是 prompt_tokens 的子集';
 COMMENT ON COLUMN ai_conversation_generation_payload.reasoning_tokens IS
     '上游报告的推理 Token 数；供应商已经将其包含在 completion_tokens 中时不得重复计费';
+COMMENT ON COLUMN ai_conversation_generation_payload.provider_cost_ticks IS
+    '所有成功图片成本证据完整时汇总的供应商美元成本 ticks；待对账时为空';
+COMMENT ON COLUMN ai_conversation_generation_payload.metering_evidence IS
+    'schemaVersion=1 的限长安全计量证据，只保存输出序号、状态、安全请求 ID 和十进制成本字符串';
 COMMENT ON COLUMN ai_conversation_generation_payload.model_finish_reason IS
     '上游模型返回的完成原因；用于正常完成、取消和异常终态的结算证据';
 COMMENT ON COLUMN ai_conversation_generation_payload.upstream_request_id IS

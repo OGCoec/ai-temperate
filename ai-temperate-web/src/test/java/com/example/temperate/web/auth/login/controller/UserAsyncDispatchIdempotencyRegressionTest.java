@@ -30,6 +30,7 @@ import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationInterceptor;
+import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
@@ -150,7 +151,9 @@ class UserAsyncDispatchIdempotencyRegressionTest {
         when(properties.mode()).thenReturn(NetworkRiskMode.ENFORCE);
         when(properties.lookupTimeout()).thenReturn(Duration.ofSeconds(8));
         when(properties.webRtc()).thenReturn(new NetworkRiskProperties.WebRtc(
-                Duration.ofSeconds(15),
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(12),
+                Duration.ofSeconds(3),
                 List.of(URI.create("stun:stun.cloudflare.com:3478")),
                 8,
                 ""));
@@ -215,7 +218,8 @@ class UserAsyncDispatchIdempotencyRegressionTest {
                         webRtcService,
                         contextResolver,
                         new ObjectMapper(),
-                        new WebRtcMetrics(new SimpleMeterRegistry()));
+                        new WebRtcMetrics(new SimpleMeterRegistry()),
+                        new WebRtcVerificationTransport());
 
         DelayedUserController controller = new DelayedUserController();
         MockMvc mockMvc = MockMvcBuilders

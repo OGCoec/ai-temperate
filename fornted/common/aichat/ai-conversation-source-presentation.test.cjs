@@ -30,6 +30,21 @@ function source(overrides = {}) {
 	}
 }
 
+function parenthesizedDomainAst(visibleDomain, href) {
+	return {
+		type: 'document',
+		children: [{
+			type: 'paragraph',
+			children: [
+				{ type: 'text', value: 'Reference (' },
+				{ type: 'link', safe: true, href,
+					children: [{ type: 'text', value: visibleDomain }] },
+				{ type: 'text', value: ') remains available.' }
+			]
+		}]
+	}
+}
+
 test('normalizes safe sources and derives the hostname from the source URL', () => {
 	const api = loadModule()
 	const value = api.normalizeAiConversationSource(source())
@@ -139,6 +154,55 @@ test('uses a safe parenthesized Markdown domain link when no SSE source matches'
 	assert.equal(link.source.url,
 		'https://threejs.org/docs/#manual/en/introduction/Creating-a-scene')
 	assert.equal(decorated.children[0].children[2].value, ' remains available.')
+})
+
+test('treats one leading www label as equivalent for parenthesized domain links', () => {
+	const api = loadModule()
+	const rabbitMqUrl =
+		'https://www.rabbitmq.com/docs/3.13/queues?utm_source=openai'
+	const rabbitMqAst = parenthesizedDomainAst('rabbitmq.com', rabbitMqUrl)
+	const decoratedRabbitMq = api.decorateAiMarkdownSources(rabbitMqAst, [])
+	const rabbitMqLink = decoratedRabbitMq.children[0].children[1]
+
+	assert.equal(rabbitMqAst.children[0].children[0].value, 'Reference (')
+	assert.equal(rabbitMqAst.children[0].children[1].source, undefined)
+	assert.equal(decoratedRabbitMq.children[0].children[0].value, 'Reference ')
+	assert.equal(rabbitMqLink.source.domain, 'www.rabbitmq.com')
+	assert.equal(rabbitMqLink.source.url, rabbitMqUrl)
+	assert.equal(decoratedRabbitMq.children[0].children[2].value,
+		' remains available.')
+
+	for (const candidate of [
+		{ visibleDomain: 'www.rabbitmq.com',
+			href: 'https://rabbitmq.com/docs/queues', expectedDomain: 'rabbitmq.com' },
+		{ visibleDomain: 'rabbitmq.com.',
+			href: 'https://www.rabbitmq.com/docs/queues', expectedDomain: 'www.rabbitmq.com' },
+		{ visibleDomain: 'WWW.RabbitMQ.COM',
+			href: 'https://rabbitmq.com/docs/queues', expectedDomain: 'rabbitmq.com' }
+	]) {
+		const decorated = api.decorateAiMarkdownSources(
+			parenthesizedDomainAst(candidate.visibleDomain, candidate.href), [])
+		assert.equal(decorated.children[0].children[1].source?.domain,
+			candidate.expectedDomain)
+	}
+})
+
+test('does not collapse arbitrary or deceptive subdomains into source chips', () => {
+	const api = loadModule()
+	for (const candidate of [
+		{ visibleDomain: 'apache.org', href: 'https://kafka.apache.org/documentation' },
+		{ visibleDomain: 'rabbitmq.com',
+			href: 'https://www.rabbitmq.com.evil.example/docs' },
+		{ visibleDomain: 'rabbitmq.com', href: 'https://www2.rabbitmq.com/docs' },
+		{ visibleDomain: 'RabbitMQ documentation', href: 'https://www.rabbitmq.com/docs' }
+	]) {
+		const decorated = api.decorateAiMarkdownSources(
+			parenthesizedDomainAst(candidate.visibleDomain, candidate.href), [])
+		assert.equal(decorated.children[0].children[1].source, undefined)
+		assert.equal(decorated.children[0].children[0].value, 'Reference (')
+		assert.equal(decorated.children[0].children[2].value,
+			') remains available.')
+	}
 })
 
 test('preserves ordinary parentheses, code, unmatched links, and citations with extra wrapper content', () => {
