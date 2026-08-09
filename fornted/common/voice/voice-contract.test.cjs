@@ -14,10 +14,12 @@ test('H5 permits only self microphone access and explicit secure voice sockets',
 
 	assert.match(headers, /microphone=\(self\)/)
 	assert.match(connectSource, /wss:\/\/localhost:6655/)
-	assert.match(connectSource, /wss:\/\/api\.niko000o\.site/)
+	assert.match(connectSource, /wss:\/\/niko000o\.site/)
+	assert.doesNotMatch(connectSource, /wss:\/\/api\.niko000o\.site/)
 	assert.doesNotMatch(connectSource, /(?:^|\s)ws:\/\//)
 	const ticketApi = read('common/voice/voice-ticket-api.js')
-	assert.match(ticketApi, /wss:\/\/api\.niko000o\.site\/ws\/voice/)
+	assert.match(ticketApi, /wss:\/\/\$\{window\.location\.host\}\/ws\/voice/)
+	assert.doesNotMatch(ticketApi, /wss:\/\/api\.niko000o\.site\/ws\/voice/)
 })
 
 test('Android declares record permission and streams AudioRecord bytes without Base64', () => {

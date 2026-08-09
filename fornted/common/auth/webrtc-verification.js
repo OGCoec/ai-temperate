@@ -1,14 +1,20 @@
 import {
 	WEBRTC_DEFAULT_TIMEOUT_MILLIS,
-	collectBrowserWebRtcIps,
 	isWebRtcFailureCode,
 	isWebRtcRetryCode,
 	webRtcErrorFromResponse,
 	webRtcTriggerFromHeaders
 } from '@shared-auth/webrtc-verification-core.js'
+// #ifdef H5
 import {
-	collectAndroidWebRtcIpsInBackground
-} from '@shared-auth/android-webrtc-background-probe.js'
+	collectH5VerificationIps
+} from './webrtc-verification-h5.js'
+// #endif
+// #ifdef APP-PLUS
+import {
+	collectAndroidVerificationIps
+} from './webrtc-verification-android.js'
+// #endif
 import { AUTH_API_BASE_URL, clientPlatform } from './config.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import { currentPreAuthToken } from './pre-auth.js'
@@ -31,7 +37,11 @@ export function invalidateWebRtcVerification() {
 	latestFailure = null
 }
 
-export function observeWebRtcVerificationHeaders(headers = {}) {
+export function observeAndroidWebRtcVerificationHeaders(headers = {}) {
+	// #ifndef APP-PLUS
+	return false
+	// #endif
+	// #ifdef APP-PLUS
 	const trigger = webRtcTriggerFromHeaders(headers)
 	if (!trigger) return false
 	const generation = trigger.generation
@@ -45,20 +55,39 @@ export function observeWebRtcVerificationHeaders(headers = {}) {
 	verifiedInMemory = false
 	if (trigger.state === 'REQUIRED' || trigger.state === 'PENDING') {
 		setTimeout(() => {
-			void startWebRtcVerificationInBackground(trigger.generation)
+			void startPlatformWebRtcVerification(trigger.generation)
 				.catch(error => {
 					if (isWebRtcFailureCode(error?.code)) presentWebRtcFailure(error)
 				})
 		}, 0)
 	}
 	return true
+	// #endif
 }
 
 export function currentWebRtcFailure() {
 	return latestFailure ? { ...latestFailure, webRtcIps: [...latestFailure.webRtcIps] } : null
 }
 
-export function startWebRtcVerificationInBackground(expectedGeneration = '') {
+export function ensureH5WebRtcVerified() {
+	// #ifdef H5
+	return startPlatformWebRtcVerification()
+	// #endif
+	// #ifndef H5
+	return Promise.resolve(ignoredResult())
+	// #endif
+}
+
+export function startAndroidWebRtcVerificationInBackground(expectedGeneration = '') {
+	// #ifdef APP-PLUS
+	return startPlatformWebRtcVerification(expectedGeneration)
+	// #endif
+	// #ifndef APP-PLUS
+	return Promise.resolve(ignoredResult())
+	// #endif
+}
+
+function startPlatformWebRtcVerification(expectedGeneration = '') {
 	if (verifiedInMemory && !expectedGeneration) {
 		return Promise.resolve({ verificationState: 'VERIFIED', webRtcStatus: true })
 	}
@@ -88,7 +117,7 @@ export function startWebRtcVerificationInBackground(expectedGeneration = '') {
 					&& latestGeneration
 					&& compareGeneration(completedGeneration, latestGeneration) !== 0) {
 					setTimeout(() => {
-						void startWebRtcVerificationInBackground(latestGeneration)
+						void startPlatformWebRtcVerification(latestGeneration)
 							.catch(() => {})
 					}, 0)
 				}
@@ -96,11 +125,6 @@ export function startWebRtcVerificationInBackground(expectedGeneration = '') {
 		verificationTasks.set(key, task)
 	}
 	return verificationTasks.get(key)
-}
-
-export function ensureWebRtcVerified() {
-	return startWebRtcVerificationInBackground(
-		latestGeneration)
 }
 
 export async function refreshWebRtcFailure() {
@@ -113,7 +137,7 @@ export async function refreshWebRtcFailure() {
 	}
 	if (state === 'PENDING') {
 		latestFailure = null
-		await startWebRtcVerificationInBackground(String(start.probeGeneration || ''))
+		await startPlatformWebRtcVerification(String(start.probeGeneration || ''))
 		return null
 	}
 	latestFailure = failureFromPayload(start)
@@ -165,15 +189,11 @@ async function verify(attempt, allowGenerationRefresh) {
 			boundedTimeout(start?.timeoutMillis),
 			Math.max(1, remainingMillis - reportGraceMillis))
 		const deadlineAt = Date.now() + remainingMillis
-		const webRtcIps = clientPlatform() === 'ANDROID'
-			? await collectAndroidWebRtcIpsInBackground({
-				attemptId: `${activeAttempt.epoch}:${generation}`,
-				webviewId: 'ait-user-webrtc',
-				resourcePath: '/hybrid/html/webrtc-probe.html',
-				stunUrls: start?.stunUrls,
-				timeoutMillis: probeMillis
-			})
-			: await collectBrowserWebRtcIps(start?.stunUrls, probeMillis)
+		const webRtcIps = await collectPlatformVerificationIps({
+			attemptId: `${activeAttempt.epoch}:${generation}`,
+			stunUrls: start?.stunUrls,
+			timeoutMillis: probeMillis
+		})
 		if (!isAttemptActive(activeAttempt)) return ignoredResult()
 		const report = await submitReport(
 			start?.reportPath || '/api/_edge/webrtc/report',
@@ -196,6 +216,16 @@ async function verify(attempt, allowGenerationRefresh) {
 		}
 		throw error
 	}
+}
+
+function collectPlatformVerificationIps(options) {
+	// #ifdef H5
+	return collectH5VerificationIps(options)
+	// #endif
+	// #ifdef APP-PLUS
+	return collectAndroidVerificationIps(options)
+	// #endif
+	return Promise.resolve([])
 }
 
 async function submitReport(path, data, deadlineAt) {

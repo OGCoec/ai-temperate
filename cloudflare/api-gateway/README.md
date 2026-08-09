@@ -1,7 +1,8 @@
 # AI Temperate API Gateway
 
-该 Worker 为 `niko000o.site` 和 `admin.niko000o.site` 提供同源 `/api` 入口，并把允许的
-请求原路径转发到 `https://api.niko000o.site`。
+该 Worker 为 `niko000o.site` 和 `admin.niko000o.site` 提供同源 `/api` 入口，同时为普通
+H5 提供精确的 `/ws/voice` WebSocket 入口，并把允许的请求原路径转发到
+`https://api.niko000o.site`。
 
 部署前必须把同一份至少 32 字节随机密钥的规范 Base64 值分别保存为：
 
@@ -56,6 +57,13 @@ Spring Boot 首次部署使用 `EDGE_PROXY_MODE=OPTIONAL`；两个前端和正�
 `/api/admin/mail-inspection/jobs/{22字符jobId}/events`。Worker 不读取完整响应体，
 直接流式转发 Origin 的 `text/event-stream`，透传 `Last-Event-ID`、`X-Trace-Id`，
 并把客户端取消信号传播到 Origin。响应固定禁止浏览器和 CDN 缓存及转换。
+
+语音 WebSocket 只允许根域名的精确 `/ws/voice` 路径。Worker 校验 GET Upgrade 后，删除
+Cookie、Authorization 和客户端伪造的边缘头，为握手生成同一套 v2 HMAC，再向
+`https://api.niko000o.site/ws/voice` 发起上游 Upgrade。上游必须返回不携带 Set-Cookie 的
+101 WebSocket 响应；Worker 直接返回运行时 WebSocket 对象，不读取音频帧或转写内容。
+生产发布顺序固定为 Worker、H5、后端 `/ws/voice` REQUIRED 验签收口，避免旧 H5 在切换前
+被直接连接禁令阻断。Android 无 Origin 直连仍由连接后的单次语音票据保护。
 
 `SSE_ROUTE_LOG_SAMPLE_RATE` 只控制低比例入口诊断日志。日志仅包含固定路由模板、
 HTTP 状态和有界 `CF-Ray`，禁止记录真实 Job ID、Cookie、Authorization 或请求头。

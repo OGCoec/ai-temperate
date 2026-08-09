@@ -67,7 +67,9 @@ test('multi image controls use capability checks, one downstream stream and boun
 	assert.match(image, /capabilities\.has\('IMAGE_GENERATION'\)[\s\S]*capabilities\.has\('IMAGE_EDIT'\)/)
 	assert.doesNotMatch(image, /gpt-image-2|gpt-image-1\.5/)
 	assert.match(page, /数量 · \{\{ selectedImageOutputCount \}\}/)
-	assert.match(page, /createImageOutputSlots\(requestedImageCount\)/)
+	assert.doesNotMatch(page, /createImageOutputSlots\(requestedImageCount\)/)
+	assert.match(page, /generatedImageGallery\(message\)/)
+	assert.match(page, /imagePresentationOrder:\s*\[\]/)
 	assert.match(page, /imageGenerationRequest\([\s\S]{0,180}requestedImageCount/)
 	assert.match(dialog, /maxlength="2"/)
 	assert.match(dialog, /parseImageOutputCount/)
@@ -79,31 +81,21 @@ test('multi image controls use capability checks, one downstream stream and boun
 	assert.equal((stream.match(/openGenerationOnce\(/g) || []).length >= 1, true)
 })
 
-test('generated response images use responsive 720px by 1080px bounds without changing uploaded media thumbnails', () => {
+test('generated response images use a completion-ordered mosaic without changing uploaded media thumbnails', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(page,
 		/message\.contentAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
-	assert.match(page,
-		/message\.responseAttachments\?\.length[\s\S]{0,1400}<image[^>]*class="attachment-image generated-response-image"[^>]*:style="generatedResponseImageStyle\(attachment\)"[^>]*@load="handleGeneratedResponseImageLoad\(attachment, \$event\)"[^>]*mode="widthFix"/)
+	assert.match(page, /generated-image-gallery-wrap/)
+	assert.match(page, /generatedImageGallery\(message\)\.visibleItems/)
+	assert.match(page, /generatedImageGallery\(message\)\.hiddenCount/)
+	assert.match(page, /generated-image-progress/)
+	assert.match(page, /class="generated-image-gallery-image"/)
 	assert.match(page, /\.attachment-image\s*\{[^}]*height:\s*180px/)
-	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*=\s*720/)
-	assert.match(page, /GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX\s*=\s*1080/)
-	assert.match(page, /GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO\s*=\s*0\.7/)
-	assert.match(page,
-		/Math\.min\(\s*GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX,\s*validViewportHeight\s*\*\s*GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO\s*\)/)
-	assert.match(page,
-		/Math\.min\(\s*1,\s*GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX\s*\/\s*naturalWidth,\s*maximumHeight\s*\/\s*naturalHeight\s*\)/)
-	assert.match(page, /Math\.max\(1,\s*Math\.floor\(naturalWidth\s*\*\s*scale\)\)/)
-	assert.match(page, /uni\.onWindowResize\(this\.generatedResponseImageResizeListener\)/)
-	assert.match(page, /uni\.offWindowResize\(this\.generatedResponseImageResizeListener\)/)
-	assert.match(page, /event\?\.detail\?\.width[\s\S]*event\?\.detail\?\.height/)
-	assert.match(page, /delete remainingSizes\[key\]/)
-	assert.match(page, /width:\s*'100%'/)
-	assert.match(page,
-		/\.attachment-image\.generated-response-image\s*\{[^}]*max-width:\s*100%[^}]*height:\s*auto[^}]*margin:\s*0 auto[^}]*display:\s*block[^}]*\}/)
-	assert.doesNotMatch(page,
-		/\.attachment-image\.generated-response-image\s*\{\s*(?:width:\s*100%|[^}]*;\s*width:\s*100%)/)
+	assert.match(page, /\.generated-image-gallery\.is-hero-two/)
+	assert.match(page, /\.generated-image-gallery\.is-hero-three/)
+	assert.match(page, /\.generated-image-gallery-overflow/)
+	assert.match(page, /@keyframes generated-image-gallery-exit/)
 })
 
 test('desktop chat uses one primary sidebar with new chat before navigation and recent after it', () => {

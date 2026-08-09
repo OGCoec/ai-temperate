@@ -43,6 +43,113 @@ class EdgeProxySignatureFilterTest {
     }
 
     @Test
+    void requiredModeRejectsUnsignedBrowserWebSocketUpgrade() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.addHeader("Origin", "https://niko000o.site");
+        request.addHeader("Upgrade", "websocket");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString())
+                .contains("EDGE_PROXY_SIGNATURE_INVALID");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void requiredModeAllowsSignedBrowserWebSocketUpgrade() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.setRequestURI("/ws/voice");
+        request.addHeader("Origin", "https://niko000o.site");
+        request.addHeader("Upgrade", "websocket");
+        addSignature(request, "niko000o.site");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(
+                TrustedExternalHostResolver.VERIFIED_EXTERNAL_HOST_ATTRIBUTE))
+                .isEqualTo("niko000o.site");
+    }
+
+    @Test
+    void optionalModeRejectsIncompleteWebSocketEdgeHeaders() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.addHeader("Origin", "https://niko000o.site");
+        request.addHeader("Upgrade", "websocket");
+        request.addHeader(
+                EdgeProxySignatureVerifier.EXTERNAL_HOST_HEADER,
+                "niko000o.site");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void requiredModeRejectsForgedWebSocketSignature() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.setRequestURI("/ws/voice");
+        request.addHeader("Origin", "https://niko000o.site");
+        request.addHeader("Upgrade", "websocket");
+        addSignature(request, "niko000o.site");
+        request.removeHeader(EdgeProxySignatureVerifier.SIGNATURE_HEADER);
+        request.addHeader(EdgeProxySignatureVerifier.SIGNATURE_HEADER, "forged");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void optionalModeAllowsUnsignedBrowserWebSocketDuringCutover() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.addHeader("Origin", "https://niko000o.site");
+        request.addHeader("Upgrade", "websocket");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+    }
+
+    @Test
+    void requiredModeAllowsUnsignedNativeWebSocketWithoutOrigin() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        request.addHeader("Upgrade", "websocket");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+    }
+
+    @Test
     void requiredModeAllowsUnsignedNativeRequestWithoutOrigin() throws Exception {
         EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
         MockHttpServletRequest request =

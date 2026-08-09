@@ -11,7 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 在 CORS、CSRF 和业务认证之前校验 Cloudflare Worker 的浏览器请求签名。
+ * 在 CORS、CSRF 和业务认证之前校验 Cloudflare Worker 的 API 与语音 WebSocket 浏览器请求签名。
  *
  * <p>REQUIRED 只强制带 Origin 的 H5 请求；没有 Origin 的现有 Android 原生协议保持直连。
  * 任意模式下，只要请求携带部分边缘头，就必须完整验签，避免伪造属性进入后续 Cookie
@@ -27,7 +27,7 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
     private final EdgeProxySignatureVerifier verifier;
 
     /**
-     * 创建只处理 API 请求的边缘签名过滤器。
+     * 创建只处理 API 与公开语音 WebSocket Upgrade 请求的边缘签名过滤器。
      *
      * @param properties 边缘代理模式配置
      * @param verifier 请求级签名验签器
@@ -42,8 +42,11 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String uri = request.getRequestURI();
+        // 只把公开语音握手的精确路径纳入边缘边界，避免未来新增的内部 /ws 路径被意外暴露或改变认证语义。
         return uri == null
-                || !(uri.equals("/api") || uri.startsWith("/api/"));
+                || !(uri.equals("/api")
+                        || uri.startsWith("/api/")
+                        || uri.equals("/ws/voice"));
     }
 
     @Override

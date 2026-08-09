@@ -5,8 +5,9 @@ import java.util.regex.Pattern;
 /**
  * 保存验证码供应商允许进入诊断日志的有限响应元数据，并在对象边界统一执行长度与字符白名单校验。
  *
- * <p>该类型不接收原始响应体、错误消息或请求对象；任何空值、超长值或含非诊断字符的字符串都会被
- * 归一化为 {@code unavailable}，避免供应商返回内容把个人信息或控制字符带入日志。</p>
+ * <p>该类型不接收原始响应体、错误描述或请求对象；OAuth 只允许保留机器错误、数字错误码和固定失败原因。
+ * 任何空值、超长值或含非诊断字符的字符串都会被归一化为 {@code unavailable}，避免供应商返回内容把个人信息
+ * 或控制字符带入日志。</p>
  */
 public record VerificationDeliveryProviderMetadata(
         Integer httpStatus,
@@ -23,7 +24,10 @@ public record VerificationDeliveryProviderMetadata(
         RecommendedAction recommendedAction,
         Boolean explicitFrom,
         Boolean authRefreshAttempted,
-        Long retryAfterSeconds) {
+        Long retryAfterSeconds,
+        String oauthError,
+        String oauthErrorCodes,
+        String oauthFailureReason) {
 
     private static final int MAX_DIAGNOSTIC_LENGTH = 128;
     private static final long MAX_RETRY_AFTER_SECONDS = 86_400L;
@@ -38,6 +42,49 @@ public record VerificationDeliveryProviderMetadata(
         requestId = sanitizeDiagnosticValue(requestId);
         exceptionClass = sanitizeDiagnosticValue(exceptionClass);
         retryAfterSeconds = normalizeRetryAfterSeconds(retryAfterSeconds);
+        oauthError = sanitizeDiagnosticValue(oauthError);
+        oauthErrorCodes = sanitizeDiagnosticValue(oauthErrorCodes);
+        oauthFailureReason = sanitizeDiagnosticValue(oauthFailureReason);
+    }
+
+    /**
+     * 保留原有十五参数构造方式，使 OAuth 专用诊断字段只由令牌端点适配器显式提供。
+     */
+    public VerificationDeliveryProviderMetadata(
+            Integer httpStatus,
+            String providerCode,
+            String providerStatus,
+            Boolean providerSuccess,
+            String requestId,
+            String exceptionClass,
+            Operation operation,
+            Endpoint endpoint,
+            FailureStage failureStage,
+            FailureCategory failureCategory,
+            FailureHint failureHint,
+            RecommendedAction recommendedAction,
+            Boolean explicitFrom,
+            Boolean authRefreshAttempted,
+            Long retryAfterSeconds) {
+        this(
+                httpStatus,
+                providerCode,
+                providerStatus,
+                providerSuccess,
+                requestId,
+                exceptionClass,
+                operation,
+                endpoint,
+                failureStage,
+                failureCategory,
+                failureHint,
+                recommendedAction,
+                explicitFrom,
+                authRefreshAttempted,
+                retryAfterSeconds,
+                null,
+                null,
+                null);
     }
 
     /**
@@ -57,6 +104,9 @@ public record VerificationDeliveryProviderMetadata(
                 providerSuccess,
                 requestId,
                 exceptionClass,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -96,7 +146,10 @@ public record VerificationDeliveryProviderMetadata(
                 recommendedAction,
                 explicitFrom,
                 authRefreshAttempted,
-                retryAfterSeconds);
+                retryAfterSeconds,
+                oauthError,
+                oauthErrorCodes,
+                oauthFailureReason);
     }
 
     /**

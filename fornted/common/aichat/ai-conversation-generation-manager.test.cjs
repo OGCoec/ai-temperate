@@ -89,6 +89,7 @@ test('clears terminal Base64 previews while preserving canonical OSS attachments
 	manager.clearGenerationManager()
 	manager.registerGeneration({ generationPublicId: 'generation-image-terminal' })
 	manager.updateGeneration('generation-image-terminal', {
+		imagePresentationOrder: [3, 0],
 		previewImages: [{
 			outputIndex: 0,
 			url: 'data:image/png;base64,YWJj',
@@ -104,6 +105,7 @@ test('clears terminal Base64 previews while preserving canonical OSS attachments
 
 	const terminal = manager.getGeneration('generation-image-terminal')
 	assert.deepEqual(terminal.previewImages, [])
+	assert.deepEqual(terminal.imagePresentationOrder, [3, 0])
 	assert.equal(
 		terminal.responseAttachments[0].url,
 		'https://oss.example.test/image.png'

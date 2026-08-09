@@ -7,6 +7,7 @@ import com.example.temperate.service.registration.verification.delivery.logging.
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.FailureStage;
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.RecommendedAction;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 
@@ -134,6 +135,19 @@ class MicrosoftGraphFailureClassifierTest {
         assertThat(rejected.recommendedAction())
                 .isEqualTo(RecommendedAction.REAUTHORIZE_OR_VERIFY_CLIENT_CREDENTIALS);
         assertThat(throttled.failureCategory()).isEqualTo(FailureCategory.THROTTLED);
+    }
+
+    @Test
+    void mapsMicrosoftOauthMachineCodeToSafeFailureReason() {
+        assertThat(MicrosoftGraphFailureClassifier.oauthFailureReason(
+                        "invalid_grant", List.of(700084)))
+                .isEqualTo("spa_refresh_token_expired");
+        assertThat(MicrosoftGraphFailureClassifier.oauthFailureReason(
+                        "invalid_client", List.of(70002)))
+                .isEqualTo("client_secret_invalid");
+        assertThat(MicrosoftGraphFailureClassifier.oauthFailureReason(
+                        "invalid_grant", List.of()))
+                .isEqualTo("oauth_invalid_grant");
     }
 
     private static void assertClassification(

@@ -84,3 +84,16 @@ test('persisted image events update one slot without becoming a terminal event',
 	assert.match(panel, /activeToken\?\.persistedUrl === attachment\.persistedUrl/)
 	assert.doesNotMatch(stream, /image-persisted'[\s\S]{0,160}terminalStatus\s*=/)
 })
+
+test('multi-image presentation records arrival order without prebuilding empty tiles', () => {
+	const stream = source('ai-conversation-stream.js')
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+
+	assert.match(stream, /recordImagePresentationOrder\(/)
+	assert.match(stream, /imagePresentationOrder:\s*\[\]/)
+	assert.match(stream, /previewImages:\s*\[\]/)
+	assert.match(panel, /recordImagePresentationOrder\(/)
+	assert.match(panel, /appendMissingImagePresentationOrder\(/)
+	assert.match(panel, /beginVisibleImageUpgrades\(/)
+	assert.doesNotMatch(panel, /createImageOutputSlots\(requestedImageCount\)/)
+})

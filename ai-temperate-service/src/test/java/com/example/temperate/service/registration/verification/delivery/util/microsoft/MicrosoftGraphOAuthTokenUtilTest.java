@@ -123,6 +123,8 @@ class MicrosoftGraphOAuthTokenUtilTest {
                             .isEqualTo(Operation.REFRESH_ACCESS_TOKEN);
                     assertThat(exception.metadata().failureStage())
                             .isEqualTo(FailureStage.TIMEOUT);
+                    assertThat(exception.metadata().oauthFailureReason())
+                            .isEqualTo("unavailable");
                 })
                 .verify();
     }
@@ -179,6 +181,55 @@ class MicrosoftGraphOAuthTokenUtilTest {
                     assertThat(exception.metadata().toString())
                             .doesNotContain("refresh_token")
                             .doesNotContain("sender@example.test");
+                });
+    }
+
+    @Test
+    void oauthMachineErrorFieldsReachSafeFailureMetadata() {
+        MicrosoftGraphOAuthTokenUtil util = new MicrosoftGraphOAuthTokenUtil(
+                properties(),
+                new MutableClock(NOW),
+                request -> Mono.error(new MicrosoftGraphOAuthResponseException(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "invalid_grant",
+                        List.of(700084),
+                        "request-700084",
+                        null)));
+
+        assertThatThrownBy(() -> util.accessToken().block())
+                .isInstanceOfSatisfying(VerificationDeliveryException.class, exception -> {
+                    assertThat(exception.metadata().oauthError())
+                            .isEqualTo("invalid_grant");
+                    assertThat(exception.metadata().oauthErrorCodes())
+                            .isEqualTo("700084");
+                    assertThat(exception.metadata().oauthFailureReason())
+                            .isEqualTo("spa_refresh_token_expired");
+                    assertThat(exception.metadata().requestId())
+                            .isEqualTo("request-700084");
+                    assertThat(exception.metadata().toString())
+                            .doesNotContain("refresh-1")
+                            .doesNotContain("client-secret");
+                });
+    }
+
+    @Test
+    void sevenDigitMicrosoftOauthCodeIsPreservedForSafeClassification() {
+        MicrosoftGraphOAuthTokenUtil util = new MicrosoftGraphOAuthTokenUtil(
+                properties(),
+                new MutableClock(NOW),
+                request -> Mono.error(new MicrosoftGraphOAuthResponseException(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "invalid_client",
+                        List.of(7000215),
+                        "request-7000215",
+                        null)));
+
+        assertThatThrownBy(() -> util.accessToken().block())
+                .isInstanceOfSatisfying(VerificationDeliveryException.class, exception -> {
+                    assertThat(exception.metadata().oauthErrorCodes())
+                            .isEqualTo("7000215");
+                    assertThat(exception.metadata().oauthFailureReason())
+                            .isEqualTo("client_secret_invalid");
                 });
     }
 

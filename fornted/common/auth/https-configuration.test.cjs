@@ -45,7 +45,9 @@ test('ordinary H5 CSP uses self for API connections', () => {
 	assert.ok(scriptSource, '普通用户页面必须声明 script-src CSP')
 	assert.match(connectSource, /'self'/)
 	assert.match(connectSource, /https:\/\/localhost:6655/)
+	assert.match(connectSource, /wss:\/\/niko000o\.site/)
 	assert.doesNotMatch(connectSource, /https:\/\/api\.niko000o\.site/)
+	assert.doesNotMatch(connectSource, /wss:\/\/api\.niko000o\.site/)
 	assert.doesNotMatch(scriptSource, /'unsafe-inline'/)
 })
 

@@ -206,7 +206,8 @@ public final class VerificationDeliveryLoggingAspect {
                         + "httpStatus={} providerCode={} providerStatus={} providerSuccess={} "
                         + "operation={} endpoint={} failureStage={} failureCategory={} "
                         + "failureHint={} recommendedAction={} explicitFrom={} "
-                        + "authRefreshAttempted={} retryAfterSeconds={} "
+                        + "authRefreshAttempted={} retryAfterSeconds={} oauthError={} "
+                        + "oauthErrorCodes={} oauthFailureReason={} "
                         + "requestId={} exceptionClass={} providerMessageId={} safeReason={} "
                         + "retryable={} traceId={} messageId={} flow={} channel={} deliveryMethod={} "
                         + "purpose={} attemptNo={} maxAttempts={}",
@@ -225,6 +226,9 @@ public final class VerificationDeliveryLoggingAspect {
                 valueOrUnavailable(metadata.explicitFrom()),
                 valueOrUnavailable(metadata.authRefreshAttempted()),
                 valueOrUnavailable(metadata.retryAfterSeconds()),
+                metadata.oauthError(),
+                metadata.oauthErrorCodes(),
+                metadata.oauthFailureReason(),
                 metadata.requestId(),
                 metadata.exceptionClass(),
                 providerMessageId,

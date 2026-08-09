@@ -4,16 +4,21 @@ import com.example.temperate.service.registration.verification.delivery.exceptio
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata;
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.Endpoint;
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.Operation;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
@@ -56,8 +61,7 @@ public final class MicrosoftGraphOAuthTokenUtil
                             .uri(properties.tokenUri())
                             .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                             .body(BodyInserters.fromFormData(form))
-                            .retrieve()
-                            .bodyToMono(MicrosoftGraphTokenResponse.class);
+                            .exchangeToMono(MicrosoftGraphOAuthTokenUtil::safeResponse);
                 });
     }
 
@@ -153,6 +157,16 @@ public final class MicrosoftGraphOAuthTokenUtil
         if (failure instanceof VerificationDeliveryException) {
             return failure;
         }
+        if (failure instanceof MicrosoftGraphOAuthResponseException responseException) {
+            int status = responseException.httpStatus();
+            boolean retryable = status == 408 || status == 429 || status >= 500;
+            return new VerificationDeliveryException(
+                    retryable,
+                    PROVIDER,
+                    "microsoft_oauth_http_error",
+                    failureMetadata(status, responseException),
+                    null);
+        }
         if (failure instanceof WebClientResponseException responseException) {
             int status = responseException.getStatusCode().value();
             boolean retryable = status == 408
@@ -175,6 +189,8 @@ public final class MicrosoftGraphOAuthTokenUtil
 
     private static VerificationDeliveryProviderMetadata failureMetadata(
             Integer httpStatus, Throwable failure) {
+        String oauthError = oauthError(failure);
+        List<Integer> oauthErrorCodes = oauthErrorCodes(failure);
         MicrosoftGraphFailureClassifier.Classification classification =
                 MicrosoftGraphFailureClassifier.classifyOAuth(httpStatus, failure);
         return new VerificationDeliveryProviderMetadata(
@@ -192,10 +208,58 @@ public final class MicrosoftGraphOAuthTokenUtil
                 classification.recommendedAction(),
                 null,
                 true,
-                retryAfterSeconds(failure));
+                retryAfterSeconds(failure),
+                oauthError,
+                oauthErrorCodesValue(oauthErrorCodes),
+                oauthFailureReason(oauthError, oauthErrorCodes));
+    }
+
+    private static String oauthFailureReason(String oauthError, List<Integer> oauthErrorCodes) {
+        // 网络超时和连接失败没有 OAuth 机器码，不能把它们误判成微软主动拒绝令牌。
+        if (oauthError == null && (oauthErrorCodes == null || oauthErrorCodes.isEmpty())) {
+            return null;
+        }
+        return MicrosoftGraphFailureClassifier.oauthFailureReason(oauthError, oauthErrorCodes);
+    }
+
+    private static Mono<MicrosoftGraphTokenResponse> safeResponse(ClientResponse response) {
+        int httpStatus = response.statusCode().value();
+        HttpHeaders headers = response.headers().asHttpHeaders();
+        String requestId = headers.getFirst("request-id");
+        Long retryAfterSeconds = numericRetryAfter(
+                headers.getFirst(HttpHeaders.RETRY_AFTER));
+        if (response.statusCode().is2xxSuccessful()) {
+            return response.bodyToMono(MicrosoftGraphTokenResponse.class);
+        }
+        // 错误响应只绑定稳定机器字段，error_description 与原始正文不会进入对象、异常或日志。
+        MicrosoftGraphOAuthErrorPayload empty =
+                new MicrosoftGraphOAuthErrorPayload(null, List.of());
+        return response.bodyToMono(MicrosoftGraphOAuthErrorPayload.class)
+                .defaultIfEmpty(empty)
+                .onErrorReturn(empty)
+                .flatMap(payload -> Mono.error(new MicrosoftGraphOAuthResponseException(
+                        httpStatus,
+                        payload.error(),
+                        payload.errorCodes(),
+                        requestId,
+                        retryAfterSeconds)));
+    }
+
+    private static Long numericRetryAfter(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static Long retryAfterSeconds(Throwable failure) {
+        if (failure instanceof MicrosoftGraphOAuthResponseException responseException) {
+            return responseException.retryAfterSeconds();
+        }
         String value = responseHeader(failure, "Retry-After");
         if (value == null) {
             return null;
@@ -209,10 +273,36 @@ public final class MicrosoftGraphOAuthTokenUtil
     }
 
     private static String responseHeader(Throwable failure, String headerName) {
+        if (failure instanceof MicrosoftGraphOAuthResponseException responseException) {
+            return "request-id".equalsIgnoreCase(headerName)
+                    ? responseException.requestId()
+                    : null;
+        }
         if (!(failure instanceof WebClientResponseException responseException)) {
             return null;
         }
         return responseException.getHeaders().getFirst(headerName);
+    }
+
+    private static String oauthError(Throwable failure) {
+        return failure instanceof MicrosoftGraphOAuthResponseException responseException
+                ? responseException.oauthError()
+                : null;
+    }
+
+    private static List<Integer> oauthErrorCodes(Throwable failure) {
+        return failure instanceof MicrosoftGraphOAuthResponseException responseException
+                ? responseException.errorCodes()
+                : List.of();
+    }
+
+    private static String oauthErrorCodesValue(List<Integer> errorCodes) {
+        if (errorCodes == null || errorCodes.isEmpty()) {
+            return null;
+        }
+        return errorCodes.stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining("-"));
     }
 
     /**
@@ -245,6 +335,19 @@ public final class MicrosoftGraphOAuthTokenUtil
         @Override
         public String toString() {
             return "MicrosoftGraphTokenResponse[tokens=protected]";
+        }
+    }
+
+    /**
+     * 只反序列化 Microsoft OAuth 的稳定机器字段，明确忽略 error_description 和其他第三方内容。
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record MicrosoftGraphOAuthErrorPayload(
+            String error,
+            @JsonProperty("error_codes") List<Integer> errorCodes) {
+
+        private MicrosoftGraphOAuthErrorPayload {
+            errorCodes = errorCodes == null ? List.of() : List.copyOf(errorCodes);
         }
     }
 

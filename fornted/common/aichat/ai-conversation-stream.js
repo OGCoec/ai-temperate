@@ -9,7 +9,6 @@ import { reportAiConversationStreamDiagnostics } from './ai-conversation-stream-
 import { createAiConversationLifecycleDiagnostics } from './ai-conversation-lifecycle-diagnostics.js'
 import {
 	imagePreviewAttachment,
-	createImageOutputSlots,
 	failImageOutputAttachment,
 	mergeCompletedImageOutputs,
 	mergeImagePreviewOutput,
@@ -17,6 +16,10 @@ import {
 	persistedImageOutputAttachment,
 	persistedImageAttachments
 } from './ai-conversation-image-generation.js'
+import {
+	appendMissingImagePresentationOrder,
+	recordImagePresentationOrder
+} from './ai-conversation-image-gallery.js'
 import {
 	initialVideoUploadProgress,
 	mergeMediaUploadProgress
@@ -116,9 +119,9 @@ export async function openAiConversationStream(command, handlers = {}) {
 				localId: command.localId,
 				inputText: command.inputText,
 				requestedImageCount: Number(command.requestedImageCount || 0),
-				previewImages: Number(command.requestedImageCount || 0) > 0
-					? createImageOutputSlots(command.requestedImageCount)
-					: [],
+				requestedImageAspect: String(command.body?.image?.aspect || 'SQUARE'),
+				imagePresentationOrder: [],
+				previewImages: [],
 				status: 'QUEUED'
 			})
 			if (publicHandle) bindGenerationObserver(value, publicHandle)
@@ -145,6 +148,9 @@ export async function openAiConversationStream(command, handlers = {}) {
 						localId: command.localId,
 						inputText: command.inputText,
 						requestedImageCount: Number(command.requestedImageCount || 0),
+						requestedImageAspect: String(command.body?.image?.aspect || 'SQUARE'),
+						imagePresentationOrder: [],
+						previewImages: [],
 						status: 'RUNNING'
 					})
 					if (publicHandle) {
@@ -172,6 +178,8 @@ export async function openAiConversationStream(command, handlers = {}) {
 				if (previewImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
+						imagePresentationOrder: recordImagePresentationOrder(
+							current?.imagePresentationOrder, previewImage),
 						previewImages: mergeImagePreviewOutput(
 							current?.previewImages || [], previewImage)
 					})
@@ -182,6 +190,8 @@ export async function openAiConversationStream(command, handlers = {}) {
 				if (persistedImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
+						imagePresentationOrder: recordImagePresentationOrder(
+							current?.imagePresentationOrder, persistedImage),
 						previewImages: mergePersistedImageOutput(
 							current?.previewImages || [], persistedImage)
 					})
@@ -257,6 +267,8 @@ export async function openAiConversationStream(command, handlers = {}) {
 					persisted,
 					terminalAttachmentEvidenceComplete
 						? requestedImageCount : 0)
+				const imagePresentationOrder = appendMissingImagePresentationOrder(
+					current?.imagePresentationOrder, displayAttachments)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data.terminalType,
 					terminalReason: event.data.terminalReason,
@@ -266,6 +278,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 						terminalAttachmentEvidenceComplete
 							? requestedImageCount : 0),
 					previewImages: displayAttachments,
+					imagePresentationOrder,
 					requestedImageCount,
 					messagePublicId: event.data?.messagePublicId || '',
 					terminalAttachmentEvidenceComplete,
@@ -401,6 +414,8 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 				if (previewImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
+						imagePresentationOrder: recordImagePresentationOrder(
+							current?.imagePresentationOrder, previewImage),
 						previewImages: mergeImagePreviewOutput(
 							current?.previewImages || [], previewImage)
 					})
@@ -411,6 +426,8 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 				if (persistedImage) {
 					const current = getGeneration(generationPublicId)
 					updateGeneration(generationPublicId, {
+						imagePresentationOrder: recordImagePresentationOrder(
+							current?.imagePresentationOrder, persistedImage),
 						previewImages: mergePersistedImageOutput(
 							current?.previewImages || [], persistedImage)
 					})
@@ -484,6 +501,8 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					persisted,
 					terminalAttachmentEvidenceComplete
 						? requestedImageCount : 0)
+				const imagePresentationOrder = appendMissingImagePresentationOrder(
+					current?.imagePresentationOrder, displayAttachments)
 				updateGeneration(generationPublicId, {
 					terminalType: event.data?.terminalType,
 					terminalReason: event.data?.terminalReason,
@@ -493,6 +512,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 						terminalAttachmentEvidenceComplete
 							? requestedImageCount : 0),
 					previewImages: displayAttachments,
+					imagePresentationOrder,
 					requestedImageCount,
 					messagePublicId: event.data?.messagePublicId || '',
 					terminalAttachmentEvidenceComplete,

@@ -46,6 +46,16 @@ function runtime(fetchImpl) {
 	}
 }
 
+function websocketUpgradeResponse(options = {}) {
+	return {
+		status: options.status ?? 101,
+		headers: new Headers(options.headers),
+		webSocket: Object.hasOwn(options, 'webSocket')
+			? options.webSocket
+			: Object.freeze({ kind: 'test-websocket' })
+	}
+}
+
 test('root host forwards only ordinary API paths and preserves path plus query', async () => {
 	let captured
 	const response = await handleRequest(
@@ -693,6 +703,158 @@ test('worker overwrites spoofable proxy headers and signs the exact upstream req
 	assert.equal(captured.headers.get('X-Forwarded-Host'), null)
 	assert.equal(captured.headers.get('Forwarded'), null)
 	assert.equal(captured.headers.get('CF-Connecting-IP'), null)
+})
+
+test('root voice WebSocket is signed and transparently upgraded without credentials', async () => {
+	let captured
+	const upstreamResponse = websocketUpgradeResponse()
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			migrated: false,
+			headers: {
+				Upgrade: 'websocket',
+				Connection: 'Upgrade',
+				Authorization: 'Bearer test-credential',
+				Cookie: `${COOKIE_SCOPE_MARKER_NAME}=1; access_token=test-credential`,
+				'X-AIT-Edge-Host': 'evil.example',
+				'X-AIT-Edge-Signature': 'forged',
+				'X-Forwarded-Host': 'evil.example'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return upstreamResponse
+		})
+	)
+
+	const timestamp = String(Math.floor(NOW / 1000))
+	const canonical = [
+		'v2',
+		'GET',
+		'/ws/voice',
+		'niko000o.site',
+		timestamp,
+		'test-ray-ord',
+		'203.0.113.10',
+		'US',
+		'64500',
+		'41.8781',
+		'-87.6298'
+	].join('\n')
+	const expected = createHmac(
+		'sha256',
+		Buffer.from(ENV.EDGE_PROXY_HMAC_SECRET_BASE64, 'base64')
+	).update(canonical).digest('base64url')
+
+	assert.equal(response, upstreamResponse)
+	assert.equal(captured.url, 'https://api.niko000o.site/ws/voice')
+	assert.equal(captured.method, 'GET')
+	assert.equal(captured.headers.get('Upgrade'), 'websocket')
+	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Authorization'), null)
+	assert.equal(captured.headers.get('X-Forwarded-Host'), null)
+	assert.equal(captured.headers.get('X-AIT-Edge-Host'), 'niko000o.site')
+	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expected)
+})
+
+test('voice WebSocket accepts only the exact path and a GET Upgrade request', async () => {
+	const notGet = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			method: 'POST',
+			headers: { Upgrade: 'websocket' }
+		}),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const missingUpgrade = await handleRequest(
+		request('niko000o.site', '/ws/voice'),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const wrongUpgrade = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			headers: { Upgrade: 'h2c' }
+		}),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+	const forbiddenPaths = await Promise.all([
+		'/ws',
+		'/ws/admin',
+		'/ws/voice/extra'
+	].map(path => handleRequest(
+		request('niko000o.site', path, {
+			headers: { Upgrade: 'websocket' }
+		}),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		}))))
+
+	assert.equal(notGet.status, 405)
+	assert.equal(notGet.headers.get('Allow'), 'GET')
+	assert.equal(missingUpgrade.status, 426)
+	assert.equal(missingUpgrade.headers.get('Upgrade'), 'websocket')
+	assert.equal(wrongUpgrade.status, 426)
+	assert.deepEqual(forbiddenPaths.map(response => response.status), [403, 403, 403])
+})
+
+test('voice WebSocket fails closed when the upstream handshake is unsafe', async () => {
+	const requestOptions = { headers: { Upgrade: 'websocket' } }
+	const unavailable = await handleRequest(
+		request('niko000o.site', '/ws/voice', requestOptions),
+		ENV,
+		runtime(() => {
+			throw new Error('test upstream failure')
+		})
+	)
+	const rejected = await handleRequest(
+		request('niko000o.site', '/ws/voice', requestOptions),
+		ENV,
+		runtime(() => websocketUpgradeResponse({
+			status: 503,
+			webSocket: null
+		}))
+	)
+	const missingSocket = await handleRequest(
+		request('niko000o.site', '/ws/voice', requestOptions),
+		ENV,
+		runtime(() => websocketUpgradeResponse({ webSocket: null }))
+	)
+	const cookie = await handleRequest(
+		request('niko000o.site', '/ws/voice', requestOptions),
+		ENV,
+		runtime(() => websocketUpgradeResponse({
+			headers: {
+				'Set-Cookie': 'access_token=test; Path=/; Secure; HttpOnly'
+			}
+		}))
+	)
+
+	assert.equal(unavailable.status, 502)
+	assert.deepEqual(await unavailable.json(), {
+		code: 'EDGE_UPSTREAM_UNAVAILABLE',
+		message: 'The edge request was rejected.'
+	})
+	assert.equal(rejected.status, 502)
+	assert.deepEqual(await rejected.json(), {
+		code: 'EDGE_WEBSOCKET_UPGRADE_FAILED',
+		message: 'The edge request was rejected.'
+	})
+	assert.equal(missingSocket.status, 502)
+	assert.equal(cookie.status, 502)
+	assert.deepEqual(await cookie.json(), {
+		code: 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION',
+		message: 'The edge request was rejected.'
+	})
 })
 
 test('pre-auth and risk challenge paths are isolated to their matching host', async () => {

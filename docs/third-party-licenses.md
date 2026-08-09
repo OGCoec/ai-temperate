@@ -1,5 +1,36 @@
 # 第三方许可补充说明
 
+## thinking-orbs Canvas engine
+
+- 上游项目：`Jakubantalik/thinking-orbs@0.2.0`，固定源码修订 `8157b726c35712acba57f5d72149c2d33b5f0fd6`。
+- 使用目的：在 uni-app H5 与 Android App-Vue 中本地渲染 AI 录音、推理、联网搜索和整理状态的 2D Canvas Orb。
+- 上游许可：MIT，版权归 Jakub Antalik 所有。
+- 项目边界：项目仅采用其状态预设与 2D Canvas 绘制算法，去除 React 组件层并通过 renderjs 驱动；分发时保留本说明和上游 MIT 许可文本。
+
+上游 MIT 许可文本：
+
+> MIT License
+>
+> Copyright (c) 2026 Jakub Antalik
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
 ## AVIF ImageIO Native Reader
 
 - 依赖坐标：`io.github.nemanjastokuca:avif-imageio-native-reader:0.1.0`

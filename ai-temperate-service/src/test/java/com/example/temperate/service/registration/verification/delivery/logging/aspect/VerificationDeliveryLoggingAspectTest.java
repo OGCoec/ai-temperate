@@ -220,6 +220,54 @@ class VerificationDeliveryLoggingAspectTest {
     }
 
     @Test
+    void oauthFailureLogsMachineCodesAndSafeReasonWithoutRawResponse() {
+        VerificationDeliveryProviderMetadata metadata =
+                new VerificationDeliveryProviderMetadata(
+                        400,
+                        null,
+                        "failed",
+                        false,
+                        "request-700084",
+                        "MicrosoftGraphOAuthResponseException",
+                        Operation.REFRESH_ACCESS_TOKEN,
+                        Endpoint.OAUTH_TOKEN,
+                        FailureStage.AUTHENTICATION,
+                        FailureCategory.AUTHENTICATION_FAILED,
+                        FailureHint.OAUTH_CREDENTIAL_OR_REFRESH_TOKEN_REJECTED,
+                        RecommendedAction.REAUTHORIZE_OR_VERIFY_CLIENT_CREDENTIALS,
+                        null,
+                        true,
+                        null,
+                        "invalid_grant",
+                        "700084",
+                        "spa_refresh_token_expired");
+        VerificationDeliveryException failure = new VerificationDeliveryException(
+                false,
+                "microsoft_graph",
+                "microsoft_oauth_http_error",
+                metadata,
+                new IllegalStateException(
+                        "raw body contains refresh-token-value and alice@example.test"));
+        SixDigitVerificationCodeService service = proxy(Mono.error(failure));
+
+        try (DebugLogCapture logs = DebugLogCapture.start(
+                VerificationDeliveryLoggingAspect.class)) {
+            assertThatThrownBy(() -> logContext()
+                            .propagate(service.sendCode(SENSITIVE_REQUEST))
+                            .block())
+                    .isInstanceOf(VerificationDeliveryException.class);
+
+            assertThat(logs.joinedMessages())
+                    .contains("oauthError=invalid_grant")
+                    .contains("oauthErrorCodes=700084")
+                    .contains("oauthFailureReason=spa_refresh_token_expired")
+                    .doesNotContain("refresh-token-value")
+                    .doesNotContain("alice@example.test")
+                    .doesNotContain("raw body contains");
+        }
+    }
+
+    @Test
     void futureCompletionKeepsRabbitCorrelationContext() {
         VerificationDeliveryProviderMetadata metadata =
                 new VerificationDeliveryProviderMetadata(

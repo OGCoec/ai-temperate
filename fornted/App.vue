@@ -1,14 +1,21 @@
 <script>
 	import { version } from './package.json'
-	import { ensureCookieScopeMigration } from '@/common/auth/cookie-scope-migration.js'
 	import { ensurePreAuth } from '@/common/auth/pre-auth.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import { isRiskChallengeFlowPage } from '@/common/auth/risk-challenge-navigation.js'
+	import { presentWebRtcFailure } from '@/common/auth/webrtc-verification.js'
+	// #ifdef H5
+	import { ensureCookieScopeMigration } from '@/common/auth/cookie-scope-migration.js'
 	import {
-		startWebRtcVerificationInBackground,
-		presentWebRtcFailure
+		ensureH5WebRtcVerified
 	} from '@/common/auth/webrtc-verification.js'
 	import { prewarmTurnstile } from '@/common/auth/turnstile-prewarm.js'
+	// #endif
+	// #ifdef APP-PLUS
+	import {
+		startAndroidWebRtcVerificationInBackground
+	} from '@/common/auth/webrtc-verification.js'
+	// #endif
 	// #ifdef APP
 	import checkUpdate from '@/uni_modules/uni-upgrade-center-app/utils/check-update'
 	// #endif
@@ -23,17 +30,26 @@
 			)
 			// #endif
 			if (!isRiskChallengeFlowPage(options?.path)) {
-				// 所有认证请求共享迁移和 PreAuth Promise，启动阶段不弹出重复错误。
+				// #ifdef H5
+				// H5 保留浏览器 Cookie、PreAuth 和 RTCPeerConnection 的既有执行顺序。
 				void ensureCookieScopeMigration().catch(() => {})
 				void ensurePreAuth()
-					.then(() => startWebRtcVerificationInBackground())
+					.then(() => ensureH5WebRtcVerified())
 					.catch(error => {
 						if (presentRiskBlock(error)) return
 						presentWebRtcFailure(error)
 					})
-				// #ifdef H5
 				// 启动阶段只预热官方 SDK，真实挑战仍等待后端下发。
 				void prewarmTurnstile()
+				// #endif
+				// #ifdef APP-PLUS
+				// Android 只启动屏幕外本地 WebView 探测，不允许回退到 H5 浏览器实现。
+				void ensurePreAuth()
+					.then(() => startAndroidWebRtcVerificationInBackground())
+					.catch(error => {
+						if (presentRiskBlock(error)) return
+						presentWebRtcFailure(error)
+					})
 				// #endif
 			}
 			console.log('App Launch')

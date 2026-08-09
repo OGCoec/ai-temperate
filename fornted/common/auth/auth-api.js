@@ -8,10 +8,12 @@ import {
 	loadAndroidTotpLoginFlow
 } from './android-flow-keystore.js'
 import { beginTotpLoginFlow, clearTotpLoginFlow } from './totp-login-flow.js'
+import { invalidateWebRtcVerification } from './webrtc-verification.js'
+// #ifdef APP-PLUS
 import {
-	invalidateWebRtcVerification,
-	startWebRtcVerificationInBackground
+	startAndroidWebRtcVerificationInBackground
 } from './webrtc-verification.js'
+// #endif
 import {
 	beginRegistrationFlow,
 	clearRegistrationFlowState,
@@ -90,9 +92,12 @@ function handleLoginResponse(response) {
 	if (response?.status === 'AUTHENTICATED') {
 		clearTotpLoginFlow()
 		saveSession(response)
-		// 登录轮换 PreAuth 后建立新的任务 epoch；后台校验不得读取旧 Token 或复用旧 Promise。
+		// 登录轮换 PreAuth 后建立新的任务 epoch；H5 在下一次请求前同步校验。
 		invalidateWebRtcVerification()
-		void startWebRtcVerificationInBackground().catch(() => {})
+		// #ifdef APP-PLUS
+		// Android 保持后台 WebView 校验，不阻塞登录成功响应。
+		void startAndroidWebRtcVerificationInBackground().catch(() => {})
+		// #endif
 	}
 	return response
 }

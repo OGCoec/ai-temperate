@@ -29,12 +29,18 @@ import {
 	isWebRtcRetryCode
 } from '@shared-auth/webrtc-verification-core.js'
 import {
-	ensureWebRtcVerified,
 	invalidateWebRtcVerification,
-	observeWebRtcVerificationHeaders,
-	presentWebRtcFailure,
-	startWebRtcVerificationInBackground
+	presentWebRtcFailure
 } from './webrtc-verification.js'
+// #ifdef H5
+import { ensureH5WebRtcVerified } from './webrtc-verification.js'
+// #endif
+// #ifdef APP-PLUS
+import {
+	observeAndroidWebRtcVerificationHeaders,
+	startAndroidWebRtcVerificationInBackground
+} from './webrtc-verification.js'
+// #endif
 
 const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
@@ -63,8 +69,10 @@ function rawRequestTask(options) {
 			timeout: options.timeout,
 			withCredentials: true,
 			success(response) {
-				// 业务响应只触发后台 WebRTC 任务，当前 Promise 不等待 start、ICE 或 report。
-				observeWebRtcVerificationHeaders(response.header || response.headers || {})
+				// #ifdef APP-PLUS
+				// Android 根据响应头推进后台 WebView 探测；H5 不消费这条异步触发链路。
+				observeAndroidWebRtcVerificationHeaders(response.header || response.headers || {})
+				// #endif
 				try {
 					// Android 必须在解释业务状态前保存同请求续签的 AT；H5 由浏览器接收 HttpOnly Cookie。
 					applySessionRenewalHeaders(response.header || {})
@@ -150,6 +158,7 @@ export async function initializeBrowserCsrf(
 	await ensureCookieScopeMigration()
 	await ensurePreAuth()
 	try {
+		await ensureH5WebRtcVerified()
 		const existing = browserCsrfToken()
 		if (existing) return existing
 		if (!csrfInFlight) {
@@ -164,7 +173,7 @@ export async function initializeBrowserCsrf(
 		if (presentRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
 		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
-			recoverWebRtc(error)
+			await recoverH5WebRtc()
 			return initializeBrowserCsrf(migrationRetried, preAuthRetried, true)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
@@ -174,7 +183,7 @@ export async function initializeBrowserCsrf(
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
 			await ensurePreAuth()
-			void startWebRtcVerificationInBackground().catch(() => {})
+			await ensureH5WebRtcVerified()
 			return initializeBrowserCsrf(migrationRetried, true, webRtcRetried)
 		}
 		if (migrationRetried
@@ -200,6 +209,9 @@ export async function publicRequest(
 	await ensureCookieScopeMigration()
 	await ensurePreAuth()
 	try {
+		// #ifdef H5
+		await ensureH5WebRtcVerified()
+		// #endif
 		const method = String(options.method || 'POST').toUpperCase()
 		const headers = clientContextHeaders()
 		Object.assign(headers, options.headers || {})
@@ -224,7 +236,12 @@ export async function publicRequest(
 		if (presentRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
 		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
-			recoverWebRtc(error)
+			// #ifdef H5
+			await recoverH5WebRtc()
+			// #endif
+			// #ifdef APP-PLUS
+			recoverAndroidWebRtc()
+			// #endif
 			return publicRequest(path, options, migrationRetried, preAuthRetried, true)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
@@ -234,7 +251,12 @@ export async function publicRequest(
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
 			await ensurePreAuth()
-			void startWebRtcVerificationInBackground().catch(() => {})
+			// #ifdef H5
+			await ensureH5WebRtcVerified()
+			// #endif
+			// #ifdef APP-PLUS
+			void startAndroidWebRtcVerificationInBackground().catch(() => {})
+			// #endif
 			return publicRequest(path, options, migrationRetried, true, webRtcRetried)
 		}
 		if (clientPlatform() !== 'H5'
@@ -276,9 +298,12 @@ export function restorePersistedSession() {
 export async function authorizedRequest(path, options = {}, retryState = {}) {
 	const preserveSessionOnFailure = options.preserveSessionOnFailure === true
 	try {
-		// Cookie、PreAuth 和凭据仍在请求前准备；WebRTC Report 独立在后台完成，不再阻塞业务发送。
+		// H5 保持 WebRTC 前置校验；Android 的 Report 继续由独立后台 WebView 完成。
 		await ensureCookieScopeMigration()
 		await ensurePreAuth()
+		// #ifdef H5
+		await ensureH5WebRtcVerified()
+		// #endif
 		const headers = await protectedCredentialHeaders(options.headers)
 		return await requestTask({
 			path,
@@ -292,7 +317,12 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 		handleAuthorizedSecurityFailure(error)
 		if (!retryState.preAuth && error?.code === 'PREAUTH_REQUIRED') {
 			await ensurePreAuth()
-			void startWebRtcVerificationInBackground().catch(() => {})
+			// #ifdef H5
+			await ensureH5WebRtcVerified()
+			// #endif
+			// #ifdef APP-PLUS
+			void startAndroidWebRtcVerificationInBackground().catch(() => {})
+			// #endif
 			return authorizedRequest(path, options, { ...retryState, preAuth: true })
 		}
 		if (!preserveSessionOnFailure || TERMINAL_SESSION_ERRORS.has(error?.code)) {
@@ -329,6 +359,9 @@ function handleAuthorizedSecurityFailure(error) {
 export async function prepareAuthorizedStreamingRequest(path, options = {}) {
 	await ensureCookieScopeMigration()
 	await ensurePreAuth()
+	// #ifdef H5
+	await ensureH5WebRtcVerified()
+	// #endif
 	const method = String(options.method || 'POST').toUpperCase()
 	const headers = await protectedCredentialHeaders(options.headers)
 	return Object.freeze({
@@ -406,9 +439,22 @@ function handleTerminalSessionError(error) {
 	uni.reLaunch({ url: AUTH_ROUTES.login })
 }
 
-function recoverWebRtc(error) {
+async function recoverH5WebRtc() {
 	invalidateWebRtcVerification()
-	void ensureWebRtcVerified().catch(verificationError => {
+	try {
+		return await ensureH5WebRtcVerified()
+	} catch (verificationError) {
+		if (presentRiskBlock(verificationError)) return
+		if (isWebRtcFailureCode(verificationError.code)) {
+			presentWebRtcFailure(verificationError)
+		}
+		throw verificationError
+	}
+}
+
+function recoverAndroidWebRtc() {
+	invalidateWebRtcVerification()
+	void startAndroidWebRtcVerificationInBackground().catch(verificationError => {
 		if (presentRiskBlock(verificationError)) return
 		if (isWebRtcFailureCode(verificationError.code)) {
 			presentWebRtcFailure(verificationError)

@@ -85,9 +85,29 @@
 						</view>
 						<view class="message-block assistant-message">
 							<view class="assistant-label"><text>AI</text><text v-if="message.stopped" class="stopped-label">已停止</text></view>
-							<view v-if="modelActivityText(message)" class="model-activity" role="status">
-								<view class="model-activity-dot"></view>
-								<text>{{ modelActivityText(message) }}</text>
+							<view v-if="modelActivityPresentation(message)" class="model-activity" role="status">
+								<user-thinking-orb
+									v-if="modelActivityPresentation(message).looping"
+									:state="modelActivityPresentation(message).state"
+									:size="20"
+									:reduced="motionReduced"
+									:aria-label="modelActivityPresentation(message).label"
+								/>
+								<uni-icons
+									v-else
+									type="info"
+									size="18"
+									color="#f2a24d"
+									aria-hidden="true"
+								/>
+								<text>{{ modelActivityPresentation(message).label }}</text>
+								<user-source-chip
+									v-if="modelActivityPresentation(message).sourcePresentation"
+									:source="modelActivityPresentation(message).sourcePresentation.source"
+									:domain="modelActivityPresentation(message).sourcePresentation.domain"
+									:disabled="!modelActivityPresentation(message).sourcePresentation.clickable"
+									variant="activity"
+								/>
 							</view>
 							<button
 								v-if="researchDetailsAvailable(message)"
@@ -145,11 +165,62 @@
 								:message-key="message.localId || message.messagePublicId || ''"
 								:sources="researchSources(message)"
 							/>
-							<text v-else-if="message.streaming && !modelActivityText(message)" class="typing-indicator">正在生成…</text>
+							<text v-else-if="message.streaming && !modelActivityPresentation(message)" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
-							<view v-if="message.responseAttachments?.length" class="attachment-grid">
+							<text
+								v-if="message.streaming && !generatedImageGallery(message).visibleItems.length && generatedImageGallery(message).progressLabel"
+								class="generated-image-progress"
+								role="status"
+								aria-live="polite"
+							>
+								{{ generatedImageGallery(message).progressLabel }}
+							</text>
+							<view v-if="generatedImageGallery(message).visibleItems.length" class="generated-image-gallery-wrap">
 								<view
-									v-for="attachment in message.responseAttachments"
+									class="generated-image-gallery"
+									:class="`is-${generatedImageGallery(message).layout.toLowerCase()}`"
+									:style="generatedImageGalleryStyle(message)"
+									role="group"
+									aria-label="generated images"
+								>
+									<view
+										v-for="(attachment, galleryIndex) in generatedImageGallery(message).visibleItems"
+										:key="attachment.attachmentId"
+										class="generated-image-gallery-tile"
+										:class="{
+											'is-hero': galleryIndex === 0,
+											'is-exiting': attachment.galleryExiting === true,
+											'is-partial': String(attachment.phase || '').toUpperCase() === 'PARTIAL'
+										}"
+									>
+										<image
+											v-if="previewImage(attachment)"
+											class="generated-image-gallery-image"
+											:src="attachment.url"
+											mode="aspectFill"
+											@load="handleGeneratedResponseImageLoad(attachment, $event)"
+										/>
+										<view
+											v-if="galleryIndex === 3 && generatedImageGallery(message).hiddenCount > 0"
+											class="generated-image-gallery-overflow"
+											aria-hidden="true"
+										>
+											<text>+{{ generatedImageGallery(message).hiddenCount }}</text>
+										</view>
+									</view>
+								</view>
+								<text
+									v-if="generatedImageGallery(message).progressLabel"
+									class="generated-image-progress"
+									role="status"
+									aria-live="polite"
+								>
+									{{ generatedImageGallery(message).progressLabel }}
+								</text>
+							</view>
+							<view v-if="nonImageResponseAttachments(message).length" class="attachment-grid">
+								<view
+									v-for="attachment in nonImageResponseAttachments(message)"
 									:key="attachment.attachmentId"
 									class="attachment-card"
 									:class="{ 'is-video': previewVideo(attachment) }"
@@ -275,32 +346,48 @@
 					</button>
 				</view>
 				<view v-if="voiceInteractionActive || voicePartialText" class="voice-status" :class="{ 'is-finalizing': voiceFinalizing, 'is-queued': voiceQueued }" :aria-busy="String(voiceInteractionActive)">
-					<view class="voice-status-heading">
-						<view class="voice-status-dot" aria-hidden="true"></view>
-						<text>{{ voiceStatusLabel }}</text>
-						<text v-if="voiceRecording" class="voice-duration">{{ voiceDurationLabel }}</text>
-						<button
-							v-if="voiceQueued"
-							class="voice-queue-cancel"
-							type="button"
-							aria-label="取消语音识别排队"
-							@click="cancelVoiceQueue"
-						>取消排队</button>
+					<user-thinking-orb
+						v-if="voiceActivityPresentation"
+						:state="voiceActivityPresentation.state"
+						:size="64"
+						:reduced="motionReduced"
+						:aria-label="voiceActivityPresentation.label"
+					/>
+					<view class="voice-status-copy">
+						<view class="voice-status-heading">
+							<view class="voice-status-dot" aria-hidden="true"></view>
+							<text>{{ voiceStatusLabel }}</text>
+							<text v-if="voiceRecording" class="voice-duration">{{ voiceDurationLabel }}</text>
+							<button
+								v-if="voiceQueued"
+								class="voice-queue-cancel"
+								type="button"
+								aria-label="取消语音识别排队"
+								@click="cancelVoiceQueue"
+							>取消排队</button>
+						</view>
+						<text v-if="voicePartialText" class="voice-preview">{{ voicePartialText }}</text>
 					</view>
-					<text v-if="voicePartialText" class="voice-preview">{{ voicePartialText }}</text>
 				</view>
 				<view class="composer-meta">
 					<view class="composer-controls">
 						<picker :range="models" range-key="modelName" :value="selectedModelIndex" :disabled="generating || !models.length" @change="selectModel">
 							<view class="model-picker"><text>{{ selectedModel?.modelName || '选择模型' }}</text><uni-icons type="down" size="14" color="#9ba6a0" /></view>
 						</picker>
-						<view
-							v-if="contextUsage"
-							class="context-usage"
-							:class="`is-${contextUsageTone}`"
-							role="status"
-						>
-							<view class="context-usage-copy">
+							<view
+								v-if="contextUsage"
+								class="context-usage"
+								:class="`is-${contextUsageTone}`"
+								role="status"
+							>
+								<user-thinking-orb
+									v-if="contextCompactionPresentation"
+									:state="contextCompactionPresentation.state"
+									:size="20"
+									:reduced="motionReduced"
+									:aria-label="contextCompactionPresentation.label"
+								/>
+								<view class="context-usage-copy">
 								<text>{{ contextUsageLabel }}</text>
 								<text v-if="contextCompactionActive" class="context-usage-status">正在压缩上下文</text>
 								<text v-else-if="contextUsage.compactionStatus === 'FAILED'" class="context-usage-status">压缩失败</text>
@@ -409,6 +496,15 @@
 								<uni-icons type="down" size="14" color="#9bc8ec" />
 							</view>
 						</picker>
+						<button
+							class="motion-toggle"
+							type="button"
+							:aria-pressed="String(manualMotionReduced)"
+							:aria-label="motionToggleAriaLabel"
+							@click="toggleMotionPreference"
+						>
+							<text>{{ motionPreferenceLabel }}</text>
+						</button>
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
 				</view>
@@ -469,7 +565,6 @@
 		imageGenerationProfileLevels,
 		imageGenerationRequest,
 		imagePreviewAttachment,
-		createImageOutputSlots,
 		failImageOutputAttachment,
 		mergeCompletedImageOutputs,
 		mergeImagePreviewOutput,
@@ -483,6 +578,12 @@
 		supportedImageAspectOptions,
 		upsertImageOutputAttachment
 	} from '@/common/aichat/ai-conversation-image-generation.js'
+	import {
+		appendMissingImagePresentationOrder,
+		createImageGalleryPresentation,
+		imageGalleryAspectRatio,
+		recordImagePresentationOrder
+	} from '@/common/aichat/ai-conversation-image-gallery.js'
 	import {
 		initialVideoUploadProgress,
 		mediaUploadProgressKey,
@@ -509,7 +610,16 @@
 		formatAiReasoningSummaryMarkdown,
 		presentAiResearchTimeline
 	} from '@/common/aichat/ai-conversation-research-presentation.js'
+	import {
+		presentAiActivity,
+		presentAiCompactionActivity,
+		presentAiVoiceActivity
+	} from '@/common/aichat/ai-activity-presentation.js'
 	import { mergeAiConversationSources } from '@/common/aichat/ai-conversation-source-presentation.js'
+	import {
+		AI_MOTION_PREFERENCES,
+		createAiMotionPreferenceController
+	} from '@/common/ui/ai-motion-preference.js'
 	import {
 		AI_CONVERSATION_WEB_SEARCH_MODES,
 		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
@@ -549,6 +659,7 @@
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
 	import UserSourceChip from './user-source-chip.vue'
+	import UserThinkingOrb from './user-thinking-orb.vue'
 	import {
 		appendLocalMessage,
 		clearAiConversationHistoryStale,
@@ -727,7 +838,7 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserMediaUploadProgress, UserSourceChip },
+		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserMediaUploadProgress, UserSourceChip, UserThinkingOrb },
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -752,6 +863,9 @@
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
 				imageUpgradeTokens: markRaw(new Map()),
+				imageGalleryExitTimers: markRaw(new Map()),
+				imageGalleryExiting: markRaw(new Map()),
+				imageGalleryRevision: 0,
 				generatedResponseImageNaturalSizes: {},
 				generatedVideoNaturalSizes: {},
 				videoDownloadBusyById: {},
@@ -787,6 +901,9 @@
 				voiceRecorder: null,
 				voiceTimer: null,
 				voiceStartedAt: 0,
+				motionReduced: false,
+				motionPreference: AI_MOTION_PREFERENCES.SYSTEM,
+				motionController: null,
 				scrollTarget: '',
 				historyResyncing: false,
 				modelsLoading: false,
@@ -804,6 +921,10 @@
 			}
 		},
 		mounted() {
+			this.motionController = createAiMotionPreferenceController(snapshot => {
+				this.motionReduced = snapshot.reduced
+				this.motionPreference = snapshot.preference
+			})
 			void prewarmAiCodeHighlighter().catch(() => {})
 			this.refreshGeneratedResponseImageViewportHeight()
 			this.refreshTurnNavigationViewport()
@@ -814,8 +935,11 @@
 			}
 		},
 		beforeUnmount() {
+			this.motionController?.destroy?.()
+			this.motionController = null
 			void this.cancelVoiceInput('COMPONENT_UNMOUNT')
 			this.clearCompletedImageUpgrades()
+			this.clearImageGalleryExitTimers()
 			this.closeContextObserver()
 			this.releaseTurnNavigationFrame()
 			if (this.generatedResponseImageResizeListener
@@ -980,23 +1104,20 @@
 			voiceRecording() { return this.voiceState === 'RECORDING' },
 			voiceQueued() { return this.voiceState === 'QUEUED' },
 			voiceFinalizing() { return this.voiceState === 'FINALIZING' },
+			voiceActivityPresentation() {
+				return presentAiVoiceActivity(this.voiceState, {
+					queuePosition: this.voiceQueuePosition,
+					queueCapacity: this.voiceQueueCapacity,
+					limitReached: this.voiceLimitReached
+				})
+			},
 			voiceButtonDisabled() {
 				return this.generating || !['IDLE', 'ERROR', 'RECORDING'].includes(this.voiceState)
 			},
 			voiceButtonLabel() {
 				return this.voiceRecording ? '结束语音输入' : '开始语音输入'
 			},
-			voiceStatusLabel() {
-				const labels = {
-					REQUESTING_PERMISSION: '正在请求麦克风权限',
-					ISSUING_TICKET: '正在准备安全语音连接',
-					CONNECTING: '正在连接本地语音识别',
-					QUEUED: `正在排队，第 ${this.voiceQueuePosition} / ${this.voiceQueueCapacity} 位`,
-					RECORDING: '正在听写',
-					FINALIZING: this.voiceLimitReached ? '已达到 5 分钟上限，正在生成最终文字' : '正在生成最终文字'
-				}
-				return labels[this.voiceState] || ''
-			},
+			voiceStatusLabel() { return this.voiceActivityPresentation?.label || '' },
 			voiceDurationLabel() {
 				const seconds = Math.max(0, Math.floor(this.voiceElapsedMs / 1000))
 				return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -1004,6 +1125,21 @@
 			contextCompactionActive() {
 				return this.contextUsage?.compactionStatus === 'QUEUED'
 					|| this.contextUsage?.compactionStatus === 'RUNNING'
+			},
+			contextCompactionPresentation() {
+				return presentAiCompactionActivity(this.contextUsage?.compactionStatus)
+			},
+			manualMotionReduced() {
+				return this.motionPreference === AI_MOTION_PREFERENCES.REDUCE
+			},
+			motionPreferenceLabel() {
+				if (this.manualMotionReduced) return '动画已手动关闭'
+				return this.motionReduced ? '动画已按系统关闭' : '动画跟随系统'
+			},
+			motionToggleAriaLabel() {
+				return this.manualMotionReduced
+					? '动画已手动关闭，点击改为跟随系统'
+					: '动画跟随系统，点击手动关闭动画'
 			},
 			contextUsagePercent() {
 				return Math.max(0, Number(this.contextUsage?.usagePercent || 0))
@@ -2074,10 +2210,11 @@
 						state: 'AVAILABLE'
 					})),
 					responseText: '',
-					responseAttachments: requestedImageCount
-						? createImageOutputSlots(requestedImageCount)
-						: [],
+					responseAttachments: [],
 					requestedImageCount,
+					requestedImageAspect: requestedImageCount
+						? this.selectedImageAspect : '',
+					imagePresentationOrder: [],
 					imageOutputSummary: '',
 					streaming: true, saving: false,
 					stopped: false, error: '', modelActivity: null,
@@ -2179,9 +2316,10 @@
 					localId: command.localId,
 					inputText: command.inputText,
 					requestedImageCount,
-					previewImages: requestedImageCount
-						? createImageOutputSlots(requestedImageCount)
-						: []
+					requestedImageAspect: requestedImageCount
+						? this.selectedImageAspect : '',
+					imagePresentationOrder: [],
+					previewImages: []
 				})
 				try {
 					this.activeStream = await openAiConversationStream(command, {
@@ -2375,8 +2513,11 @@
 					const current = this.messages.find(message => message.localId === localId)
 					const responseAttachments = mergeImagePreviewOutput(
 						current?.responseAttachments || [], previewImage)
+					const imagePresentationOrder = recordImagePresentationOrder(
+						current?.imagePresentationOrder, previewImage)
 					this.applyStore(patchLocalMessage(localId, {
 						responseAttachments,
+						imagePresentationOrder,
 						streaming: true,
 						saving: responseAttachments.some(attachment =>
 							attachment?.status === 'FINALIZING')
@@ -2388,8 +2529,11 @@
 					const current = this.messages.find(message => message.localId === localId)
 					const responseAttachments = mergePersistedImageOutput(
 						current?.responseAttachments || [], persistedImage)
+					const imagePresentationOrder = recordImagePresentationOrder(
+						current?.imagePresentationOrder, persistedImage)
 					this.applyStore(patchLocalMessage(localId, {
 						responseAttachments,
+						imagePresentationOrder,
 						streaming: true,
 						saving: responseAttachments.some(attachment =>
 							attachment?.status === 'FINALIZING')
@@ -2399,6 +2543,7 @@
 						responseAttachments.find(attachment =>
 							Number(attachment?.outputIndex) === persistedImage.outputIndex))
 				} else if (event.type === 'image-output-status') {
+					this.captureImageGalleryExit(localId, event.data?.outputIndex)
 					const current = this.messages.find(message => message.localId === localId)
 					const responseAttachments = failImageOutputAttachment(
 						current?.responseAttachments || [], event.data)
@@ -2407,6 +2552,7 @@
 						saving: responseAttachments.some(attachment =>
 							attachment?.status === 'FINALIZING')
 					}))
+					this.beginVisibleImageUpgrades(localId)
 				} else if (event.type === 'snapshot') {
 					this.markdownRenderState?.applySnapshot?.({
 						revision: Number(event.data?.revision || 0),
@@ -2444,16 +2590,24 @@
 						persistedAttachments,
 						terminalAttachmentEvidenceComplete
 							? requestedImageCount : 0)
+					const imagePresentationOrder = appendMissingImagePresentationOrder(
+						current?.imagePresentationOrder, responseAttachments)
 					const imageOutputSummary = requestedImageCount > 1
 						? `请求 ${requestedImageCount} 张，成功 ${persistedAttachments.length} 张`
 						: ''
 					const warnings = event.data.terminalReason === 'IMAGE_OSS_PERSISTENCE_DROPPED'
 						? ['ATTACHMENT_STORAGE_PARTIAL'] : []
 					// 先把当前 data URL 快照留在页面消息中，再解除 Manager 订阅；终态清理 Base64 时不会把 UI 换回 OSS。
-					this.applyStore(patchLocalMessage(localId, { responseAttachments }))
+					this.applyStore(patchLocalMessage(localId, {
+						responseAttachments,
+						imagePresentationOrder,
+						requestedImageAspect: current?.requestedImageAspect
+							|| this.selectedImageAspect
+					}))
 					this.activeGenerationSubscription?.()
 					this.activeGenerationSubscription = null
-					this.beginCompletedImageUpgrades(localId, responseAttachments)
+					this.beginCompletedImageUpgrades(
+						localId, responseAttachments, imagePresentationOrder)
 					this.finishTextPresentation(() => {
 						const failed = event.data.terminalType
 							&& event.data.terminalType !== 'COMPLETED'
@@ -2551,34 +2705,16 @@
 				this.applyStore(patchLocalMessage(localId, { research }))
 			},
 			modelActivityText(message) {
-				const activity = message?.modelActivity
-				if (!activity) return ''
-				if (activity.phase === 'PROCESSING') return '正在准备回答'
-				if (activity.phase === 'REASONING') return '正在推理和整理信息'
-				if (activity.phase === 'WEB_SEARCH') {
-					if (activity.status === 'STARTED') {
-						return activity.query
-							? `已开始搜索：${activity.query}` : '已开始联网搜索'
-					}
-					if (activity.status === 'IN_PROGRESS') {
-						return activity.query
-							? `正在搜索：${activity.query}` : '正在执行联网搜索'
-					}
-					if (activity.status === 'COMPLETED') {
-						return '已完成联网检索，正在整理来源'
-					}
-					if (activity.status === 'FAILED') return '联网搜索失败'
-					if (activity.status === 'UNAVAILABLE') return '联网搜索不可用'
-					return '联网搜索状态已更新'
-				}
-				if (activity.phase === 'GENERATING') return '正在生成回答'
-				if (activity.phase === 'VIDEO_GENERATION') {
-					return `正在生成视频 · ${Math.max(0, Math.min(100,
-						Number(activity.progress || 0)))}%`
-				}
-				if (activity.phase === 'VIDEO_TRANSFER') return '正在安全保存视频到 OSS'
-				if (activity.phase === 'FINALIZING') return '正在保存生成内容'
-				return ''
+				return this.modelActivityPresentation(message)?.label || ''
+			},
+			modelActivityPresentation(message) {
+				if (!message?.modelActivity) return null
+				return presentAiActivity(
+					message.modelActivity,
+					this.researchSources(message))
+			},
+			toggleMotionPreference() {
+				this.motionController?.toggleManualReduce?.()
 			},
 			researchDetailsAvailable(message) {
 				if (!aiConversationWebSearchEnabled() || !message?.research) return false
@@ -2782,17 +2918,95 @@
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
 			},
+			generatedImageGallery(message) {
+				// The exit snapshot keeps a failed tile visible for one short transition;
+				// the data source remains authoritative and the snapshot is never persisted.
+				void this.imageGalleryRevision
+				const localId = String(message?.localId || '')
+				const exiting = [...this.imageGalleryExiting.values()]
+					.filter(item => item.localId === localId)
+					.map(item => item.attachment)
+				const attachments = [
+					...(Array.isArray(message?.responseAttachments)
+						? message.responseAttachments : []),
+					...exiting
+				]
+				const presentationOrder = appendMissingImagePresentationOrder(
+					message?.imagePresentationOrder, attachments)
+				return createImageGalleryPresentation({
+					attachments,
+					presentationOrder,
+					requestedCount: message?.requestedImageCount
+				})
+			},
+			generatedImageGalleryStyle(message) {
+				const aspect = imageGalleryAspectRatio(
+					message?.requestedImageAspect || this.selectedImageAspect)
+				return {
+					'--image-gallery-aspect': String(aspect),
+					'--image-gallery-mosaic-aspect': String(aspect * 1.52)
+				}
+			},
+			nonImageResponseAttachments(message) {
+				return (Array.isArray(message?.responseAttachments)
+					? message.responseAttachments : [])
+					.filter(attachment => attachment?.imageSlot !== true)
+			},
+			captureImageGalleryExit(localId, outputIndex) {
+				const message = this.messages.find(item => item.localId === localId)
+				const source = (message?.responseAttachments || []).find(item =>
+					Number(item?.outputIndex) === Number(outputIndex))
+				if (!source || !this.previewImage(source)) return
+				const key = `${localId}:${Number(outputIndex)}`
+				const existingTimer = this.imageGalleryExitTimers.get(key)
+				if (existingTimer) clearTimeout(existingTimer)
+				const snapshot = Object.freeze({
+					...source,
+					galleryExiting: true,
+					status: 'FINALIZING'
+				})
+				this.imageGalleryExiting.set(key, { localId, attachment: snapshot })
+				this.imageGalleryRevision += 1
+				const timer = setTimeout(() => {
+					this.imageGalleryExiting.delete(key)
+					this.imageGalleryExitTimers.delete(key)
+					this.imageGalleryRevision += 1
+				}, 180)
+				this.imageGalleryExitTimers.set(key, timer)
+			},
+			clearImageGalleryExitTimers() {
+				this.imageGalleryExitTimers.forEach(timer => clearTimeout(timer))
+				this.imageGalleryExitTimers.clear()
+				this.imageGalleryExiting.clear()
+				this.imageGalleryRevision += 1
+			},
 			clearCompletedImageUpgrades() {
 				this.imageUpgradeTokens.clear()
 			},
-			beginCompletedImageUpgrades(localId, attachments) {
-				for (const attachment of attachments || []) {
+			beginVisibleImageUpgrades(localId) {
+				const message = this.messages.find(item => item.localId === localId)
+				const gallery = this.generatedImageGallery(message)
+				for (const attachment of gallery.visibleItems || []) {
+					this.beginImageUpgrade(localId, attachment)
+				}
+			},
+			beginCompletedImageUpgrades(localId, attachments, presentationOrder) {
+				const message = this.messages.find(item => item.localId === localId)
+				const gallery = this.generatedImageGallery({
+					...message,
+					responseAttachments: attachments,
+					imagePresentationOrder: presentationOrder
+				})
+				for (const attachment of gallery.visibleItems || []) {
 					this.beginImageUpgrade(localId, attachment)
 				}
 			},
 			beginImageUpgrade(localId, attachment) {
 				if (attachment?.requiresUpgrade !== true || !attachment?.persistedUrl
 					|| attachment?.upgradeFailed === true) return
+				const message = this.messages.find(item => item.localId === localId)
+				if (!this.generatedImageGallery(message).visibleOutputIndexes.includes(
+					Number(attachment.outputIndex))) return
 				const outputIndex = Number(attachment.outputIndex)
 				const key = `${localId}:${outputIndex}`
 				const activeToken = this.imageUpgradeTokens.get(key)
@@ -3120,6 +3334,9 @@
 						contentAttachments: [],
 						responseText: task.responseText || '',
 						responseAttachments: [],
+						requestedImageCount: Number(task.requestedImageCount || 0),
+						requestedImageAspect: task.requestedImageAspect || 'SQUARE',
+						imagePresentationOrder: task.imagePresentationOrder || [],
 						streaming: true,
 						saving: false,
 						stopped: false,
@@ -3144,6 +3361,24 @@
 				this.activeGenerationSubscription = subscribeGeneration(
 					generationPublicId, task => {
 						if (!task || this.activeGenerationPublicId !== generationPublicId) return
+						const current = this.messages.find(item => item.localId === localId)
+						const taskAttachments = Array.isArray(task.previewImages) && task.previewImages.length
+							? task.previewImages
+							: task.previewImage
+								? [task.previewImage]
+								: Array.isArray(task.responseAttachments)
+									? task.responseAttachments : null
+						if (Array.isArray(taskAttachments)) {
+							for (const attachment of taskAttachments) {
+								if (String(attachment?.status || '').toUpperCase() === 'FAILED') {
+									this.captureImageGalleryExit(localId, attachment.outputIndex)
+								}
+							}
+						}
+						const responseAttachments = taskAttachments || current?.responseAttachments || []
+						const imagePresentationOrder = appendMissingImagePresentationOrder(
+							task.imagePresentationOrder || current?.imagePresentationOrder,
+							responseAttachments)
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: task.messagePublicId || '',
 							responseText: task.responseText || '',
@@ -3155,6 +3390,9 @@
 								: Array.isArray(task.responseAttachments)
 									? { responseAttachments: task.responseAttachments }
 									: {}),
+							imagePresentationOrder,
+							requestedImageAspect: task.requestedImageAspect
+								|| current?.requestedImageAspect || this.selectedImageAspect,
 							streaming: !['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status),
 							saving: task.status === 'CANCEL_REQUESTED'
@@ -3178,6 +3416,7 @@
 								? `请求 ${task.requestedImageCount} 张，成功 ${Number(task.successfulImageCount ?? task.responseAttachments.filter(item => item?.state === 'AVAILABLE').length)} 张`
 								: ''
 						}))
+						this.beginVisibleImageUpgrades(localId)
 						if (['SETTLED', 'REFUNDED', 'RECONCILE_REQUIRED', 'COMPLETED']
 								.includes(task.status)) {
 							this.generating = false
@@ -3220,7 +3459,7 @@
 	.assistant-label { gap: 8px; margin-bottom: 8px; color: #37d39a; font-size: 12px; font-weight: 800; letter-spacing: .8px; }
 	.stopped-label { color: #f2a24d; font-weight: 600; letter-spacing: 0; }
 	.model-activity { min-height: 28px; margin: 2px 0 8px; display: flex; align-items: center; gap: 8px; color: #9faaa4; font-size: 12px; }
-	.model-activity-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #37d39a; box-shadow: 0 0 0 4px rgba(55, 211, 154, .1); }
+	.model-activity .user-thinking-orb { margin-left: -2px; }
 	.research-toggle { min-height: 36px; margin: 0 0 10px; padding: 0 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; color: #a9d8c5; font-size: 12px; }
 	.research-panel { max-width: 680px; margin: 0 0 12px; padding: 12px; border: 1px solid rgba(75, 101, 89, .52); border-radius: 13px; background: rgba(19, 25, 22, .72); }
 	.research-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 5px 0; color: #b9c5bf; font-size: 12px; line-height: 1.5; }
@@ -3234,6 +3473,22 @@
 	.message-error, .message-warning, .composer-error { color: #f2a24d; font-size: 13px; }
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+	.generated-image-gallery-wrap { width: min(100%, 720px); margin-top: 10px; }
+	.generated-image-gallery { width: 100%; display: grid; gap: 7px; }
+	.generated-image-gallery.is-single { grid-template-columns: minmax(0, 1fr); }
+	.generated-image-gallery.is-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.generated-image-gallery.is-hero-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.generated-image-gallery.is-hero-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.generated-image-gallery-tile { min-width: 0; aspect-ratio: var(--image-gallery-aspect); position: relative; overflow: hidden; border: 1px solid rgba(104, 136, 121, .42); border-radius: 14px; background: #141816; box-shadow: 0 8px 24px rgba(0, 0, 0, .14); }
+	.generated-image-gallery.is-hero-two .generated-image-gallery-tile.is-hero { grid-column: 1 / -1; }
+	.generated-image-gallery.is-hero-three .generated-image-gallery-tile.is-hero { grid-column: 1 / -1; }
+	.generated-image-gallery-image { width: 100%; height: 100%; display: block; transition: filter 160ms ease, opacity 180ms ease; }
+	.generated-image-gallery-tile.is-partial .generated-image-gallery-image { filter: blur(2px) saturate(.9); transform: scale(1.018); }
+	.generated-image-gallery-tile.is-partial::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(135deg, rgba(8, 15, 12, .16), rgba(8, 15, 12, .04)); }
+	.generated-image-gallery-tile.is-exiting { animation: generated-image-gallery-exit 180ms ease-in forwards; }
+	.generated-image-gallery-overflow { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: rgba(5, 10, 8, .58); color: #f3f7f5; font-size: 28px; font-weight: 760; letter-spacing: -.5px; }
+	.generated-image-progress { display: block; margin-top: 8px; color: #8fdcbe; font-size: 12px; font-variant-numeric: tabular-nums; }
+	@keyframes generated-image-gallery-exit { to { opacity: 0; transform: scale(.975); } }
 	.attachment-card { min-width: 0; overflow: hidden; display: flex; flex-direction: column; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
 	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; overflow: visible; justify-self: center; border: 0; border-radius: 0; background: transparent; }
 	.attachment-media-frame { min-width: 0; overflow: hidden; }
@@ -3263,9 +3518,10 @@
 	.voice-button.is-recording { border-color: #ff746b; background: rgba(183, 57, 49, .72); box-shadow: 0 0 0 3px rgba(255, 116, 107, .13); }
 	.voice-button.is-finalizing { border-color: rgba(242, 162, 77, .5); opacity: .72; }
 	.voice-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
-	.voice-status { margin-top: 7px; padding: 9px 12px; border: 1px solid rgba(255, 116, 107, .28); border-radius: 12px; background: rgba(76, 28, 25, .3); color: #f4c2be; }
+	.voice-status { margin-top: 7px; padding: 9px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid rgba(255, 116, 107, .28); border-radius: 12px; background: rgba(76, 28, 25, .3); color: #f4c2be; }
 	.voice-status.is-finalizing { border-color: rgba(242, 162, 77, .3); background: rgba(75, 51, 24, .28); color: #f2c997; }
 	.voice-status.is-queued { border-color: rgba(77, 156, 242, .34); background: rgba(24, 48, 75, .3); color: #c8def8; }
+	.voice-status-copy { min-width: 0; flex: 1; }
 	.voice-status-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
 	.voice-status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #ff746b; box-shadow: 0 0 0 4px rgba(255, 116, 107, .12); }
 	.voice-status.is-finalizing .voice-status-dot { background: #f2a24d; box-shadow: 0 0 0 4px rgba(242, 162, 77, .12); }
@@ -3283,6 +3539,7 @@
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.context-usage { min-width: 142px; min-height: 36px; padding: 6px 10px; display: flex; flex-direction: column; justify-content: center; gap: 5px; border: 1px solid rgba(55, 211, 154, .24); border-radius: 10px; background: rgba(15, 22, 19, .72); color: #8fdcbe; box-sizing: border-box; }
+	.context-usage > .user-thinking-orb { align-self: flex-start; }
 	.context-usage-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; line-height: 1.15; white-space: nowrap; }
 	.context-usage-status { font-size: 9px; opacity: .9; }
 	.context-usage-track { width: 100%; height: 3px; overflow: hidden; border-radius: 999px; background: rgba(143, 220, 190, .16); }
@@ -3293,6 +3550,10 @@
 	.context-usage.is-danger { border-color: rgba(255, 112, 104, .38); color: #ff9b94; }
 	.context-usage.is-danger .context-usage-track { background: rgba(255, 112, 104, .16); }
 	.context-usage.is-danger .context-usage-fill { background: #ff7068; }
+	.motion-toggle { min-height: 36px; margin: 0; padding: 0 10px; border: 1px solid rgba(113, 151, 134, .38); border-radius: 10px; background: rgba(20, 29, 25, .72); color: #9eb8aa; font-size: 11px; line-height: 34px; }
+	.motion-toggle::after { border: 0; }
+	.motion-toggle:active { background: rgba(55, 211, 154, .15); color: #c9f4e2; }
+	.motion-toggle:focus-visible { outline: 2px solid rgba(143, 232, 196, .8); outline-offset: 2px; }
 	.reasoning-effort-picker, .image-aspect-picker, .video-option-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
 	.image-aspect-picker { color: #9bc8ec; }
 	.video-option-picker { color: #9bc8ec; }
@@ -3311,6 +3572,10 @@
 	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
 		.mobile-only { display: none !important; }
+		.generated-image-gallery.is-hero-two { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
+		.generated-image-gallery.is-hero-three { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(3, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
+		.generated-image-gallery.is-hero-two .generated-image-gallery-tile, .generated-image-gallery.is-hero-three .generated-image-gallery-tile { aspect-ratio: auto; }
+		.generated-image-gallery.is-hero-two .generated-image-gallery-tile.is-hero, .generated-image-gallery.is-hero-three .generated-image-gallery-tile.is-hero { grid-column: 1; grid-row: 1 / -1; }
 	}
 	@media screen and (min-width: 1024px) {
 		.message-shell { padding: 38px 28px 28px; }

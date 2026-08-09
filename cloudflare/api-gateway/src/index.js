@@ -1,6 +1,7 @@
 const ROOT_HOST = 'niko000o.site'
 const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
+const VOICE_WEBSOCKET_PATH = '/ws/voice'
 const SIGNATURE_VERSION = 'v2'
 const AI_MODEL_DETAIL_PATH =
 	/^\/api\/ai-models\/[A-Za-z0-9_-]{11}$/
@@ -126,7 +127,17 @@ export async function handleRequest(request, env, runtime = {}) {
 		}
 		return migrationResponse(request)
 	}
-	if (!API_METHODS.includes(request.method)) {
+	if (route.webSocket) {
+		if (request.method !== 'GET') {
+			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
+		}
+		if (headerValue(request.headers, 'Upgrade').trim().toLowerCase()
+			!== 'websocket') {
+			return jsonError(426, 'WEBSOCKET_UPGRADE_REQUIRED', {
+				Upgrade: 'websocket'
+			})
+		}
+	} else if (!API_METHODS.includes(request.method)) {
 		return jsonError(405, 'METHOD_NOT_ALLOWED', {
 			Allow: API_METHODS.join(', ')
 		})
@@ -154,6 +165,9 @@ export async function handleRequest(request, env, runtime = {}) {
 	if (isCrossHostRedirect(upstreamResponse, route.surface)) {
 		return jsonError(502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
 	}
+	if (route.webSocket) {
+		return guardedWebSocketResponse(upstreamResponse)
+	}
 	logSseRequest(sseDiagnostic, upstreamResponse)
 	const response = guardedResponse(
 		upstreamResponse,
@@ -169,6 +183,15 @@ function classifyRoute(url) {
 	if (url.hostname === ROOT_HOST) {
 		if (url.pathname === '/api/_edge/cookie-scope') {
 			return { allowed: true, migration: true, surface: 'root' }
+		}
+		if (url.pathname === VOICE_WEBSOCKET_PATH) {
+			return {
+				allowed: true,
+				migration: false,
+				surface: 'root',
+				webSocket: true,
+				routeTemplate: VOICE_WEBSOCKET_PATH
+			}
 		}
 		const conversationResponse =
 			url.pathname === '/api/ai/conversations/responses'
@@ -295,6 +318,11 @@ async function signedUpstreamRequest(request, env, route, now) {
 			|| lowerName.startsWith('x-forwarded-')) {
 			headers.delete(name)
 		}
+	}
+	if (route.webSocket) {
+		// 语音握手只负责建立传输通道，身份由连接后的单次票据原子消费，避免把主域名凭据扩大到 /ws。
+		headers.delete('Cookie')
+		headers.delete('Authorization')
 	}
 
 	const timestamp = String(Math.floor(now() / 1000))
@@ -491,6 +519,18 @@ function guardedResponse(response, surface, streaming = false) {
 		statusText: response.statusText,
 		headers
 	})
+}
+
+function guardedWebSocketResponse(response) {
+	if (response.status !== 101 || !response.webSocket) {
+		return jsonError(502, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
+	}
+	const setCookies = readSetCookies(response.headers)
+	if (setCookies === null || setCookies.length > 0) {
+		return jsonError(502, 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION')
+	}
+	// 透明代理必须保留运行时挂载的 WebSocket 对象；重建普通 Response 会丢失升级后的双向通道。
+	return response
 }
 
 function createSseDiagnostic(route, request, env, runtime) {

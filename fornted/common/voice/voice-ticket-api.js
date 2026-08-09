@@ -44,9 +44,6 @@ export function voiceWebSocketUrl(apiBaseUrl = AUTH_API_BASE_URL) {
 	}
 	// #ifdef H5
 	if (typeof window !== 'undefined' && window.location?.protocol === 'https:') {
-		if (window.location.hostname === 'niko000o.site') {
-			return 'wss://api.niko000o.site/ws/voice'
-		}
 		return `wss://${window.location.host}/ws/voice`
 	}
 	// #endif

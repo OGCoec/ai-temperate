@@ -5,16 +5,28 @@ import com.example.temperate.service.registration.verification.delivery.logging.
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.FailureStage;
 import com.example.temperate.service.registration.verification.delivery.logging.VerificationDeliveryProviderMetadata.RecommendedAction;
 import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeoutException;
 
 /**
  * 将 Microsoft Graph 的稳定状态码和机器可读错误码映射为有限的安全诊断分类。
  *
- * <p>该分类器不读取错误消息、响应体或请求内容；输出的提示只用于确定排查方向，不代表在缺少
- * 账号和邮箱状态证据时已经确认唯一根因。</p>
+ * <p>该分类器只读取稳定的 OAuth 机器错误和数字错误码，不读取 error_description、原始响应体或
+ * 请求内容；输出的提示只用于确定排查方向，不代表在缺少账号和邮箱状态证据时已经确认唯一根因。</p>
  */
 final class MicrosoftGraphFailureClassifier {
+
+    private static final Set<Integer> REFRESH_TOKEN_INACTIVE_CODES = Set.of(700082);
+    private static final Set<Integer> SPA_REFRESH_TOKEN_EXPIRED_CODES = Set.of(700084);
+    private static final Set<Integer> SIGN_IN_FREQUENCY_CODES = Set.of(70043);
+    private static final Set<Integer> REFRESH_TOKEN_REVOKED_CODES = Set.of(70000, 700080);
+    private static final Set<Integer> CLIENT_SECRET_INVALID_CODES = Set.of(70002, 7000215);
+    private static final Set<Integer> CLIENT_REGISTRATION_INVALID_CODES = Set.of(700016);
+    private static final Set<Integer> CLIENT_TOKEN_MISMATCH_CODES = Set.of(700027, 7000218);
+    private static final Set<Integer> CONSENT_REQUIRED_CODES = Set.of(65001, 65004);
 
     private MicrosoftGraphFailureClassifier() {
     }
@@ -173,6 +185,49 @@ final class MicrosoftGraphFailureClassifier {
                 RecommendedAction.INSPECT_STATUS_CODE_AND_REQUEST_ID);
     }
 
+    /**
+     * 将 Microsoft OAuth 的稳定 error 与 AADSTS 数字码映射为固定日志原因，禁止传播 error_description。
+     */
+    static String oauthFailureReason(String oauthError, List<Integer> errorCodes) {
+        List<Integer> codes = errorCodes == null ? List.of() : errorCodes;
+        if (containsAny(codes, SPA_REFRESH_TOKEN_EXPIRED_CODES)) {
+            return "spa_refresh_token_expired";
+        }
+        if (containsAny(codes, REFRESH_TOKEN_INACTIVE_CODES)) {
+            return "refresh_token_inactive";
+        }
+        if (containsAny(codes, SIGN_IN_FREQUENCY_CODES)) {
+            return "sign_in_frequency_policy_rejected";
+        }
+        if (containsAny(codes, REFRESH_TOKEN_REVOKED_CODES)) {
+            return "refresh_token_revoked";
+        }
+        if (containsAny(codes, CLIENT_SECRET_INVALID_CODES)) {
+            return "client_secret_invalid";
+        }
+        if (containsAny(codes, CLIENT_REGISTRATION_INVALID_CODES)) {
+            return "oauth_client_registration_invalid";
+        }
+        if (containsAny(codes, CLIENT_TOKEN_MISMATCH_CODES)) {
+            return "oauth_client_token_mismatch";
+        }
+        if (containsAny(codes, CONSENT_REQUIRED_CODES)) {
+            return "oauth_consent_required";
+        }
+
+        String normalized = oauthError == null
+                ? ""
+                : oauthError.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "invalid_grant" -> "oauth_invalid_grant";
+            case "invalid_client" -> "oauth_invalid_client";
+            case "unauthorized_client" -> "oauth_unauthorized_client";
+            case "consent_required", "interaction_required" -> "oauth_consent_required";
+            case "invalid_scope" -> "oauth_invalid_scope";
+            default -> "oauth_request_rejected";
+        };
+    }
+
     private static boolean hasCode(String actualCode, String expectedCode) {
         return actualCode != null && expectedCode.equalsIgnoreCase(actualCode);
     }
@@ -192,6 +247,10 @@ final class MicrosoftGraphFailureClassifier {
             current = next;
         }
         return false;
+    }
+
+    private static boolean containsAny(List<Integer> values, Set<Integer> expected) {
+        return values.stream().anyMatch(expected::contains);
     }
 
     private static Classification classification(

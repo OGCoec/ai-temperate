@@ -2,8 +2,15 @@
     "version" : "1.0",
     "configurations" : [
         {
-            "playground" : "standard",
+            "customPlaygroundType" : "device",
+            "packageName" : "io.dcloud.HBuilder",
+            "playground" : "custom",
             "type" : "uni-app:app-android"
+        },
+        {
+            "customPlaygroundType" : "device",
+            "playground" : "standard",
+            "type" : "uni-app:app-ios"
         }
     ]
 }
