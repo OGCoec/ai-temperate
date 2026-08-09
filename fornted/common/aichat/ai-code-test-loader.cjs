@@ -2,6 +2,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
+const esmResolverPromise = import(pathToFileURL(
+	path.join(__dirname, 'ai-code-test-esm-resolver.mjs')
+).href)
+
 function sourceUrl(source) {
 	return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
 }
@@ -26,7 +30,8 @@ async function moduleUrl(filePath, cache) {
 			if (specifier.startsWith('.')) {
 				replacement = await moduleUrl(path.resolve(path.dirname(absolutePath), specifier), cache)
 			} else {
-				replacement = pathToFileURL(require.resolve(specifier)).href
+				const { resolveEsmSpecifier } = await esmResolverPromise
+				replacement = resolveEsmSpecifier(specifier)
 			}
 			source = source.replaceAll(JSON.stringify(specifier), JSON.stringify(replacement))
 			source = source.replaceAll("'" + specifier + "'", JSON.stringify(replacement))

@@ -54,7 +54,8 @@ final class VideoTransferNdjsonWriter {
 
     void failed(long sequence, String errorCode) {
         ObjectNode frame = frame("failed", sequence);
-        frame.put("errorCode", Objects.requireNonNull(errorCode));
+        // 失败帧是 FC 唯一跨网络的异常边界，始终通过固定枚举白名单过滤调用方传入值。
+        frame.put("errorCode", VideoTransferFailureCode.safeCode(errorCode));
         write(frame);
     }
 

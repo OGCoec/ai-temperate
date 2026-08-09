@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 创建一次 xAI 视频任务并按官方协议轮询到终态，输出只包含进度、临时定位和精确成本事件。
@@ -116,11 +117,11 @@ public final class XaiVideosGenerationStreamingStrategy
     }
 
     private Flux<AiConversationModelEvent> poll(String requestId) {
-        return Flux.interval(
-                        videoProperties.pollInterval(),
-                        videoProperties.pollInterval())
-                // concatMap 保证任意时刻只有一个状态查询，避免慢响应造成并行轮询和额外压力。
-                .concatMap(ignored -> client.poll(requestId))
+        // 固定 interval 会在单次 GET 超过轮询间隔时因下游暂无需求而溢出；
+        // 每次响应完成后再启动下一段延迟，既保证单请求串行，也不会积压过期 tick。
+        return Mono.delay(videoProperties.pollInterval())
+                .then(Mono.defer(() -> client.poll(requestId)))
+                .repeat()
                 .takeUntil(result -> result.status().terminal())
                 .concatMap(result -> events(requestId, result));
     }

@@ -135,8 +135,9 @@ final class AliyunFcAiConversationVideoBridgeClient {
                         return;
                     }
                     if ("failed".equals(frame.type())) {
-                        sink.error(new IllegalStateException(
-                                "FC video transfer reported failure."));
+                        // FC 响应属于不可信网络输入，阶段码必须先经过固定白名单收敛再离开桥接边界。
+                        sink.error(AliyunFcVideoTransferFailureException.from(
+                                frame.errorCode()));
                         return;
                     }
                     if ("completed".equals(frame.type())
@@ -215,6 +216,8 @@ final class AliyunFcAiConversationVideoBridgeClient {
                     ? node.get("totalBytes").asLong(-1L) : null;
             Integer percent = node.hasNonNull("percent")
                     ? node.get("percent").asInt(-1) : null;
+            String errorCode = node.hasNonNull("errorCode")
+                    ? node.get("errorCode").asText(null) : null;
             if (!node.isObject() || node.path("schemaVersion").asInt(-1) != 1
                     || sequence < 1L || transferredBytes < 0L
                     || (totalBytes != null && totalBytes < transferredBytes)
@@ -225,7 +228,7 @@ final class AliyunFcAiConversationVideoBridgeClient {
                 throw new IllegalArgumentException("FC NDJSON total bytes are invalid.");
             }
             return new TransferFrame(type, sequence, transferredBytes, totalBytes,
-                    percent, node.get("result"));
+                    percent, errorCode, node.get("result"));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException(
                     "FC video bridge returned malformed NDJSON.", exception);
@@ -299,6 +302,7 @@ final class AliyunFcAiConversationVideoBridgeClient {
             long transferredBytes,
             Long totalBytes,
             Integer percent,
+            String errorCode,
             JsonNode result) {
 
         private AiConversationMediaUploadProgress toProgress(

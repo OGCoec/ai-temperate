@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 const { loadEsmModule } = require('./ai-code-test-loader.cjs')
@@ -17,6 +18,13 @@ function textContent(node) {
 async function loadPresentation() {
 	return loadEsmModule(path.join(__dirname, 'ai-json-presentation.js'))
 }
+
+test('imports the ESM-only lossless-json package through named exports', () => {
+	const source = fs.readFileSync(path.join(__dirname, 'ai-json-presentation.js'), 'utf8')
+
+	assert.match(source, /import \{ isLosslessNumber, parse as parseLosslessJson \} from 'lossless-json'/)
+	assert.doesNotMatch(source, /losslessJsonModule\.default/)
+})
 
 test('maps JSON objects into the existing safe Markdown AST without losing large numbers', async () => {
 	const { parseAiJsonDocument } = await loadPresentation()

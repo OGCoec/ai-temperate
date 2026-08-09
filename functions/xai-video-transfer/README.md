@@ -4,6 +4,8 @@
 
 部署使用阿里云 FC `custom.debian11` Web Function、512 MiB 内存和 900 秒超时。`customRuntimeConfig` 运行 Shade 包中的 `XaiVideoTransferWebServer`，并由 FC 将 HTTP 请求转发至端口 `9000`。
 
+`custom.debian11` 不内置 Java。执行 `mvn package` 时，Maven 会下载固定版本的 Eclipse Temurin Linux x64 JRE 11、校验 SHA-256，并生成 `target/fc-deploy` 与 `target/xai-video-transfer-deploy.zip`。部署时只能上传该目录或 ZIP，禁止直接上传整个 `target`。`bootstrap` 会在 FC 冷启动时把 JRE 解压至 `/tmp/xai-video-transfer-java11`，再通过绝对路径启动 Shade JAR；这样不会依赖容器 `PATH`，也不会受 Windows ZIP 可执行权限丢失影响。
+
 `probe` 保持历史单个 JSON 响应。`transfer` 在已签名请求中携带 `responseMode=ndjson-v1` 时返回 `application/x-ndjson`：
 
 - `progress`：OSS SDK 分片的真实累计字节进度；

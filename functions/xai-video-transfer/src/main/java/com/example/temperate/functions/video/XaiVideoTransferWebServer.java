@@ -181,11 +181,11 @@ public final class XaiVideoTransferWebServer {
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 writer.failed(sequence.incrementAndGet(),
-                        "AI_VIDEO_OSS_TRANSFER_FAILED");
+                        VideoTransferFailureCode.safeCode(exception));
             } catch (Exception exception) {
                 // NDJSON 已经开始时只能写入稳定失败帧，不能改写已提交的 HTTP 状态或泄漏底层异常。
                 writer.failed(sequence.incrementAndGet(),
-                        "AI_VIDEO_OSS_TRANSFER_FAILED");
+                        VideoTransferFailureCode.safeCode(exception));
             }
         }
     }
@@ -202,15 +202,37 @@ public final class XaiVideoTransferWebServer {
                 || !request.targetObjectKey().startsWith(configuration.objectPrefix())) {
             throw new IllegalArgumentException("FC video transfer request is invalid.");
         }
-        try (VideoSourceStream.OpenedVideo source = videoSource.open(
-                        request.sourceUrl(), request.expectedContentType(),
-                        request.maximumBytes());
-                OssMultipartUploader uploader = new OssMultipartUploader(
-                        configuration, request.targetObjectKey(),
-                        requireOssCredentials())) {
-            progressListener.uploading(0L,
-                    source.declaredLength() > 0L ? source.declaredLength() : null);
-            return relay.relay(source, uploader, request.maximumBytes(), progressListener);
+        // 先读取 FC 角色的短期凭据，缺失时立即返回阶段码，避免无意义地打开上游视频流。
+        CredentialsProvider credentials = requireOssCredentials();
+        VideoSourceStream.OpenedVideo source;
+        try {
+            source = videoSource.open(
+                    request.sourceUrl(), request.expectedContentType(),
+                    request.maximumBytes());
+        } catch (InterruptedException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new VideoTransferFailureException(
+                    VideoTransferFailureCode.SOURCE_OPEN_FAILED, exception);
+        }
+        try (VideoSourceStream.OpenedVideo openedSource = source) {
+            OssMultipartUploader uploader;
+            try {
+                uploader = new OssMultipartUploader(
+                        configuration, request.targetObjectKey(), credentials);
+            } catch (Exception exception) {
+                throw new VideoTransferFailureException(
+                        VideoTransferFailureCode.OSS_MULTIPART_INIT_FAILED,
+                        exception);
+            }
+            try (OssMultipartUploader openedUploader = uploader) {
+                progressListener.uploading(0L,
+                        openedSource.declaredLength() > 0L
+                                ? openedSource.declaredLength() : null);
+                return relay.relay(
+                        openedSource, openedUploader,
+                        request.maximumBytes(), progressListener);
+            }
         }
     }
 
@@ -220,7 +242,9 @@ public final class XaiVideoTransferWebServer {
         String securityToken = System.getenv(TEMPORARY_SECURITY_TOKEN);
         if (isBlank(accessKeyId) || isBlank(accessKeySecret)
                 || isBlank(securityToken)) {
-            throw new IOException("FC RAM execution credentials are unavailable.");
+            throw new VideoTransferFailureException(
+                    VideoTransferFailureCode.OSS_CREDENTIALS_UNAVAILABLE,
+                    null);
         }
         // 仅把 FC 执行角色注入的短期 STS 三元组交给 OSS SDK，禁止读取、记录或保存长期 AccessKey。
         return new StaticCredentialsProvider(accessKeyId, accessKeySecret,

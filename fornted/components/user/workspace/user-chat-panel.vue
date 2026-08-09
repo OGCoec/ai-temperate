@@ -192,6 +192,19 @@
 										{{ attachment.phase === 'FINAL' ? '最终图片正在保存到 OSS…' : '生成中的完整预览，仅最终图片会保存' }}
 									</text>
 									</view>
+									<!-- #ifdef H5 -->
+									<button
+										v-if="previewVideo(attachment)"
+										class="video-download-button"
+										type="button"
+										:disabled="videoDownloading(attachment)"
+										:aria-busy="String(videoDownloading(attachment))"
+										@click="downloadVideo(attachment)"
+									>
+										<uni-icons type="download" size="16" color="#37d39a" aria-hidden="true" />
+										<text>{{ videoDownloading(attachment) ? '正在下载' : '下载视频' }}</text>
+									</button>
+									<!-- #endif -->
 									<user-media-upload-progress
 										v-if="mediaUploadProgressForAttachment(message, attachment)"
 										:progress="mediaUploadProgressForAttachment(message, attachment)"
@@ -741,6 +754,8 @@
 				imageUpgradeTokens: markRaw(new Map()),
 				generatedResponseImageNaturalSizes: {},
 				generatedVideoNaturalSizes: {},
+				videoDownloadBusyById: {},
+				videoDownloadObjectUrls: markRaw(new Set()),
 				generatedResponseImageViewportHeight: null,
 				generatedResponseImageResizeListener: null,
 				generating: false,
@@ -826,6 +841,7 @@
 			this.cancelPendingUploads()
 			this.releasePreviewUrls(this.pendingAttachments.map(file => file.path))
 			this.releaseAllLocalPreviews()
+			this.releaseAllVideoDownloadObjectUrls()
 		},
 		computed: {
 			selectedModel() { return this.models.find(model => model.publicId === this.selectedModelPublicId) || null },
@@ -2933,6 +2949,59 @@
 			},
 			previewImage(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('image/') && attachment.contentType !== 'image/svg+xml' && attachment.url },
 			previewVideo(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('video/') && attachment.url },
+			videoDownloading(attachment) {
+				const attachmentId = String(attachment?.attachmentId || '')
+				return Boolean(attachmentId && this.videoDownloadBusyById[attachmentId])
+			},
+			setVideoDownloading(attachmentId, downloading) {
+				const next = { ...this.videoDownloadBusyById }
+				if (downloading) next[attachmentId] = true
+				else delete next[attachmentId]
+				this.videoDownloadBusyById = next
+			},
+			videoDownloadFileName(attachment) {
+				const fileName = String(attachment?.fileName || '').trim()
+				return /\.mp4$/i.test(fileName) ? fileName : 'generated-video.mp4'
+			},
+			releaseVideoDownloadObjectUrl(objectUrl) {
+				if (!objectUrl) return
+				URL.revokeObjectURL(objectUrl)
+				this.videoDownloadObjectUrls.delete(objectUrl)
+			},
+			releaseAllVideoDownloadObjectUrls() {
+				this.videoDownloadObjectUrls.forEach(objectUrl => URL.revokeObjectURL(objectUrl))
+				this.videoDownloadObjectUrls.clear()
+			},
+			async downloadVideo(attachment) {
+				if (!this.previewVideo(attachment)
+					|| !/^https:\/\//i.test(String(attachment.url || ''))) return
+				const attachmentId = String(attachment.attachmentId || '')
+				if (!attachmentId || this.videoDownloading(attachment)) return
+				this.setVideoDownloading(attachmentId, true)
+				let objectUrl = ''
+				try {
+					const response = await fetch(attachment.url, { credentials: 'omit' })
+					if (!response.ok) throw new Error('VIDEO_DOWNLOAD_HTTP_FAILED')
+					const blob = await response.blob()
+					if (!blob.size) throw new Error('VIDEO_DOWNLOAD_EMPTY')
+					objectUrl = URL.createObjectURL(blob)
+					this.videoDownloadObjectUrls.add(objectUrl)
+					const link = document.createElement('a')
+					link.href = objectUrl
+					link.download = this.videoDownloadFileName(attachment)
+					link.rel = 'noopener'
+					link.style.display = 'none'
+					document.body.appendChild(link)
+					link.click()
+					link.remove()
+					setTimeout(() => this.releaseVideoDownloadObjectUrl(objectUrl), 1000)
+				} catch (_) {
+					this.releaseVideoDownloadObjectUrl(objectUrl)
+					uni.showToast({ title: '视频下载失败，请重试', icon: 'none' })
+				} finally {
+					this.setVideoDownloading(attachmentId, false)
+				}
+			},
 			openAttachment(attachment) {
 				if (attachment.state !== 'AVAILABLE' || !attachment.url) return
 				// #ifdef H5
@@ -3128,7 +3197,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .voice-button, .send-button, .attachment-file, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -3166,9 +3235,9 @@
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 	.attachment-card { min-width: 0; overflow: hidden; display: flex; flex-direction: column; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
-	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; justify-self: center; background: #000; }
+	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; overflow: visible; justify-self: center; border: 0; border-radius: 0; background: transparent; }
 	.attachment-media-frame { min-width: 0; overflow: hidden; }
-	.attachment-media-frame.is-video { width: 100%; max-width: 720px; max-height: min(68vh, 1080px); margin: 0 auto; background: #000; }
+	.attachment-media-frame.is-video { width: 100%; max-width: 720px; max-height: min(68vh, 1080px); margin: 0 auto; overflow: hidden; border: 1px solid #313a35; border-radius: 12px; background: #000; box-sizing: border-box; }
 	.media-upload-pending-grid { grid-template-columns: minmax(0, 1fr); }
 	.media-upload-pending-card { min-height: 0; }
 	.media-upload-video-placeholder { min-height: clamp(160px, 38vw, 405px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8fdcbe; font-size: 13px; }
@@ -3182,6 +3251,9 @@
 	.image-count-picker { min-height: 34px; margin: 0; padding: 0 10px; border-radius: 10px; color: #cbd4cf; font-size: 12px; }
 	.attachment-file { width: 100%; min-height: 54px; margin: 0; padding: 10px 12px; justify-content: flex-start; gap: 9px; border: 0; border-radius: 0; color: #dce5e0; text-align: left; }
 	.attachment-file text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.video-download-button { min-height: 36px; margin: 10px auto 0; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 10px; color: #a7e6c9; font-size: 12px; font-weight: 700; }
+	.video-download-button:disabled { cursor: wait; opacity: .62; }
+	.video-download-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
 	.message-bottom { height: 1px; }
 	.composer-wrap { width: min(100%, 820px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px 14px calc(10px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.composer { min-height: 58px; padding: 7px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid rgba(99, 117, 107, .55); border-radius: 18px; background: rgba(30, 35, 32, .84); box-shadow: inset 0 1px rgba(255, 255, 255, .05); backdrop-filter: blur(20px) saturate(115%); }

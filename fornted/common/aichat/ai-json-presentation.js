@@ -1,7 +1,4 @@
-import * as losslessJsonModule from 'lossless-json'
-
-const losslessJson = losslessJsonModule.default || losslessJsonModule
-const { isLosslessNumber, parse: parseLosslessJson } = losslessJson
+import { isLosslessNumber, parse as parseLosslessJson } from 'lossless-json'
 
 const MAX_DEPTH = 64
 const MAX_NODES = 5000

@@ -156,6 +156,56 @@ final class XaiVideosGenerationStreamingStrategyTest {
         verify(client, times(1)).poll("request-delayed");
     }
 
+    @Test
+    void doesNotOverflowWhenStatusGetExceedsPollInterval() {
+        XaiVideoClient client = mock(XaiVideoClient.class);
+        when(client.start(any())).thenReturn(Mono.just(
+                new XaiVideoStartResult("request-slow")));
+        when(client.poll("request-slow"))
+                .thenReturn(Mono.defer(() ->
+                        Mono.delay(Duration.ofSeconds(6))
+                                .thenReturn(new XaiVideoPollResult(
+                                        XaiVideoStatus.PENDING, 40, null, null))))
+                .thenReturn(Mono.just(new XaiVideoPollResult(
+                        XaiVideoStatus.DONE,
+                        100,
+                        new AiConversationGeneratedVideo(
+                                "request-slow",
+                                "https://vidgen.x.ai/result.mp4",
+                                5_000L,
+                                "grok-imagine-video-1.5",
+                                false),
+                        4_000_000_000L)));
+        AiConversationVideoGenerationProperties properties =
+                enabledProperties(
+                        Duration.ofSeconds(5), Duration.ofSeconds(30));
+        XaiVideosGenerationStreamingStrategy strategy =
+                new XaiVideosGenerationStreamingStrategy(
+                        new AiInferenceProperties(
+                                true, "https://proxy.example", "test-key",
+                                Duration.ofMinutes(1)),
+                        properties,
+                        registry(new XaiTextToVideoOperationStrategy(
+                                new ObjectMapper(), properties)),
+                        client);
+
+        StepVerifier.withVirtualTime(() -> strategy.stream(request()))
+                .expectNextMatches(
+                        AiConversationModelEvent.VideoRequestAccepted.class::isInstance)
+                .thenAwait(Duration.ofSeconds(11))
+                .expectNextMatches(AiConversationModelEvent.VideoProgress.class::isInstance)
+                .expectNoEvent(Duration.ofSeconds(4))
+                .thenAwait(Duration.ofSeconds(1))
+                .expectNextMatches(AiConversationModelEvent.VideoProgress.class::isInstance)
+                .expectNextMatches(
+                        AiConversationModelEvent.VideoCostEvidence.class::isInstance)
+                .expectNextMatches(AiConversationModelEvent.Video.class::isInstance)
+                .verifyComplete();
+
+        verify(client, times(1)).start(any());
+        verify(client, times(2)).poll("request-slow");
+    }
+
     private static AiConversationStreamingRequest request() {
         return request(null);
     }

@@ -38,6 +38,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@shikijs/langs": "4.4.1",
     "@shikijs/stream": "4.4.1",
     "libphonenumber-js": "1.13.8",
     "lossless-json": "4.3.0",

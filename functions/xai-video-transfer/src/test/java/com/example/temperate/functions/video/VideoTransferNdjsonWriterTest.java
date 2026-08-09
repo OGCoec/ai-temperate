@@ -37,4 +37,19 @@ final class VideoTransferNdjsonWriterTest {
         assertFalse(serialized.contains("sourceUrl"));
         assertFalse(serialized.contains("secret"));
     }
+
+    @Test
+    void sanitizesUnknownFailureTextToGenericStageCode() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        VideoTransferNdjsonWriter writer = new VideoTransferNdjsonWriter(
+                output, new ObjectMapper());
+
+        writer.failed(1, "https://source.example/video?signature=secret");
+
+        JsonNode frame = new ObjectMapper().readTree(
+                output.toString(StandardCharsets.UTF_8).trim());
+        assertEquals("failed", frame.path("type").asText());
+        assertEquals("OSS_TRANSFER_FAILED", frame.path("errorCode").asText());
+        assertFalse(output.toString(StandardCharsets.UTF_8).contains("secret"));
+    }
 }

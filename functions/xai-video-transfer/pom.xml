@@ -13,6 +13,10 @@
         <jackson.version>2.18.3</jackson.version>
         <aliyun.oss.v2.version>0.3.1</aliyun.oss.v2.version>
 		<junit.version>5.11.4</junit.version>
+        <fc.java.runtime.archive>OpenJDK11U-jre_x64_linux_hotspot_11.0.28_6.tar.gz</fc.java.runtime.archive>
+        <fc.java.runtime.url>https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.28%2B6/${fc.java.runtime.archive}</fc.java.runtime.url>
+        <fc.java.runtime.sha256>ddbd5d7ef14aa06784fb94d1e0e7177868dfdd0aa216a8a2e654869968ef7392</fc.java.runtime.sha256>
+        <fc.deploy.directory>${project.build.directory}/fc-deploy</fc.deploy.directory>
     </properties>
 
     <dependencies>
@@ -84,6 +88,47 @@
                                     <mainClass>com.example.temperate.functions.video.XaiVideoTransferWebServer</mainClass>
                                 </transformer>
                             </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>assemble-fc-web-deployment</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <delete dir="${fc.deploy.directory}"/>
+                                <mkdir dir="${fc.deploy.directory}"/>
+                                <get src="${fc.java.runtime.url}"
+                                     dest="${project.build.directory}/${fc.java.runtime.archive}"
+                                     skipexisting="true"
+                                     retries="3"/>
+                                <checksum file="${project.build.directory}/${fc.java.runtime.archive}"
+                                          algorithm="SHA-256"
+                                          property="fc.java.runtime.sha256.actual"/>
+                                <condition property="fc.java.runtime.sha256.valid">
+                                    <equals arg1="${fc.java.runtime.sha256.actual}"
+                                            arg2="${fc.java.runtime.sha256}"/>
+                                </condition>
+                                <fail unless="fc.java.runtime.sha256.valid"
+                                      message="Downloaded Linux Java 11 runtime failed SHA-256 verification."/>
+                                <copy file="${project.basedir}/bootstrap"
+                                      todir="${fc.deploy.directory}"/>
+                                <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                      todir="${fc.deploy.directory}"/>
+                                <copy file="${project.build.directory}/${fc.java.runtime.archive}"
+                                      todir="${fc.deploy.directory}"/>
+                                <zip destfile="${project.build.directory}/xai-video-transfer-deploy.zip"
+                                     basedir="${fc.deploy.directory}"/>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

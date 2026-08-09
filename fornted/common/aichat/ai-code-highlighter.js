@@ -1,14 +1,47 @@
 import darkPlus from '@shikijs/themes/dark-plus'
 import { createHighlighterCore } from 'shiki/core'
-import { bundledLanguages, bundledLanguagesInfo } from 'shiki/langs'
+// #ifndef APP-PLUS
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+// #endif
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
-import { ShikiStreamTokenizer } from '@shikijs/stream'
+// #ifdef APP-PLUS
+import { AppShikiStreamTokenizer } from './ai-code-stream-tokenizer-app.js'
+// #endif
+// #ifndef APP-PLUS
+import { ShikiStreamTokenizer as BrowserShikiStreamTokenizer } from '@shikijs/stream'
+// #endif
 import { createAiCodeLanguageResolver } from './ai-code-language.js'
 import {
 	AI_CODE_THEME_NAME,
 	createAntigravityCodeTheme
 } from './ai-code-theme-antigravity.js'
+// #ifdef APP-PLUS
+import {
+	bundledLanguages as appBundledLanguages,
+	bundledLanguagesInfo as appBundledLanguagesInfo
+} from './ai-code-languages-app.js'
+import shikiWasm from 'shiki/wasm'
+// #endif
+// #ifndef APP-PLUS
+import {
+	bundledLanguages as fullBundledLanguages,
+	bundledLanguagesInfo as fullBundledLanguagesInfo
+} from 'shiki/langs'
+// #endif
+
+let bundledLanguages
+let bundledLanguagesInfo
+let PlatformShikiStreamTokenizer
+// #ifdef APP-PLUS
+bundledLanguages = appBundledLanguages
+bundledLanguagesInfo = appBundledLanguagesInfo
+PlatformShikiStreamTokenizer = AppShikiStreamTokenizer
+// #endif
+// #ifndef APP-PLUS
+bundledLanguages = fullBundledLanguages
+bundledLanguagesInfo = fullBundledLanguagesInfo
+PlatformShikiStreamTokenizer = BrowserShikiStreamTokenizer
+// #endif
 
 const DEFAULT_PREWARM_LANGUAGES = Object.freeze([
 	'java', 'javascript', 'typescript', 'python', 'cpp', 'go',
@@ -18,7 +51,9 @@ const resolveLanguage = createAiCodeLanguageResolver(bundledLanguagesInfo)
 
 let themePromise = null
 let onigurumaHighlighterPromise = null
+// #ifndef APP-PLUS
 let javascriptHighlighterPromise = null
+// #endif
 let prewarmLanguagesStarted = false
 
 async function antigravityTheme() {
@@ -30,15 +65,23 @@ async function antigravityTheme() {
 
 async function onigurumaHighlighter() {
 	if (!onigurumaHighlighterPromise) {
+		let engine
+		// #ifdef APP-PLUS
+		engine = createOnigurumaEngine(shikiWasm)
+		// #endif
+		// #ifndef APP-PLUS
+		engine = createOnigurumaEngine(import('shiki/wasm'))
+		// #endif
 		onigurumaHighlighterPromise = antigravityTheme().then(theme => createHighlighterCore({
 			themes: [theme],
 			langs: [],
-			engine: createOnigurumaEngine(import('shiki/wasm'))
+			engine
 		}))
 	}
 	return onigurumaHighlighterPromise
 }
 
+// #ifndef APP-PLUS
 async function javascriptHighlighter() {
 	if (!javascriptHighlighterPromise) {
 		javascriptHighlighterPromise = antigravityTheme().then(theme => createHighlighterCore({
@@ -49,6 +92,16 @@ async function javascriptHighlighter() {
 	}
 	return javascriptHighlighterPromise
 }
+// #endif
+
+async function unavailableFallbackHighlighter() {
+	throw new Error('AI_CODE_FALLBACK_UNAVAILABLE')
+}
+
+let defaultFallbackHighlighter = unavailableFallbackHighlighter
+// #ifndef APP-PLUS
+defaultFallbackHighlighter = javascriptHighlighter
+// #endif
 
 async function loadLanguage(highlighter, canonicalId) {
 	const loaded = new Set(highlighter.getLoadedLanguages?.() || [])
@@ -62,7 +115,7 @@ async function loadLanguage(highlighter, canonicalId) {
 
 export async function prepareAiCodeHighlighterWithFallback(language, services = {}) {
 	const createPrimary = services.createPrimary || onigurumaHighlighter
-	const createFallback = services.createFallback || javascriptHighlighter
+	const createFallback = services.createFallback || defaultFallbackHighlighter
 	try {
 		const highlighter = await createPrimary()
 		await loadLanguage(highlighter, language.canonicalId)
@@ -107,7 +160,7 @@ export async function createAiCodeTokenizer(language) {
 	return {
 		language: resolved,
 		engine: prepared.engine,
-		tokenizer: new ShikiStreamTokenizer({
+		tokenizer: new PlatformShikiStreamTokenizer({
 			highlighter: prepared.highlighter,
 			lang: resolved.canonicalId,
 			theme: AI_CODE_THEME_NAME,
@@ -120,7 +173,7 @@ export function prewarmAiCodeHighlighter(options = {}) {
 	const languages = Array.isArray(options.languages)
 		? options.languages
 		: DEFAULT_PREWARM_LANGUAGES
-	const corePromise = onigurumaHighlighter().catch(() => javascriptHighlighter())
+	const corePromise = onigurumaHighlighter().catch(() => defaultFallbackHighlighter())
 	void corePromise.then(() => {
 		if (prewarmLanguagesStarted) return
 		prewarmLanguagesStarted = true

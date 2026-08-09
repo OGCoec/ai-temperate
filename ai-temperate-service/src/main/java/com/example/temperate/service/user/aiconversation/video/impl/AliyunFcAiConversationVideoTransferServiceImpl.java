@@ -14,6 +14,8 @@ import com.example.temperate.service.user.aiconversation.video.AiConversationVid
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -22,6 +24,9 @@ import org.springframework.stereotype.Service;
 @Service
 public final class AliyunFcAiConversationVideoTransferServiceImpl
         implements AiConversationVideoTransferService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            AliyunFcAiConversationVideoTransferServiceImpl.class);
 
     private final AliyunFcAiConversationVideoBridgeClient client;
     private final AiConversationVideoGenerationProperties.FunctionCompute properties;
@@ -61,10 +66,19 @@ public final class AliyunFcAiConversationVideoTransferServiceImpl
                 notifyProgress(progressListener, progress);
             });
         } catch (RuntimeException failure) {
+            String safeErrorCode = failure
+                    instanceof AliyunFcVideoTransferFailureException fcFailure
+                    ? fcFailure.errorCode()
+                    : AiConversationErrorCode.AI_VIDEO_OSS_TRANSFER_FAILED.name();
             // \u4FDD\u7559\u6700\u540E\u4E00\u6B21\u771F\u5B9E\u5B57\u8282\u4F4D\u7F6E\uFF0C\u9632\u6B62\u524D\u7AEF\u4F2A\u9020\u5B8C\u6210.
             notifyProgress(progressListener, failedProgress(
                     latestSequence, latestTransferredBytes, latestTotalBytes,
-                    latestPercent));
+                    latestPercent, safeErrorCode));
+            // 仅记录固定错误码与内部传输标识，禁止把源 URL、OSS Key 或远端原始异常写入日志。
+            LOGGER.warn(
+                    "event=ai_video_oss_transfer_failed traceId={} stageCode={}",
+                    command.transferId(),
+                    safeErrorCode);
             throw new AiConversationException(
                     AiConversationErrorCode.AI_VIDEO_OSS_TRANSFER_FAILED,
                     "\u89C6\u9891\u65E0\u6CD5\u5B89\u5168\u4FDD\u5B58\u5230 OSS\u3002",
@@ -77,7 +91,8 @@ public final class AliyunFcAiConversationVideoTransferServiceImpl
                 || !"video/mp4".equalsIgnoreCase(response.contentType())) {
             notifyProgress(progressListener, failedProgress(
                     latestSequence, latestTransferredBytes, latestTotalBytes,
-                    latestPercent));
+                    latestPercent,
+                    AiConversationErrorCode.AI_VIDEO_OSS_TRANSFER_FAILED.name()));
             throw new AiConversationException(
                     AiConversationErrorCode.AI_VIDEO_OSS_TRANSFER_FAILED,
                     "\u89C6\u9891\u642C\u8FD0\u7ED3\u679C\u672A\u901A\u8FC7\u5B89\u5168\u6821\u9A8C\u3002",
@@ -114,7 +129,8 @@ public final class AliyunFcAiConversationVideoTransferServiceImpl
             AtomicLong latestSequence,
             AtomicLong latestTransferredBytes,
             AtomicReference<Long> latestTotalBytes,
-            AtomicReference<Integer> latestPercent) {
+            AtomicReference<Integer> latestPercent,
+            String errorCode) {
         return new AiConversationMediaUploadProgress(
                 AiConversationMediaType.VIDEO,
                 0,
@@ -125,7 +141,7 @@ public final class AliyunFcAiConversationVideoTransferServiceImpl
                 latestTotalBytes.get(),
                 latestPercent.get(),
                 latestSequence.incrementAndGet(),
-                AiConversationErrorCode.AI_VIDEO_OSS_TRANSFER_FAILED.name());
+                errorCode);
     }
 
     /**

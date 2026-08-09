@@ -10,12 +10,14 @@ import {
   AitVoicePermissionOptions,
   AitVoiceRecorderFailure,
   AitVoiceRecorderOptions,
-  AitVoiceRecorderSession
+  AitVoiceRecorderSession,
+  RequestRecordPermissionApi,
+  StartRecordingApi
 } from '../interface.uts'
 
 const RECORD_AUDIO = 'android.permission.RECORD_AUDIO'
-const SAMPLE_RATE = 16000
-const BYTES_PER_FRAME = 3200
+const SAMPLE_RATE: Int = 16000
+const BYTES_PER_FRAME: Int = 3200
 
 function failure(code: string, message: string): AitVoiceRecorderFailure {
   return { code, message }
@@ -24,7 +26,8 @@ function failure(code: string, message: string): AitVoiceRecorderFailure {
 /**
  * 使用系统权限 API 而不是页面层模拟授权，确保 Android 拒绝状态与真实录音权限一致。
  */
-export function requestRecordPermission(options: AitVoicePermissionOptions): void {
+export const requestRecordPermission: RequestRecordPermissionApi =
+  function(options: AitVoicePermissionOptions): void {
   const activity = UTSAndroid.getUniActivity()
   if (activity == null) {
     options.onDenied(false)
@@ -48,7 +51,8 @@ export function requestRecordPermission(options: AitVoicePermissionOptions): voi
 /**
  * AudioRecord 直接产出目标 PCM，避免经过有损容器编码后再解码造成延迟和额外复制。
  */
-export function startRecording(options: AitVoiceRecorderOptions): AitVoiceRecorderSession {
+export const startRecording: StartRecordingApi =
+  function(options: AitVoiceRecorderOptions): AitVoiceRecorderSession {
   const running = new AtomicBoolean(true)
   const stopped = new AtomicBoolean(false)
   const minimumBuffer = AudioRecord.getMinBufferSize(

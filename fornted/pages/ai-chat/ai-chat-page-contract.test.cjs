@@ -216,6 +216,35 @@ test('chat page supports generic attachments while only media categories require
 	assert.match(cards, /不受当前模型支持/)
 })
 
+test('Android document picker uses UTS-compatible expressions instead of Kotlin-only syntax', () => {
+	const androidPicker = read('uni_modules/ait-document-picker/utssdk/app-android/index.uts')
+
+	assert.doesNotMatch(androidPicker, /-?\d+L\b/)
+	assert.doesNotMatch(androidPicker, /\s\?:\s/)
+	assert.doesNotMatch(androidPicker, /\buntil\b/)
+	assert.match(androidPicker, /const REQUEST_CODE: Int = 17341/)
+	assert.match(androidPicker, /const input = resolver\.openInputStream\(uri\)[\s\S]{0,120}if \(input == null\)/)
+	assert.match(androidPicker, /const limit: Int = Math\.min\(count, clipData\.getItemCount\(\)\)\.toInt\(\)/)
+	assert.match(androidPicker, /for \(let index: Int = 0; index < limit; index\+\+\)/)
+	assert.match(androidPicker, /selected\.forEach\(\(uri: Uri\) => \{[\s\S]{0,100}files\.add\(copyUri\(uri\)\)/)
+	assert.doesNotMatch(androidPicker, /selected\.forEach\(\(uri: Uri\) => files\.add/)
+	assert.match(androidPicker, /const errorMessage = error\.message/)
+	assert.doesNotMatch(androidPicker, /error\.getMessage\(\)/)
+})
+
+test('Android UTS HTTP plugins use Int lengths and key-only UTSJSONObject iteration', () => {
+	const androidUpload = read('uni_modules/ait-oss-put/utssdk/app-android/index.uts')
+	const androidSse = read('uni_modules/ait-sse/utssdk/app-android/index.uts')
+
+	assert.match(androidUpload, /setFixedLengthStreamingMode\(options\.sizeBytes\.toInt\(\)\)/)
+	assert.match(androidUpload, /options\.headers\.forEach\(\(name: string\) => \{/)
+	assert.match(androidUpload, /const value = options\.headers\[name\]/)
+	assert.doesNotMatch(androidUpload, /headers\.forEach\(\(value:[^,]+,\s*name:/)
+	assert.match(androidSse, /options\.headers\.forEach\(\(name: string\) => \{/)
+	assert.match(androidSse, /const value = options\.headers\[name\]/)
+	assert.doesNotMatch(androidSse, /headers\.forEach\(\(value:[^,]+,\s*name:/)
+})
+
 test('audio attachments use the generic cross-platform open flow', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
 

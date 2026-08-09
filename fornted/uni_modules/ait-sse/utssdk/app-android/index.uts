@@ -79,7 +79,9 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       connection.setUseCaches(false)
       connection.setDoInput(true)
       connection.setDoOutput(true)
-      options.headers.forEach((value: any, name: string) => {
+      options.headers.forEach((name: string) => {
+        const value = options.headers[name]
+        if (value == null) return
         connection.setRequestProperty(name, value.toString())
       })
       const writer = new OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)

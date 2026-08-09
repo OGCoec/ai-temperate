@@ -1,3 +1,25 @@
 #!/bin/sh
-# FC custom runtime uses sh explicitly, so this bootstrap does not depend on executable bits in a Windows-built deployment package.
-exec java --add-modules jdk.httpserver -jar /code/xai-video-transfer-0.0.1-SNAPSHOT.jar
+set -eu
+
+# FC custom.debian11 does not provide Java. Keep the Linux archive compressed in /code so Windows packaging cannot drop executable bits.
+JRE_ARCHIVE="/code/OpenJDK11U-jre_x64_linux_hotspot_11.0.28_6.tar.gz"
+JRE_DIRECTORY="/tmp/xai-video-transfer-java11"
+JAVA_EXECUTABLE="/tmp/xai-video-transfer-java11/bin/java"
+
+if [ ! -f "${JRE_ARCHIVE}" ]; then
+  echo "FC_BOOTSTRAP_JRE_ARCHIVE_MISSING" >&2
+  exit 127
+fi
+
+if [ ! -x "${JAVA_EXECUTABLE}" ]; then
+  rm -rf "${JRE_DIRECTORY}"
+  mkdir -p "${JRE_DIRECTORY}"
+  if ! tar -xzf "${JRE_ARCHIVE}" -C "${JRE_DIRECTORY}" --strip-components=1; then
+    echo "FC_BOOTSTRAP_JRE_EXTRACT_FAILED" >&2
+    exit 127
+  fi
+fi
+
+exec "${JAVA_EXECUTABLE}" \
+  --add-modules jdk.httpserver \
+  -jar /code/xai-video-transfer-0.0.1-SNAPSHOT.jar

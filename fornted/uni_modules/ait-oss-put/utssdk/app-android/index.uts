@@ -56,8 +56,10 @@ export function putFile(options: AitOssPutOptions): AitOssPutConnection {
       connection.setInstanceFollowRedirects(false)
       connection.setDoInput(true)
       connection.setDoOutput(true)
-      connection.setFixedLengthStreamingMode(options.sizeBytes)
-      options.headers.forEach((value: any, name: string) => {
+      connection.setFixedLengthStreamingMode(options.sizeBytes.toInt())
+      options.headers.forEach((name: string) => {
+        const value = options.headers[name]
+        if (value == null) return
         // 固定长度流模式会写入真实 Content-Length，禁止让外部 Header 覆盖本地文件校验结果。
         if (name.lowercase() == 'content-length') return
         connection.setRequestProperty(name, value.toString())

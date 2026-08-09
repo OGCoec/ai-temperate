@@ -1,7 +1,101 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
 const { loadEsmModule } = require('./ai-code-test-loader.cjs')
+
+const ANDROID_LANGUAGE_IDS = [
+	'c', 'cpp', 'csharp', 'css', 'go', 'html', 'java', 'javascript', 'json',
+	'kotlin', 'php', 'python', 'rust', 'shellscript', 'sql', 'typescript', 'vue'
+]
+
+function appPlusSource(source) {
+	return source
+		.replace(/\/\/ #ifndef APP-PLUS[\s\S]*?\/\/ #endif/g, '')
+		.replace(/\/\/ #ifdef APP-PLUS\s*([\s\S]*?)\/\/ #endif/g, '$1')
+}
+
+test('uses a static common-language registry for App while preserving the full H5 registry', async () => {
+	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const appRegistrySource = fs.readFileSync(path.join(__dirname, 'ai-code-languages-app.js'), 'utf8')
+	const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'))
+	const appRegistry = await loadEsmModule(path.join(__dirname, 'ai-code-languages-app.js'))
+
+	assert.equal(packageJson.dependencies['@shikijs/langs'], '4.4.1')
+	assert.match(highlighterSource, /#ifdef APP-PLUS[\s\S]*from '\.\/ai-code-languages-app\.js'[\s\S]*#endif/)
+	assert.match(highlighterSource, /#ifndef APP-PLUS[\s\S]*from 'shiki\/langs'[\s\S]*#endif/)
+	assert.match(highlighterSource, /#ifdef APP-PLUS[\s\S]*import shikiWasm from 'shiki\/wasm'[\s\S]*#endif/)
+	assert.match(highlighterSource, /#ifndef APP-PLUS[\s\S]*createOnigurumaEngine\(import\('shiki\/wasm'\)\)[\s\S]*#endif/)
+	assert.doesNotMatch(appRegistrySource, /import\s*\(/)
+	for (const id of ANDROID_LANGUAGE_IDS) {
+		assert.ok(appRegistry.bundledLanguages[id], id)
+		assert.equal(
+			appRegistry.bundledLanguagesInfo.some(language => language.id === id),
+			true,
+			id
+		)
+	}
+})
+
+test('keeps the unsupported JavaScript regex fallback out of the App bundle', () => {
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const androidSource = appPlusSource(source)
+
+	assert.doesNotMatch(androidSource, /shiki\/engine\/javascript/)
+	assert.doesNotMatch(androidSource, /createJavaScriptRegexEngine/)
+	assert.doesNotMatch(androidSource, /javascriptHighlighter/)
+	assert.match(androidSource, /createOnigurumaEngine\(shikiWasm\)/)
+})
+
+test('keeps browser TransformStream code out of App while preserving the H5 Shiki stream path', () => {
+	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const appTokenizerSource = fs.readFileSync(path.join(__dirname, 'ai-code-stream-tokenizer-app.js'), 'utf8')
+	const androidSource = appPlusSource(highlighterSource)
+
+	assert.match(androidSource, /from '\.\/ai-code-stream-tokenizer-app\.js'/)
+	assert.doesNotMatch(androidSource, /@shikijs\/stream/)
+	assert.doesNotMatch(appTokenizerSource, /\b(?:TransformStream|ReadableStream|WritableStream)\b/)
+	assert.doesNotMatch(appTokenizerSource, /@shikijs\/stream/)
+	assert.match(highlighterSource, /#ifndef APP-PLUS[\s\S]*from '@shikijs\/stream'[\s\S]*#endif/)
+})
+
+test('App tokenizer preserves stable lines, recalls unfinished tokens, closes, clears and clones independently', async () => {
+	const { AppShikiStreamTokenizer } = await loadEsmModule(
+		path.join(__dirname, 'ai-code-stream-tokenizer-app.js')
+	)
+	const grammarStates = []
+	const highlighter = {
+		codeToTokens(code, options) {
+			grammarStates.push(options.grammarState)
+			return {
+				tokens: [[{ content: code, color: '#FFFFFF', offset: 0 }]],
+				grammarState: 'state:' + code
+			}
+		}
+	}
+	const tokenizer = new AppShikiStreamTokenizer({ highlighter, lang: 'javascript' })
+	const first = await tokenizer.enqueue('const value = 1\nret')
+	const clone = tokenizer.clone()
+	const second = await tokenizer.enqueue('urn value')
+
+	assert.equal(first.recall, 0)
+	assert.equal(first.stable.map(token => token.content).join(''), 'const value = 1\n')
+	assert.equal(first.unstable.map(token => token.content).join(''), 'ret')
+	assert.equal(second.recall, first.unstable.length)
+	assert.equal(second.stable.length, 0)
+	assert.equal(second.unstable.map(token => token.content).join(''), 'return value')
+	assert.equal(tokenizer.close().stable.map(token => token.content).join(''), 'return value')
+	assert.equal(clone.close().stable.map(token => token.content).join(''), 'ret')
+	assert.equal(tokenizer.close().stable.length, 0)
+	assert.equal(grammarStates[0], undefined)
+	assert.equal(grammarStates[1], 'state:const value = 1')
+
+	await tokenizer.enqueue('discarded')
+	tokenizer.clear()
+	const afterClear = await tokenizer.enqueue('fresh')
+	assert.equal(afterClear.recall, 0)
+	assert.equal(afterClear.unstable.map(token => token.content).join(''), 'fresh')
+})
 
 test('loads real Shiki grammars and produces Antigravity-colored Java tokens', async () => {
 	const { createAiCodeTokenizer, resolveAiCodeLanguage } = await loadEsmModule(

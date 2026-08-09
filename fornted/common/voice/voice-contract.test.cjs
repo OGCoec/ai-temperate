@@ -31,6 +31,29 @@ test('Android declares record permission and streams AudioRecord bytes without B
 	assert.doesNotMatch(recorder, /Base64|base64/)
 })
 
+test('Android UTS recorder exports typed const APIs without function declarations', () => {
+	const recorderInterface = read('uni_modules/ait-voice-recorder/utssdk/interface.uts')
+	const recorder = read('uni_modules/ait-voice-recorder/utssdk/app-android/index.uts')
+	const wrapper = read('common/voice/voice-recorder.js')
+
+	assert.doesNotMatch(recorderInterface, /export function requestRecordPermission/)
+	assert.doesNotMatch(recorderInterface, /export function startRecording/)
+	assert.match(recorderInterface, /export type RequestRecordPermissionApi\s*=\s*\(options: AitVoicePermissionOptions\) => void/)
+	assert.match(recorderInterface, /export type StartRecordingApi\s*=\s*\(options: AitVoiceRecorderOptions\) => AitVoiceRecorderSession/)
+	assert.match(recorder, /export const requestRecordPermission: RequestRecordPermissionApi\s*=\s*function\(options: AitVoicePermissionOptions\): void/)
+	assert.match(recorder, /export const startRecording: StartRecordingApi\s*=\s*function\(options: AitVoiceRecorderOptions\): AitVoiceRecorderSession/)
+	assert.match(wrapper, /import\s*\{\s*requestRecordPermission,\s*startRecording\s*\}\s*from '@\/uni_modules\/ait-voice-recorder'/)
+})
+
+test('Android UTS recorder pins native AudioRecord arguments to Int', () => {
+	const recorder = read('uni_modules/ait-voice-recorder/utssdk/app-android/index.uts')
+
+	assert.match(recorder, /const SAMPLE_RATE: Int = 16000/)
+	assert.match(recorder, /const BYTES_PER_FRAME: Int = 3200/)
+	assert.match(recorder, /AudioRecord\.getMinBufferSize\(\s*SAMPLE_RATE,/)
+	assert.match(recorder, /ByteArray\(BYTES_PER_FRAME\)/)
+})
+
 test('chat composer previews partial text and only appends final text to draft', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const partialBranch = panel.slice(

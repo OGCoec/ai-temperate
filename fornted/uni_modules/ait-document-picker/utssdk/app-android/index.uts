@@ -13,7 +13,7 @@ import {
   AitPickedDocument
 } from '../interface.uts'
 
-const REQUEST_CODE = 17341
+const REQUEST_CODE: Int = 17341
 const MAX_FILE_BYTES = 100 * 1024 * 1024
 let active = false
 
@@ -25,7 +25,7 @@ function copyUri(uri: Uri): AitPickedDocument {
   const activity = UTSAndroid.getUniActivity()!
   const resolver = activity.getContentResolver()
   let fileName = 'attachment.bin'
-  let declaredSize: Long = -1L
+  let declaredSize: Long = -1
   const cursor = resolver.query(uri, null, null, null, null)
   if (cursor != null) {
     try {
@@ -53,7 +53,9 @@ function copyUri(uri: Uri): AitPickedDocument {
   }
   const destination = new File(directory, UUID.randomUUID().toString())
   const input = resolver.openInputStream(uri)
-      ?: throw IllegalArgumentException('AI_ATTACHMENT_READ_FAILED')
+  if (input == null) {
+    throw IllegalArgumentException('AI_ATTACHMENT_READ_FAILED')
+  }
   const output = new FileOutputStream(destination)
   let total = 0
   try {
@@ -77,7 +79,9 @@ function copyUri(uri: Uri): AitPickedDocument {
     destination.delete()
     throw IllegalArgumentException('AI_ATTACHMENT_EMPTY')
   }
-  const contentType = resolver.getType(uri) ?: 'application/octet-stream'
+  let contentType = 'application/octet-stream'
+  const detectedContentType = resolver.getType(uri)
+  if (detectedContentType != null) contentType = detectedContentType
   return {
     fileName,
     contentType,
@@ -118,8 +122,10 @@ export function chooseDocuments(options: AitDocumentPickerOptions): void {
     const selected = Array<Uri>()
     const clipData = data.getClipData()
     if (clipData != null) {
-      const limit = Math.min(count, clipData.getItemCount())
-      for (index in 0 until limit) selected.add(clipData.getItemAt(index).getUri())
+      const limit: Int = Math.min(count, clipData.getItemCount()).toInt()
+      for (let index: Int = 0; index < limit; index++) {
+        selected.add(clipData.getItemAt(index).getUri())
+      }
     } else {
       const uri = data.getData()
       if (uri != null) selected.add(uri)
@@ -132,12 +138,16 @@ export function chooseDocuments(options: AitDocumentPickerOptions): void {
     const worker = new Thread(() => {
       try {
         const files = Array<AitPickedDocument>()
-        selected.forEach((uri: Uri) => files.add(copyUri(uri)))
+        selected.forEach((uri: Uri) => {
+          files.add(copyUri(uri))
+        })
         active = false
         options.onSuccess(files)
       } catch (error: Throwable) {
         active = false
-        const code = error.getMessage() ?: 'AI_ATTACHMENT_PICK_FAILED'
+        let code: string = 'AI_ATTACHMENT_PICK_FAILED'
+        const errorMessage = error.message
+        if (errorMessage != null) code = errorMessage
         options.onError(fail(code, code == 'AI_ATTACHMENT_TOO_LARGE'
           ? '单个附件不能超过 100 MB。'
           : '无法读取所选附件。'))

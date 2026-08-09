@@ -20,11 +20,13 @@ export type AitVoiceRecorderSession = {
 }
 
 /**
- * 请求 Android 录音权限，永久拒绝与普通拒绝通过独立布尔值返回。
+ * 定义 Android 录音权限请求 API，权限结果继续通过原有回调返回。
  */
-export function requestRecordPermission(options: AitVoicePermissionOptions): void
+export type RequestRecordPermissionApi =
+  (options: AitVoicePermissionOptions) => void
 
 /**
- * 启动固定十六千赫兹、单声道、十六位小端 PCM 录音并按约一百毫秒回调。
+ * 定义 Android PCM 录音启动 API，返回值继续提供可重复调用的停止操作。
  */
-export function startRecording(options: AitVoiceRecorderOptions): AitVoiceRecorderSession
+export type StartRecordingApi =
+  (options: AitVoiceRecorderOptions) => AitVoiceRecorderSession
