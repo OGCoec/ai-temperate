@@ -351,8 +351,14 @@ test('H5 and Android share one SSE parser and Android transport accepts POST JSO
 	assert.match(androidTransport, /MAX_ERROR_BODY_BYTES = 16 \* 1024/)
 	assert.match(androidTransport, /getErrorStream\(\)/)
 	assert.match(androidTransport, /JSON\.parse\(body\)/)
-	assert.match(androidTransport, /return \{ code, statusCode, message \}/)
-	assert.match(androidTransport, /getContentType\(\)[\s\S]*text\/event-stream/)
+	assert.match(
+		androidTransport,
+		/return \{ code, statusCode, message, contentType, cfMitigated, cfRay \}/
+	)
+	assert.match(
+		androidTransport,
+		/getHeaderField\('Content-Type'\)[\s\S]*text\/event-stream/
+	)
 	assert.match(stream, /Accept:\s*'text\/event-stream, application\/json'/)
 	assert.match(stream, /if \(closed\) \{\s*active\.close\?\.\(closeReason, closeDetails\)\s*return\s*\}/)
 	assert.match(android, /lifecycleDiagnostics\?\.abortCalled\?\.\(\)/)
