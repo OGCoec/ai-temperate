@@ -1,4 +1,8 @@
 import { AUTH_API_BASE_URL, clientPlatform } from './config.js'
+import {
+	androidEdgeRequestHeaders,
+	runAndroidRequestWithEdgeRecovery
+} from './android-edge-challenge.js'
 import { ensureCookieScopeMigration } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import {
@@ -13,6 +17,10 @@ import {
 	failRiskChallengeRecheck
 } from './risk-challenge-navigation.js'
 import { clearSession } from './session-vault.js'
+import {
+	applyDiagnosticsToError,
+	inspectAuthResponse
+} from './turnstile-response-diagnostics.js'
 
 const PRE_AUTH_PATH = '/api/_edge/pre-auth'
 let ready = false
@@ -104,14 +112,28 @@ async function bootstrapPreAuth() {
 }
 
 function requestBootstrap(headers) {
+	return runAndroidRequestWithEdgeRecovery(
+		() => requestBootstrapOnce(headers))
+}
+
+function requestBootstrapOnce(headers) {
 	return new Promise((resolve, reject) => {
 		uni.request({
 			url: `${AUTH_API_BASE_URL}${PRE_AUTH_PATH}`,
 			method: 'POST',
-			header: headers,
+			header: androidEdgeRequestHeaders(headers),
 			withCredentials: true,
 			timeout: 10000,
 			success(response) {
+				const diagnostics = inspectAuthResponse(response)
+				if (diagnostics.classification === 'EDGE_CHALLENGE') {
+					const error = preAuthError(
+						'EDGE_CHALLENGE',
+						'Cloudflare 安全检查尚未完成，请完成人机验证。')
+					error.statusCode = response.statusCode
+					reject(applyDiagnosticsToError(error, diagnostics))
+					return
+				}
 				if (response.statusCode >= 200 && response.statusCode < 300) {
 					resolve(response.data)
 					return

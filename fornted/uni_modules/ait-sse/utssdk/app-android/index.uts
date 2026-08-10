@@ -6,14 +6,28 @@ import HttpURLConnection from 'java.net.HttpURLConnection'
 import URL from 'java.net.URL'
 import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
 import Thread from 'java.lang.Thread'
+import CookieManager from 'android.webkit.CookieManager'
 
 import { AitSseConnection, AitSseFailure, AitSseRequestOptions } from '../interface.uts'
 
 const MAX_ERROR_BODY_BYTES = 16 * 1024
 
-function failure(statusCode: number, body: string): AitSseFailure {
+function failure(
+  statusCode: number,
+  body: string,
+  contentType: string,
+  cfMitigated: string,
+  cfRay: string
+): AitSseFailure {
   let code = `HTTP_${statusCode}`
   let message = '无法建立模型流式响应。'
+  if (cfMitigated.lowercase() == 'challenge'
+      || (statusCode == 403
+        && contentType.lowercase().contains('text/html')
+        && cfRay.length > 0)) {
+    code = 'EDGE_CHALLENGE'
+    message = 'Cloudflare 安全检查尚未完成，请完成人机验证。'
+  }
   if (body.length > 0) {
     try {
       const payload = JSON.parse(body) as UTSJSONObject
@@ -22,7 +36,26 @@ function failure(statusCode: number, body: string): AitSseFailure {
     } catch (_: Throwable) {
     }
   }
-  return { code, statusCode, message }
+  return { code, statusCode, message, contentType, cfMitigated, cfRay }
+}
+
+function clearanceCookie(cookieHeader: string | null): string {
+  if (cookieHeader == null || cookieHeader.length == 0) return ''
+  const entries = cookieHeader.split(';')
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]
+    const separator = entry.indexOf('=')
+    if (separator < 0) continue
+    const name = entry.substring(0, separator).trim()
+    const value = entry.substring(separator + 1).trim()
+    if (name != 'cf_clearance') continue
+    if (value.length == 0 || value.length > 4096
+        || value.contains('\r') || value.contains('\n') || value.contains(';')) {
+      return ''
+    }
+    return `cf_clearance=${value}`
+  }
+  return ''
 }
 
 function boundedError(connection: HttpURLConnection): string {
@@ -67,7 +100,10 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
         notifyFailure({
           code: 'AI_CONVERSATION_SSE_HTTPS_REQUIRED',
           statusCode: 0,
-          message: 'Android 模型流只允许 HTTPS。'
+          message: 'Android 模型流只允许 HTTPS。',
+          contentType: '',
+          cfMitigated: '',
+          cfRay: ''
         })
         return
       }
@@ -82,13 +118,26 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       options.headers.forEach((name: string) => {
         const value = options.headers[name]
         if (value == null) return
+        if (name.lowercase() == 'cookie') return
         connection.setRequestProperty(name, value.toString())
       })
+      // 只允许 Cloudflare 放行 Cookie 进入边缘；Worker 会在回源前删除，业务 Cookie 仍由显式 Token 协议承载。
+      const managedClearance = clearanceCookie(
+        CookieManager.getInstance().getCookie(options.url))
+      if (managedClearance.length > 0) {
+        connection.setRequestProperty('Cookie', managedClearance)
+      }
       const writer = new OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)
       writer.write(options.body)
       writer.flush()
       writer.close()
       const status = connection.getResponseCode()
+      const contentTypeHeader = connection.getHeaderField('Content-Type')
+      const cfMitigatedHeader = connection.getHeaderField('CF-Mitigated')
+      const cfRayHeader = connection.getHeaderField('CF-Ray')
+      const contentType = contentTypeHeader == null ? '' : contentTypeHeader
+      const cfMitigated = cfMitigatedHeader == null ? '' : cfMitigatedHeader
+      const cfRay = cfRayHeader == null ? '' : cfRayHeader
       const renewedHeader = connection.getHeaderField("X-Session-Renewed")
       const newAccessHeader = connection.getHeaderField("X-New-Access-Token")
       const sessionRenewed = renewedHeader == null ? "" : renewedHeader
@@ -97,7 +146,10 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
         notifyFailure({
           code: 'SESSION_RESPONSE_INVALID',
           statusCode: status,
-          message: '会话续签响应缺少新的访问令牌。'
+          message: '会话续签响应缺少新的访问令牌。',
+          contentType,
+          cfMitigated,
+          cfRay
         })
         return
       }
@@ -105,19 +157,28 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       options.onOpen({
         statusCode: status,
         sessionRenewed: sessionRenewed,
-        newAccessToken: newAccessToken
+        newAccessToken: newAccessToken,
+        contentType,
+        cfMitigated,
+        cfRay
       })
       if (status < 200 || status >= 300) {
-        notifyFailure(failure(status, boundedError(connection)))
+        notifyFailure(failure(
+          status,
+          boundedError(connection),
+          contentType,
+          cfMitigated,
+          cfRay))
         return
       }
-      const contentType = connection.getContentType()
-      if (contentType == null
-          || !contentType.lowercase().contains('text/event-stream')) {
+      if (!contentType.lowercase().contains('text/event-stream')) {
         notifyFailure({
           code: 'AI_CONVERSATION_SSE_CONTENT_TYPE_INVALID',
           statusCode: status,
-          message: '服务端未返回事件流。'
+          message: '服务端未返回事件流。',
+          contentType,
+          cfMitigated,
+          cfRay
         })
         return
       }
@@ -134,7 +195,10 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       notifyFailure({
         code: 'AI_CONVERSATION_SSE_ANDROID_IO',
         statusCode: 0,
-        message: 'Android 模型流已中断。'
+        message: 'Android 模型流已中断。',
+        contentType: '',
+        cfMitigated: '',
+        cfRay: ''
       })
     } finally {
       try { activeReader?.close() } catch (_: Throwable) {}

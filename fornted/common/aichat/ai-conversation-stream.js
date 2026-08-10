@@ -3,6 +3,10 @@ import {
 	recoverAuthorizedStreamingSession
 } from '../auth/http-client.js'
 import { clientPlatform } from '../auth/config.js'
+import {
+	isAndroidEdgeChallenge,
+	repeatedAndroidEdgeChallengeError
+} from '../auth/android-edge-challenge-policy.js'
 import { openAiConversationSseH5 } from './ai-conversation-sse-h5.js'
 import { createAiConversationStreamDiagnostics } from './ai-conversation-stream-diagnostics.js'
 import { reportAiConversationStreamDiagnostics } from './ai-conversation-stream-diagnostics-reporter.js'
@@ -44,6 +48,17 @@ function responsePath(conversationPublicId) {
 
 function wait(milliseconds) {
 	return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function recoverGenerationEdgeChallenge(error, recoveryState) {
+	if (!isAndroidEdgeChallenge(error)) return false
+	if (recoveryState.edgeChallengeRetried) {
+		throw repeatedAndroidEdgeChallengeError(error)
+	}
+	const recovered = await recoverAuthorizedStreamingSession(error)
+	if (!recovered) return false
+	recoveryState.edgeChallengeRetried = true
+	return true
 }
 
 async function openOnce(command, handlers, lifecycleDiagnostics) {
@@ -331,6 +346,9 @@ export async function openAiConversationStream(command, handlers = {}) {
 				&& await recoverAuthorizedStreamingSession(error)) {
 				return connect(true)
 			}
+			if (!closed && !accepted && retried && isAndroidEdgeChallenge(error)) {
+				throw repeatedAndroidEdgeChallengeError(error)
+			}
 			if (!closed && asyncGenerationEnabled() && generationPublicId) {
 				return reconnectGeneration(error)
 			}
@@ -342,6 +360,10 @@ export async function openAiConversationStream(command, handlers = {}) {
 		const deadline = Date.now() + 25_000
 		let lastFailure = initialFailure
 		let delay = 250
+		const recoveryState = { edgeChallengeRetried: false }
+		if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState)) {
+			delay = 0
+		}
 		while (!closed && Date.now() < deadline) {
 			updateGeneration(generationPublicId, { observerAttached: false })
 			await wait(delay)
@@ -353,6 +375,10 @@ export async function openAiConversationStream(command, handlers = {}) {
 				await active.completed
 				return
 			} catch (failure) {
+				if (await recoverGenerationEdgeChallenge(failure, recoveryState)) {
+					delay = 0
+					continue
+				}
 				lastFailure = failure
 				delay = Math.min(delay * 2, 2_000)
 			}
@@ -542,6 +568,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 	let handle = null
 	const completed = (async () => {
 		let outcome = 'TRANSPORT_ERROR'
+		const recoveryState = { edgeChallengeRetried: false }
 		try {
 			await active.completed
 			outcome = 'COMPLETE'
@@ -549,6 +576,9 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		} catch (initialFailure) {
 			let lastFailure = initialFailure
 			let delay = 250
+			if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState)) {
+				delay = 0
+			}
 			const deadline = Date.now() + 25_000
 			while (!closed && Date.now() < deadline) {
 				updateGeneration(generationPublicId, { observerAttached: false })
@@ -562,6 +592,10 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 					outcome = 'COMPLETE'
 					return
 				} catch (failure) {
+					if (await recoverGenerationEdgeChallenge(failure, recoveryState)) {
+						delay = 0
+						continue
+					}
 					lastFailure = failure
 					delay = Math.min(delay * 2, 2_000)
 				}

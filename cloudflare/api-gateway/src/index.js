@@ -2,6 +2,9 @@ const ROOT_HOST = 'niko000o.site'
 const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
 const VOICE_WEBSOCKET_PATH = '/ws/voice'
+const ANDROID_CLEARANCE_PATH = '/__edge/android-clearance'
+const ANDROID_CLEARANCE_STATUS_PATH = '/__edge/android-clearance/status'
+const CLOUDFLARE_CLEARANCE_COOKIE = 'cf_clearance'
 const SIGNATURE_VERSION = 'v2'
 const AI_MODEL_DETAIL_PATH =
 	/^\/api\/ai-models\/[A-Za-z0-9_-]{11}$/
@@ -122,6 +125,12 @@ export async function handleRequest(request, env, runtime = {}) {
 	const url = new URL(request.url)
 	const route = classifyRoute(url)
 	if (!route.allowed) return jsonError(route.status, route.code)
+	if (route.androidClearance) {
+		if (request.method !== 'GET') {
+			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
+		}
+		return androidClearanceResponse(request, route.androidClearance)
+	}
 	const sseDiagnostic = createSseDiagnostic(route, request, env, runtime)
 
 	if (route.migration) {
@@ -195,6 +204,20 @@ function classifyRoute(url) {
 		return denied()
 	}
 	if (url.hostname === ROOT_HOST) {
+		if (url.pathname === ANDROID_CLEARANCE_PATH) {
+			return {
+				allowed: true,
+				androidClearance: 'page',
+				surface: 'root'
+			}
+		}
+		if (url.pathname === ANDROID_CLEARANCE_STATUS_PATH) {
+			return {
+				allowed: true,
+				androidClearance: 'status',
+				surface: 'root'
+			}
+		}
 		if (url.pathname === '/api/_edge/cookie-scope') {
 			return { allowed: true, migration: true, surface: 'root' }
 		}
@@ -547,6 +570,63 @@ function hasCookie(header, expectedName, expectedValue) {
 		const value = item.slice(separator + 1).trim()
 		return name === expectedName && value === expectedValue
 	})
+}
+
+function androidClearanceResponse(request, responseKind) {
+	const clearance = cookieValue(
+		request.headers.get('Cookie'),
+		CLOUDFLARE_CLEARANCE_COOKIE)
+	if (!clearance) return jsonError(428, 'EDGE_CLEARANCE_REQUIRED')
+	if (responseKind === 'status') {
+		return new Response(null, { status: 204, headers: noStoreHeaders() })
+	}
+
+	const nonce = randomNonce()
+	const headers = noStoreHeaders()
+	headers.set('Content-Type', 'text/html; charset=UTF-8')
+	headers.set('Content-Security-Policy',
+		`default-src 'none'; script-src 'nonce-${nonce}'; `
+		+ "base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+	headers.set('Referrer-Policy', 'no-referrer')
+	headers.set('X-Content-Type-Options', 'nosniff')
+	headers.set('X-Frame-Options', 'DENY')
+	return new Response(androidClearancePage(nonce), { status: 200, headers })
+}
+
+function cookieValue(header, expectedName) {
+	if (!header) return ''
+	for (const item of header.split(';')) {
+		const separator = item.indexOf('=')
+		if (separator < 0) continue
+		const name = item.slice(0, separator).trim()
+		const value = item.slice(separator + 1).trim()
+		if (name !== expectedName) continue
+		if (!value || value.length > 4096 || /[\u0000-\u0020\u007f;]/.test(value)) {
+			return ''
+		}
+		return value
+	}
+	return ''
+}
+
+function randomNonce() {
+	const bytes = new Uint8Array(18)
+	crypto.getRandomValues(bytes)
+	return bytesToBase64(bytes)
+		.replaceAll('+', '-')
+		.replaceAll('/', '_')
+		.replace(/=+$/, '')
+}
+
+function androidClearancePage(nonce) {
+	return '<!doctype html><html lang="zh-CN"><head>'
+		+ '<meta charset="utf-8">'
+		+ '<meta name="viewport" content="width=device-width,initial-scale=1">'
+		+ '<title>安全验证已完成</title>'
+		+ '</head><body>'
+		+ '<p>安全验证已完成，正在返回应用。</p>'
+		+ `<script nonce="${nonce}">location.replace('ait-edge://verified')</script>`
+		+ '</body></html>'
 }
 
 function guardedResponse(response, surface, streaming = false, transport = null) {

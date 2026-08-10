@@ -75,9 +75,31 @@ Upgrade，删除 Cookie、Authorization 和客户端伪造的边缘头，为握�
 回源固定使用主域 Origin，Android 回源不带 Origin；两类客户端的身份仍由连接后的平台匹配
 一次性语音 Ticket 确定。生产发布顺序固定为 Worker、Android/H5、后端 REQUIRED 验签收口。
 
-Cloudflare WAF、Bot 产品与 Security Events 规则不属于本次 Worker 代码范围。API、SSE 或
-Upgrade 若收到带 `CF-Mitigated: challenge` 的 HTML，必须作为外部阻塞单独处理，不能放宽
-运输分类或边缘签名来绕过。
+Android API 或 SSE 收到 `CF-Mitigated: challenge` 时，通过以下两个精确主域入口完成托管
+验证和 Cookie 共享确认：
+
+```text
+GET /__edge/android-clearance
+GET /__edge/android-clearance/status
+```
+
+两个入口都由 Worker 在边缘终止，不回源、不生成 HMAC，也不进入 H5 Cookie Scope。第一个
+入口只有在请求已经携带非空 `cf_clearance` 时才返回完成页面，否则返回
+`428 EDGE_CLEARANCE_REQUIRED`；第二个入口携带该 Cookie 时返回 204，否则返回相同 428。
+Worker 页面不读取、输出或记录 Cookie 值。
+
+Cloudflare 控制台必须为根域的第一个精确入口配置 `Managed Challenge`：
+
+```text
+http.host eq "niko000o.site"
+and http.request.method eq "GET"
+and http.request.uri.path eq "/__edge/android-clearance"
+```
+
+不得把规则扩大到 `/api/**`、`/__edge/*` 或 `/ws/**`，状态入口也不得强制 Challenge，否则
+Android 无法区分 Cookie 未共享与重复挑战。现有 Bot Fight Mode 可以保留；Android通过系统
+WebView 完成验证后，只把 `cf_clearance` 带到主域 Worker，Worker仍会在回源前删除所有 Android
+Cookie。WebSocket错误事件没有可靠响应头，因此语音只依赖连接前的 Ticket HTTP请求完成恢复。
 
 `SSE_ROUTE_LOG_SAMPLE_RATE` 只控制低比例入口诊断日志。日志仅包含固定路由模板、
 HTTP 状态和有界 `CF-Ray`，禁止记录真实 Job ID、Cookie、Authorization 或请求头。

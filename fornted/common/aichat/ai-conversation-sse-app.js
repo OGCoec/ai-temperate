@@ -34,9 +34,13 @@ export function openAiConversationSseApp(request, handlers = {}) {
 			})
 			handlers.lifecycleDiagnostics?.record?.('CLIENT_RESPONSE_HEADERS', {
 				statusCode: Number(renewal?.statusCode || 0),
-				contentType: 'text/event-stream'
+				contentType: String(renewal?.contentType || '')
 			})
-			handlers.onOpen?.()
+			const isEventStream = String(renewal?.contentType || '')
+				.toLowerCase().includes('text/event-stream')
+			const isSuccessful = Number(renewal?.statusCode || 0) >= 200
+				&& Number(renewal?.statusCode || 0) < 300
+			if (isSuccessful && isEventStream) handlers.onOpen?.()
 		},
 		onChunk(chunk) { if (!closed) parser.push(String(chunk || '')) },
 		onError(failure) {
@@ -44,6 +48,9 @@ export function openAiConversationSseApp(request, handlers = {}) {
 			const error = new Error(failure?.message || 'Android 模型流已中断。')
 			error.code = String(failure?.code || 'AI_CONVERSATION_SSE_ANDROID_IO')
 			error.statusCode = Number(failure?.statusCode || 0)
+			error.cfMitigated = String(failure?.cfMitigated || '')
+			error.contentType = String(failure?.contentType || '')
+			error.cfRay = String(failure?.cfRay || '')
 			rejectCompleted(error)
 		},
 		onClosed() {

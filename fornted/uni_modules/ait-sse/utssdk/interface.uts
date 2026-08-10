@@ -2,12 +2,18 @@ export type AitSseFailure = {
   code: string
   statusCode: number
   message: string
+  contentType: string
+  cfMitigated: string
+  cfRay: string
 }
 
 export type AitSseOpen = {
   statusCode: number
   sessionRenewed: string
   newAccessToken: string
+  contentType: string
+  cfMitigated: string
+  cfRay: string
 }
 
 export type AitSseRequestOptions = {

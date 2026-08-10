@@ -5,6 +5,11 @@ import {
 } from './browser-cookies.js'
 import { AUTH_API_BASE_URL, AUTH_ROUTES, clientPlatform } from './config.js'
 import {
+	androidEdgeRequestHeaders,
+	ensureAndroidEdgeClearance,
+	runAndroidRequestWithEdgeRecovery
+} from './android-edge-challenge.js'
+import {
 	ensureCookieScopeMigration,
 	invalidateCookieScopeMigration
 } from './cookie-scope-migration.js'
@@ -65,7 +70,7 @@ function rawRequestTask(options) {
 			url: `${AUTH_API_BASE_URL}${options.path}`,
 			method: options.method || 'POST',
 			data: options.data,
-			header: options.headers || {},
+			header: androidEdgeRequestHeaders(options.headers || {}),
 			timeout: options.timeout,
 			withCredentials: true,
 			success(response) {
@@ -125,7 +130,7 @@ function rawRequestTask(options) {
 
 async function requestTask(options) {
 	await ensureCookieScopeMigration()
-	return rawRequestTask(options)
+	return runAndroidRequestWithEdgeRecovery(() => rawRequestTask(options))
 }
 
 function notifyResponseObserver(observer, diagnostics) {
@@ -375,6 +380,10 @@ export async function prepareAuthorizedStreamingRequest(path, options = {}) {
  * 仅在流式请求尚未收到 accepted 时执行一次既有会话恢复；accepted 之后禁止自动重放，避免重复计费。
  */
 export async function recoverAuthorizedStreamingSession(error) {
+	if (clientPlatform() === 'ANDROID' && error?.code === 'EDGE_CHALLENGE') {
+		await ensureAndroidEdgeClearance()
+		return true
+	}
 	const mode = sessionRenewalMode(clientPlatform(), error?.code, false)
 	if (mode === SessionRenewalMode.NONE) {
 		handleTerminalSessionError(error)

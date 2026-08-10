@@ -15,6 +15,14 @@
       "zone_name": "niko000o.site"
     },
     {
+      "pattern": "niko000o.site/__edge/android-clearance",
+      "zone_name": "niko000o.site"
+    },
+    {
+      "pattern": "niko000o.site/__edge/android-clearance/status",
+      "zone_name": "niko000o.site"
+    },
+    {
       "pattern": "admin.niko000o.site/api/*",
       "zone_name": "niko000o.site"
     }

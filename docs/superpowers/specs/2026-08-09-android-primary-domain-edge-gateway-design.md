@@ -26,8 +26,9 @@ H5 / Android 语音 WebSocket
 - 不改变 Android 的 Access Token、Refresh Token、PreAuth Token 与设备安装 ID 协议。
 - 不把 Android 改成 H5 Cookie 会话。
 - 不改变语音 Ticket 格式、Redis Key、Whisper 协议或业务消息格式。
-- 不使用可执行 JavaScript 的 Cloudflare Challenge Page 作为 API 客户端验证手段。
-- 不修改 Cloudflare WAF、Bot 产品或 Security Events 规则；生产仍出现 HTML Challenge 时按外部阻塞处理。
+- 不让 API JSON/SSE 客户端直接解释或执行 Cloudflare Challenge HTML。
+- Android托管挑战恢复由后续的 `2026-08-10-android-cloudflare-managed-challenge-design.md`
+  精确扩展；除此之外不修改 H5、后端或宽泛 WAF/Bot规则。
 
 ## 方案比较
 
@@ -101,7 +102,10 @@ Worker 将主域名请求分为两类：
 
 ## Cloudflare WAF
 
-WAF 调整不属于本次代码实施范围。API、SSE 或 WebSocket Upgrade 如果仍收到带有 `CF-Mitigated: challenge` 的 HTML 响应，说明请求在到达 Worker 应用逻辑前后被 Cloudflare 安全产品挑战；该情况必须作为独立外部阻塞报告，不能通过放宽本次 Worker 分类或后端验签来绕过。
+本设计最初把 Cloudflare HTML Challenge 作为外部阻塞。Android实际抓包确认
+`CF-Mitigated: challenge` 会被原生请求当作普通错误而无法显示，因此由
+`2026-08-10-android-cloudflare-managed-challenge-design.md` 增加仅供 Android使用的精确
+Managed Challenge入口。原有 API运输分类、后端签名和 H5行为不因此放宽。
 
 ## 测试设计
 
@@ -136,4 +140,5 @@ WAF 调整不属于本次代码实施范围。API、SSE 或 WebSocket Upgrade �
 - Android不依赖H5 Cookie Scope，不接收H5认证Cookie。
 - H5现有Cookie、CSRF、SSE与语音行为不回归。
 - `api.niko000o.site` 的无签名 `/api/**` 与 `/ws/voice` 直连被生产后端拒绝。
-- 若仍收到Cloudflare HTML Challenge，明确归因于本次范围外的WAF或Bot规则并阻止生产验收，不修改代码绕过。
+- Android API/SSE收到Cloudflare HTML Challenge时进入专用托管验证流程；WebSocket仍不得根据
+  无响应头的普通连接错误猜测Challenge。

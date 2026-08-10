@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
 	COOKIE_SCOPE_MARKER_NAME,
@@ -55,6 +56,97 @@ function websocketUpgradeResponse(options = {}) {
 			: Object.freeze({ kind: 'test-websocket' })
 	}
 }
+
+test('wrangler exposes only the two exact Android clearance routes', () => {
+	const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
+
+	assert.match(config, /"pattern":\s*"niko000o\.site\/__edge\/android-clearance"/)
+	assert.match(config,
+		/"pattern":\s*"niko000o\.site\/__edge\/android-clearance\/status"/)
+	assert.doesNotMatch(config, /niko000o\.site\/__edge\/\*/)
+})
+
+test('Android clearance page and status never call the API upstream', async () => {
+	let upstreamCalls = 0
+	const fetchImpl = () => {
+		upstreamCalls += 1
+		throw new Error('clearance routes must terminate at the edge')
+	}
+	const missingPage = await handleRequest(
+		request('niko000o.site', '/__edge/android-clearance', {
+			migrated: false
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const verifiedPage = await handleRequest(
+		request('niko000o.site', '/__edge/android-clearance', {
+			migrated: false,
+			headers: { Cookie: 'cf_clearance=test-clearance-value' }
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const missingStatus = await handleRequest(
+		request('niko000o.site', '/__edge/android-clearance/status', {
+			migrated: false
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const verifiedStatus = await handleRequest(
+		request('niko000o.site', '/__edge/android-clearance/status', {
+			migrated: false,
+			headers: { Cookie: 'cf_clearance=test-clearance-value' }
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const pageBody = await verifiedPage.text()
+
+	assert.equal(missingPage.status, 428)
+	assert.equal((await missingPage.json()).code, 'EDGE_CLEARANCE_REQUIRED')
+	assert.equal(verifiedPage.status, 200)
+	assert.match(verifiedPage.headers.get('Content-Type') || '', /text\/html/)
+	assert.match(verifiedPage.headers.get('Content-Security-Policy') || '',
+		/default-src 'none'/)
+	assert.equal(verifiedPage.headers.get('Cache-Control'), 'no-store')
+	assert.match(pageBody, /ait-edge:\/\/verified/)
+	assert.doesNotMatch(pageBody, /test-clearance-value/)
+	assert.equal(missingStatus.status, 428)
+	assert.equal((await missingStatus.json()).code, 'EDGE_CLEARANCE_REQUIRED')
+	assert.equal(verifiedStatus.status, 204)
+	assert.equal(verifiedStatus.headers.get('Cache-Control'), 'no-store')
+	assert.equal(upstreamCalls, 0)
+})
+
+test('Android clearance routing accepts only exact GET paths', async () => {
+	const noUpstream = runtime(() => {
+		throw new Error('clearance route must not call upstream')
+	})
+	const notGet = await handleRequest(
+		request('niko000o.site', '/__edge/android-clearance', {
+			method: 'POST',
+			migrated: false
+		}),
+		ENV,
+		noUpstream
+	)
+	const forbidden = await Promise.all([
+		'/__edge/android-clearance/',
+		'/__edge/android-clearance/extra',
+		'/__edge/android-clearance/status/extra',
+		'/__edge/android-admin-clearance'
+	].map(path => handleRequest(
+		request('niko000o.site', path, { migrated: false }),
+		ENV,
+		noUpstream
+	)))
+
+	assert.equal(notGet.status, 405)
+	assert.equal(notGet.headers.get('Allow'), 'GET')
+	assert.deepEqual(forbidden.map(response => response.status), [403, 403, 403, 403])
+})
 
 test('root host forwards only ordinary API paths and preserves path plus query', async () => {
 	let captured
