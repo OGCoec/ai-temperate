@@ -35,6 +35,9 @@ const EDGE_ASN_HEADER = 'X-AIT-Edge-ASN'
 const EDGE_LATITUDE_HEADER = 'X-AIT-Edge-Latitude'
 const EDGE_LONGITUDE_HEADER = 'X-AIT-Edge-Longitude'
 const EDGE_RESET_HEADER = 'X-AIT-Cookie-Scope-Reset'
+const CLIENT_PLATFORM_HEADER = 'X-Client-Platform'
+const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
+const H5_TRANSPORT = 'H5_BROWSER'
 const API_METHODS = Object.freeze([
 	'GET',
 	'HEAD',
@@ -143,7 +146,12 @@ export async function handleRequest(request, env, runtime = {}) {
 		})
 	}
 
-	if (!hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
+	const transport = classifyClientTransport(request, route)
+	if (!transport.allowed) {
+		return jsonError(transport.status, transport.code)
+	}
+	if (transport.kind === H5_TRANSPORT
+		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
 		return jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
 	}
 	if (env.API_UPSTREAM_ORIGIN !== UPSTREAM_ORIGIN) {
@@ -155,7 +163,12 @@ export async function handleRequest(request, env, runtime = {}) {
 
 	let upstreamResponse
 	try {
-		const upstreamRequest = await signedUpstreamRequest(request, env, route, now)
+		const upstreamRequest = await signedUpstreamRequest(
+			request,
+			env,
+			route,
+			transport,
+			now)
 		upstreamResponse = await fetchImpl(upstreamRequest)
 	} catch (_) {
 		logSseRequest(sseDiagnostic, null)
@@ -166,13 +179,14 @@ export async function handleRequest(request, env, runtime = {}) {
 		return jsonError(502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
 	}
 	if (route.webSocket) {
-		return guardedWebSocketResponse(upstreamResponse)
+		return guardedWebSocketResponse(upstreamResponse, transport)
 	}
 	logSseRequest(sseDiagnostic, upstreamResponse)
 	const response = guardedResponse(
 		upstreamResponse,
 		route.surface,
-		route.streaming === true)
+		route.streaming === true,
+		transport)
 	return instrumentSseResponse(response, sseDiagnostic, runtime)
 }
 
@@ -303,7 +317,35 @@ function denied() {
 	return { allowed: false, status: 403, code: 'EDGE_ROUTE_FORBIDDEN' }
 }
 
-async function signedUpstreamRequest(request, env, route, now) {
+function classifyClientTransport(request, route) {
+	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
+		.trim()
+		.toUpperCase()
+	if (platform !== 'ANDROID') {
+		// 缺少或未知平台不能降级成原生运输，只能继续接受 H5 的 Cookie Scope 约束。
+		return { allowed: true, kind: H5_TRANSPORT }
+	}
+	if (route.surface !== 'root'
+		|| headerValue(request.headers, 'Origin').trim()
+		|| hasFetchMetadata(request.headers)) {
+		// 浏览器可以伪造普通平台头，但不能去除浏览器自动附加的 Origin/Fetch Metadata。
+		return {
+			allowed: false,
+			status: 403,
+			code: 'EDGE_CLIENT_TRANSPORT_INVALID'
+		}
+	}
+	return { allowed: true, kind: ANDROID_TRANSPORT }
+}
+
+function hasFetchMetadata(headers) {
+	for (const name of headers.keys()) {
+		if (name.toLowerCase().startsWith('sec-fetch-')) return true
+	}
+	return false
+}
+
+async function signedUpstreamRequest(request, env, route, transport, now) {
 	const inboundUrl = new URL(request.url)
 	const upstreamUrl = new URL(
 		`${inboundUrl.pathname}${inboundUrl.search}`,
@@ -318,6 +360,18 @@ async function signedUpstreamRequest(request, env, route, now) {
 			|| lowerName.startsWith('x-forwarded-')) {
 			headers.delete(name)
 		}
+	}
+	if (transport.kind === ANDROID_TRANSPORT) {
+		// 原生请求只保留显式 Token、PreAuth 与设备头，不能把代理抓包 Cookie 或浏览器元数据带入源站。
+		headers.delete('Cookie')
+		headers.delete('Origin')
+		headers.delete('Referer')
+		for (const name of [...headers.keys()]) {
+			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
+		}
+		headers.set(CLIENT_PLATFORM_HEADER, 'ANDROID')
+	} else {
+		headers.set(CLIENT_PLATFORM_HEADER, 'H5')
 	}
 	if (route.webSocket) {
 		// 语音握手只负责建立传输通道，身份由连接后的单次票据原子消费，避免把主域名凭据扩大到 /ws。
@@ -341,7 +395,9 @@ async function signedUpstreamRequest(request, env, route, now) {
 		edgeNetwork.latitude,
 		edgeNetwork.longitude
 	].join('\n')
-	headers.set('Origin', `https://${externalHost}`)
+	if (transport.kind === H5_TRANSPORT) {
+		headers.set('Origin', `https://${externalHost}`)
+	}
 	headers.set(EDGE_VERSION_HEADER, SIGNATURE_VERSION)
 	headers.set(EDGE_HOST_HEADER, externalHost)
 	headers.set(EDGE_TIMESTAMP_HEADER, timestamp)
@@ -493,10 +549,14 @@ function hasCookie(header, expectedName, expectedValue) {
 	})
 }
 
-function guardedResponse(response, surface, streaming = false) {
+function guardedResponse(response, surface, streaming = false, transport = null) {
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null) {
 		return jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
+	}
+	if (transport?.kind === ANDROID_TRANSPORT && setCookies.length > 0) {
+		// Android 使用显式 Token 协议；拒绝源站 Cookie，避免与 H5 会话模型发生隐式混用。
+		return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 	}
 	const allowedNames = surface === 'admin' ? ADMIN_COOKIE_NAMES : ROOT_COOKIE_NAMES
 	for (const cookie of setCookies) {
@@ -521,12 +581,15 @@ function guardedResponse(response, surface, streaming = false) {
 	})
 }
 
-function guardedWebSocketResponse(response) {
+function guardedWebSocketResponse(response, transport) {
 	if (response.status !== 101 || !response.webSocket) {
 		return jsonError(502, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
 	}
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null || setCookies.length > 0) {
+		if (transport.kind === ANDROID_TRANSPORT && setCookies?.length > 0) {
+			return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
+		}
 		return jsonError(502, 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION')
 	}
 	// 透明代理必须保留运行时挂载的 WebSocket 对象；重建普通 Response 会丢失升级后的双向通道。

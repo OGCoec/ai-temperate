@@ -11,14 +11,15 @@ function readRootProjectFile(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, '..', '..', '..', relativePath), 'utf8')
 }
 
-test('uses same-origin production H5 API while preserving local H5 and Android endpoints', () => {
+test('uses the primary domain for Android and same-origin production H5 API', () => {
 	const source = readProjectFile('common/auth/config.js')
 
-	assert.match(source, /let authApiBaseUrl = 'https:\/\/api\.niko000o\.site'/)
+	assert.match(source, /let authApiBaseUrl = 'https:\/\/niko000o\.site'/)
 	assert.match(source, /authApiBaseUrl = 'https:\/\/localhost:6655'/)
 	assert.match(source, /h5Hostname === 'niko000o\.site'/)
 	assert.match(source, /authApiBaseUrl = ''/)
 	assert.match(source, /window\.location\.hostname/)
+	assert.doesNotMatch(source, /https:\/\/api\.niko000o\.site/)
 	assert.doesNotMatch(source, /http:\/\/(?:127\.0\.0\.1|localhost):6655/)
 })
 

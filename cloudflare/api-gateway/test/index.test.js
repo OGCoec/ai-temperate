@@ -77,7 +77,145 @@ test('root host forwards only ordinary API paths and preserves path plus query',
 			+ '?attempt=1&upstream=https%3A%2F%2Fevil.example'
 	)
 	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+	assert.equal(captured.headers.get('X-Client-Platform'), 'H5')
 	assert.equal(captured.cache, 'no-store')
+})
+
+test('Android HTTP uses the primary-domain Worker without Cookie Scope and preserves explicit tokens', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth?attempt=1', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'ANDROID',
+				Authorization: 'Bearer android-access-token',
+				'X-Refresh-Token': 'android-refresh-token',
+				'X-CSRF-Token': 'android-csrf-token',
+				'X-AIT-PreAuth': 'android-pre-auth-token',
+				'X-Device-Installation-Id': 'test-installation-id',
+				Cookie: 'captured_proxy_cookie=must-not-pass',
+				Referer: 'https://untrusted.example/source',
+				'X-AIT-Edge-Host': 'evil.example',
+				'X-Forwarded-Host': 'evil.example'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	const canonical = [
+		'v2',
+		'POST',
+		'/api/_edge/pre-auth?attempt=1',
+		'niko000o.site',
+		String(Math.floor(NOW / 1000)),
+		'test-ray-ord',
+		'203.0.113.10',
+		'US',
+		'64500',
+		'41.8781',
+		'-87.6298'
+	].join('\n')
+	const expectedSignature = createHmac(
+		'sha256',
+		Buffer.from(ENV.EDGE_PROXY_HMAC_SECRET_BASE64, 'base64')
+	).update(canonical).digest('base64url')
+
+	assert.equal(response.status, 204)
+	assert.equal(captured.url,
+		'https://api.niko000o.site/api/_edge/pre-auth?attempt=1')
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Referer'), null)
+	assert.equal(captured.headers.get('Authorization'), 'Bearer android-access-token')
+	assert.equal(captured.headers.get('X-Refresh-Token'), 'android-refresh-token')
+	assert.equal(captured.headers.get('X-CSRF-Token'), 'android-csrf-token')
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), 'android-pre-auth-token')
+	assert.equal(captured.headers.get('X-Device-Installation-Id'), 'test-installation-id')
+	assert.equal(captured.headers.get('X-Forwarded-Host'), null)
+	assert.equal(captured.headers.get('X-AIT-Edge-Host'), 'niko000o.site')
+	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expectedSignature)
+})
+
+test('Android transport rejects browser Origin or Fetch Metadata before proxying', async () => {
+	let upstreamCalls = 0
+	const fetchImpl = () => {
+		upstreamCalls += 1
+		return new Response(null, { status: 204 })
+	}
+	const withOrigin = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'ANDROID',
+				Origin: 'https://niko000o.site'
+			}
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+	const withFetchMetadata = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'ANDROID',
+				'Sec-Fetch-Site': 'same-origin'
+			}
+		}),
+		ENV,
+		runtime(fetchImpl)
+	)
+
+	assert.equal(withOrigin.status, 403)
+	assert.equal((await withOrigin.json()).code, 'EDGE_CLIENT_TRANSPORT_INVALID')
+	assert.equal(withFetchMetadata.status, 403)
+	assert.equal((await withFetchMetadata.json()).code,
+		'EDGE_CLIENT_TRANSPORT_INVALID')
+	assert.equal(upstreamCalls, 0)
+})
+
+test('unknown platforms follow the H5 Cookie Scope policy instead of Android fallback', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/api/auth/csrf', {
+			migrated: false,
+			headers: { 'X-Client-Platform': 'UNKNOWN' }
+		}),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		})
+	)
+
+	assert.equal(response.status, 428)
+	assert.equal((await response.json()).code, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
+})
+
+test('Android responses reject every upstream Set-Cookie header', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth', {
+			method: 'POST',
+			migrated: false,
+			headers: { 'X-Client-Platform': 'ANDROID' }
+		}),
+		ENV,
+		runtime(() => new Response(null, {
+			status: 204,
+			headers: {
+				'Set-Cookie': '__Host-ait-preauth=unexpected; Path=/; Secure; HttpOnly'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.equal((await response.json()).code,
+		'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 })
 
 test('root host forwards the ordinary AI model APIs without changing their paths', async () => {
@@ -147,6 +285,40 @@ test('root host forwards AI conversation POST SSE without buffering its body', a
 		'https://api.niko000o.site/api/ai/conversations/responses'
 	)
 	assert.equal(JSON.parse(capturedBody).input.text, 'hello')
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+	assert.match(response.headers.get('Cache-Control'), /no-transform/)
+})
+
+test('Android SSE keeps streaming behavior while removing browser credentials', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/ai/conversations/responses', {
+			method: 'POST',
+			migrated: false,
+			body: JSON.stringify({ input: { text: 'hello' } }),
+			headers: {
+				'Content-Type': 'application/json',
+				Accept: 'text/event-stream',
+				'X-Client-Platform': 'ANDROID',
+				Authorization: 'Bearer android-access-token',
+				Cookie: 'captured_proxy_cookie=must-not-pass'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('event: accepted\ndata: {}\n\n', {
+				headers: { 'Content-Type': 'text/event-stream' }
+			})
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Authorization'), 'Bearer android-access-token')
+	assert.equal(await response.text(), 'event: accepted\ndata: {}\n\n')
 	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
 	assert.match(response.headers.get('Cache-Control'), /no-transform/)
 })
@@ -752,11 +924,60 @@ test('root voice WebSocket is signed and transparently upgraded without credenti
 	assert.equal(captured.method, 'GET')
 	assert.equal(captured.headers.get('Upgrade'), 'websocket')
 	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+	assert.equal(captured.headers.get('X-Client-Platform'), 'H5')
 	assert.equal(captured.headers.get('Cookie'), null)
 	assert.equal(captured.headers.get('Authorization'), null)
 	assert.equal(captured.headers.get('X-Forwarded-Host'), null)
 	assert.equal(captured.headers.get('X-AIT-Edge-Host'), 'niko000o.site')
 	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expected)
+})
+
+test('Android voice WebSocket skips Cookie Scope and preserves native ticket transport semantics', async () => {
+	let captured
+	const upstreamResponse = websocketUpgradeResponse()
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			migrated: false,
+			headers: {
+				Upgrade: 'websocket',
+				Connection: 'Upgrade',
+				'X-Client-Platform': 'ANDROID',
+				Authorization: 'Bearer must-not-pass-to-websocket',
+				Cookie: 'captured_proxy_cookie=must-not-pass'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return upstreamResponse
+		})
+	)
+
+	const canonical = [
+		'v2',
+		'GET',
+		'/ws/voice',
+		'niko000o.site',
+		String(Math.floor(NOW / 1000)),
+		'test-ray-ord',
+		'203.0.113.10',
+		'US',
+		'64500',
+		'41.8781',
+		'-87.6298'
+	].join('\n')
+	const expectedSignature = createHmac(
+		'sha256',
+		Buffer.from(ENV.EDGE_PROXY_HMAC_SECRET_BASE64, 'base64')
+	).update(canonical).digest('base64url')
+
+	assert.equal(response, upstreamResponse)
+	assert.equal(captured.url, 'https://api.niko000o.site/ws/voice')
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Authorization'), null)
+	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expectedSignature)
 })
 
 test('voice WebSocket accepts only the exact path and a GET Upgrade request', async () => {
@@ -855,6 +1076,28 @@ test('voice WebSocket fails closed when the upstream handshake is unsafe', async
 		code: 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION',
 		message: 'The edge request was rejected.'
 	})
+})
+
+test('Android voice WebSocket rejects upstream cookies with the native policy code', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			migrated: false,
+			headers: {
+				Upgrade: 'websocket',
+				'X-Client-Platform': 'ANDROID'
+			}
+		}),
+		ENV,
+		runtime(() => websocketUpgradeResponse({
+			headers: {
+				'Set-Cookie': 'access_token=unexpected; Path=/; Secure; HttpOnly'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.equal((await response.json()).code,
+		'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 })
 
 test('pre-auth and risk challenge paths are isolated to their matching host', async () => {

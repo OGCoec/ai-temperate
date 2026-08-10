@@ -11,11 +11,11 @@ import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 在 CORS、CSRF 和业务认证之前校验 Cloudflare Worker 的 API 与语音 WebSocket 浏览器请求签名。
+ * 在 CORS、CSRF 和业务认证之前校验 Cloudflare Worker 的 API 与语音 WebSocket 请求签名。
  *
- * <p>REQUIRED 只强制带 Origin 的 H5 请求；没有 Origin 的现有 Android 原生协议保持直连。
- * 任意模式下，只要请求携带部分边缘头，就必须完整验签，避免伪造属性进入后续 Cookie
- * 作用域判断。</p>
+ * <p>生产 REQUIRED 模式要求 H5 与 Android 都只能通过 Worker 进入受保护路径，不能依据
+ * Origin 是否存在来放行原生客户端。OPTIONAL 仅用于切换期允许完全不带边缘头的请求；任意
+ * 模式下只要携带部分边缘头，就必须完整验签，避免伪造属性进入后续认证与 Cookie 作用域判断。</p>
  */
 public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
 
@@ -28,6 +28,8 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
 
     /**
      * 创建只处理 API 与公开语音 WebSocket Upgrade 请求的边缘签名过滤器。
+     *
+     * <p>过滤器只建立可信边缘边界，不负责 Android Token、H5 Cookie 或语音 Ticket 的业务认证。</p>
      *
      * @param properties 边缘代理模式配置
      * @param verifier 请求级签名验签器
@@ -60,9 +62,9 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         }
 
         boolean hasEdgeHeader = verifier.hasAnyEdgeHeader(request);
-        boolean browserRequest = hasText(request.getHeader("Origin"));
         if (!hasEdgeHeader) {
-            if (properties.mode() == EdgeProxyMode.REQUIRED && browserRequest) {
+            // REQUIRED 不再把“无 Origin”视为原生客户端可信证明，否则攻击者可直接删除 Origin 绕过 Worker。
+            if (properties.mode() == EdgeProxyMode.REQUIRED) {
                 reject(response);
                 return;
             }
@@ -82,10 +84,6 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         } catch (EdgeProxyVerificationException exception) {
             reject(response);
         }
-    }
-
-    private static boolean hasText(String value) {
-        return value != null && !value.isBlank();
     }
 
     private static void reject(HttpServletResponse response) throws IOException {

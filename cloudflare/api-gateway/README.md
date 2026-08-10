@@ -1,8 +1,9 @@
 # AI Temperate API Gateway
 
-该 Worker 为 `niko000o.site` 和 `admin.niko000o.site` 提供同源 `/api` 入口，同时为普通
-H5 提供精确的 `/ws/voice` WebSocket 入口，并把允许的请求原路径转发到
-`https://api.niko000o.site`。
+该 Worker 为 `niko000o.site` 上的 H5 与 Android 提供统一 `/api` 和精确 `/ws/voice`
+入口，并为 `admin.niko000o.site` 提供隔离的管理员 `/api/admin/**` 入口。所有允许的请求
+保持原路径回源到 `https://api.niko000o.site`；`api.` 只作为 Worker 回源，不再是生产客户端
+的公开直连入口。
 
 部署前必须把同一份至少 32 字节随机密钥的规范 Base64 值分别保存为：
 
@@ -49,21 +50,34 @@ IP2LOCATION_API_KEY_ENCRYPTION_KEY_BASE64=<另一份至少32字节随机值的�
 这两个网络风险 Secret 不写入 Worker；Worker 与后端共享的仍只有
 `EDGE_PROXY_HMAC_SECRET_BASE64`。
 
-Spring Boot 首次部署使用 `EDGE_PROXY_MODE=OPTIONAL`；两个前端和正式 Routes 完成切换、
-旧父域 Cookie 已清理后改为 `EDGE_PROXY_MODE=REQUIRED`。生产环境不得启用
+Spring Boot 首次部署使用 `EDGE_PROXY_MODE=OPTIONAL`；Worker、H5 与 Android 主域名入口
+完成验证后立即改为 `EDGE_PROXY_MODE=REQUIRED`。REQUIRED 对 `/api`、`/api/**` 和精确
+`/ws/voice` 全部要求有效 Worker HMAC，不为无 Origin Android 保留直连例外。生产环境不得启用
 `workers.dev`，不得把 Secret 写入 `wrangler.jsonc`、日志或 Git。
+
+Worker 把请求运输分成 `H5_BROWSER` 与 `ANDROID_NATIVE`。Android 只有在
+`X-Client-Platform: ANDROID`、无 Origin 且没有任何 `Sec-Fetch-*` 头时才使用原生运输；
+否则伪造 Android 平台的请求返回 `403 EDGE_CLIENT_TRANSPORT_INVALID`。Android 不要求 H5
+Cookie Scope，回源前删除 Cookie、Origin、Referer 与 Fetch Metadata，同时保留显式 Token、
+PreAuth、CSRF 和设备安装 ID 头。Android 上游响应出现任何 Set-Cookie 时返回
+`502 EDGE_ANDROID_COOKIE_POLICY_VIOLATION`。缺少或未知平台按更严格的 H5 Cookie Scope
+策略处理，不能降级为 Android。
 
 邮件检查实时接口固定匹配
 `/api/admin/mail-inspection/jobs/{22字符jobId}/events`。Worker 不读取完整响应体，
 直接流式转发 Origin 的 `text/event-stream`，透传 `Last-Event-ID`、`X-Trace-Id`，
 并把客户端取消信号传播到 Origin。响应固定禁止浏览器和 CDN 缓存及转换。
 
-语音 WebSocket 只允许根域名的精确 `/ws/voice` 路径。Worker 校验 GET Upgrade 后，删除
-Cookie、Authorization 和客户端伪造的边缘头，为握手生成同一套 v2 HMAC，再向
+语音 WebSocket 只允许根域名的精确 `/ws/voice` 路径。H5 与 Android 均由 Worker 校验 GET
+Upgrade，删除 Cookie、Authorization 和客户端伪造的边缘头，为握手生成同一套 v2 HMAC，再向
 `https://api.niko000o.site/ws/voice` 发起上游 Upgrade。上游必须返回不携带 Set-Cookie 的
-101 WebSocket 响应；Worker 直接返回运行时 WebSocket 对象，不读取音频帧或转写内容。
-生产发布顺序固定为 Worker、H5、后端 `/ws/voice` REQUIRED 验签收口，避免旧 H5 在切换前
-被直接连接禁令阻断。Android 无 Origin 直连仍由连接后的单次语音票据保护。
+101 WebSocket 响应；Worker 直接返回运行时 WebSocket 对象，不读取音频帧或转写内容。H5
+回源固定使用主域 Origin，Android 回源不带 Origin；两类客户端的身份仍由连接后的平台匹配
+一次性语音 Ticket 确定。生产发布顺序固定为 Worker、Android/H5、后端 REQUIRED 验签收口。
+
+Cloudflare WAF、Bot 产品与 Security Events 规则不属于本次 Worker 代码范围。API、SSE 或
+Upgrade 若收到带 `CF-Mitigated: challenge` 的 HTML，必须作为外部阻塞单独处理，不能放宽
+运输分类或边缘签名来绕过。
 
 `SSE_ROUTE_LOG_SAMPLE_RATE` 只控制低比例入口诊断日志。日志仅包含固定路由模板、
 HTTP 状态和有界 `CF-Ray`，禁止记录真实 Job ID、Cookie、Authorization 或请求头。

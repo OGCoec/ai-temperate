@@ -17,7 +17,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 /**
- * 验证边缘签名过滤器在生产 H5 请求上失败关闭，同时保持 Android 直连协议兼容。
+ * 验证生产 H5 与 Android 请求必须经过 Worker，并覆盖切换模式和伪造边缘头的失败关闭语义。
  */
 class EdgeProxySignatureFilterTest {
 
@@ -120,6 +120,23 @@ class EdgeProxySignatureFilterTest {
     }
 
     @Test
+    void requiredModeRejectsExpiredNativeSignature() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/api/_edge/pre-auth");
+        request.setRequestURI("/api/_edge/pre-auth");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        addSignatureAt(request, "niko000o.site", NOW.minus(Duration.ofMinutes(5)));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
     void optionalModeAllowsUnsignedBrowserWebSocketDuringCutover() throws Exception {
         EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
         MockHttpServletRequest request =
@@ -135,7 +152,7 @@ class EdgeProxySignatureFilterTest {
     }
 
     @Test
-    void requiredModeAllowsUnsignedNativeWebSocketWithoutOrigin() throws Exception {
+    void requiredModeRejectsUnsignedNativeWebSocketWithoutOrigin() throws Exception {
         EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
         MockHttpServletRequest request =
                 new MockHttpServletRequest("GET", "/ws/voice");
@@ -146,14 +163,87 @@ class EdgeProxySignatureFilterTest {
 
         filter.doFilter(request, response, chain);
 
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString())
+                .contains("EDGE_PROXY_SIGNATURE_INVALID");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void requiredModeRejectsUnsignedNativeRequestWithoutOrigin() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/api/auth/session/bootstrap");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString())
+                .contains("EDGE_PROXY_SIGNATURE_INVALID");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void requiredModeAllowsSignedNativeRequestWithoutOrigin() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/api/auth/session/bootstrap");
+        request.setRequestURI("/api/auth/session/bootstrap");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        addSignature(request, "niko000o.site");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(
+                TrustedExternalHostResolver.VERIFIED_EXTERNAL_HOST_ATTRIBUTE))
+                .isEqualTo("niko000o.site");
+    }
+
+    @Test
+    void requiredModeAllowsSignedNativeWebSocketWithoutOrigin() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.setRequestURI("/ws/voice");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        request.addHeader("Upgrade", "websocket");
+        addSignature(request, "niko000o.site");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(
+                TrustedExternalHostResolver.VERIFIED_EXTERNAL_HOST_ATTRIBUTE))
+                .isEqualTo("niko000o.site");
+    }
+
+    @Test
+    void optionalModeAllowsUnsignedBrowserRequestDuringCutover() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/api/auth/csrf");
+        request.addHeader("Origin", "https://niko000o.site");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
         assertThat(chain.getRequest()).isSameAs(request);
     }
 
     @Test
-    void requiredModeAllowsUnsignedNativeRequestWithoutOrigin() throws Exception {
-        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+    void optionalModeAllowsUnsignedNativeRequestDuringCutover() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
         MockHttpServletRequest request =
-                new MockHttpServletRequest("POST", "/api/auth/session/bootstrap");
+                new MockHttpServletRequest("POST", "/api/_edge/pre-auth");
         request.addHeader("X-Client-Platform", "ANDROID");
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
@@ -164,11 +254,10 @@ class EdgeProxySignatureFilterTest {
     }
 
     @Test
-    void optionalModeAllowsUnsignedBrowserRequestDuringCutover() throws Exception {
-        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.OPTIONAL);
+    void requiredModeDoesNotFilterUnprotectedPaths() throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
         MockHttpServletRequest request =
-                new MockHttpServletRequest("GET", "/api/auth/csrf");
-        request.addHeader("Origin", "https://niko000o.site");
+                new MockHttpServletRequest("GET", "/actuator/health");
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
 
@@ -246,8 +335,15 @@ class EdgeProxySignatureFilterTest {
     private static void addSignature(
             MockHttpServletRequest request,
             String externalHost) {
+        addSignatureAt(request, externalHost, NOW);
+    }
+
+    private static void addSignatureAt(
+            MockHttpServletRequest request,
+            String externalHost,
+            Instant issuedAt) {
         String ray = "test-ray-ord";
-        long timestamp = NOW.getEpochSecond();
+        long timestamp = issuedAt.getEpochSecond();
         String canonical = String.join(
                 "\n",
                 "v2",

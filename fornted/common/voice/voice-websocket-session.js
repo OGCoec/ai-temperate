@@ -89,11 +89,16 @@ export class VoiceWebSocketSession {
 			this.readyReject = reject
 			this._scheduleReadyTimeout(10000, '语音连接超时。')
 			try {
-				this.task = uni.connectSocket({
+				const socketOptions = {
 					url: this.url,
 					// UniApp 未传回调时会返回 Promise；显式提供 complete 才能取得下方需要的 SocketTask。
 					complete: () => {}
-				})
+				}
+				// #ifdef APP-PLUS
+				// 原生握手显式声明运输平台；H5 构建会移除此头，由浏览器 Origin 与 Cookie Scope 分类。
+				socketOptions.header = { 'X-Client-Platform': 'ANDROID' }
+				// #endif
+				this.task = uni.connectSocket(socketOptions)
 				this.task.onOpen(() => this._sendJson({
 					type: 'session.start',
 					protocolVersion: Number(ticketIssue?.protocolVersion),

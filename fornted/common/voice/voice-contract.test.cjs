@@ -22,6 +22,21 @@ test('H5 permits only self microphone access and explicit secure voice sockets',
 	assert.doesNotMatch(ticketApi, /wss:\/\/api\.niko000o\.site\/ws\/voice/)
 })
 
+test('Android derives its voice socket from the production primary-domain API base', () => {
+	const config = read('common/auth/config.js')
+	const ticketApi = read('common/voice/voice-ticket-api.js')
+	const session = read('common/voice/voice-websocket-session.js')
+
+	assert.match(config, /let authApiBaseUrl = 'https:\/\/niko000o\.site'/)
+	assert.doesNotMatch(config, /https:\/\/api\.niko000o\.site/)
+	assert.match(ticketApi, /voiceWebSocketUrl\(apiBaseUrl = AUTH_API_BASE_URL\)/)
+	assert.match(ticketApi, /const url = new URL\(base\)/)
+	assert.match(ticketApi, /url\.protocol = 'wss:'/)
+	assert.match(ticketApi, /url\.pathname = '\/ws\/voice'/)
+	assert.doesNotMatch(ticketApi, /wss:\/\/api\.niko000o\.site\/ws\/voice/)
+	assert.match(session, /#ifdef APP-PLUS[\s\S]*X-Client-Platform'[\s\S]*'ANDROID'/)
+})
+
 test('Android declares record permission and streams AudioRecord bytes without Base64', () => {
 	const manifest = read('manifest.json')
 	const recorder = read('uni_modules/ait-voice-recorder/utssdk/app-android/index.uts')

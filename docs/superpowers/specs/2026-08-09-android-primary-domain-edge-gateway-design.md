@@ -2,7 +2,7 @@
 
 ## 目标
 
-生产 H5 与 Android 对外统一只访问 `niko000o.site`，由 Cloudflare Worker 将受控请求反向代理到 `api.niko000o.site`。`api.niko000o.site` 继续存在，但只作为 Worker 回源与旧版 Android 迁移期入口。
+生产 H5 与 Android 对外统一只访问 `niko000o.site`，由 Cloudflare Worker 将受控请求反向代理到 `api.niko000o.site`。当前没有已发布 APK，因此不设置旧版 Android 兼容期；`api.niko000o.site` 继续存在，但只作为 Worker 回源。
 
 最终链路：
 
@@ -27,6 +27,7 @@ H5 / Android 语音 WebSocket
 - 不把 Android 改成 H5 Cookie 会话。
 - 不改变语音 Ticket 格式、Redis Key、Whisper 协议或业务消息格式。
 - 不使用可执行 JavaScript 的 Cloudflare Challenge Page 作为 API 客户端验证手段。
+- 不修改 Cloudflare WAF、Bot 产品或 Security Events 规则；生产仍出现 HTML Challenge 时按外部阻塞处理。
 
 ## 方案比较
 
@@ -51,9 +52,9 @@ H5 与 Android 使用相同公网 Host 和 Worker 路由，但 Worker 明确区�
 Worker 将主域名请求分为两类：
 
 1. H5 请求：带受信任主域 Origin，继续要求 Cookie Scope 标记并使用 Cookie/CSRF 协议。
-2. Android 原生请求：`X-Client-Platform` 为 `ANDROID`，且没有浏览器 Origin 与 Fetch Metadata；禁止携带 Cookie，继续使用显式 Token Header。
+2. Android 原生请求：`X-Client-Platform` 为 `ANDROID`，且没有浏览器 Origin 与 Fetch Metadata；即使入站携带 Cookie 也会在回源前删除，继续使用显式 Token Header。
 
-`X-Client-Platform` 本身不是身份凭证。该分类只选择运输协议，不授予用户身份；用户身份仍由 PreAuth、Access Token、Refresh Token、CSRF、设备绑定与一次性语音 Ticket 校验。无 Origin 的非浏览器客户端可以模仿 Android，这与当前公开 `api.` 直连协议的攻击面相同，不得在文档中描述为设备证明。
+`X-Client-Platform` 本身不是身份凭证。该分类只选择运输协议，不授予用户身份；用户身份仍由 PreAuth、Access Token、Refresh Token、CSRF、设备绑定与一次性语音 Ticket 校验。无 Origin 的非浏览器客户端可以模仿 Android，因此即使公网已经统一经过 Worker，也不得把该分类描述为设备证明。
 
 如果未来要求证明请求来自未篡改 APK，应单独引入服务端验证的设备证明或硬件密钥协议，不能把 APK 内置共享 Secret 当作长期安全边界。
 
@@ -88,26 +89,19 @@ Worker 将主域名请求分为两类：
 
 ## Java 后端行为
 
-现有业务认证原则上保持不变：
+现有业务认证协议保持不变，同时收紧公网边缘入口：
 
 - Worker签名完整时，边缘过滤器允许请求并注入可信网络上下文。
+- 生产 `EDGE_PROXY_MODE=REQUIRED` 对 `/api`、`/api/**` 与精确 `/ws/voice` 全部要求完整有效的 Worker 签名；无 Origin Android 不再具有直连例外。
+- `OPTIONAL` 只允许完全不带边缘头的切换期请求；携带部分、过期或错误边缘头仍然拒绝。
+- `DISABLED` 只供本地开发跳过边缘验签。
 - Android平台头继续选择 Header Token运输。
 - 无 Origin 的 Android WebSocket继续要求 Android一次性 Ticket。
 - H5仍使用主域 Origin、Cookie、CSRF 与 H5 Ticket。
 
-如果测试发现后端把 Worker签名的无 Origin Android请求错误归类，才增加最小修正与定向测试；不预先重构认证模块。
-
 ## Cloudflare WAF
 
-API、SSE 和 WebSocket Upgrade不能收到需要执行 JavaScript和写入浏览器 Cookie的 Challenge Page。应先通过 Security Events 的 Ray ID 确认实际命中组件，再为精确 Host、Path 与 Method建立最小 Skip 或例外。
-
-不得：
-
-- 对整个 Zone 关闭 WAF或DDoS保护。
-- 仅凭 `X-Client-Platform: ANDROID` 跳过全部安全产品。
-- 对所有路径使用宽泛 Allow/Skip。
-
-应用层 PreAuth、设备绑定、Token、Ticket与限流继续承担API安全控制。
+WAF 调整不属于本次代码实施范围。API、SSE 或 WebSocket Upgrade 如果仍收到带有 `CF-Mitigated: challenge` 的 HTML 响应，说明请求在到达 Worker 应用逻辑前后被 Cloudflare 安全产品挑战；该情况必须作为独立外部阻塞报告，不能通过放宽本次 Worker 分类或后端验签来绕过。
 
 ## 测试设计
 
@@ -115,25 +109,25 @@ API、SSE 和 WebSocket Upgrade不能收到需要执行 JavaScript和写入浏�
 
 - 前端契约：Android生产 API基址为主域名；生产源码不再包含 Android直连 `api.`；本地 H5与生产 H5行为不变。
 - 前端语音契约：Android与H5生产地址都生成主域名 WSS，本地 H5不变。
-- Worker HTTP：Android无 Origin、无 Cookie请求成功分类并签名回源；Android Cookie被拒绝；H5仍要求Cookie Scope。
+- Worker HTTP：Android无 Origin请求成功分类并签名回源；入站 Cookie被删除、上游 Set-Cookie被拒绝；H5仍要求Cookie Scope。
 - Worker WebSocket：Android无 Origin Upgrade通过主域名回源且上游无 Origin；H5仍带主域 Origin；两类请求均不泄漏Cookie/Authorization。
 - Worker安全：浏览器请求不得通过伪造 `ANDROID` 头绕过Cookie Scope；伪造边缘头继续被清除。
-- Java定向测试：只在实际后端兼容性需要修改时增加。
+- Java定向测试：REQUIRED 拒绝无签名 Android API 与 WebSocket，接受无 Origin 但签名有效的 Android请求；OPTIONAL、DISABLED 与非保护路径语义保持不变。
 
 第二阶段获得明确授权后，才运行前端、Worker和必要Java测试；不得连接生产数据库、Redis、RabbitMQ或Whisper。
 
-## 部署与迁移
+## 部署与收口
 
 1. 记录当前Worker、Android与后端可回滚版本。
-2. 根据Security Events调整产生Challenge的精确Cloudflare规则。
-3. 先部署向后兼容的Worker；此时旧Android仍直连 `api.`。
-4. 用隔离请求验证主域名Android HTTP、SSE与WebSocket代理。
-5. 发布新版Android，使新版本切换到主域名。
-6. 观察PreAuth、登录、Token续期、SSE、上传与语音指标。
-7. 保留旧Android直连过渡期；需要强制升级或达到约定版本覆盖率后，再关闭无Worker签名的公网直连。
+2. 先部署支持两类运输协议的新Worker。
+3. 用隔离请求验证主域名Android HTTP、SSE与WebSocket代理。
+4. 在HBuilderX重新生成并安装Android开发包，使其切换到主域名。
+5. 验证Android与H5的PreAuth、登录、Token续期、SSE、上传与语音指标。
+6. 最后部署后端签名收口，并保持生产 `EDGE_PROXY_MODE=REQUIRED`，立即拒绝所有无Worker签名的API与语音握手。
+7. 验证 `api.niko000o.site` 无签名直连返回签名403，主域名经Worker仍成功。
 8. `api.niko000o.site` 继续作为Worker回源，不删除DNS或Tunnel。
 
-回滚时先恢复Android旧基址，再回滚Worker兼容分支；如果后续已经关闭旧直连，必须先恢复后端兼容入口，避免旧APK全部403。
+若后端已经完成 REQUIRED 收口，回滚时必须先恢复后端的临时兼容入口，再恢复Android旧基址；Worker最后回滚，避免主域名客户端先失去代理入口。
 
 ## 成功标准
 
@@ -141,5 +135,5 @@ API、SSE 和 WebSocket Upgrade不能收到需要执行 JavaScript和写入浏�
 - Worker回源仍为 `api.niko000o.site`。
 - Android不依赖H5 Cookie Scope，不接收H5认证Cookie。
 - H5现有Cookie、CSRF、SSE与语音行为不回归。
-- API请求不再收到Cloudflare HTML Challenge。
-- 新旧Android迁移期间均可用，最终可以按独立发布计划关闭二级域名直连。
+- `api.niko000o.site` 的无签名 `/api/**` 与 `/ws/voice` 直连被生产后端拒绝。
+- 若仍收到Cloudflare HTML Challenge，明确归因于本次范围外的WAF或Bot规则并阻止生产验收，不修改代码绕过。

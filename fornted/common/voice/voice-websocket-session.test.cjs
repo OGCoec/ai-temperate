@@ -46,6 +46,7 @@ test('passes a callback so UniApp returns SocketTask instead of a Promise wrappe
 	})
 
 	assert.equal(typeof connectOptions.complete, 'function')
+	assert.deepEqual(connectOptions.header, { 'X-Client-Platform': 'ANDROID' })
 	socket.handlers.open()
 	await new Promise(resolve => setImmediate(resolve))
 	socket.handlers.message({ data: JSON.stringify({ type: 'session.ready' }) })

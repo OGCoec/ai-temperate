@@ -1,4 +1,4 @@
-let authApiBaseUrl = 'https://api.niko000o.site'
+let authApiBaseUrl = 'https://niko000o.site'
 // #ifdef H5
 // H5 本地开发仍直连本机后端；正式根域通过 Cloudflare Worker 使用同源 /api。
 const h5Hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : ''
