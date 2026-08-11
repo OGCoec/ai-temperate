@@ -11,10 +11,13 @@ import {
 	requiredAdminCsrfToken
 } from './admin-csrf-policy.js'
 import {
+	acceptAdminAndroidRiskChallenge,
 	currentAdminPreAuthToken,
 	ensureAdminPreAuth,
-	invalidateAdminPreAuth
+	invalidateAdminPreAuth,
+	recheckAdminPreAuthAfterRiskChallenge
 } from './admin-pre-auth.js'
+import { repeatedAndroidRiskChallengeError } from './admin-android-risk-challenge.js'
 import { presentAdminRiskBlock } from './admin-risk-block-navigation.js'
 import { beginAdminRiskChallenge } from './admin-risk-challenge-navigation.js'
 import {
@@ -173,7 +176,16 @@ export async function adminRequest(path, options = {}, retryState = {}) {
 			return adminRequest(path, options, { ...retryState, webRtc: true })
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
-			beginAdminRiskChallenge(error)
+			if (platform === 'H5') beginAdminRiskChallenge(error)
+			if (retryState.riskChallenge) {
+				throw repeatedAndroidRiskChallengeError(error)
+			}
+			await acceptAdminAndroidRiskChallenge(error)
+			await recheckAdminPreAuthAfterRiskChallenge()
+			return adminRequest(
+				path,
+				options,
+				{ ...retryState, riskChallenge: true })
 		}
 		if (!retryState.preAuth
 			&& ['PREAUTH_REQUIRED', 'ADMIN_PREAUTH_REQUIRED'].includes(error.code)) {
@@ -218,7 +230,18 @@ export async function adminUploadFile(path, options = {}, retryState = {}) {
 			recoverAdminWebRtc(error)
 			return adminUploadFile(path, options, { ...retryState, webRtc: true })
 		}
-		if (error.code === 'RISK_CHALLENGE_REQUIRED') beginAdminRiskChallenge(error)
+		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
+			if (platform === 'H5') beginAdminRiskChallenge(error)
+			if (retryState.riskChallenge) {
+				throw repeatedAndroidRiskChallengeError(error)
+			}
+			await acceptAdminAndroidRiskChallenge(error)
+			await recheckAdminPreAuthAfterRiskChallenge()
+			return adminUploadFile(
+				path,
+				options,
+				{ ...retryState, riskChallenge: true })
+		}
 		if (!retryState.preAuth
 			&& ['PREAUTH_REQUIRED', 'ADMIN_PREAUTH_REQUIRED'].includes(error.code)) {
 			invalidateAdminPreAuth()
@@ -353,6 +376,7 @@ function adminResponseError(path, statusCode, data) {
 	error.challengeRef = body.challengeRef || ''
 	error.challengePath = body.challengePath || ''
 	error.expiresAt = body.expiresAt || ''
+	error.preAuthToken = body.preAuthToken || ''
 	error.webRtcStatus = body.webRtcStatus
 	error.httpIp = body.httpIp || ''
 	error.webRtcIps = Array.isArray(body.webRtcIps) ? [...body.webRtcIps] : []

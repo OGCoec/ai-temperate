@@ -121,11 +121,12 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
                 || HttpMethod.OPTIONS.matches(request.getMethod())) {
             return allow(request, scope, "bypass");
         }
+        String rawPreAuth = transport.read(request, scope);
         PreAuthAccess access = existingAccess instanceof PreAuthAccess verified
                 ? verified
                 : preAuthService.resolve(
                                 scope,
-                                transport.read(request, scope),
+                                rawPreAuth,
                                 request.getHeader(DEVICE_HEADER))
                         .orElse(null);
         if (access == null) {
@@ -248,34 +249,28 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
                     RejectionReason.DYNAMIC_BLOCK,
                     Map.of());
         }
-        if (AuthClientPlatform.fromHeader(
-                        request.getHeader("X-Client-Platform"))
-                == AuthClientPlatform.ANDROID) {
-            // 原生客户端无法完成浏览器 WAF 页面，不签发无用引用，要求用户切换可信网络后重试。
-            metrics.rejection(scope, "challenge_unavailable_android");
-            return reject(
-                    request,
-                    response,
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "RISK_CHALLENGE_UNAVAILABLE",
-                    RejectionReason.CHALLENGE_REQUIRED,
-                    Map.of());
-        }
         RiskChallengeIssue issue = challengeService.issue(access, assessment);
         metrics.rejection(scope, "challenge_required");
         String challengePath = scope == RiskScope.ADMIN
                 ? "/api/admin/_edge/risk-challenge"
                 : "/api/_edge/risk-challenge";
+        Map<String, String> details = new java.util.LinkedHashMap<>();
+        details.put("challengeRef", issue.reference());
+        details.put("challengePath", challengePath);
+        details.put("expiresAt", issue.expiresAt().toString());
+        if (AuthClientPlatform.fromHeader(
+                        request.getHeader("X-Client-Platform"))
+                == AuthClientPlatform.ANDROID) {
+            // Android 只在受控 428 合同中取回当前 PreAuth，随后通过临时 HttpOnly Cookie 交给顶层 WebView。
+            details.put("preAuthToken", rawPreAuth);
+        }
         return reject(
                 request,
                 response,
                 HttpStatus.PRECONDITION_REQUIRED,
                 "RISK_CHALLENGE_REQUIRED",
                 RejectionReason.CHALLENGE_REQUIRED,
-                Map.of(
-                        "challengeRef", issue.reference(),
-                        "challengePath", challengePath,
-                        "expiresAt", issue.expiresAt().toString()));
+                details);
     }
 
     private boolean reject(

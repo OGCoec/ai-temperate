@@ -16,6 +16,8 @@ import java.util.Set;
  */
 public final class WebRtcIpNormalizer {
 
+    private static final int IPV4_PREFIX_BYTES = 3;
+    private static final int IPV6_PREFIX_BYTES = 8;
     private static final Comparator<String> STABLE_ORDER = Comparator
             .comparingInt((String value) -> value.indexOf(':') < 0 ? 0 : 1)
             .thenComparing(Comparator.naturalOrder());
@@ -44,6 +46,42 @@ public final class WebRtcIpNormalizer {
     public String normalizeTrustedHttpIp(String currentHttpIp) {
         return IpAddressIdentity.tryParse(currentHttpIp)
                 .map(IpAddressIdentity::canonicalText)
+                .orElseThrow(WebRtcInvalidReportException::new);
+    }
+
+    /**
+     * 判断规范化地址是否为 IPv4，供一致性策略分别限制 IPv4 与 IPv6 的不同候选数量。
+     */
+    public boolean isIpv4(String normalizedIp) {
+        return parseLiteral(normalizedIp).getAddress().length == 4;
+    }
+
+    /**
+     * 按固定网络前缀比较可信 HTTP IP 与 WebRTC 候选，且禁止 IPv4 与 IPv6 跨类型匹配。
+     * IPv4 使用 /24，IPv6 使用 /64，以兼容同一出口网段内末端地址变化，同时限制放宽范围。
+     */
+    public boolean matchesTrustedPrefix(
+            String canonicalHttpIp,
+            String normalizedWebRtcIp) {
+        byte[] httpBytes = parseLiteral(canonicalHttpIp).getAddress();
+        byte[] webRtcBytes = parseLiteral(normalizedWebRtcIp).getAddress();
+        if (httpBytes.length != webRtcBytes.length) {
+            return false;
+        }
+        int prefixBytes = httpBytes.length == 4
+                ? IPV4_PREFIX_BYTES
+                : IPV6_PREFIX_BYTES;
+        for (int index = 0; index < prefixBytes; index++) {
+            if (httpBytes[index] != webRtcBytes[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static InetAddress parseLiteral(String value) {
+        return IpAddressIdentity.tryParse(value)
+                .map(IpAddressIdentity::toInetAddress)
                 .orElseThrow(WebRtcInvalidReportException::new);
     }
 

@@ -53,4 +53,32 @@ class WebRtcIpNormalizerTest {
                         8))
                 .isInstanceOf(WebRtcInvalidReportException.class);
     }
+
+    @Test
+    void matchesIpv4BySlash24AndRequiresTheSameIpVersion() {
+        assertThat(normalizer.isIpv4("66.90.98.38")).isTrue();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "66.90.98.36",
+                "66.90.98.38")).isTrue();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "66.90.98.36",
+                "66.90.99.38")).isFalse();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "66.90.98.36",
+                "2606:4700:4700::1111")).isFalse();
+    }
+
+    @Test
+    void matchesIpv6BySlash64AndRequiresTheSameIpVersion() {
+        assertThat(normalizer.isIpv4("2606:4700:4700::1111")).isFalse();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "2606:4700:4700::1111",
+                "2606:4700:4700::2222")).isTrue();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "2606:4700:4700::1111",
+                "2606:4700:4701::2222")).isFalse();
+        assertThat(normalizer.matchesTrustedPrefix(
+                "2606:4700:4700::1111",
+                "66.90.98.38")).isFalse();
+    }
 }

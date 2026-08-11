@@ -1225,6 +1225,81 @@ test('pre-auth and risk challenge paths are isolated to their matching host', as
 	])
 })
 
+test('Android WebView risk navigation preserves only the matching host bridge cookie', async () => {
+	const forwarded = []
+	const fetchImpl = async upstream => {
+		forwarded.push({
+			url: upstream.url,
+			cookie: upstream.headers.get('Cookie'),
+			platform: upstream.headers.get('X-Client-Platform')
+		})
+		return new Response(null, {
+			status: 303,
+			headers: { Location: '/pages/risk/challenge-complete' }
+		})
+	}
+	const root = await handleRequest(
+		request('niko000o.site', `/api/_edge/risk-challenge?ref=${'A'.repeat(43)}`, {
+			migrated: false,
+			headers: {
+				Cookie: '__Host-ait-preauth=user-token; __Host-ait-admin-preauth=must-not-forward; admin_session=must-not-forward; cf_clearance=clearance',
+				'Sec-Fetch-Mode': 'navigate',
+				'Sec-Fetch-Dest': 'document'
+			}
+		}),
+		ENV,
+		runtime(fetchImpl))
+	const admin = await handleRequest(
+		request('admin.niko000o.site', `/api/admin/_edge/risk-challenge?ref=${'B'.repeat(43)}`, {
+			migrated: false,
+			headers: {
+				Cookie: '__Host-ait-admin-preauth=admin-token; __Host-ait-preauth=must-not-forward; access_token=must-not-forward; cf_clearance=clearance',
+				'Sec-Fetch-Mode': 'navigate',
+				'Sec-Fetch-Dest': 'document'
+			}
+		}),
+		ENV,
+		runtime(fetchImpl))
+
+	assert.equal(root.status, 303)
+	assert.equal(admin.status, 303)
+	assert.equal(forwarded.length, 2)
+	assert.match(forwarded[0].cookie, /__Host-ait-preauth=user-token/)
+	assert.doesNotMatch(forwarded[0].cookie, /ait-admin-preauth/)
+	assert.doesNotMatch(forwarded[0].cookie, /admin_session/)
+	assert.match(forwarded[1].cookie, /__Host-ait-admin-preauth=admin-token/)
+	assert.doesNotMatch(forwarded[1].cookie, /(?:^|;)\s*__Host-ait-preauth=/)
+	assert.doesNotMatch(forwarded[1].cookie, /access_token/)
+	assert.deepEqual(forwarded.map(item => /cf_clearance=clearance/.test(item.cookie)), [true, true])
+	assert.deepEqual(forwarded.map(item => item.platform), ['H5', 'H5'])
+})
+
+test('administrator Android native transport strips cookies while retaining explicit PreAuth', async () => {
+	let captured
+	const response = await handleRequest(
+		request('admin.niko000o.site', '/api/admin/auth/state', {
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'ANDROID',
+				'X-AIT-PreAuth': 'native-preauth',
+				Cookie: '__Host-ait-admin-preauth=must-not-forward'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('{}', {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			})
+		}))
+
+	assert.equal(response.status, 200)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), 'native-preauth')
+})
+
 test('ordinary WebRTC edge endpoints are forwarded only on the root host', async () => {
 	const forwarded = []
 	const fetchImpl = async upstream => {

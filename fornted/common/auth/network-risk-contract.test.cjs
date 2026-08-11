@@ -70,6 +70,27 @@ test('ordinary risk challenge uses the shared three-round state machine and a re
 	assert.doesNotMatch(gate, /428|Cloudflare|WAF|信用分|ASN|供应商/)
 	assert.match(pages, /pages\/risk\/challenge-failed/)
 })
+test('ordinary Android risk challenge bridges PreAuth through one bounded WebView retry', () => {
+	const coordinator = source('common/auth/android-risk-challenge.js')
+	const preAuth = source('common/auth/pre-auth.js')
+	const http = source('common/auth/http-client.js')
+	const shared = source('../shared-frontend/auth/android-risk-challenge.js')
+
+	assert.match(coordinator, /__Host-ait-preauth/)
+	assert.match(coordinator, /\/api\/_edge\/risk-challenge/)
+	assert.match(coordinator, /\/pages\/risk\/challenge-complete/)
+	assert.match(preAuth, /ensureAndroidRiskChallenge/)
+	assert.match(preAuth, /recheckPreAuthAfterRiskChallenge/)
+	assert.match(http, /repeatedAndroidRiskChallengeError/)
+	assert.match(http, /riskChallenge/)
+	assert.match(shared, /RISK_CHALLENGE_REPEATED/)
+	assert.match(shared, /BRIDGE_COOKIE_MAX_AGE_SECONDS\s*=\s*180/)
+	assert.match(shared, /RISK_CHALLENGE_COOKIE_FAILED/)
+	assert.match(shared, /RISK_CHALLENGE_TIMEOUT/)
+	assert.match(shared, /RISK_CHALLENGE_CANCELLED/)
+	assert.doesNotMatch(shared, /removeAllCookies|console\./)
+})
+
 test('ordinary risk block enters a non-retryable top-level security gate', () => {
 	const app = source('App.vue')
 	const login = source('pages/auth/login.vue')

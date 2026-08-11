@@ -20,9 +20,13 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -32,7 +36,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 提供普通与管理员 PreAuth Bootstrap 以及 WAF Challenge 验证后的同源完成入口。
@@ -45,6 +48,9 @@ import org.springframework.web.server.ResponseStatusException;
         name = "安全-网络风险边缘流程",
         description = "为普通 H5、管理员 H5 和 Android 建立 PreAuth，并闭合 Cloudflare WAF Challenge；不返回 IP 信用分、坐标或供应商数据。")
 public final class NetworkRiskEdgeController {
+
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(NetworkRiskEdgeController.class);
 
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
     private static final String PLATFORM_HEADER = "X-Client-Platform";
@@ -110,30 +116,26 @@ public final class NetworkRiskEdgeController {
 
     @GetMapping("/api/_edge/risk-challenge")
     @Operation(summary = "消费普通用户一次性 WAF Challenge 引用")
-    public void completeUserChallenge(
+    public ResponseEntity<ChallengeCompletionResponse> completeUserChallenge(
             @RequestParam("ref") String reference,
-            HttpServletRequest request,
-            HttpServletResponse response) {
-        completeChallenge(
+            HttpServletRequest request) {
+        return completeChallenge(
                 RiskScope.USER,
                 reference,
                 USER_COMPLETE_PATH,
-                request,
-                response);
+                request);
     }
 
     @GetMapping("/api/admin/_edge/risk-challenge")
     @Operation(summary = "消费管理员一次性 WAF Challenge 引用")
-    public void completeAdminChallenge(
+    public ResponseEntity<ChallengeCompletionResponse> completeAdminChallenge(
             @RequestParam("ref") String reference,
-            HttpServletRequest request,
-            HttpServletResponse response) {
-        completeChallenge(
+            HttpServletRequest request) {
+        return completeChallenge(
                 RiskScope.ADMIN,
                 reference,
                 ADMIN_COMPLETE_PATH,
-                request,
-                response);
+                request);
     }
 
     private ResponseEntity<BootstrapResponse> bootstrap(
@@ -155,9 +157,18 @@ public final class NetworkRiskEdgeController {
                     null));
         }
         TrustedNetworkObservation observation = contextResolver.resolve(request)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.FORBIDDEN,
-                        "Trusted network context is unavailable."));
+                .orElse(null);
+        if (observation == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(new BootstrapResponse(
+                            "UNAVAILABLE",
+                            "RISK_CONTEXT_UNAVAILABLE",
+                            null,
+                            clock.instant(),
+                            false,
+                            null,
+                            null));
+        }
         String existing = transport.read(request, scope);
         boolean h5 = AuthClientPlatform.fromHeader(platformHeader)
                 == AuthClientPlatform.H5;
@@ -169,19 +180,15 @@ public final class NetworkRiskEdgeController {
                             device,
                             observation,
                             "1".equals(request.getHeader(
-                                    PreAuthTransport.RESET_HEADER)),
-                            h5)
+                                    PreAuthTransport.RESET_HEADER)))
                     .block(properties.lookupTimeout());
-        } catch (RuntimeException exception) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new BootstrapResponse(
-                            "UNAVAILABLE",
-                            "RISK_ASSESSMENT_UNAVAILABLE",
-                            null,
-                            clock.instant(),
-                            false,
-                            null,
-                            null));
+        } catch (DataAccessException exception) {
+            return riskAssessmentUnavailable(scope, exception);
+        } catch (IllegalStateException exception) {
+            if (!isAssessmentInfrastructureFailure(exception)) {
+                throw exception;
+            }
+            return riskAssessmentUnavailable(scope, exception);
         }
         if (outcome == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -235,12 +242,12 @@ public final class NetworkRiskEdgeController {
                             null,
                             null));
         }
-        if (!h5 || outcome.challenge() == null) {
+        if (outcome.challenge() == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(new BootstrapResponse(
                             "CHALLENGE_UNAVAILABLE",
                             "RISK_CHALLENGE_UNAVAILABLE",
-                            outcome.issue().rawToken(),
+                            h5 ? null : outcome.issue().rawToken(),
                             outcome.issue().expiresAt(),
                             outcome.reauthenticationRequired(),
                             null,
@@ -253,8 +260,8 @@ public final class NetworkRiskEdgeController {
                 .body(new BootstrapResponse(
                         "CHALLENGE_REQUIRED",
                         "RISK_CHALLENGE_REQUIRED",
-                        null,
-                        outcome.issue().expiresAt(),
+                        h5 ? null : outcome.issue().rawToken(),
+                        outcome.challenge().expiresAt(),
                         outcome.reauthenticationRequired(),
                         outcome.challenge().reference(),
                         challengePath));
@@ -272,34 +279,89 @@ public final class NetworkRiskEdgeController {
         authCookieWriter.clearSession(response);
     }
 
-    private void completeChallenge(
+    private ResponseEntity<ChallengeCompletionResponse> completeChallenge(
             RiskScope scope,
             String reference,
             String completionPath,
-            HttpServletRequest request,
-            HttpServletResponse response) {
-        noStore(response);
-        String rawPreAuth = transport.read(request, scope);
-        PreAuthAccess access = preAuthService.resolveChallengeNavigation(
-                        scope,
-                        rawPreAuth)
-                .orElseThrow(() -> new ResponseStatusException(
+            HttpServletRequest request) {
+        try {
+            String rawPreAuth = transport.read(request, scope);
+            PreAuthAccess access = preAuthService.resolveChallengeNavigation(
+                            scope,
+                            rawPreAuth)
+                    .orElse(null);
+            if (access == null) {
+                return challengeCompletionError(
                         HttpStatus.FORBIDDEN,
-                        "Risk challenge is invalid."));
-        TrustedNetworkObservation observation = contextResolver.resolve(request)
-                .orElseThrow(() -> new ResponseStatusException(
+                        "RISK_CHALLENGE_INVALID");
+            }
+            TrustedNetworkObservation observation = contextResolver.resolve(request)
+                    .orElse(null);
+            if (observation == null) {
+                return challengeCompletionError(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "RISK_CONTEXT_UNAVAILABLE");
+            }
+            if (!challengeService.consumeAndTrust(
+                    access,
+                    reference,
+                    observation)) {
+                return challengeCompletionError(
                         HttpStatus.FORBIDDEN,
-                        "Risk challenge is invalid."));
-        if (!challengeService.consumeAndTrust(
-                access,
-                reference,
-                observation)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Risk challenge is invalid.");
+                        "RISK_CHALLENGE_INVALID");
+            }
+            return ResponseEntity.status(HttpStatus.SEE_OTHER)
+                    .location(URI.create(completionPath))
+                    .cacheControl(CacheControl.noStore().cachePrivate())
+                    .build();
+        } catch (DataAccessException exception) {
+            // Redis 等持久化基础设施故障不能伪装成用户挑战失败，也不能泄露底层异常消息。
+            LOGGER.warn(
+                    "event=risk_challenge_unavailable scope={} exceptionClass={}",
+                    scope,
+                    exception.getClass().getSimpleName());
+            return challengeCompletionError(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "RISK_CHALLENGE_UNAVAILABLE");
         }
-        response.setStatus(HttpStatus.SEE_OTHER.value());
-        response.setHeader(HttpHeaders.LOCATION, completionPath);
+    }
+
+    private ResponseEntity<ChallengeCompletionResponse> challengeCompletionError(
+            HttpStatus status,
+            String code) {
+        return ResponseEntity.status(status)
+                .cacheControl(CacheControl.noStore().cachePrivate())
+                .body(new ChallengeCompletionResponse(
+                        code,
+                        "The risk challenge could not be completed.",
+                        clock.instant()));
+    }
+
+    private ResponseEntity<BootstrapResponse> riskAssessmentUnavailable(
+            RiskScope scope,
+            RuntimeException exception) {
+        // 只把明确的存储或等待超时归为基础设施不可用，其他程序异常继续交给全局 500 处理。
+        LOGGER.warn(
+                "event=risk_assessment_unavailable scope={} exceptionClass={}",
+                scope,
+                exception.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new BootstrapResponse(
+                        "UNAVAILABLE",
+                        "RISK_ASSESSMENT_UNAVAILABLE",
+                        null,
+                        clock.instant(),
+                        false,
+                        null,
+                        null));
+    }
+
+    private static boolean isAssessmentInfrastructureFailure(
+            IllegalStateException exception) {
+        String message = exception.getMessage();
+        return message != null
+                && (message.startsWith("Timeout on blocking read")
+                        || message.equals("Created PreAuth state is unavailable."));
     }
 
     private static void noStore(HttpServletResponse response) {
@@ -319,5 +381,14 @@ public final class NetworkRiskEdgeController {
             boolean reauthenticationRequired,
             String challengeRef,
             String challengePath) {
+    }
+
+    /**
+     * 返回风险挑战导航的稳定失败合同，不包含 Token、引用或网络识别信息。
+     */
+    public record ChallengeCompletionResponse(
+            String code,
+            String message,
+            Instant timestamp) {
     }
 }

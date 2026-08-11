@@ -120,18 +120,11 @@ class WebRtcVerificationServiceImplTest {
         Fixture fixture = fixture();
         PreAuthAccess access = access(
                 fixture, PreAuthWebRtcPhase.PENDING, 11L, DEADLINE, null, null);
-        when(fixture.store().writeWebRtcResult(
-                eq(RiskScope.USER),
-                eq(TOKEN),
-                eq(DEVICE),
-                eq(fixture.httpIpDigest()),
-                eq(11L),
-                eq(true),
-                eq(null),
-                any(String.class),
-                eq(true),
-                eq(Duration.ofMinutes(30))))
-                .thenReturn(PreAuthWebRtcWriteResult.UPDATED);
+        expectWritten(
+                fixture,
+                11L,
+                true,
+                null);
 
         var decision = fixture.service().report(
                 access,
@@ -143,15 +136,184 @@ class WebRtcVerificationServiceImplTest {
     }
 
     @Test
-    void reportCannotImplicitlyStartARequiredGeneration() {
+    void ipv4ReportAcceptsTheSameSlash24WithADifferentLastByte() {
         Fixture fixture = fixture();
         PreAuthAccess access = access(
-                fixture, PreAuthWebRtcPhase.REQUIRED, 12L, DEADLINE, null, null);
+                fixture, PreAuthWebRtcPhase.PENDING, 12L, DEADLINE, null, null);
+        expectWritten(fixture, 12L, true, null);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "12",
+                List.of("8.8.8.9"));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+    }
+
+    @Test
+    void ipv4ReportRejectsADifferentSlash24() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 13L, DEADLINE, null, null);
+        expectWritten(
+                fixture,
+                13L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "13",
+                List.of("8.8.4.4"));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void ipv6ReportAcceptsTheSameSlash64() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.PENDING,
+                14L,
+                DEADLINE,
+                null,
+                null);
+        expectWritten(fixture, 14L, true, null);
+
+        assertThat(fixture.service().report(
+                access,
+                httpIpv6,
+                "14",
+                List.of("2606:4700:4700::2222")).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+    }
+
+    @Test
+    void ipv6ReportRejectsAnotherSlash64() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.PENDING,
+                15L,
+                DEADLINE,
+                null,
+                null);
+        expectWritten(
+                fixture,
+                15L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
+
+        assertThat(fixture.service().report(
+                access,
+                httpIpv6,
+                "15",
+                List.of("2606:4700:4701::2222")).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void reportAllowsOneCandidatePerIpVersionWhenTheHttpVersionMatches() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 16L, DEADLINE, null, null);
+        expectWritten(fixture, 16L, true, null);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "16",
+                List.of("8.8.8.9", "2606:4700:4700::1111"));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+    }
+
+    @Test
+    void reportRejectsMultipleDistinctIpv4Candidates() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.PENDING,
+                17L,
+                DEADLINE,
+                null,
+                null);
+        expectWritten(
+                fixture,
+                17L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
 
         assertThat(fixture.service().report(
                 access,
                 HTTP_IP,
-                "12",
+                "17",
+                List.of("8.8.8.8", "8.8.8.9")).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void reportRejectsMultipleDistinctIpv6Candidates() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.PENDING,
+                18L,
+                DEADLINE,
+                null,
+                null);
+        expectWritten(
+                fixture,
+                18L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
+
+        assertThat(fixture.service().report(
+                access,
+                httpIpv6,
+                "18",
+                List.of(
+                        "2606:4700:4700::1111",
+                        "2606:4700:4700::2222")).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void reportRejectsWhenOnlyTheOtherIpVersionIsPresent() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 19L, DEADLINE, null, null);
+        expectWritten(
+                fixture,
+                19L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "19",
+                List.of("2606:4700:4700::1111"));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void reportCannotImplicitlyStartARequiredGeneration() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.REQUIRED, 20L, DEADLINE, null, null);
+
+        assertThat(fixture.service().report(
+                access,
+                HTTP_IP,
+                "20",
                 List.of(HTTP_IP)).outcome())
                 .isEqualTo(WebRtcVerificationOutcome.STALE_REPORT);
     }
@@ -167,7 +329,7 @@ class WebRtcVerificationServiceImplTest {
         PreAuthAccess access = access(
                 fixture,
                 PreAuthWebRtcPhase.FAILED,
-                13L,
+                21L,
                 null,
                 PreAuthWebRtcFailureReason.IP_MISMATCH,
                 ciphertext);
@@ -177,11 +339,15 @@ class WebRtcVerificationServiceImplTest {
     }
 
     private static Fixture fixture() {
+        return fixture(HTTP_IP);
+    }
+
+    private static Fixture fixture(String httpIp) {
         byte[] hmacKey = "abcdef0123456789abcdef0123456789"
                 .getBytes(StandardCharsets.UTF_8);
         NetworkRiskIdentifier identifier = new NetworkRiskIdentifier(
                 new HmacSha256Identifier(hmacKey));
-        HmacIdentifier ipDigest = identifier.identifyIp(HTTP_IP);
+        HmacIdentifier ipDigest = identifier.identifyIp(httpIp);
         String encryptionKey = Base64.getEncoder().encodeToString(
                 "0123456789abcdef0123456789abcdef"
                         .getBytes(StandardCharsets.UTF_8));
@@ -210,6 +376,25 @@ class WebRtcVerificationServiceImplTest {
                 protector,
                 new WebRtcIpNormalizer());
         return new Fixture(service, store, protector, ipDigest);
+    }
+
+    private static void expectWritten(
+            Fixture fixture,
+            long generation,
+            boolean matched,
+            PreAuthWebRtcFailureReason failureReason) {
+        when(fixture.store().writeWebRtcResult(
+                eq(RiskScope.USER),
+                eq(TOKEN),
+                eq(DEVICE),
+                eq(fixture.httpIpDigest()),
+                eq(generation),
+                eq(matched),
+                eq(failureReason),
+                any(String.class),
+                eq(true),
+                eq(Duration.ofMinutes(30))))
+                .thenReturn(PreAuthWebRtcWriteResult.UPDATED);
     }
 
     private static PreAuthAccess access(

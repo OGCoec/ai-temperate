@@ -1,4 +1,4 @@
-let adminApiBaseUrl = 'https://api.niko000o.site'
+let adminApiBaseUrl = 'https://admin.niko000o.site'
 
 // #ifdef H5
 const h5Hostname = typeof window !== 'undefined' && window.location

@@ -3,6 +3,10 @@ import {
 	androidEdgeRequestHeaders,
 	runAndroidRequestWithEdgeRecovery
 } from './android-edge-challenge.js'
+import {
+	ensureAndroidRiskChallenge,
+	repeatedAndroidRiskChallengeError
+} from './android-risk-challenge.js'
 import { ensureCookieScopeMigration } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import {
@@ -49,7 +53,7 @@ export async function ensurePreAuth() {
 	return bootstrapInFlight
 }
 
-async function bootstrapPreAuth() {
+async function bootstrapPreAuth(riskChallengeRetried = false) {
 	await ensureCookieScopeMigration()
 	// Challenge 返回后的同步抢占只允许当前调用方执行一次 PreAuth 复查。
 	const challengeRecheck = claimRiskChallengeRecheck()
@@ -69,14 +73,19 @@ async function bootstrapPreAuth() {
 		response = await requestBootstrap(headers)
 	} catch (error) {
 		if (error.reauthenticationRequired) clearSession()
-		if (platform === 'ANDROID' && error.preAuthToken) {
-			saveAndroidSessionCredentials({
-				...loadAndroidSessionCredentials(),
-				preAuthToken: error.preAuthToken
-			})
-		}
 		if (presentRiskBlock(error)) throw error
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
+			if (platform === 'ANDROID') {
+				if (riskChallengeRetried) {
+					throw repeatedAndroidRiskChallengeError(error)
+				}
+				await acceptAndroidRiskChallenge(error)
+				try {
+					return await bootstrapPreAuth(true)
+				} catch (cause) {
+					throw normalizeRiskChallengeRecheckError(cause)
+				}
+			}
 			beginRiskChallenge(error)
 		}
 		if (challengeRecheck) failRiskChallengeRecheck()
@@ -94,6 +103,14 @@ async function bootstrapPreAuth() {
 		if (challengeRecheck) completeRiskChallengeRecheck()
 		return ''
 	}
+	if (response?.status !== 'READY') {
+		if (challengeRecheck) failRiskChallengeRecheck()
+		throw preAuthError(
+			riskChallengeRetried
+				? 'RISK_CHALLENGE_RECHECK_FAILED'
+				: 'PREAUTH_BOOTSTRAP_INVALID',
+			'预登录安全状态无效。')
+	}
 	if (response?.reauthenticationRequired) clearSession()
 	if (platform === 'ANDROID') {
 		if (!response?.preAuthToken) {
@@ -109,6 +126,32 @@ async function bootstrapPreAuth() {
 	ready = true
 	if (challengeRecheck) completeRiskChallengeRecheck()
 	return currentPreAuthToken()
+}
+
+export async function acceptAndroidRiskChallenge(error) {
+	if (clientPlatform() !== 'ANDROID') return false
+	if (error?.code !== 'RISK_CHALLENGE_REQUIRED' || !error.preAuthToken) {
+		throw preAuthError(
+			'RISK_CHALLENGE_RECHECK_FAILED',
+			'安全验证参数不完整。')
+	}
+	await ensureAndroidRiskChallenge(error)
+	saveAndroidSessionCredentials({
+		...loadAndroidSessionCredentials(),
+		preAuthToken: error.preAuthToken
+	})
+	return true
+}
+
+export function recheckPreAuthAfterRiskChallenge() {
+	ready = false
+	resetRequested = false
+	if (!bootstrapInFlight) {
+		bootstrapInFlight = bootstrapPreAuth(true)
+			.catch(cause => { throw normalizeRiskChallengeRecheckError(cause) })
+			.finally(() => { bootstrapInFlight = null })
+	}
+	return bootstrapInFlight
 }
 
 function requestBootstrap(headers) {
@@ -163,5 +206,20 @@ function requestBootstrapOnce(headers) {
 function preAuthError(code, message) {
 	const error = new Error(message)
 	error.code = code
+	return error
+}
+
+function normalizeRiskChallengeRecheckError(cause) {
+	if ([
+		'RISK_CHALLENGE_CANCELLED',
+		'RISK_CHALLENGE_TIMEOUT',
+		'RISK_CHALLENGE_COOKIE_FAILED',
+		'RISK_CHALLENGE_RECHECK_FAILED',
+		'RISK_CHALLENGE_REPEATED'
+	].includes(cause?.code)) return cause
+	const error = preAuthError(
+		'RISK_CHALLENGE_RECHECK_FAILED',
+		'安全验证后的状态复查失败。')
+	error.cause = cause
 	return error
 }

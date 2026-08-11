@@ -1,4 +1,8 @@
 import { ADMIN_API_BASE_URL, adminClientPlatform } from './admin-config.js'
+import {
+	ensureAdminAndroidRiskChallenge,
+	repeatedAndroidRiskChallengeError
+} from './admin-android-risk-challenge.js'
 import { ensureAdminCookieScopeMigration } from './admin-cookie-scope-migration.js'
 import { adminDeviceInstallationId } from './admin-device.js'
 import {
@@ -42,7 +46,7 @@ export async function ensureAdminPreAuth() {
 	return bootstrapInFlight
 }
 
-async function bootstrap() {
+async function bootstrap(riskChallengeRetried = false) {
 	await ensureAdminCookieScopeMigration()
 	// Challenge 返回后的同步抢占只允许当前调用方执行一次管理员 PreAuth 复查。
 	const challengeRecheck = claimAdminRiskChallengeRecheck()
@@ -62,11 +66,19 @@ async function bootstrap() {
 		response = await requestBootstrap(headers)
 	} catch (error) {
 		if (error.reauthenticationRequired) clearLocalAdminAuthentication()
-		if (platform === 'ANDROID' && error.preAuthToken) {
-			updateAdminSecureState({ preAuthToken: error.preAuthToken })
-		}
 		if (presentAdminRiskBlock(error)) throw error
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
+			if (platform === 'ANDROID') {
+				if (riskChallengeRetried) {
+					throw repeatedAndroidRiskChallengeError(error)
+				}
+				await acceptAdminAndroidRiskChallenge(error)
+				try {
+					return await bootstrap(true)
+				} catch (cause) {
+					throw normalizeAdminRiskChallengeRecheckError(cause)
+				}
+			}
 			beginAdminRiskChallenge(error)
 		}
 		if (challengeRecheck) failAdminRiskChallengeRecheck()
@@ -81,6 +93,14 @@ async function bootstrap() {
 		if (challengeRecheck) completeAdminRiskChallengeRecheck()
 		return ''
 	}
+	if (response?.status !== 'READY') {
+		if (challengeRecheck) failAdminRiskChallengeRecheck()
+		throw createError(
+			riskChallengeRetried
+				? 'RISK_CHALLENGE_RECHECK_FAILED'
+				: 'PREAUTH_BOOTSTRAP_INVALID',
+			'管理员预登录安全状态无效。')
+	}
 	if (response?.reauthenticationRequired) clearLocalAdminAuthentication()
 	if (platform === 'ANDROID') {
 		if (!response?.preAuthToken) {
@@ -93,6 +113,31 @@ async function bootstrap() {
 	ready = true
 	if (challengeRecheck) completeAdminRiskChallengeRecheck()
 	return currentAdminPreAuthToken()
+}
+
+export async function acceptAdminAndroidRiskChallenge(error) {
+	if (adminClientPlatform() !== 'ANDROID') return false
+	if (error?.code !== 'RISK_CHALLENGE_REQUIRED' || !error.preAuthToken) {
+		throw createError(
+			'RISK_CHALLENGE_RECHECK_FAILED',
+			'管理员安全验证参数不完整。')
+	}
+	await ensureAdminAndroidRiskChallenge(error)
+	updateAdminSecureState({ preAuthToken: error.preAuthToken })
+	return true
+}
+
+export function recheckAdminPreAuthAfterRiskChallenge() {
+	ready = false
+	resetRequested = false
+	if (!bootstrapInFlight) {
+		bootstrapInFlight = bootstrap(true)
+			.catch(cause => {
+				throw normalizeAdminRiskChallengeRecheckError(cause)
+			})
+			.finally(() => { bootstrapInFlight = null })
+	}
+	return bootstrapInFlight
 }
 
 function requestBootstrap(headers) {
@@ -139,5 +184,20 @@ function clearLocalAdminAuthentication() {
 function createError(code, message) {
 	const error = new Error(message)
 	error.code = code
+	return error
+}
+
+function normalizeAdminRiskChallengeRecheckError(cause) {
+	if ([
+		'RISK_CHALLENGE_CANCELLED',
+		'RISK_CHALLENGE_TIMEOUT',
+		'RISK_CHALLENGE_COOKIE_FAILED',
+		'RISK_CHALLENGE_RECHECK_FAILED',
+		'RISK_CHALLENGE_REPEATED'
+	].includes(cause?.code)) return cause
+	const error = createError(
+		'RISK_CHALLENGE_RECHECK_FAILED',
+		'管理员安全验证后的状态复查失败。')
+	error.cause = cause
 	return error
 }

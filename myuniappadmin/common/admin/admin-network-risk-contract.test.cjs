@@ -70,6 +70,23 @@ test('administrator challenge accepts only its path and shares the bounded failu
 	assert.doesNotMatch(gate, /428|Cloudflare|WAF|信用分|ASN|供应商/)
 	assert.match(pages, /pages\/risk\/challenge-failed/)
 })
+test('administrator Android challenge is isolated to the admin host and cookie', () => {
+	const coordinator = source('common/admin/admin-android-risk-challenge.js')
+	const preAuth = source('common/admin/admin-pre-auth.js')
+	const http = source('common/admin/admin-http.js')
+	const config = source('common/admin/admin-config.js')
+
+	assert.match(config, /https:\/\/admin\.niko000o\.site/)
+	assert.match(coordinator, /__Host-ait-admin-preauth/)
+	assert.match(coordinator, /\/api\/admin\/_edge\/risk-challenge/)
+	assert.match(coordinator, /\/pages\/risk\/challenge-complete/)
+	assert.match(preAuth, /ensureAdminAndroidRiskChallenge/)
+	assert.match(preAuth, /recheckAdminPreAuthAfterRiskChallenge/)
+	assert.match(http, /repeatedAndroidRiskChallengeError/)
+	assert.match(http, /riskChallenge/)
+	assert.match(coordinator, /repeatedAndroidRiskChallengeError/)
+})
+
 test('administrator risk block enters a non-retryable top-level security gate', () => {
 	const app = source('App.vue')
 	const preAuth = source('common/admin/admin-pre-auth.js')

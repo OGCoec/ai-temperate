@@ -124,7 +124,17 @@ public final class WebRtcVerificationServiceImpl
                 reportedWebRtcIps,
                 properties.webRtc().maxReportedIps());
         String canonicalHttpIp = normalizer.normalizeTrustedHttpIp(currentHttpIp);
-        boolean matched = normalized.contains(canonicalHttpIp);
+        long ipv4CandidateCount = normalized.stream()
+                .filter(normalizer::isIpv4)
+                .count();
+        long ipv6CandidateCount = normalized.size() - ipv4CandidateCount;
+        // 同一类型出现多个不同公网候选意味着出口不一致；IPv4 与 IPv6 各一个时，
+        // 只使用与 HTTP IP 同类型的候选按 /24 或 /64 前缀完成一致性校验。
+        boolean candidateCountAllowed = ipv4CandidateCount <= 1
+                && ipv6CandidateCount <= 1;
+        boolean matched = candidateCountAllowed
+                && normalized.stream().anyMatch(candidate ->
+                        normalizer.matchesTrustedPrefix(canonicalHttpIp, candidate));
         PreAuthWebRtcFailureReason failureReason = matched
                 ? null
                 : normalized.isEmpty()

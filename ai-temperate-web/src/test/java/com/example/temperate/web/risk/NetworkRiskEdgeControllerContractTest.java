@@ -27,8 +27,12 @@ class NetworkRiskEdgeControllerContractTest {
                         "RISK_ASSESSMENT_UNAVAILABLE",
                         "outcome.issue().rawToken()",
                         "HttpStatus.SEE_OTHER",
+                        "RISK_CONTEXT_UNAVAILABLE",
+                        "RISK_CHALLENGE_UNAVAILABLE",
+                        "DataAccessException",
                         "USER_COMPLETE_PATH",
                         "ADMIN_COMPLETE_PATH")
+                .doesNotContain("if (!h5 || outcome.challenge() == null)")
                 .doesNotContain("<html", "<script", "<style");
     }
 }

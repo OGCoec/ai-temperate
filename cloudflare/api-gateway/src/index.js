@@ -149,6 +149,8 @@ export async function handleRequest(request, env, runtime = {}) {
 				Upgrade: 'websocket'
 			})
 		}
+	} else if (route.riskChallenge && request.method !== 'GET') {
+		return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
 	} else if (!API_METHODS.includes(request.method)) {
 		return jsonError(405, 'METHOD_NOT_ALLOWED', {
 			Allow: API_METHODS.join(', ')
@@ -160,6 +162,7 @@ export async function handleRequest(request, env, runtime = {}) {
 		return jsonError(transport.status, transport.code)
 	}
 	if (transport.kind === H5_TRANSPORT
+		&& !route.riskChallenge
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
 		return jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
 	}
@@ -220,6 +223,14 @@ function classifyRoute(url) {
 		}
 		if (url.pathname === '/api/_edge/cookie-scope') {
 			return { allowed: true, migration: true, surface: 'root' }
+		}
+		if (url.pathname === '/api/_edge/risk-challenge') {
+			return {
+				allowed: true,
+				migration: false,
+				riskChallenge: true,
+				surface: 'root'
+			}
 		}
 		if (url.pathname === VOICE_WEBSOCKET_PATH) {
 			return {
@@ -287,7 +298,6 @@ function classifyRoute(url) {
 			|| url.pathname === '/api/ai/conversations/stream-diagnostics'
 		if (url.pathname === '/api/health'
 			|| url.pathname === '/api/_edge/pre-auth'
-			|| url.pathname === '/api/_edge/risk-challenge'
 			|| url.pathname === '/api/_edge/webrtc/start'
 			|| url.pathname === '/api/_edge/webrtc/report'
 			|| pathWithin(url.pathname, '/api/auth')
@@ -301,6 +311,14 @@ function classifyRoute(url) {
 	if (url.hostname === ADMIN_HOST) {
 		if (url.pathname === '/api/admin/_edge/cookie-scope') {
 			return { allowed: true, migration: true, surface: 'admin' }
+		}
+		if (url.pathname === '/api/admin/_edge/risk-challenge') {
+			return {
+				allowed: true,
+				migration: false,
+				riskChallenge: true,
+				surface: 'admin'
+			}
 		}
 		const mailSse = url.pathname.match(
 			/^\/api\/admin\/mail-inspection\/jobs\/([A-Za-z0-9_-]{22})\/events$/)
@@ -348,8 +366,7 @@ function classifyClientTransport(request, route) {
 		// 缺少或未知平台不能降级成原生运输，只能继续接受 H5 的 Cookie Scope 约束。
 		return { allowed: true, kind: H5_TRANSPORT }
 	}
-	if (route.surface !== 'root'
-		|| headerValue(request.headers, 'Origin').trim()
+	if (headerValue(request.headers, 'Origin').trim()
 		|| hasFetchMetadata(request.headers)) {
 		// 浏览器可以伪造普通平台头，但不能去除浏览器自动附加的 Origin/Fetch Metadata。
 		return {
@@ -394,6 +411,17 @@ async function signedUpstreamRequest(request, env, route, transport, now) {
 		}
 		headers.set(CLIENT_PLATFORM_HEADER, 'ANDROID')
 	} else {
+		if (route.riskChallenge) {
+			// 风险挑战只把当前 Host 所属凭据送往共享源站，防止手工构造请求跨越普通端与管理端 Cookie 边界。
+			const forbiddenNames = route.surface === 'admin'
+				? ROOT_COOKIE_NAMES
+				: ADMIN_COOKIE_NAMES
+			const scopedCookies = withoutCookieNames(
+				headers.get('Cookie'),
+				forbiddenNames)
+			if (scopedCookies) headers.set('Cookie', scopedCookies)
+			else headers.delete('Cookie')
+		}
 		headers.set(CLIENT_PLATFORM_HEADER, 'H5')
 	}
 	if (route.webSocket) {
@@ -570,6 +598,18 @@ function hasCookie(header, expectedName, expectedValue) {
 		const value = item.slice(separator + 1).trim()
 		return name === expectedName && value === expectedValue
 	})
+}
+
+function withoutCookieNames(header, forbiddenNames) {
+	return String(header || '')
+		.split(';')
+		.map(value => value.trim())
+		.filter(value => {
+			const separator = value.indexOf('=')
+			if (separator <= 0) return false
+			return !forbiddenNames.has(value.slice(0, separator).trim())
+		})
+		.join('; ')
 }
 
 function androidClearanceResponse(request, responseKind) {

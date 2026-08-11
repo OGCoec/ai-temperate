@@ -15,10 +15,13 @@ import {
 } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import {
+	acceptAndroidRiskChallenge,
 	currentPreAuthToken,
 	ensurePreAuth,
-	invalidatePreAuth
+	invalidatePreAuth,
+	recheckPreAuthAfterRiskChallenge
 } from './pre-auth.js'
+import { repeatedAndroidRiskChallengeError } from './android-risk-challenge.js'
 import { presentRiskBlock } from './risk-block-navigation.js'
 import { beginRiskChallenge } from './risk-challenge-navigation.js'
 import { hasCompleteSessionCredentials } from './session-credentials.js'
@@ -109,6 +112,7 @@ function rawRequestTask(options) {
 				error.challengeRef = response.data?.challengeRef || ''
 				error.challengePath = response.data?.challengePath || ''
 				error.expiresAt = response.data?.expiresAt || ''
+				error.preAuthToken = response.data?.preAuthToken || ''
 				error.webRtcStatus = response.data?.webRtcStatus
 				error.httpIp = response.data?.httpIp || ''
 				error.webRtcIps = Array.isArray(response.data?.webRtcIps)
@@ -209,7 +213,8 @@ export async function publicRequest(
 	options = {},
 	migrationRetried = false,
 	preAuthRetried = false,
-	webRtcRetried = false
+	webRtcRetried = false,
+	riskChallengeRetried = false
 ) {
 	await ensureCookieScopeMigration()
 	await ensurePreAuth()
@@ -247,10 +252,28 @@ export async function publicRequest(
 			// #ifdef APP-PLUS
 			recoverAndroidWebRtc()
 			// #endif
-			return publicRequest(path, options, migrationRetried, preAuthRetried, true)
+			return publicRequest(
+				path,
+				options,
+				migrationRetried,
+				preAuthRetried,
+				true,
+				riskChallengeRetried)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
-			beginRiskChallenge(error)
+			if (clientPlatform() === 'H5') beginRiskChallenge(error)
+			if (riskChallengeRetried) {
+				throw repeatedAndroidRiskChallengeError(error)
+			}
+			await acceptAndroidRiskChallenge(error)
+			await recheckPreAuthAfterRiskChallenge()
+			return publicRequest(
+				path,
+				options,
+				migrationRetried,
+				preAuthRetried,
+				webRtcRetried,
+				true)
 		}
 		if (!preAuthRetried && error.code === 'PREAUTH_REQUIRED') {
 			invalidatePreAuth()
@@ -262,7 +285,13 @@ export async function publicRequest(
 			// #ifdef APP-PLUS
 			void startAndroidWebRtcVerificationInBackground().catch(() => {})
 			// #endif
-			return publicRequest(path, options, migrationRetried, true, webRtcRetried)
+			return publicRequest(
+				path,
+				options,
+				migrationRetried,
+				true,
+				webRtcRetried,
+				riskChallengeRetried)
 		}
 		if (clientPlatform() !== 'H5'
 			|| migrationRetried
@@ -273,7 +302,13 @@ export async function publicRequest(
 		invalidatePreAuth()
 		invalidateWebRtcVerification()
 		await ensureCookieScopeMigration()
-		return publicRequest(path, options, true, preAuthRetried, webRtcRetried)
+		return publicRequest(
+			path,
+			options,
+			true,
+			preAuthRetried,
+			webRtcRetried,
+			riskChallengeRetried)
 	}
 }
 
@@ -320,6 +355,18 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 		})
 	} catch (error) {
 		handleAuthorizedSecurityFailure(error)
+		if (error?.code === 'RISK_CHALLENGE_REQUIRED') {
+			if (clientPlatform() === 'H5') beginRiskChallenge(error)
+			if (retryState.riskChallenge) {
+				throw repeatedAndroidRiskChallengeError(error)
+			}
+			await acceptAndroidRiskChallenge(error)
+			await recheckPreAuthAfterRiskChallenge()
+			return authorizedRequest(
+				path,
+				options,
+				{ ...retryState, riskChallenge: true })
+		}
 		if (!retryState.preAuth && error?.code === 'PREAUTH_REQUIRED') {
 			await ensurePreAuth()
 			// #ifdef H5
@@ -342,9 +389,6 @@ function handleAuthorizedSecurityFailure(error) {
 	if (isWebRtcFailureCode(error?.code)) {
 		presentWebRtcFailure(error)
 		invalidateWebRtcVerification()
-	}
-	if (error?.code === 'RISK_CHALLENGE_REQUIRED') {
-		beginRiskChallenge(error)
 	}
 	if (error?.code === 'PREAUTH_REQUIRED') {
 		invalidatePreAuth()

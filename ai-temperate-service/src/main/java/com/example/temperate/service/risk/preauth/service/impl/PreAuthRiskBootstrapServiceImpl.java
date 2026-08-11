@@ -63,8 +63,7 @@ public final class PreAuthRiskBootstrapServiceImpl
             String existingRawToken,
             String rawDeviceId,
             TrustedNetworkObservation observation,
-            boolean resetExisting,
-            boolean browserChallengeSupported) {
+            boolean resetExisting) {
         boolean suppliedExisting =
                 existingRawToken != null && !existingRawToken.isBlank();
         Optional<PreAuthAccess> existing = preAuthService.resolve(
@@ -86,7 +85,6 @@ public final class PreAuthRiskBootstrapServiceImpl
                             access,
                             assessment,
                             reauthenticationRequired,
-                            browserChallengeSupported,
                             observation.observedAt()));
         }
         return ipIntelligenceService.lookup(observation.clientIp())
@@ -97,16 +95,14 @@ public final class PreAuthRiskBootstrapServiceImpl
                         scope,
                         rawDeviceId,
                         snapshot,
-                        reauthenticationRequired,
-                        browserChallengeSupported));
+                        reauthenticationRequired));
     }
 
     private PreAuthBootstrapOutcome createInitial(
             RiskScope scope,
             String rawDeviceId,
             PreAuthNetworkSnapshot snapshot,
-            boolean reauthenticationRequired,
-            boolean browserChallengeSupported) {
+            boolean reauthenticationRequired) {
         RiskDecision decision =
                 NetworkRiskScorePolicy.decide(
                         snapshot.trustScore(),
@@ -138,8 +134,7 @@ public final class PreAuthRiskBootstrapServiceImpl
                 issue,
                 access,
                 assessment,
-                reauthenticationRequired,
-                browserChallengeSupported);
+                reauthenticationRequired);
     }
 
     private PreAuthBootstrapOutcome outcome(
@@ -147,7 +142,6 @@ public final class PreAuthRiskBootstrapServiceImpl
             PreAuthAccess access,
             RiskAssessment assessment,
             boolean reauthenticationRequired,
-            boolean browserChallengeSupported,
             Instant now) {
         Duration ttl = access.state().authenticated()
                 ? properties.authenticatedPreAuthTtl()
@@ -160,20 +154,18 @@ public final class PreAuthRiskBootstrapServiceImpl
                         access.state().webRtcGeneration()),
                 access,
                 assessment,
-                reauthenticationRequired,
-                browserChallengeSupported);
+                reauthenticationRequired);
     }
 
     private PreAuthBootstrapOutcome outcome(
             PreAuthIssue issue,
             PreAuthAccess access,
             RiskAssessment assessment,
-            boolean reauthenticationRequired,
-            boolean browserChallengeSupported) {
+            boolean reauthenticationRequired) {
         RiskChallengeIssue challenge = null;
         if (properties.mode() == NetworkRiskMode.ENFORCE
-                && assessment.decision() == RiskDecision.CHALLENGE
-                && browserChallengeSupported) {
+                && assessment.decision() == RiskDecision.CHALLENGE) {
+            // H5 与 Android 都具备顶层浏览器挑战通道，服务层只依据风险决策签发一次性引用。
             challenge = challengeService.issue(access, assessment);
         }
         return new PreAuthBootstrapOutcome(

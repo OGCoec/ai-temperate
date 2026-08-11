@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.common.security.hmac.HmacSha256Identifier;
+import com.example.temperate.service.risk.challenge.RiskChallengeIssue;
 import com.example.temperate.service.risk.challenge.RiskChallengeService;
 import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
@@ -77,7 +78,6 @@ class PreAuthRiskBootstrapServiceImplTest {
                 null,
                 DEVICE,
                 observation(),
-                false,
                 false).block();
 
         assertThat(outcome).isNotNull();
@@ -100,7 +100,6 @@ class PreAuthRiskBootstrapServiceImplTest {
                 null,
                 DEVICE,
                 observation(),
-                false,
                 false).block();
 
         verify(fixture.preAuthService()).createEvaluated(
@@ -121,11 +120,14 @@ class PreAuthRiskBootstrapServiceImplTest {
                 null,
                 DEVICE,
                 observation(),
-                false,
-                true).block();
+                false).block();
 
         assertThat(outcome).isNotNull();
         assertThat(outcome.access().state().lastTrustedIpDigest()).isNull();
+        assertThat(outcome.challenge()).isNotNull();
+        verify(fixture.challengeService()).issue(
+                any(PreAuthAccess.class),
+                any());
         verify(fixture.preAuthService()).createEvaluated(
                 eq(RiskScope.USER),
                 eq(DEVICE),
@@ -148,7 +150,6 @@ class PreAuthRiskBootstrapServiceImplTest {
                 LEGACY_RAW_TOKEN,
                 DEVICE,
                 observation(),
-                false,
                 false).block();
 
         assertThat(outcome).isNotNull();
@@ -162,7 +163,6 @@ class PreAuthRiskBootstrapServiceImplTest {
                 null,
                 DEVICE,
                 observation(),
-                false,
                 false).block();
     }
 
@@ -197,15 +197,20 @@ class PreAuthRiskBootstrapServiceImplTest {
                 DEVICE)).thenReturn(Optional.of(access));
         PreAuthNetworkSnapshotFactory factory =
                 new PreAuthNetworkSnapshotFactoryImpl(IDENTIFIER);
+        RiskChallengeService challengeService = mock(RiskChallengeService.class);
+        when(challengeService.issue(any(), any()))
+                .thenReturn(new RiskChallengeIssue(
+                        "risk-challenge-reference",
+                        NOW.plus(Duration.ofMinutes(3))));
         PreAuthRiskBootstrapServiceImpl service =
                 new PreAuthRiskBootstrapServiceImpl(
                         preAuthService,
                         intelligenceService,
                         factory,
                         mock(NetworkRiskAssessmentService.class),
-                        mock(RiskChallengeService.class),
+                        challengeService,
                         properties);
-        return new Fixture(service, preAuthService);
+        return new Fixture(service, preAuthService, challengeService);
     }
 
     private static PreAuthAccess access(int score) {
@@ -294,6 +299,7 @@ class PreAuthRiskBootstrapServiceImplTest {
 
     private record Fixture(
             PreAuthRiskBootstrapServiceImpl service,
-            PreAuthService preAuthService) {
+            PreAuthService preAuthService,
+            RiskChallengeService challengeService) {
     }
 }

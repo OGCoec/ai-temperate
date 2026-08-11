@@ -15,6 +15,5 @@ public interface PreAuthRiskBootstrapService {
             String existingRawToken,
             String rawDeviceId,
             TrustedNetworkObservation observation,
-            boolean resetExisting,
-            boolean browserChallengeSupported);
+            boolean resetExisting);
 }

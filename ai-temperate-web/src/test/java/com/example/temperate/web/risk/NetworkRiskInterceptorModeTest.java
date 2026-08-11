@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
+import com.example.temperate.service.risk.challenge.RiskChallengeIssue;
 import com.example.temperate.service.risk.challenge.RiskChallengeService;
 import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
@@ -66,7 +67,7 @@ class NetworkRiskInterceptorModeTest {
     }
 
     @Test
-    void androidChallengeReturnsControlledUnavailableWithoutIssuingWafReference()
+    void androidChallengeReturns428WithPreAuthAndWafReference()
             throws Exception {
         Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
         PreAuthAccess access = mock(PreAuthAccess.class);
@@ -97,6 +98,12 @@ class NetworkRiskInterceptorModeTest {
                                 "A".repeat(43)),
                         HmacIdentifier.fromProtectedValue(
                                 "B".repeat(43)))));
+        when(fixture.challengeService().issue(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new RiskChallengeIssue(
+                        "android-risk-reference",
+                        Instant.parse("2026-07-25T12:03:00Z")));
         MockHttpServletRequest request = request();
         request.addHeader("X-Client-Platform", "ANDROID");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -107,10 +114,13 @@ class NetworkRiskInterceptorModeTest {
                 new Object());
 
         assertThat(allowed).isFalse();
-        assertThat(response.getStatus()).isEqualTo(503);
+        assertThat(response.getStatus()).isEqualTo(428);
         assertThat(response.getContentAsString())
-                .contains("RISK_CHALLENGE_UNAVAILABLE");
-        verify(fixture.challengeService(), never())
+                .contains(
+                        "RISK_CHALLENGE_REQUIRED",
+                        "android-risk-reference",
+                        "android-preauth-token");
+        verify(fixture.challengeService())
                 .issue(
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
@@ -182,13 +192,18 @@ class NetworkRiskInterceptorModeTest {
                 mock(RiskChallengeService.class);
         RiskRequestContextResolver contextResolver =
                 mock(RiskRequestContextResolver.class);
+        PreAuthTransport transport = mock(PreAuthTransport.class);
+        when(transport.read(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn("android-preauth-token");
         NetworkRiskInterceptor interceptor = new NetworkRiskInterceptor(
                 properties,
                 preAuthService,
                 assessmentService,
                 challengeService,
                 contextResolver,
-                mock(PreAuthTransport.class),
+                transport,
                 new ObjectMapper(),
                 new NetworkRiskMetrics(new SimpleMeterRegistry()));
         return new Fixture(
