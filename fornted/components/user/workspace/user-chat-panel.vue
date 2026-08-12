@@ -616,6 +616,7 @@
 							</view>
 						</picker>
 						<button
+							v-if="!manualMotionReduced"
 							class="motion-toggle"
 							type="button"
 							:aria-pressed="String(manualMotionReduced)"
