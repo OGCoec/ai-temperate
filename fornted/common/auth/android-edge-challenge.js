@@ -12,6 +12,18 @@ const CLEARANCE_STATUS_PATH = '/__edge/android-clearance/status'
 const VERIFIED_SCHEME = 'ait-edge://verified'
 const WEBVIEW_ID = 'ait-cloudflare-managed-challenge'
 const CHALLENGE_TIMEOUT_MILLIS = 120000
+const CLEARANCE_STATUS_TIMEOUT_MILLIS = 2000
+const CLEARANCE_CONFIRMATION_DELAYS = Object.freeze([0, 150, 400, 800, 1500])
+const ClearanceProbeStatus = Object.freeze({
+	VERIFIED: 'VERIFIED',
+	PENDING: 'PENDING',
+	RETRYABLE: 'RETRYABLE'
+})
+const EDGE_CHALLENGE_FAILURE_MESSAGES = Object.freeze({
+	[AndroidEdgeChallengeError.TIMEOUT]: '安全验证等待超时，请重新验证。',
+	[AndroidEdgeChallengeError.NOT_SHARED]: '安全验证状态未同步，请重新验证。',
+	[AndroidEdgeChallengeError.REPEATED]: '安全验证后请求仍被拦截，请稍后重试。'
+})
 
 let clearanceInFlight = null
 
@@ -54,12 +66,30 @@ export function ensureAndroidEdgeClearance() {
 	return clearanceInFlight
 }
 
+export function presentAndroidEdgeChallengeFailure(error) {
+	const code = String(error?.code || '')
+	if (code === AndroidEdgeChallengeError.CANCELLED) return true
+	const message = EDGE_CHALLENGE_FAILURE_MESSAGES[code]
+	if (!message) return false
+	try {
+		uni.showToast({
+			title: message,
+			icon: 'none',
+			duration: 4000
+		})
+	} catch (_) {}
+	return true
+}
+
 function openManagedChallenge() {
 	return new Promise((resolve, reject) => {
 		let webview = null
 		let settled = false
-		let verifying = false
+		let confirmationInFlight = false
+		let authoritativeCompletionSeen = false
 		let timeoutHandle = null
+		const retryWaits = new Map()
+		const activeRequests = new Set()
 
 		const closeWebview = () => {
 			if (!webview) return
@@ -67,29 +97,82 @@ function openManagedChallenge() {
 			webview = null
 			try { active.close('slide-out-bottom', 180) } catch (_) {}
 		}
+		const clearRetryWaits = () => {
+			for (const [handle, completeWait] of retryWaits) {
+				clearTimeout(handle)
+				completeWait()
+			}
+			retryWaits.clear()
+		}
+		const abortActiveRequests = () => {
+			for (const request of activeRequests) {
+				try { request.abort?.() } catch (_) {}
+			}
+			activeRequests.clear()
+		}
 		const settle = (error = null) => {
 			if (settled) return
 			settled = true
 			if (timeoutHandle) clearTimeout(timeoutHandle)
+			clearRetryWaits()
+			abortActiveRequests()
 			closeWebview()
 			if (error) reject(error)
 			else resolve()
 		}
-		const verifySharedClearance = async () => {
-			if (verifying || settled) return
-			verifying = true
+		const waitForRetry = delay => new Promise(completeWait => {
+			if (settled) {
+				completeWait()
+				return
+			}
+			let handle = null
+			handle = setTimeout(() => {
+				retryWaits.delete(handle)
+				completeWait()
+			}, delay)
+			retryWaits.set(handle, completeWait)
+		})
+		const registerRequest = request => {
+			if (request && typeof request.abort === 'function') {
+				activeRequests.add(request)
+			}
+		}
+		const unregisterRequest = request => {
+			if (request) activeRequests.delete(request)
+		}
+		const confirmSharedClearance = async authoritative => {
+			if (authoritative) authoritativeCompletionSeen = true
+			if (confirmationInFlight || settled) return
+			confirmationInFlight = true
 			try {
-				flushAndroidCookies()
-				await probeClearanceStatus()
-				settle()
+				for (const delay of CLEARANCE_CONFIRMATION_DELAYS) {
+					if (delay > 0) await waitForRetry(delay)
+					if (settled) return
+					flushAndroidCookies()
+					const status = await probeClearanceStatus(
+						registerRequest,
+						unregisterRequest)
+					if (settled) return
+					if (status === ClearanceProbeStatus.VERIFIED) {
+						settle()
+						return
+					}
+				}
+				if (authoritativeCompletionSeen) {
+					settle(edgeChallengeError(
+						AndroidEdgeChallengeError.NOT_SHARED,
+						'Cloudflare 验证状态未同步，请重新验证。'))
+				}
 			} catch (error) {
 				settle(error)
+			} finally {
+				confirmationInFlight = false
 			}
 		}
 
 		try {
 			const url = `${AUTH_API_BASE_URL}${CLEARANCE_PATH}`
-			webview = plus.webview.create(url, WEBVIEW_ID, {
+			webview = plus.webview.create('', WEBVIEW_ID, {
 				top: '0px',
 				bottom: '0px',
 				left: '0px',
@@ -97,14 +180,22 @@ function openManagedChallenge() {
 				background: '#0b0d0c'
 			})
 			webview.overrideUrlLoading(
-				{ mode: 'reject', match: 'ait-edge://*' },
+				{
+					mode: 'reject',
+					match: '^ait-edge://verified$',
+					effect: 'instant',
+					exclude: 'none'
+				},
 				event => {
 					if (String(event?.url || '') !== VERIFIED_SCHEME) return
-					void verifySharedClearance()
+					void confirmSharedClearance(true)
 				})
+			webview.addEventListener('loaded', () => {
+				void confirmSharedClearance(false)
+			})
 			webview.addEventListener('close', () => {
 				webview = null
-				if (!settled && !verifying) {
+				if (!settled) {
 					settle(edgeChallengeError(
 						AndroidEdgeChallengeError.CANCELLED,
 						'已取消 Cloudflare 安全验证。'))
@@ -118,8 +209,9 @@ function openManagedChallenge() {
 			timeoutHandle = setTimeout(() => {
 				settle(edgeChallengeError(
 					AndroidEdgeChallengeError.TIMEOUT,
-					'Cloudflare 安全验证等待超时，请重试。'))
+					'Cloudflare 安全验证等待超时，请重新验证。'))
 			}, CHALLENGE_TIMEOUT_MILLIS)
+			webview.loadURL(url)
 			webview.show('slide-in-bottom', 180)
 		} catch (_) {
 			settle(edgeChallengeError(
@@ -139,15 +231,15 @@ function flushAndroidCookies() {
 	}
 }
 
-function probeClearanceStatus() {
+function probeClearanceStatus(registerRequest, unregisterRequest) {
 	const clearance = getAndroidClearanceCookieHeader()
 	if (!clearance) {
-		return Promise.reject(edgeChallengeError(
-			AndroidEdgeChallengeError.NOT_SHARED,
-			'Cloudflare 验证 Cookie 尚未共享到应用请求。'))
+		return Promise.resolve(ClearanceProbeStatus.PENDING)
 	}
 	return new Promise((resolve, reject) => {
-		uni.request({
+		let request = null
+		let completed = false
+		request = uni.request({
 			url: `${AUTH_API_BASE_URL}${CLEARANCE_STATUS_PATH}`,
 			method: 'GET',
 			header: {
@@ -155,10 +247,14 @@ function probeClearanceStatus() {
 				Cookie: clearance
 			},
 			withCredentials: false,
-			timeout: 10000,
+			timeout: CLEARANCE_STATUS_TIMEOUT_MILLIS,
 			success(response) {
 				if (response.statusCode === 204) {
-					resolve()
+					resolve(ClearanceProbeStatus.VERIFIED)
+					return
+				}
+				if (response.statusCode === 428) {
+					resolve(ClearanceProbeStatus.PENDING)
 					return
 				}
 				reject(edgeChallengeError(
@@ -166,10 +262,13 @@ function probeClearanceStatus() {
 					'Cloudflare 验证状态未同步，请重新验证。'))
 			},
 			fail() {
-				reject(edgeChallengeError(
-					AndroidEdgeChallengeError.NOT_SHARED,
-					'无法确认 Cloudflare 验证状态，请稍后重试。'))
+				resolve(ClearanceProbeStatus.RETRYABLE)
+			},
+			complete() {
+				completed = true
+				unregisterRequest(request)
 			}
 		})
+		if (!completed) registerRequest(request)
 	})
 }

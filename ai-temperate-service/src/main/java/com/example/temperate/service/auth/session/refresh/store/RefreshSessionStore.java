@@ -8,9 +8,10 @@ import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSess
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 
 /**
- * 定义刷新会话的创建、原子续期、CSRF 轮换和撤销存储契约。
+ * 定义刷新会话的创建、原子续期、CSRF 轮换、握手只读绑定校验和撤销存储契约。
  *
- * <p>实现必须同时维护会话本体和按用户索引，且不得把原始 RT、CSRF 或设备标识持久化为可重放值。</p>
+ * <p>实现必须同时维护会话本体和按用户索引，且不得把原始 RT、CSRF 或设备标识持久化为可重放值；
+ * 握手读取不得改变任何 TTL。</p>
  */
 public interface RefreshSessionStore {
 
@@ -20,6 +21,10 @@ public interface RefreshSessionStore {
             HmacIdentifier refreshTokenHash,
             HmacIdentifier deviceHash,
             HmacIdentifier csrfHash);
+
+    RefreshSessionValidation validateBinding(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash);
 
     RefreshSessionValidation validateForAccessWithPreAuth(
             HmacIdentifier refreshTokenHash,

@@ -146,8 +146,11 @@ test('discards in-flight tokens as soon as a non-prefix snapshot correction arri
 	const corrected = session.update({ code: 'class Correct', streaming: true })
 	releaseFirstEnqueue()
 	await Promise.all([first, corrected])
+	const correctedRevision = snapshots.at(-1).revision
 
-	const visibleText = snapshots.flatMap(snapshot => snapshot.lines)
+	const visibleText = snapshots
+		.filter(snapshot => snapshot.revision >= correctedRevision)
+		.flatMap(snapshot => snapshot.lines)
 		.flatMap(line => line.tokens)
 		.map(token => token.content)
 	assert.equal(visibleText.includes('class Wrong'), false)
@@ -173,7 +176,7 @@ test('publishes an empty view when a streaming snapshot retracts all code', asyn
 	assert.deepEqual(snapshots.at(-1).lines, [])
 })
 
-test('locks a cold grammar to plain text after 1000ms and never recolors it later', async () => {
+test('keeps cold grammar text readable and recolors it when initialization finishes', async () => {
 	const { createAiCodeHighlightSessionFactory } = await loadEsmModule(
 		path.join(__dirname, 'ai-code-highlight-session.js')
 	)
@@ -181,26 +184,91 @@ test('locks a cold grammar to plain text after 1000ms and never recolors it late
 	const tokenizerPromise = new Promise(resolve => { resolveTokenizer = resolve })
 	const snapshots = []
 	const session = createAiCodeHighlightSessionFactory({
-		createTokenizer: () => tokenizerPromise,
-		languageTimeoutMs: 1000,
-		setTimer: callback => {
-			callback()
-			return 1
-		},
-		clearTimer: () => {}
+		createTokenizer: () => tokenizerPromise
 	})({
 		language: { id: 'cold-language', label: 'Cold language' },
 		onSnapshot: snapshot => snapshots.push(snapshot),
 		scheduleFrame: callback => callback()
 	})
 
-	await session.update({ code: 'first', streaming: true })
-	assert.equal(snapshots.at(-1).status, 'plain')
-	resolveTokenizer(await fakeTokenizerFactory([])({ id: 'cold-language', label: 'Cold language' }))
+	const update = session.update({ code: 'first', streaming: true })
 	await Promise.resolve()
-	await session.update({ code: 'first second', streaming: true })
+	assert.equal(snapshots.at(-1).status, 'loading')
+	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'first')
+	resolveTokenizer(await fakeTokenizerFactory([])({ id: 'cold-language', label: 'Cold language' }))
+	await update
+	assert.equal(snapshots.at(-1).status, 'ready')
+	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'first')
+})
+
+test('retries a transient highlighter failure on the next append', async () => {
+	const { createAiCodeHighlightSessionFactory } = await loadEsmModule(
+		path.join(__dirname, 'ai-code-highlight-session.js')
+	)
+	let attempts = 0
+	const snapshots = []
+	const errors = []
+	const session = createAiCodeHighlightSessionFactory({
+		createTokenizer: async language => {
+			attempts += 1
+			if (attempts === 1) throw new Error('AI_CODE_ENGINE_INIT_FAILED')
+			return fakeTokenizerFactory([])(language)
+		}
+	})({
+		language: { id: 'java', label: 'Java' },
+		onSnapshot: snapshot => snapshots.push(snapshot),
+		onError: error => errors.push(error),
+		scheduleFrame: callback => callback()
+	})
+
+	await session.update({ code: 'public', streaming: true })
 	assert.equal(snapshots.at(-1).status, 'plain')
-	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'first second')
+	assert.equal(errors[0].code, 'AI_CODE_ENGINE_INIT_FAILED')
+	await session.update({ code: 'public class Main', streaming: true })
+	assert.equal(attempts, 2)
+	assert.equal(snapshots.at(-1).status, 'ready')
+	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'public class Main')
+})
+
+test('leaves indefinite loading as readable plain text and retries on the next append', async () => {
+	const { createAiCodeHighlightSessionFactory } = await loadEsmModule(
+		path.join(__dirname, 'ai-code-highlight-session.js')
+	)
+	let attempts = 0
+	const snapshots = []
+	const errors = []
+	const session = createAiCodeHighlightSessionFactory({
+		languageTimeoutMs: 10,
+		createTokenizer: language => {
+			attempts += 1
+			if (attempts === 1) return new Promise(() => {})
+			return fakeTokenizerFactory([])(language)
+		}
+	})({
+		language: { id: 'java', label: 'Java' },
+		onSnapshot: snapshot => snapshots.push(snapshot),
+		onError: error => errors.push(error),
+		scheduleFrame: callback => callback()
+	})
+
+	const firstResult = await Promise.race([
+		session.update({ code: 'public', streaming: true }).then(() => 'settled'),
+		new Promise(resolve => setTimeout(() => resolve('still-loading'), 200))
+	])
+	assert.equal(firstResult, 'settled')
+	assert.equal(snapshots.at(-1).status, 'plain')
+	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'public')
+	assert.deepEqual(errors, [{
+		code: 'AI_CODE_ENGINE_INIT_TIMEOUT',
+		languageId: 'java',
+		stage: 'TOKENIZER',
+		elapsedMs: 10
+	}])
+
+	await session.update({ code: 'public class Main', streaming: true })
+	assert.equal(attempts, 2)
+	assert.equal(snapshots.at(-1).status, 'ready')
+	assert.equal(snapshots.at(-1).lines[0].tokens[0].content, 'public class Main')
 })
 
 test('flushes an unfinished last line on complete and retains original text on failure', async () => {

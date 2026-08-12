@@ -2,18 +2,11 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const { loadEsmModule } = require('./ai-code-test-loader.cjs')
 
 function loadModule() {
-	const source = fs.readFileSync(path.join(__dirname,
-		'ai-conversation-source-presentation.js'), 'utf8')
-		.replaceAll('export function ', 'function ')
-	const factory = new Function(`${source}; return {
-		normalizeAiConversationSource,
-		mergeAiConversationSources,
-		createAiConversationSourceIndex,
-		matchAiConversationSource,
-		decorateAiMarkdownSources }`)
-	return factory()
+	return loadEsmModule(path.join(__dirname,
+		'ai-conversation-source-presentation.js'))
 }
 
 function source(overrides = {}) {
@@ -45,8 +38,8 @@ function parenthesizedDomainAst(visibleDomain, href) {
 	}
 }
 
-test('normalizes safe sources and derives the hostname from the source URL', () => {
-	const api = loadModule()
+test('normalizes safe sources and derives the hostname from the source URL', async () => {
+	const api = await loadModule()
 	const value = api.normalizeAiConversationSource(source())
 
 	assert.equal(value.domain, 'docs.oracle.com')
@@ -58,8 +51,8 @@ test('normalizes safe sources and derives the hostname from the source URL', () 
 	assert.equal(api.normalizeAiConversationSource(null), null)
 })
 
-test('deduplicates normalized full URLs while ignoring fragments only', () => {
-	const api = loadModule()
+test('deduplicates normalized full URLs while ignoring fragments only', async () => {
+	const api = await loadModule()
 	const values = api.mergeAiConversationSources([
 		source(),
 		source({ sequence: 4, sourceId: 'source-duplicate',
@@ -72,8 +65,8 @@ test('deduplicates normalized full URLs while ignoring fragments only', () => {
 	assert.deepEqual(values.map(item => item.sourceId), ['source-1', 'source-query'])
 })
 
-test('matches exact URLs and only falls back to a unique origin plus pathname', () => {
-	const api = loadModule()
+test('matches exact URLs and only falls back to a unique origin plus pathname', async () => {
+	const api = await loadModule()
 	const index = api.createAiConversationSourceIndex([
 		source({ url: 'https://docs.oracle.com/object?view=full' }),
 		source({ sequence: 4, sourceId: 'source-about',
@@ -94,8 +87,8 @@ test('matches exact URLs and only falls back to a unique origin plus pathname', 
 		'https://docs.oracle.com/object?view=three'), null)
 })
 
-test('decorates matched citations, removes their wrapper parentheses, and does not mutate parser AST', () => {
-	const api = loadModule()
+test('decorates matched citations, removes their wrapper parentheses, and does not mutate parser AST', async () => {
+	const api = await loadModule()
 	const ast = {
 		type: 'document',
 		children: [{
@@ -129,8 +122,8 @@ test('decorates matched citations, removes their wrapper parentheses, and does n
 	assert.equal(decorated.children[1].children[2].value, '继续。')
 })
 
-test('uses a safe parenthesized Markdown domain link when no SSE source matches', () => {
-	const api = loadModule()
+test('uses a safe parenthesized Markdown domain link when no SSE source matches', async () => {
+	const api = await loadModule()
 	const ast = {
 		type: 'document',
 		children: [{
@@ -156,8 +149,8 @@ test('uses a safe parenthesized Markdown domain link when no SSE source matches'
 	assert.equal(decorated.children[0].children[2].value, ' remains available.')
 })
 
-test('treats one leading www label as equivalent for parenthesized domain links', () => {
-	const api = loadModule()
+test('treats one leading www label as equivalent for parenthesized domain links', async () => {
+	const api = await loadModule()
 	const rabbitMqUrl =
 		'https://www.rabbitmq.com/docs/3.13/queues?utm_source=openai'
 	const rabbitMqAst = parenthesizedDomainAst('rabbitmq.com', rabbitMqUrl)
@@ -187,8 +180,8 @@ test('treats one leading www label as equivalent for parenthesized domain links'
 	}
 })
 
-test('does not collapse arbitrary or deceptive subdomains into source chips', () => {
-	const api = loadModule()
+test('does not collapse arbitrary or deceptive subdomains into source chips', async () => {
+	const api = await loadModule()
 	for (const candidate of [
 		{ visibleDomain: 'apache.org', href: 'https://kafka.apache.org/documentation' },
 		{ visibleDomain: 'rabbitmq.com',
@@ -205,8 +198,8 @@ test('does not collapse arbitrary or deceptive subdomains into source chips', ()
 	}
 })
 
-test('preserves ordinary parentheses, code, unmatched links, and citations with extra wrapper content', () => {
-	const api = loadModule()
+test('preserves ordinary parentheses, code, unmatched links, and citations with extra wrapper content', async () => {
+	const api = await loadModule()
 	const ast = {
 		type: 'document',
 		children: [{

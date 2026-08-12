@@ -13,6 +13,9 @@
 	// #endif
 	// #ifdef APP-PLUS
 	import {
+		presentAndroidEdgeChallengeFailure
+	} from '@/common/auth/android-edge-challenge.js'
+	import {
 		startAndroidWebRtcVerificationInBackground
 	} from '@/common/auth/webrtc-verification.js'
 	// #endif
@@ -48,7 +51,8 @@
 					.then(() => startAndroidWebRtcVerificationInBackground())
 					.catch(error => {
 						if (presentRiskBlock(error)) return
-						presentWebRtcFailure(error)
+						if (presentWebRtcFailure(error)) return
+						presentAndroidEdgeChallengeFailure(error)
 					})
 				// #endif
 			}

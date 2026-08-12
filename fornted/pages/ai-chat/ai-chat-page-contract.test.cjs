@@ -85,7 +85,7 @@ test('generated response images use a completion-ordered mosaic without changing
 	const page = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(page,
-		/message\.contentAttachments\?\.length[\s\S]{0,600}<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
+		/message\.contentAttachments\?\.length[\s\S]*?<!-- #ifndef APP-PLUS -->\s*<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
 	assert.match(page, /generated-image-gallery-wrap/)
 	assert.match(page, /generatedImageGallery\(message\)\.visibleItems/)
 	assert.match(page, /generatedImageGallery\(message\)\.hiddenCount/)
@@ -348,19 +348,23 @@ test('H5 and Android share one SSE parser and Android transport accepts POST JSO
 	assert.match(android, /createAiConversationSseParser/)
 	assert.match(android, /terminalReceived/)
 	assert.match(android, /CLIENT_RESPONSE_HEADERS/)
+	assert.match(
+		androidTransport,
+		/@UTSJS\.keepAlive\s+export function openSseRequest/
+	)
 	assert.match(androidTransport, /MAX_ERROR_BODY_BYTES = 16 \* 1024/)
 	assert.match(androidTransport, /getErrorStream\(\)/)
 	assert.match(androidTransport, /JSON\.parse\(body\)/)
-	assert.match(
-		androidTransport,
-		/return \{ code, statusCode, message, contentType, cfMitigated, cfRay \}/
-	)
+	assert.match(androidTransport, /createFailure\(/)
+	assert.match(androidTransport, /exceptionType/)
+	assert.match(androidTransport, /closedByCaller/)
 	assert.match(
 		androidTransport,
 		/getHeaderField\('Content-Type'\)[\s\S]*text\/event-stream/
 	)
 	assert.match(stream, /Accept:\s*'text\/event-stream, application\/json'/)
 	assert.match(stream, /if \(closed\) \{\s*active\.close\?\.\(closeReason, closeDetails\)\s*return\s*\}/)
+	assert.match(android, /lifecycleDiagnostics\?\.stopRequested\?\.\(reason, details\)/)
 	assert.match(android, /lifecycleDiagnostics\?\.abortCalled\?\.\(\)/)
 	assert.match(errorPresentation, /AI_QUOTA_INSUFFICIENT:\s*'额度不足，请充值。'/)
 	assert.match(page, /aiConversationErrorMessage\(error\)/)
@@ -369,20 +373,29 @@ test('H5 and Android share one SSE parser and Android transport accepts POST JSO
 	assert.match(page, /this\.composerError = message/)
 	assert.match(uts, /method:\s*string/)
 	assert.match(uts, /body:\s*string/)
-	assert.match(uts, /close:\s*\(\) => void/)
+	assert.match(uts, /close:\s*\(callerInitiated:\s*boolean\) => void/)
 })
 
 test('stream diagnostics connect browser reads, parsed SSE and rendered text without logging content', () => {
 	const stream = read('common/aichat/ai-conversation-stream.js')
 	const h5 = read('common/aichat/ai-conversation-sse-h5.js')
+	const android = read('common/aichat/ai-conversation-sse-app.js')
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const diagnostics = read('common/aichat/ai-conversation-stream-diagnostics.js')
 
 	assert.match(h5, /BROWSER_READ/)
+	assert.match(android, /BROWSER_READ/)
 	assert.match(stream, /BROWSER_SSE_PARSED/)
 	assert.match(stream, /sequence: event\.data\?\.sequence/)
 	assert.match(panel, /FRONTEND_RENDERED/)
-	assert.match(panel, /clientPlatform\(\) === 'H5'/)
+	assert.match(panel, /recordResearchRendered\('activity'\)/)
+	assert.match(panel, /recordResearchRendered\('source'\)/)
+	assert.match(panel, /recordResearchRendered\('reasoning_summary'\)/)
+	assert.doesNotMatch(
+		`${stream}\n${panel}`,
+		/enabled:\s*clientPlatform\(\) === 'H5' \? undefined : false/
+	)
+	assert.match(`${stream}\n${panel}`, /clientPlatform\(\) === 'ANDROID' \? true : undefined/)
 	assert.match(diagnostics, /ai_stream_client_timing_summary/)
 	assert.doesNotMatch(diagnostics, /event\.data\.text/)
 	assert.doesNotMatch(diagnostics, /console\.log/)

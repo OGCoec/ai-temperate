@@ -1,5 +1,6 @@
 package com.example.temperate.web.edgeproxy;
 
+import com.example.temperate.service.user.voice.diagnostic.VoiceDiagnosticContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -7,6 +8,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -19,6 +22,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
 
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(EdgeProxySignatureFilter.class);
     private static final String ERROR_BODY =
             "{\"code\":\"EDGE_PROXY_SIGNATURE_INVALID\","
                     + "\"message\":\"Edge proxy signature is invalid.\"}";
@@ -56,7 +61,14 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
+        boolean voiceRequest = "/ws/voice".equals(request.getRequestURI());
         if (properties.mode() == EdgeProxyMode.DISABLED) {
+            logVoiceDecision(
+                    request,
+                    voiceRequest,
+                    verifier.hasAnyEdgeHeader(request),
+                    false,
+                    "DISABLED");
             filterChain.doFilter(request, response);
             return;
         }
@@ -65,9 +77,13 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         if (!hasEdgeHeader) {
             // REQUIRED 不再把“无 Origin”视为原生客户端可信证明，否则攻击者可直接删除 Origin 绕过 Worker。
             if (properties.mode() == EdgeProxyMode.REQUIRED) {
+                logVoiceDecision(
+                        request, voiceRequest, false, false, "MISSING_REQUIRED");
                 reject(response);
                 return;
             }
+            logVoiceDecision(
+                    request, voiceRequest, false, false, "UNSIGNED_OPTIONAL");
             filterChain.doFilter(request, response);
             return;
         }
@@ -80,9 +96,56 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             result.optionalNetworkContext().ifPresent(context -> request.setAttribute(
                     TrustedEdgeNetworkContextResolver.VERIFIED_NETWORK_CONTEXT_ATTRIBUTE,
                     context));
+            logVoiceDecision(request, voiceRequest, true, true, "VERIFIED");
             filterChain.doFilter(request, response);
         } catch (EdgeProxyVerificationException exception) {
+            logVoiceDecision(request, voiceRequest, true, false, "INVALID");
             reject(response);
+        }
+    }
+
+    private void logVoiceDecision(
+            HttpServletRequest request,
+            boolean voiceRequest,
+            boolean edgeHeadersPresent,
+            boolean edgeRayTrusted,
+            String outcome) {
+        if (!voiceRequest) {
+            return;
+        }
+        Object value = request.getAttribute(VoiceDiagnosticContext.ATTRIBUTE);
+        String traceId = value instanceof VoiceDiagnosticContext context
+                ? context.traceId()
+                : "ABSENT";
+        String edgeRay = value instanceof VoiceDiagnosticContext context
+                ? context.edgeRay()
+                : "ABSENT";
+        String template = "event=voice_ws_edge_signature traceId={} edgeRay={} "
+                + "mode={} edgeHeadersPresent={} edgeRayTrusted={} outcome={}";
+        try {
+            if ("VERIFIED".equals(outcome)
+                    || "DISABLED".equals(outcome)
+                    || "UNSIGNED_OPTIONAL".equals(outcome)) {
+                LOGGER.info(
+                        template,
+                        traceId,
+                        edgeRay,
+                        properties.mode().name(),
+                        edgeHeadersPresent,
+                        edgeRayTrusted,
+                        outcome);
+            } else {
+                LOGGER.warn(
+                        template,
+                        traceId,
+                        edgeRay,
+                        properties.mode().name(),
+                        edgeHeadersPresent,
+                        edgeRayTrusted,
+                        outcome);
+            }
+        } catch (RuntimeException ignored) {
+            // 日志后端异常不能参与边缘签名放行或拒绝决策。
         }
     }
 

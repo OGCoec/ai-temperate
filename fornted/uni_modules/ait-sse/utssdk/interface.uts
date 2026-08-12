@@ -1,10 +1,30 @@
 export type AitSseFailure = {
   code: string
+  stage: string
+  exceptionType: string
   statusCode: number
   message: string
   contentType: string
   cfMitigated: string
   cfRay: string
+  elapsedMs: number
+  readCount: number
+  byteCount: number
+  closedByCaller: boolean
+  retryable: boolean
+}
+
+export type AitSseDiagnostic = {
+  stage: string
+  event: string
+  statusCode: number
+  contentType: string
+  cfRay: string
+  elapsedMs: number
+  readCount: number
+  byteCount: number
+  lastReadElapsedMs: number
+  closedByCaller: boolean
 }
 
 export type AitSseOpen = {
@@ -14,6 +34,8 @@ export type AitSseOpen = {
   contentType: string
   cfMitigated: string
   cfRay: string
+  traceId: string
+  usagePublicId: string
 }
 
 export type AitSseRequestOptions = {
@@ -23,12 +45,13 @@ export type AitSseRequestOptions = {
   body: string
   onOpen: (renewal: AitSseOpen) => void
   onChunk: (chunk: string) => void
+  onDiagnostic: (diagnostic: AitSseDiagnostic) => void
   onError: (failure: AitSseFailure) => void
   onClosed: () => void
 }
 
 export type AitSseConnection = {
-  close: () => void
+  close: (callerInitiated: boolean) => void
 }
 
 /**

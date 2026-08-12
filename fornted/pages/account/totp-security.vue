@@ -1,6 +1,6 @@
 <template>
 	<view class="security-page">
-		<scroll-view class="security-scroll" scroll-y>
+		<view class="security-scroll">
 			<view class="security-shell" :aria-busy="busy || loading">
 				<text class="security-kicker">ACCOUNT SECURITY</text>
 				<text class="security-title">二次认证</text>
@@ -54,7 +54,7 @@
 
 					<template v-else>
 						<button v-if="!codeFlow" class="security-primary" type="button" :loading="busy" :disabled="busy" @click="startCodeFlow">开始{{ verificationMethodLabel }}复验</button>
-						<auth-turnstile v-else-if="!humanVerified" ref="turnstile" action="login" :challenge="codeFlow.challengeHandle" @verified="verifyHuman" />
+						<auth-turnstile v-else-if="!humanVerified" ref="turnstile" action="login" :challenge="codeFlow.challengeHandle" :page-scroll-top="turnstilePageScrollTop" @verified="verifyHuman" />
 						<template v-else>
 							<button v-if="!codeSent" class="security-primary" type="button" :loading="busy" :disabled="busy || cooldown > 0" @click="sendCode">{{ cooldown > 0 ? `${cooldown}s 后可重发` : `发送${verificationMethodLabel}验证码` }}</button>
 							<template v-else>
@@ -92,7 +92,7 @@
 					<button class="security-secondary" type="button" :disabled="busy" @click="resetOverview">暂不确认</button>
 				</template>
 			</view>
-		</scroll-view>
+		</view>
 	</view>
 </template>
 
@@ -131,6 +131,7 @@
 				codeSent: false,
 				factorCode: '',
 				cooldown: 0,
+				turnstilePageScrollTop: 0,
 				currentTotpCode: '',
 				setup: null,
 				qrDataUrl: '',
@@ -179,8 +180,18 @@
 			this.loadStatus()
 			this.loadProfile()
 		},
+		onShow() { this.$nextTick(() => this.syncTurnstileBounds({ reason: 'show' })) },
+		onPageScroll(event) {
+			this.syncTurnstileBounds({ scrollTop: event?.scrollTop, reason: 'scroll' })
+		},
+		onResize() { this.$nextTick(() => this.syncTurnstileBounds({ reason: 'resize' })) },
 		onUnload() { clearInterval(this.timer) },
 		methods: {
+			syncTurnstileBounds(context = {}) {
+				const scrollTop = Number(context?.scrollTop)
+				if (Number.isFinite(scrollTop) && scrollTop >= 0) this.turnstilePageScrollTop = scrollTop
+				this.$refs.turnstile?.syncAndroidBounds({ ...context, scrollTop: this.turnstilePageScrollTop })
+			},
 			async loadProfile() {
 				try {
 					const profile = await loadCurrentUserProfile()
@@ -244,8 +255,12 @@
 				if (flow) this.codeFlow = flow
 			},
 			async verifyHuman(token) {
+				this.$refs.turnstile?.markServerVerificationStarted()
 				const result = await this.run(() => totpApi.reverificationCodeTurnstile(this.codeFlow, token))
-				if (result?.accepted) this.humanVerified = true
+				if (result?.accepted) {
+					this.$refs.turnstile?.markServerAccepted()
+					this.humanVerified = true
+				}
 				else this.$refs.turnstile?.resetAfterServerRejection('验证结果未被服务器确认，请重新验证。')
 			},
 			async sendCode() {

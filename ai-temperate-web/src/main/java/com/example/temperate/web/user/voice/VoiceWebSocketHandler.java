@@ -1,14 +1,13 @@
 package com.example.temperate.web.user.voice;
 
-import com.example.temperate.service.user.voice.VoiceClientPlatform;
 import com.example.temperate.service.user.voice.VoiceErrorCode;
 import com.example.temperate.service.user.voice.VoiceException;
 import com.example.temperate.service.user.voice.config.VoiceProperties;
+import com.example.temperate.service.user.voice.diagnostic.VoiceDiagnosticContext;
 import com.example.temperate.service.user.voice.gateway.VoiceTranscriptionGateway;
 import com.example.temperate.service.user.voice.gateway.VoiceTranscriptionListener;
 import com.example.temperate.service.user.voice.gateway.VoiceTranscriptionSession;
-import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketService;
-import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketSnapshot;
+import com.example.temperate.service.user.voice.security.VoiceHandshakePrincipal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,30 +16,38 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.SubProtocolCapable;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
 /**
- * 认证公开语音 WebSocket 首帧并在客户端与本机 Whisper 之间流式转发 PCM 和 JSON 事件。
+ * 在握手授权完成后校验 Voice v2 初始化帧，并在客户端与本机 Whisper 之间流式转发 PCM 和 JSON 事件。
  *
- * <p>每个连接的阶段、字节计数和上游会话都封装在独立 Connection 中；单例 Handler 不保存请求级可变状态。
+ * <p>Ticket 已在返回 101 前完成原子消费，本 Handler 不再处理任何认证凭据。每个连接的阶段、
+ * 字节计数和上游会话都封装在独立 Connection 中；单例 Handler 不保存请求级可变状态。
  * Java 只执行有界转发，不缓存完整录音，也不会把最终文本自动提交给 ChatClient。</p>
  */
 @Component
 @ConditionalOnProperty(prefix = "app.voice", name = "enabled", havingValue = "true")
-public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
+public final class VoiceWebSocketHandler extends AbstractWebSocketHandler
+        implements SubProtocolCapable {
 
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(VoiceWebSocketHandler.class);
     private static final String CONNECTION_ATTRIBUTE =
             VoiceWebSocketHandler.class.getName() + ".connection";
     private static final int MAX_START_MESSAGE_BYTES = 4096;
@@ -51,17 +58,14 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
     private static final int CLIENT_SEND_BUFFER_LIMIT_BYTES = 1024 * 1024;
     private static final int MAX_PENDING_ADMISSION_EVENTS = 8;
 
-    private final VoiceSessionTicketService ticketService;
     private final VoiceTranscriptionGateway gateway;
     private final VoiceProperties properties;
     private final ObjectMapper objectMapper;
 
     public VoiceWebSocketHandler(
-            VoiceSessionTicketService ticketService,
             VoiceTranscriptionGateway gateway,
             VoiceProperties properties,
             ObjectMapper objectMapper) {
-        this.ticketService = ticketService;
         this.gateway = gateway;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -69,20 +73,41 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
+        if (!(session.getAttributes().get(VoiceHandshakePrincipal.ATTRIBUTE)
+                instanceof VoiceHandshakePrincipal)) {
+            logLifecycle(
+                    diagnosticContext(session),
+                    "CONNECTION_CONTEXT_MISSING",
+                    -1,
+                    "IllegalStateException");
+            throw new IllegalStateException("Voice WebSocket security principal is missing.");
+        }
+        if (!(session.getAttributes().get(VoiceDiagnosticContext.ATTRIBUTE)
+                instanceof VoiceDiagnosticContext diagnosticContext)) {
+            logLifecycle(
+                    null,
+                    "CONNECTION_CONTEXT_MISSING",
+                    -1,
+                    "IllegalStateException");
+            throw new IllegalStateException("Voice WebSocket diagnostic context is missing.");
+        }
         WebSocketSession serialized = new ConcurrentWebSocketSessionDecorator(
                 session,
                 CLIENT_SEND_TIME_LIMIT_MS,
                 CLIENT_SEND_BUFFER_LIMIT_BYTES);
         Connection connection = new Connection(
                 serialized,
-                ticketService,
                 gateway,
                 properties,
                 objectMapper,
-                Boolean.TRUE.equals(session.getAttributes().get(
-                        VoiceWebSocketOriginInterceptor.ORIGIN_PRESENT_ATTRIBUTE)));
+                diagnosticContext);
         session.getAttributes().put(CONNECTION_ATTRIBUTE, connection);
-        connection.scheduleAuthenticationTimeout();
+        logLifecycle(diagnosticContext, "CONNECTION_ESTABLISHED", -1, "ABSENT");
+    }
+
+    @Override
+    public List<String> getSubProtocols() {
+        return List.of("ait-voice-v2");
     }
 
     @Override
@@ -106,7 +131,13 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        connection(session).fail(
+        Connection connection = connection(session);
+        logLifecycle(
+                connection.diagnosticContext,
+                "TRANSPORT_ERROR",
+                -1,
+                safeExceptionType(exception));
+        connection.fail(
                 VoiceErrorCode.VOICE_UPSTREAM_UNAVAILABLE,
                 "语音连接已经中断。",
                 true,
@@ -117,6 +148,11 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         Object value = session.getAttributes().get(CONNECTION_ATTRIBUTE);
         if (value instanceof Connection connection) {
+            logLifecycle(
+                    connection.diagnosticContext,
+                    "CONNECTION_CLOSED",
+                    status.getCode(),
+                    "ABSENT");
             connection.closeFromClient(status.getCode());
         }
     }
@@ -144,11 +180,10 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
     private static final class Connection implements VoiceTranscriptionListener {
 
         private final WebSocketSession client;
-        private final VoiceSessionTicketService ticketService;
         private final VoiceTranscriptionGateway gateway;
         private final VoiceProperties properties;
         private final ObjectMapper objectMapper;
-        private final boolean originPresent;
+        private final VoiceDiagnosticContext diagnosticContext;
 
         private Stage stage = Stage.AWAITING_START;
         private VoiceTranscriptionSession upstream;
@@ -158,33 +193,15 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
 
         private Connection(
                 WebSocketSession client,
-                VoiceSessionTicketService ticketService,
                 VoiceTranscriptionGateway gateway,
                 VoiceProperties properties,
                 ObjectMapper objectMapper,
-                boolean originPresent) {
+                VoiceDiagnosticContext diagnosticContext) {
             this.client = client;
-            this.ticketService = ticketService;
             this.gateway = gateway;
             this.properties = properties;
             this.objectMapper = objectMapper;
-            this.originPresent = originPresent;
-        }
-
-        private void scheduleAuthenticationTimeout() {
-            CompletableFuture.runAsync(
-                    () -> {
-                        synchronized (this) {
-                            if (stage == Stage.AWAITING_START) {
-                                fail(
-                                        VoiceErrorCode.VOICE_TICKET_INVALID,
-                                        "语音连接认证超时。",
-                                        false,
-                                        CloseStatus.POLICY_VIOLATION);
-                            }
-                        }
-                    },
-                    CompletableFuture.delayedExecutor(5, TimeUnit.SECONDS));
+            this.diagnosticContext = diagnosticContext;
         }
 
         private synchronized void handleText(String payload) {
@@ -230,16 +247,13 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
                 VoiceWebSocketStartMessage start = VoiceWebSocketStartMessage.parse(
                         objectMapper,
                         payload);
-                VoiceSessionTicketSnapshot ticket = ticketService.consume(start.ticket());
-                if ((originPresent && ticket.platform() != VoiceClientPlatform.H5)
-                        || (!originPresent && ticket.platform() != VoiceClientPlatform.ANDROID)) {
-                    throw new VoiceException(
-                            VoiceErrorCode.VOICE_TICKET_INVALID,
-                            "语音连接票据与客户端平台不匹配。",
-                            false);
-                }
+                logLifecycle(
+                        diagnosticContext,
+                        "SESSION_START_ACCEPTED",
+                        -1,
+                        "ABSENT");
                 stage = Stage.CONNECTING;
-                gateway.open(start.upstreamJson(objectMapper), this)
+                gateway.open(diagnosticContext, start.upstreamJson(objectMapper), this)
                         .whenComplete((opened, error) -> {
                             synchronized (this) {
                                 if (error != null) {
@@ -699,5 +713,44 @@ public final class VoiceWebSocketHandler extends AbstractWebSocketHandler {
                 default -> "语音识别服务暂时不可用。";
             };
         }
+    }
+
+    private static VoiceDiagnosticContext diagnosticContext(WebSocketSession session) {
+        Object value = session.getAttributes().get(VoiceDiagnosticContext.ATTRIBUTE);
+        return value instanceof VoiceDiagnosticContext context ? context : null;
+    }
+
+    private static void logLifecycle(
+            VoiceDiagnosticContext context,
+            String phase,
+            int closeCode,
+            String exceptionType) {
+        String template = "event=voice_ws_connection_lifecycle traceId={} edgeRay={} "
+                + "phase={} closeCode={} exceptionType={}";
+        Object[] arguments = {
+            context == null ? "ABSENT" : context.traceId(),
+            context == null ? "ABSENT" : context.edgeRay(),
+            phase,
+            closeCode,
+            exceptionType
+        };
+        try {
+            if ("TRANSPORT_ERROR".equals(phase)
+                    || "CONNECTION_CONTEXT_MISSING".equals(phase)) {
+                LOGGER.warn(template, arguments);
+            } else {
+                LOGGER.info(template, arguments);
+            }
+        } catch (RuntimeException ignored) {
+            // 日志后端异常不能改变 WebSocket 状态机或关闭语义。
+        }
+    }
+
+    private static String safeExceptionType(Throwable exception) {
+        if (exception == null) {
+            return "ABSENT";
+        }
+        String type = exception.getClass().getSimpleName();
+        return type.matches("^[A-Za-z0-9_$]{1,128}$") ? type : "INVALID";
     }
 }

@@ -16,6 +16,20 @@ const MAX_AUDIO_FRAME_BYTES = 128 * 1024
 const MAX_EVENT_CHARACTERS = 64 * 1024
 const MAX_TRANSCRIPT_CHARACTERS = 48 * 1024
 const QUEUE_TIMEOUT_GRACE_MS = 5000
+const VOICE_TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const ANDROID_VOICE_STOP_SOURCES = new Set([
+	'USER_DISCARD',
+	'USER_TAP',
+	'RUNTIME_FAILURE',
+	'PAGE_HIDE',
+	'PAGE_UNLOAD',
+	'COMPONENT_UNMOUNT',
+	'MAX_DURATION',
+	'SERVER_LIMIT',
+	'TRANSCRIPT_FINAL',
+	'STALE_ASYNC_BRANCH',
+	'UNSPECIFIED'
+])
 
 function voiceError(code, message, retryable = false) {
 	const error = new Error(message)
@@ -53,6 +67,7 @@ export function voiceErrorMessage(error) {
 		VOICE_FRAME_TOO_LARGE: '麦克风产生的音频帧超过安全大小，请重新录音。',
 		VOICE_UPSTREAM_UNAVAILABLE: '本地语音识别服务暂时不可用。',
 		VOICE_TRANSCRIPTION_FAILED: '语音识别失败，请重新录音。',
+		VOICE_AUDIO_BRIDGE_INVALID: 'Android 音频通道转换失败，请重新启动录音。',
 		VOICE_AUDIO_FORMAT_INVALID: '录音格式不受支持。',
 		VOICE_PROTOCOL_INVALID: '语音连接协议异常，请重新连接。',
 		VOICE_PERMISSION_DENIED: '没有麦克风权限，请在系统设置中允许录音。'
@@ -76,11 +91,21 @@ export class VoiceWebSocketSession {
 		this.readyResolve = null
 		this.readyReject = null
 		this.readyTimer = null
+		this.audioFrameNumber = 0
+		this.firstAudioSendEnteredLogged = false
+		this.firstBinarySentLogged = false
 	}
 
 	connect(ticketIssue) {
 		if (this.state !== VOICE_SESSION_STATES.IDLE) {
 			return Promise.reject(voiceError('VOICE_PROTOCOL_INVALID', '语音会话不能重复连接。'))
+		}
+		const ticket = String(ticketIssue?.ticket || '')
+		if (!VOICE_TICKET_PATTERN.test(ticket)
+			|| Number(ticketIssue?.protocolVersion) !== 2) {
+			return Promise.reject(voiceError(
+				'VOICE_TICKET_INVALID',
+				'语音会话票据协议无效。'))
 		}
 		this.state = VOICE_SESSION_STATES.CONNECTING
 		this.maximumAudioBytes = Number(ticketIssue?.maxDurationMs || 300000) * 32
@@ -91,6 +116,10 @@ export class VoiceWebSocketSession {
 			try {
 				const socketOptions = {
 					url: this.url,
+					protocols: [
+						'ait-voice-v2',
+						`ait-ticket.${ticket}`
+					],
 					// UniApp 未传回调时会返回 Promise；显式提供 complete 才能取得下方需要的 SocketTask。
 					complete: () => {}
 				}
@@ -99,15 +128,17 @@ export class VoiceWebSocketSession {
 				socketOptions.header = { 'X-Client-Platform': 'ANDROID' }
 				// #endif
 				this.task = uni.connectSocket(socketOptions)
-				this.task.onOpen(() => this._sendJson({
-					type: 'session.start',
-					protocolVersion: Number(ticketIssue?.protocolVersion),
-					ticket: String(ticketIssue?.ticket || ''),
-					language: this.language,
-					format: 'pcm_s16le',
-					sampleRate: 16000,
-					channels: 1
-				}).catch(error => this._fail(error)))
+				this.task.onOpen(() => {
+					if (this.state === VOICE_SESSION_STATES.CLOSED) return
+					this._sendJson({
+						type: 'session.start',
+						protocolVersion: 2,
+						language: this.language,
+						format: 'pcm_s16le',
+						sampleRate: 16000,
+						channels: 1
+					}).catch(error => this._fail(error))
+				})
 				this.task.onMessage(message => this._handleMessage(message?.data))
 				this.task.onError(() => this._fail(voiceError(
 					'VOICE_UPSTREAM_UNAVAILABLE', '语音连接失败。', true)))
@@ -123,8 +154,16 @@ export class VoiceWebSocketSession {
 	}
 
 	sendAudio(data) {
-		if (this.state !== VOICE_SESSION_STATES.RECORDING) return Promise.resolve(false)
 		const length = Number(data?.byteLength || 0)
+		// #ifdef APP-PLUS
+		if (!this.firstAudioSendEnteredLogged) {
+			this.firstAudioSendEnteredLogged = true
+			console.log(
+				`event=voice_android_socket_audio phase=FIRST_SEND_ENTERED state=${this.state}`
+				+ ` bytes=${Number.isSafeInteger(length) ? length : -1}`)
+		}
+		// #endif
+		if (this.state !== VOICE_SESSION_STATES.RECORDING) return Promise.resolve(false)
 		if (length > MAX_AUDIO_FRAME_BYTES) {
 			const error = voiceError('VOICE_FRAME_TOO_LARGE', '音频帧超过允许大小。')
 			this._fail(error)
@@ -137,7 +176,25 @@ export class VoiceWebSocketSession {
 		}
 		if (this.sentAudioBytes + length > this.maximumAudioBytes) return Promise.resolve(false)
 		this.sentAudioBytes += length
-		return this._enqueue(data, length).then(() => true)
+		this.audioFrameNumber += 1
+		const frameNumber = this.audioFrameNumber
+		return this._enqueue(data, length).then(() => {
+			// #ifdef APP-PLUS
+			if (!this.firstBinarySentLogged) {
+				this.firstBinarySentLogged = true
+				console.log(
+					`event=voice_android_socket_audio phase=FIRST_BINARY_SENT bytes=${length}`)
+			}
+			// #endif
+			return true
+		}).catch(error => {
+			// #ifdef APP-PLUS
+			console.warn(
+				`event=voice_android_socket_audio phase=BINARY_SEND_FAILED frameNumber=${frameNumber}`
+				+ ` bytes=${length}`)
+			// #endif
+			throw error
+		})
 	}
 
 	commit() {
@@ -146,15 +203,37 @@ export class VoiceWebSocketSession {
 		return this._sendJson({ type: 'input.commit' })
 	}
 
-	async stop() {
+	async stop(source = 'UNSPECIFIED') {
 		if ([VOICE_SESSION_STATES.CLOSED, VOICE_SESSION_STATES.COMPLETED].includes(this.state)) return
+		// #ifdef APP-PLUS
+		const controlledSource = ANDROID_VOICE_STOP_SOURCES.has(source) ? source : 'UNSPECIFIED'
+		console.log(
+			`event=voice_android_socket_audio phase=CLIENT_STOP source=${controlledSource}`
+			+ ` state=${this.state}`)
+		// #endif
 		try { await this._sendJson({ type: 'session.stop' }) } catch (_) {}
 		this._resolveReady(null)
 		this.state = VOICE_SESSION_STATES.CLOSED
 		this._closeTask(1000, 'CLIENT_STOP')
 	}
 
+	abort(source = 'USER_DISCARD') {
+		if ([VOICE_SESSION_STATES.CLOSED, VOICE_SESSION_STATES.COMPLETED].includes(this.state)) return
+		const controlledSource = ANDROID_VOICE_STOP_SOURCES.has(source) ? source : 'UNSPECIFIED'
+		// #ifdef APP-PLUS
+		console.log(
+			`event=voice_android_socket_audio phase=CLIENT_ABORT source=${controlledSource}`
+			+ ` state=${this.state}`)
+		// #endif
+		// 丢弃操作先封闭本地状态，再关闭运输层；关闭回调和迟到消息因此都不能重新进入业务回调。
+		this._resolveReady(null)
+		this.state = VOICE_SESSION_STATES.CLOSED
+		this._closeTask(1000, controlledSource)
+		this.task = null
+	}
+
 	_handleMessage(raw) {
+		if (this.state === VOICE_SESSION_STATES.CLOSED) return
 		try {
 			const event = parseServerEvent(raw)
 			if (event.type === 'session.queued') {
@@ -195,15 +274,22 @@ export class VoiceWebSocketSession {
 	}
 
 	_enqueue(data, audioBytes = 0) {
-		if (!this.task) return Promise.reject(voiceError('VOICE_UPSTREAM_UNAVAILABLE', '语音连接尚未建立。'))
+		if (this.state === VOICE_SESSION_STATES.CLOSED || !this.task) {
+			return Promise.reject(voiceError('VOICE_UPSTREAM_UNAVAILABLE', '语音连接已经关闭。'))
+		}
 		if (this.pendingAudioBytes + audioBytes > MAX_PENDING_AUDIO_BYTES) {
 			const error = voiceError('VOICE_BACKPRESSURE', '本地音频发送队列已满。', true)
 			this._fail(error)
 			return Promise.reject(error)
 		}
 		this.pendingAudioBytes += audioBytes
+		const task = this.task
 		const operation = this.sendChain.then(() => new Promise((resolve, reject) => {
-			this.task.send({
+			if (this.state === VOICE_SESSION_STATES.CLOSED || this.task !== task) {
+				reject(voiceError('VOICE_UPSTREAM_UNAVAILABLE', '语音连接已经关闭。'))
+				return
+			}
+			task.send({
 				data,
 				success: resolve,
 				fail: () => reject(voiceError('VOICE_UPSTREAM_UNAVAILABLE', '音频发送失败。', true))

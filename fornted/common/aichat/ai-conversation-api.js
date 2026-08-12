@@ -1,4 +1,5 @@
 import { authorizedRequest } from '../auth/http-client.js'
+import { buildQueryString } from '../platform/query-string.js'
 
 const LONG_PUBLIC_ID = /^[A-Za-z0-9_-]{11}$/
 const HYBRID_PUBLIC_ID = /^[A-Za-z0-9_-]{22}$/
@@ -249,8 +250,9 @@ export const aiConversationApi = Object.freeze({
 	async listConversations({ cursor = '', pageSize: size = 20 } = {}) {
 		pageSize(size, 50)
 		if (cursor && !CURSOR.test(cursor)) throw error('AI_CONVERSATION_CURSOR_INVALID', '会话游标无效。')
-		const query = new URLSearchParams({ pageSize: String(size) })
-		if (cursor) query.set('cursor', cursor)
+		const entries = [['pageSize', size]]
+		if (cursor) entries.push(['cursor', cursor])
+		const query = buildQueryString(entries)
 		const result = await authorizedRequest(`/api/ai/conversations?${query}`, { method: 'GET' })
 		if (!Array.isArray(result?.conversations)) throw error('AI_CONVERSATION_RESPONSE_INVALID', '会话列表无效。')
 		return Object.freeze({
@@ -272,8 +274,9 @@ export const aiConversationApi = Object.freeze({
 		if (!HYBRID_PUBLIC_ID.test(String(conversationPublicId || ''))) throw error('AI_CONVERSATION_ID_INVALID', '会话标识无效。')
 		pageSize(size, 100)
 		if (before && !LONG_PUBLIC_ID.test(before)) throw error('AI_MESSAGE_CURSOR_INVALID', '消息游标无效。')
-		const query = new URLSearchParams({ pageSize: String(size) })
-		if (before) query.set('before', before)
+		const entries = [['pageSize', size]]
+		if (before) entries.push(['before', before])
+		const query = buildQueryString(entries)
 		const result = await authorizedRequest(`/api/ai/conversations/${encodeURIComponent(conversationPublicId)}/messages?${query}`, { method: 'GET' })
 		if (!Array.isArray(result?.messages)) throw error('AI_CONVERSATION_RESPONSE_INVALID', '消息历史无效。')
 		return Object.freeze({
@@ -292,7 +295,7 @@ export const aiConversationApi = Object.freeze({
 	async contextUsage(conversationPublicId, modelPublicId) {
 		publicId(conversationPublicId, HYBRID_PUBLIC_ID, 'conversationPublicId')
 		publicId(modelPublicId, LONG_PUBLIC_ID, 'modelPublicId')
-		const query = new URLSearchParams({ modelPublicId })
+		const query = buildQueryString([['modelPublicId', modelPublicId]])
 		return normalizeAiConversationContextUsage(await authorizedRequest(
 			`/api/ai/conversations/${encodeURIComponent(conversationPublicId)}/context-usage?${query}`,
 			{ method: 'GET' }

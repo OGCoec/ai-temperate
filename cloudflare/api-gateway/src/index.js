@@ -2,8 +2,12 @@ const ROOT_HOST = 'niko000o.site'
 const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
 const VOICE_WEBSOCKET_PATH = '/ws/voice'
+const VOICE_WEBSOCKET_PROTOCOL = 'ait-voice-v2'
+const VOICE_TICKET_PROTOCOL = /^ait-ticket\.[A-Za-z0-9_-]{43}$/
+const VOICE_WEBSOCKET_REJECTION_STATUSES = new Set([400, 401, 403, 428, 503])
 const ANDROID_CLEARANCE_PATH = '/__edge/android-clearance'
 const ANDROID_CLEARANCE_STATUS_PATH = '/__edge/android-clearance/status'
+const TURNSTILE_PAGE_PATH = '/api/auth/turnstile/page'
 const CLOUDFLARE_CLEARANCE_COOKIE = 'cf_clearance'
 const SIGNATURE_VERSION = 'v2'
 const AI_MODEL_DETAIL_PATH =
@@ -40,7 +44,18 @@ const EDGE_LONGITUDE_HEADER = 'X-AIT-Edge-Longitude'
 const EDGE_RESET_HEADER = 'X-AIT-Cookie-Scope-Reset'
 const CLIENT_PLATFORM_HEADER = 'X-Client-Platform'
 const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
+const ANDROID_WEBVIEW_TRANSPORT = 'ANDROID_WEBVIEW_DOCUMENT'
 const H5_TRANSPORT = 'H5_BROWSER'
+const TURNSTILE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{38}$/
+const PREAUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const DEVICE_INSTALLATION_ID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const TURNSTILE_ACTIONS = new Set([
+	'register',
+	'login',
+	'password_reset'
+])
+const WEBVIEW_FETCH_SITES = new Set(['', 'none', 'same-origin'])
 const API_METHODS = Object.freeze([
 	'GET',
 	'HEAD',
@@ -132,6 +147,8 @@ export async function handleRequest(request, env, runtime = {}) {
 		return androidClearanceResponse(request, route.androidClearance)
 	}
 	const sseDiagnostic = createSseDiagnostic(route, request, env, runtime)
+	const voiceDiagnostic = createVoiceWebSocketDiagnostic(
+		route, request, runtime, now)
 
 	if (route.migration) {
 		if (request.method !== 'POST') {
@@ -141,13 +158,26 @@ export async function handleRequest(request, env, runtime = {}) {
 	}
 	if (route.webSocket) {
 		if (request.method !== 'GET') {
+			finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+				edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
+			})
 			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
 		}
 		if (headerValue(request.headers, 'Upgrade').trim().toLowerCase()
 			!== 'websocket') {
+			finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+				edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
+			})
 			return jsonError(426, 'WEBSOCKET_UPGRADE_REQUIRED', {
 				Upgrade: 'websocket'
 			})
+		}
+		if (!validVoiceWebSocketProtocol(
+			request.headers.get('Sec-WebSocket-Protocol'))) {
+			finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+				edgeOutcome: 'EDGE_WEBSOCKET_PROTOCOL_INVALID'
+			})
+			return jsonError(400, 'EDGE_WEBSOCKET_PROTOCOL_INVALID')
 		}
 	} else if (route.riskChallenge && request.method !== 'GET') {
 		return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
@@ -157,19 +187,35 @@ export async function handleRequest(request, env, runtime = {}) {
 		})
 	}
 
-	const transport = classifyClientTransport(request, route)
+	const transport = classifyClientTransport(request, route, url)
+	if (voiceDiagnostic) {
+		voiceDiagnostic.transport = transport.allowed
+			? transport.kind : 'INVALID'
+	}
 	if (!transport.allowed) {
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
+		})
 		return jsonError(transport.status, transport.code)
 	}
 	if (transport.kind === H5_TRANSPORT
 		&& !route.riskChallenge
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			edgeOutcome: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED'
+		})
 		return jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
 	}
 	if (env.API_UPSTREAM_ORIGIN !== UPSTREAM_ORIGIN) {
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			edgeOutcome: 'EDGE_UPSTREAM_CONFIGURATION_INVALID'
+		})
 		return jsonError(503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID')
 	}
 	if (!request.headers.get('CF-Ray')) {
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			edgeOutcome: 'EDGE_RAY_UNAVAILABLE'
+		})
 		return jsonError(503, 'EDGE_RAY_UNAVAILABLE')
 	}
 
@@ -180,18 +226,28 @@ export async function handleRequest(request, env, runtime = {}) {
 			env,
 			route,
 			transport,
-			now)
+			now,
+			voiceDiagnostic)
 		upstreamResponse = await fetchImpl(upstreamRequest)
-	} catch (_) {
+	} catch (error) {
 		logSseRequest(sseDiagnostic, null)
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			edgeOutcome: 'EDGE_UPSTREAM_UNAVAILABLE',
+			exceptionType: safeVoiceExceptionType(error)
+		})
 		return jsonError(502, 'EDGE_UPSTREAM_UNAVAILABLE')
 	}
 
 	if (isCrossHostRedirect(upstreamResponse, route.surface)) {
+		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
+			...voiceUpstreamDiagnostic(upstreamResponse),
+			edgeOutcome: 'EDGE_UPSTREAM_REDIRECT_REJECTED'
+		})
 		return jsonError(502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
 	}
 	if (route.webSocket) {
-		return guardedWebSocketResponse(upstreamResponse, transport)
+		return guardedWebSocketResponse(
+			upstreamResponse, transport, voiceDiagnostic)
 	}
 	logSseRequest(sseDiagnostic, upstreamResponse)
 	const response = guardedResponse(
@@ -358,7 +414,7 @@ function denied() {
 	return { allowed: false, status: 403, code: 'EDGE_ROUTE_FORBIDDEN' }
 }
 
-function classifyClientTransport(request, route) {
+function classifyClientTransport(request, route, url) {
 	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim()
 		.toUpperCase()
@@ -366,16 +422,86 @@ function classifyClientTransport(request, route) {
 		// 缺少或未知平台不能降级成原生运输，只能继续接受 H5 的 Cookie Scope 约束。
 		return { allowed: true, kind: H5_TRANSPORT }
 	}
+	if (validAndroidVoiceWebSocketTransport(request, route, url)) {
+		// App-Plus 的 Socket 实现可能附带浏览器 Origin/Fetch Metadata；仅精确语音路由可忽略这些非授权元数据，且回源前仍会统一删除。
+		return { allowed: true, kind: ANDROID_TRANSPORT }
+	}
+	if (route.surface === 'root'
+		&& url.hostname === ROOT_HOST
+		&& url.pathname === TURNSTILE_PAGE_PATH) {
+		if (validAndroidWebViewDocumentRequest(request, url)) {
+			return { allowed: true, kind: ANDROID_WEBVIEW_TRANSPORT }
+		}
+		return invalidAndroidTransport()
+	}
 	if (headerValue(request.headers, 'Origin').trim()
 		|| hasFetchMetadata(request.headers)) {
 		// 浏览器可以伪造普通平台头，但不能去除浏览器自动附加的 Origin/Fetch Metadata。
-		return {
-			allowed: false,
-			status: 403,
-			code: 'EDGE_CLIENT_TRANSPORT_INVALID'
-		}
+		return invalidAndroidTransport()
 	}
 	return { allowed: true, kind: ANDROID_TRANSPORT }
+}
+
+function validAndroidVoiceWebSocketTransport(request, route, url) {
+	return route.webSocket === true
+		&& route.surface === 'root'
+		&& url.hostname === ROOT_HOST
+		&& url.pathname === VOICE_WEBSOCKET_PATH
+		&& request.method === 'GET'
+		&& headerValue(request.headers, 'Upgrade').trim().toLowerCase()
+			=== 'websocket'
+		&& validVoiceWebSocketProtocol(
+			request.headers.get('Sec-WebSocket-Protocol'))
+}
+
+function validAndroidWebViewDocumentRequest(request, url) {
+	if (request.method !== 'GET') return false
+	const origin = headerValue(request.headers, 'Origin').trim()
+	if (origin && origin !== `https://${ROOT_HOST}`) return false
+	if (!validAndroidWebViewFetchMetadata(request.headers)) return false
+	if (!PREAUTH_TOKEN_PATTERN.test(
+		headerValue(request.headers, 'X-AIT-PreAuth').trim())) return false
+	if (!DEVICE_INSTALLATION_ID_PATTERN.test(
+		headerValue(request.headers, 'X-Device-Installation-Id').trim())) return false
+	return validTurnstilePageQuery(url)
+}
+
+function validAndroidWebViewFetchMetadata(headers) {
+	if (!hasFetchMetadata(headers)) return true
+	const mode = headerValue(headers, 'Sec-Fetch-Mode').trim().toLowerCase()
+	const destination = headerValue(headers, 'Sec-Fetch-Dest').trim().toLowerCase()
+	const site = headerValue(headers, 'Sec-Fetch-Site').trim().toLowerCase()
+	const user = headerValue(headers, 'Sec-Fetch-User').trim().toLowerCase()
+	return mode === 'navigate'
+		&& destination === 'document'
+		&& WEBVIEW_FETCH_SITES.has(site)
+		&& (user === '' || user === '?1')
+}
+
+function validTurnstilePageQuery(url) {
+	const values = new Map()
+	for (const [name, value] of url.searchParams.entries()) {
+		if ((name !== 'challenge' && name !== 'action') || values.has(name)) {
+			return false
+		}
+		values.set(name, value)
+	}
+	return values.size === 2
+		&& TURNSTILE_CHALLENGE_PATTERN.test(values.get('challenge') || '')
+		&& TURNSTILE_ACTIONS.has(values.get('action') || '')
+}
+
+function invalidAndroidTransport() {
+	return {
+		allowed: false,
+		status: 403,
+		code: 'EDGE_CLIENT_TRANSPORT_INVALID'
+	}
+}
+
+function isAndroidUpstreamTransport(transport) {
+	return transport?.kind === ANDROID_TRANSPORT
+		|| transport?.kind === ANDROID_WEBVIEW_TRANSPORT
 }
 
 function hasFetchMetadata(headers) {
@@ -385,7 +511,13 @@ function hasFetchMetadata(headers) {
 	return false
 }
 
-async function signedUpstreamRequest(request, env, route, transport, now) {
+async function signedUpstreamRequest(
+	request,
+	env,
+	route,
+	transport,
+	now,
+	voiceDiagnostic = null) {
 	const inboundUrl = new URL(request.url)
 	const upstreamUrl = new URL(
 		`${inboundUrl.pathname}${inboundUrl.search}`,
@@ -401,8 +533,8 @@ async function signedUpstreamRequest(request, env, route, transport, now) {
 			headers.delete(name)
 		}
 	}
-	if (transport.kind === ANDROID_TRANSPORT) {
-		// 原生请求只保留显式 Token、PreAuth 与设备头，不能把代理抓包 Cookie 或浏览器元数据带入源站。
+	if (isAndroidUpstreamTransport(transport)) {
+		// Android原生与受控WebView请求只保留显式Token、PreAuth和设备头，浏览器运输信息不得进入源站。
 		headers.delete('Cookie')
 		headers.delete('Origin')
 		headers.delete('Referer')
@@ -425,9 +557,12 @@ async function signedUpstreamRequest(request, env, route, transport, now) {
 		headers.set(CLIENT_PLATFORM_HEADER, 'H5')
 	}
 	if (route.webSocket) {
-		// 语音握手只负责建立传输通道，身份由连接后的单次票据原子消费，避免把主域名凭据扩大到 /ws。
+		// Ticket 通过子协议进入握手，Spring 在返回 101 前原子消费；主域名 Cookie 与 Authorization 仍不回源。
 		headers.delete('Cookie')
 		headers.delete('Authorization')
+	}
+	if (voiceDiagnostic) {
+		voiceDiagnostic.upstreamCookieForwarded = headers.has('Cookie')
 	}
 
 	const timestamp = String(Math.floor(now() / 1000))
@@ -600,6 +735,16 @@ function hasCookie(header, expectedName, expectedValue) {
 	})
 }
 
+function validVoiceWebSocketProtocol(value) {
+	if (typeof value !== 'string' || !value || value.length > 128
+		|| value.includes('\r') || value.includes('\n')) return false
+	const tokens = value.split(',').map(token => token.trim())
+	if (tokens.length !== 2 || tokens.some(token => !token)
+		|| new Set(tokens).size !== 2) return false
+	return tokens.includes(VOICE_WEBSOCKET_PROTOCOL)
+		&& tokens.filter(token => VOICE_TICKET_PROTOCOL.test(token)).length === 1
+}
+
 function withoutCookieNames(header, forbiddenNames) {
 	return String(header || '')
 		.split(';')
@@ -674,7 +819,7 @@ function guardedResponse(response, surface, streaming = false, transport = null)
 	if (setCookies === null) {
 		return jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
 	}
-	if (transport?.kind === ANDROID_TRANSPORT && setCookies.length > 0) {
+	if (isAndroidUpstreamTransport(transport) && setCookies.length > 0) {
 		// Android 使用显式 Token 协议；拒绝源站 Cookie，避免与 H5 会话模型发生隐式混用。
 		return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 	}
@@ -701,19 +846,161 @@ function guardedResponse(response, surface, streaming = false, transport = null)
 	})
 }
 
-function guardedWebSocketResponse(response, transport) {
-	if (response.status !== 101 || !response.webSocket) {
+function guardedWebSocketResponse(response, transport, diagnostic) {
+	const baseDiagnostic = {
+		upstreamStatus: response.status,
+		responseWebSocketPresent: Boolean(response.webSocket),
+		protocolMatched: response.headers.get('Sec-WebSocket-Protocol')
+			=== VOICE_WEBSOCKET_PROTOCOL
+	}
+	if (response.status !== 101) {
+		const outcome = VOICE_WEBSOCKET_REJECTION_STATUSES.has(response.status)
+			? 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED'
+			: 'EDGE_WEBSOCKET_UPGRADE_FAILED'
+		finishVoiceWebSocketDiagnostic(diagnostic, {
+			...baseDiagnostic,
+			...voiceSetCookieDiagnostic(response.headers),
+			edgeOutcome: outcome
+		})
+		if (VOICE_WEBSOCKET_REJECTION_STATUSES.has(response.status)) {
+			return jsonError(response.status, 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED')
+		}
+		return jsonError(502, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
+	}
+	if (!response.webSocket
+		|| response.headers.get('Sec-WebSocket-Protocol') !== VOICE_WEBSOCKET_PROTOCOL) {
+		finishVoiceWebSocketDiagnostic(diagnostic, {
+			...baseDiagnostic,
+			...voiceSetCookieDiagnostic(response.headers),
+			edgeOutcome: 'EDGE_WEBSOCKET_UPGRADE_FAILED'
+		})
 		return jsonError(502, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
 	}
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null || setCookies.length > 0) {
-		if (transport.kind === ANDROID_TRANSPORT && setCookies?.length > 0) {
+		if (isAndroidUpstreamTransport(transport) && setCookies?.length > 0) {
+			finishVoiceWebSocketDiagnostic(diagnostic, {
+				...baseDiagnostic,
+				setCookieReadable: true,
+				setCookieCount: setCookies.length,
+				edgeOutcome: 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION'
+			})
 			return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 		}
+		finishVoiceWebSocketDiagnostic(diagnostic, {
+			...baseDiagnostic,
+			setCookieReadable: setCookies !== null,
+			setCookieCount: setCookies === null ? -1 : setCookies.length,
+			edgeOutcome: 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION'
+		})
 		return jsonError(502, 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION')
 	}
+	finishVoiceWebSocketDiagnostic(diagnostic, {
+		...baseDiagnostic,
+		setCookieReadable: true,
+		setCookieCount: 0,
+		edgeOutcome: 'EDGE_WEBSOCKET_UPGRADED'
+	})
 	// 透明代理必须保留运行时挂载的 WebSocket 对象；重建普通 Response 会丢失升级后的双向通道。
 	return response
+}
+
+function createVoiceWebSocketDiagnostic(route, request, runtime, now) {
+	if (!route.webSocket) return null
+	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
+		.trim()
+		.toUpperCase()
+	return {
+		logger: runtime.log || console,
+		now,
+		startedAt: safeVoiceNow(now),
+		cfRay: safeVoiceIdentifier(request.headers.get('CF-Ray')),
+		transport: platform === 'ANDROID'
+			? ANDROID_TRANSPORT
+			: platform === 'H5' || platform === ''
+				? H5_TRANSPORT
+				: 'INVALID',
+		clientCookiePresent: Boolean(request.headers.get('Cookie')),
+		upstreamCookieForwarded: false,
+		logged: false
+	}
+}
+
+function finishVoiceWebSocketDiagnostic(diagnostic, values) {
+	if (!diagnostic || diagnostic.logged) return
+	diagnostic.logged = true
+	const entry = {
+		event: 'voice_ws_edge_summary',
+		cfRay: diagnostic.cfRay,
+		transport: diagnostic.transport,
+		clientCookiePresent: diagnostic.clientCookiePresent,
+		upstreamCookieForwarded: diagnostic.upstreamCookieForwarded,
+		upstreamStatus: values.upstreamStatus ?? -1,
+		responseWebSocketPresent: values.responseWebSocketPresent ?? false,
+		protocolMatched: values.protocolMatched ?? false,
+		setCookieReadable: values.setCookieReadable ?? false,
+		setCookieCount: values.setCookieCount ?? -1,
+		edgeOutcome: values.edgeOutcome,
+		exceptionType: values.exceptionType || 'ABSENT',
+		elapsedMs: Math.max(0, safeVoiceNow(diagnostic.now) - diagnostic.startedAt)
+	}
+	try {
+		const log = entry.edgeOutcome === 'EDGE_WEBSOCKET_UPGRADED'
+			? diagnostic.logger.info
+			: diagnostic.logger.warn
+		if (typeof log === 'function') {
+			log.call(diagnostic.logger, JSON.stringify(entry))
+		}
+	} catch (_) {
+		// 诊断输出失败不得改变握手响应、状态码或 WebSocket 对象。
+	}
+}
+
+function voiceUpstreamDiagnostic(response) {
+	return {
+		upstreamStatus: response?.status ?? -1,
+		responseWebSocketPresent: Boolean(response?.webSocket),
+		protocolMatched: response?.headers?.get('Sec-WebSocket-Protocol')
+			=== VOICE_WEBSOCKET_PROTOCOL,
+		...voiceSetCookieDiagnostic(response?.headers)
+	}
+}
+
+function voiceSetCookieDiagnostic(headers) {
+	if (!headers) {
+		return { setCookieReadable: false, setCookieCount: -1 }
+	}
+	try {
+		const setCookies = readSetCookies(headers)
+		return {
+			setCookieReadable: setCookies !== null,
+			setCookieCount: setCookies === null ? -1 : setCookies.length
+		}
+	} catch (_) {
+		// 诊断读取失败不能改变现有 Worker 响应分支，只标记运行时接口不可用。
+		return { setCookieReadable: false, setCookieCount: -1 }
+	}
+}
+
+function safeVoiceIdentifier(value) {
+	const normalized = String(value || '').trim()
+	if (!normalized) return 'ABSENT'
+	return /^[A-Za-z0-9-]{1,128}$/.test(normalized)
+		? normalized : 'INVALID'
+}
+
+function safeVoiceExceptionType(error) {
+	const name = typeof error?.name === 'string' ? error.name : 'UnknownError'
+	return /^[A-Za-z0-9_$]{1,128}$/.test(name) ? name : 'INVALID'
+}
+
+function safeVoiceNow(now) {
+	try {
+		const value = Number(now())
+		return Number.isFinite(value) ? value : 0
+	} catch (_) {
+		return 0
+	}
 }
 
 function createSseDiagnostic(route, request, env, runtime) {

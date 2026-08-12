@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * 定义 PreAuth 签发、设备绑定校验、滑动续期、风险决策记录与可信网络更新业务。
+ * 定义 PreAuth 签发、原始或摘要级设备/会话绑定校验、滑动续期、风险决策记录与可信网络更新业务。
  */
 public interface PreAuthService {
 
@@ -33,6 +33,13 @@ public interface PreAuthService {
     Optional<PreAuthAccess> resolveChallengeNavigation(
             RiskScope scope,
             String rawToken);
+
+    Optional<PreAuthAccess> resolveBound(
+            RiskScope scope,
+            HmacIdentifier tokenDigest,
+            HmacIdentifier deviceDigest,
+            RiskSessionType sessionType,
+            HmacIdentifier sessionReferenceDigest);
 
     boolean touch(PreAuthAccess access, Instant seenAt);
 

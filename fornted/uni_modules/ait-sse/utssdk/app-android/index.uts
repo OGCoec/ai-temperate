@@ -5,19 +5,77 @@ import OutputStreamWriter from 'java.io.OutputStreamWriter'
 import HttpURLConnection from 'java.net.HttpURLConnection'
 import URL from 'java.net.URL'
 import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import AtomicLong from 'java.util.concurrent.atomic.AtomicLong'
 import Thread from 'java.lang.Thread'
+import SystemClock from 'android.os.SystemClock'
 import CookieManager from 'android.webkit.CookieManager'
+import { UTSAndroid } from 'io.dcloud.uts'
 
-import { AitSseConnection, AitSseFailure, AitSseRequestOptions } from '../interface.uts'
+import {
+  AitSseConnection,
+  AitSseDiagnostic,
+  AitSseFailure,
+  AitSseRequestOptions
+} from '../interface.uts'
 
 const MAX_ERROR_BODY_BYTES = 16 * 1024
 
-function failure(
+function boundedHeader(value: string | null, maximumLength: number): string {
+  if (value == null || value.length == 0 || value.length > maximumLength
+      || value.contains('\r') || value.contains('\n')) return ''
+  return value
+}
+
+function throwableType(error: Throwable): string {
+  try {
+    const name = UTSAndroid.getJavaClass(error).simpleName
+    return name.length > 0 ? name : 'UNKNOWN'
+  } catch (_: Throwable) {
+    return 'UNKNOWN'
+  }
+}
+
+function createFailure(
+  code: string,
+  stage: string,
+  exceptionType: string,
+  statusCode: number,
+  message: string,
+  contentType: string,
+  cfMitigated: string,
+  cfRay: string,
+  elapsedMs: number,
+  readCount: number,
+  byteCount: number,
+  closedByCaller: boolean,
+  retryable: boolean
+): AitSseFailure {
+  return {
+    code,
+    stage,
+    exceptionType,
+    statusCode,
+    message,
+    contentType,
+    cfMitigated,
+    cfRay,
+    elapsedMs,
+    readCount,
+    byteCount,
+    closedByCaller,
+    retryable
+  }
+}
+
+function responseFailure(
   statusCode: number,
   body: string,
   contentType: string,
   cfMitigated: string,
-  cfRay: string
+  cfRay: string,
+  elapsedMs: number,
+  readCount: number,
+  byteCount: number
 ): AitSseFailure {
   let code = `HTTP_${statusCode}`
   let message = '无法建立模型流式响应。'
@@ -36,7 +94,20 @@ function failure(
     } catch (_: Throwable) {
     }
   }
-  return { code, statusCode, message, contentType, cfMitigated, cfRay }
+  return createFailure(
+    code,
+    'RESPONSE_HEADERS',
+    '',
+    statusCode,
+    message,
+    contentType,
+    cfMitigated,
+    cfRay,
+    elapsedMs,
+    readCount,
+    byteCount,
+    false,
+    statusCode >= 500)
 }
 
 function clearanceCookie(cookieHeader: string | null): string {
@@ -82,39 +153,137 @@ function boundedError(connection: HttpURLConnection): string {
 
 /**
  * 使用 Android 原生连接发送 JSON 请求并增量读取 UTF-8 SSE；关闭时同步中断 Reader 与连接。
+ * HBuilderX 4.25+ 默认在首次调用后释放导出参数中的回调，因此必须保持回调存活，
+ * 确保同一 SSE 连接能够连续投递多个数据块。
  */
-export function openSseRequest(options: AitSseRequestOptions): AitSseConnection {
+@UTSJS.keepAlive
+export function openSseRequest(
+  options: AitSseRequestOptions
+): AitSseConnection {
   const closed = new AtomicBoolean(false)
+  const closedByCaller = new AtomicBoolean(false)
   const completed = new AtomicBoolean(false)
+  const closeReported = new AtomicBoolean(false)
+  const readCount = new AtomicLong(0)
+  const byteCount = new AtomicLong(0)
+  const startedAt = SystemClock.elapsedRealtime()
+  const lastReadAt = new AtomicLong(startedAt)
   let activeConnection: HttpURLConnection | null = null
   let activeReader: BufferedReader | null = null
+  let statusCode = 0
+  let contentType = ''
+  let cfMitigated = ''
+  let cfRay = ''
+  let stage = 'CONNECT'
+  let pendingFailure: AitSseFailure | null = null
+
+  const elapsedMs = (): number => {
+    const value = (SystemClock.elapsedRealtime() - startedAt).toDouble()
+    if (value <= 0) return 0
+    return value
+  }
+
+  const lastReadElapsedMs = (): number => {
+    const value = (lastReadAt.get() - startedAt).toDouble()
+    if (value <= 0) return 0
+    return value
+  }
+
+  const emitDiagnostic = (event: string, diagnosticStage: string) => {
+    const diagnostic: AitSseDiagnostic = {
+      stage: diagnosticStage,
+      event,
+      statusCode,
+      contentType,
+      cfRay,
+      elapsedMs: elapsedMs(),
+      readCount: readCount.get().toDouble(),
+      byteCount: byteCount.get().toDouble(),
+      lastReadElapsedMs: lastReadElapsedMs(),
+      closedByCaller: closedByCaller.get()
+    }
+    // 诊断回调只能携带计数和阶段；回调失败不得反向中断用户的模型流。
+    try { options.onDiagnostic(diagnostic) } catch (_: Throwable) {}
+    const reads = readCount.get().toInt()
+    if (event != 'READ' || reads == 1 || reads % 100 == 0) {
+      console.log(
+        `[ait-sse] event=${event} stage=${diagnosticStage}`
+          + ` statusCode=${statusCode} elapsedMs=${diagnostic.elapsedMs}`
+          + ` readCount=${diagnostic.readCount} byteCount=${diagnostic.byteCount}`
+          + ` lastReadElapsedMs=${diagnostic.lastReadElapsedMs}`
+          + ` contentType=${contentType} cfRay=${cfRay}`
+          + ` closedByCaller=${diagnostic.closedByCaller}`)
+    }
+  }
+
+  const releaseTransport = () => {
+    try { activeReader?.close() } catch (_: Throwable) {}
+    activeConnection?.disconnect()
+  }
+
+  const reportClosed = () => {
+    if (!closeReported.compareAndSet(false, true)) return
+    emitDiagnostic('CLOSED', 'CLOSE')
+  }
 
   const notifyFailure = (value: AitSseFailure) => {
-    if (!closed.get() && completed.compareAndSet(false, true)) options.onError(value)
+    if (closedByCaller.get() || !completed.compareAndSet(false, true)) return
+    pendingFailure = value
+    emitDiagnostic('FAILURE', value.stage)
+    console.log(
+      `[ait-sse] code=${value.code} stage=${value.stage}`
+        + ` exceptionType=${value.exceptionType} retryable=${value.retryable}`)
+  }
+
+  const callbackFailure = (error: Throwable) => {
+    notifyFailure(createFailure(
+      'AI_CONVERSATION_SSE_ANDROID_CALLBACK',
+      'JS_CALLBACK',
+      throwableType(error),
+      statusCode,
+      'Android 模型流回调失败。',
+      contentType,
+      cfMitigated,
+      cfRay,
+      elapsedMs(),
+      readCount.get().toDouble(),
+      byteCount.get().toDouble(),
+      closedByCaller.get(),
+      false))
   }
 
   const worker = new Thread(() => {
     try {
+      stage = 'CONNECT'
       const target = new URL(options.url)
       if (target.getProtocol().lowercase() != 'https') {
-        notifyFailure({
-          code: 'AI_CONVERSATION_SSE_HTTPS_REQUIRED',
-          statusCode: 0,
-          message: 'Android 模型流只允许 HTTPS。',
-          contentType: '',
-          cfMitigated: '',
-          cfRay: ''
-        })
+        notifyFailure(createFailure(
+          'AI_CONVERSATION_SSE_HTTPS_REQUIRED',
+          'CONNECT',
+          '',
+          0,
+          'Android 模型流只允许 HTTPS。',
+          '',
+          '',
+          '',
+          elapsedMs(),
+          0,
+          0,
+          false,
+          false))
         return
       }
       const connection = target.openConnection() as HttpURLConnection
       activeConnection = connection
-      connection.setRequestMethod(options.method)
+      const requestMethod = options.method.uppercase()
+      const hasRequestBody = requestMethod != 'GET' && requestMethod != 'HEAD'
+      connection.setRequestMethod(requestMethod)
       connection.setConnectTimeout(15000)
-      connection.setReadTimeout(60000)
+      // SSE 由服务端 heartbeat 保活，原生层不得用固定读取超时主动截断长回答。
+      connection.setReadTimeout(0)
       connection.setUseCaches(false)
       connection.setDoInput(true)
-      connection.setDoOutput(true)
+      connection.setDoOutput(hasRequestBody)
       options.headers.forEach((name: string) => {
         const value = options.headers[name]
         if (value == null) return
@@ -127,94 +296,165 @@ export function openSseRequest(options: AitSseRequestOptions): AitSseConnection 
       if (managedClearance.length > 0) {
         connection.setRequestProperty('Cookie', managedClearance)
       }
-      const writer = new OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)
-      writer.write(options.body)
-      writer.flush()
-      writer.close()
-      const status = connection.getResponseCode()
+      stage = 'REQUEST_BODY'
+      if (hasRequestBody) {
+        const writer = new OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)
+        writer.write(options.body)
+        writer.flush()
+        writer.close()
+      }
+      stage = 'RESPONSE_HEADERS'
+      statusCode = connection.getResponseCode()
       const contentTypeHeader = connection.getHeaderField('Content-Type')
       const cfMitigatedHeader = connection.getHeaderField('CF-Mitigated')
       const cfRayHeader = connection.getHeaderField('CF-Ray')
-      const contentType = contentTypeHeader == null ? '' : contentTypeHeader
-      const cfMitigated = cfMitigatedHeader == null ? '' : cfMitigatedHeader
-      const cfRay = cfRayHeader == null ? '' : cfRayHeader
+      contentType = boundedHeader(contentTypeHeader, 128)
+      cfMitigated = boundedHeader(cfMitigatedHeader, 64)
+      cfRay = boundedHeader(cfRayHeader, 128)
       const renewedHeader = connection.getHeaderField("X-Session-Renewed")
       const newAccessHeader = connection.getHeaderField("X-New-Access-Token")
-      const sessionRenewed = renewedHeader == null ? "" : renewedHeader
-      const newAccessToken = newAccessHeader == null ? "" : newAccessHeader
+      const traceHeader = connection.getHeaderField("X-Trace-Id")
+      const usageHeader = connection.getHeaderField("X-AI-Usage-Id")
+      const sessionRenewed = boundedHeader(renewedHeader, 16)
+      const newAccessToken = boundedHeader(newAccessHeader, 8192)
+      const traceId = boundedHeader(traceHeader, 64)
+      const usagePublicId = boundedHeader(usageHeader, 64)
       if (sessionRenewed.lowercase() == "true" && newAccessToken.length == 0) {
-        notifyFailure({
-          code: 'SESSION_RESPONSE_INVALID',
-          statusCode: status,
-          message: '会话续签响应缺少新的访问令牌。',
+        notifyFailure(createFailure(
+          'SESSION_RESPONSE_INVALID',
+          'RESPONSE_HEADERS',
+          '',
+          statusCode,
+          '会话续签响应缺少新的访问令牌。',
           contentType,
           cfMitigated,
-          cfRay
-        })
+          cfRay,
+          elapsedMs(),
+          readCount.get().toDouble(),
+          byteCount.get().toDouble(),
+          false,
+          false))
         return
       }
+      emitDiagnostic('OPEN', 'RESPONSE_HEADERS')
       // 续签响应头必须在读取首个事件块之前交给 JavaScript 更新 AndroidKeyStore。
-      options.onOpen({
-        statusCode: status,
-        sessionRenewed: sessionRenewed,
-        newAccessToken: newAccessToken,
-        contentType,
-        cfMitigated,
-        cfRay
-      })
-      if (status < 200 || status >= 300) {
-        notifyFailure(failure(
-          status,
+      try {
+        options.onOpen({
+          statusCode,
+          sessionRenewed,
+          newAccessToken,
+          contentType,
+          cfMitigated,
+          cfRay,
+          traceId,
+          usagePublicId
+        })
+      } catch (error: Throwable) {
+        callbackFailure(error)
+        return
+      }
+      if (statusCode < 200 || statusCode >= 300) {
+        notifyFailure(responseFailure(
+          statusCode,
           boundedError(connection),
           contentType,
           cfMitigated,
-          cfRay))
+          cfRay,
+          elapsedMs(),
+          readCount.get().toDouble(),
+          byteCount.get().toDouble()))
         return
       }
       if (!contentType.lowercase().contains('text/event-stream')) {
-        notifyFailure({
-          code: 'AI_CONVERSATION_SSE_CONTENT_TYPE_INVALID',
-          statusCode: status,
-          message: '服务端未返回事件流。',
+        notifyFailure(createFailure(
+          'AI_CONVERSATION_SSE_CONTENT_TYPE_INVALID',
+          'RESPONSE_HEADERS',
+          '',
+          statusCode,
+          '服务端未返回事件流。',
           contentType,
           cfMitigated,
-          cfRay
-        })
+          cfRay,
+          elapsedMs(),
+          readCount.get().toDouble(),
+          byteCount.get().toDouble(),
+          false,
+          false))
         return
       }
+      stage = 'RESPONSE_BODY'
       const reader = new BufferedReader(
         new InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
       activeReader = reader
       const chars = CharArray(4096)
       while (!closed.get()) {
         const length = reader.read(chars)
-        if (length < 0) break
-        if (length > 0) options.onChunk(chars.concatToString(0, length))
+        if (length < 0) {
+          emitDiagnostic('EOF', 'RESPONSE_BODY')
+          break
+        }
+        if (length > 0) {
+          const chunk = chars.concatToString(0, length)
+          readCount.incrementAndGet()
+          byteCount.addAndGet(chunk.toByteArray(Charsets.UTF_8).size.toLong())
+          lastReadAt.set(SystemClock.elapsedRealtime())
+          emitDiagnostic('READ', 'RESPONSE_BODY')
+          try {
+            options.onChunk(chunk)
+          } catch (error: Throwable) {
+            stage = 'JS_CALLBACK'
+            callbackFailure(error)
+            return
+          }
+        }
       }
-    } catch (_: Throwable) {
-      notifyFailure({
-        code: 'AI_CONVERSATION_SSE_ANDROID_IO',
-        statusCode: 0,
-        message: 'Android 模型流已中断。',
-        contentType: '',
-        cfMitigated: '',
-        cfRay: ''
-      })
+    } catch (error: Throwable) {
+      if (!closedByCaller.get()) {
+        notifyFailure(createFailure(
+          stage == 'JS_CALLBACK'
+            ? 'AI_CONVERSATION_SSE_ANDROID_CALLBACK'
+            : 'AI_CONVERSATION_SSE_ANDROID_IO',
+          stage,
+          throwableType(error),
+          statusCode,
+          stage == 'JS_CALLBACK'
+            ? 'Android 模型流回调失败。'
+            : 'Android 模型流已中断。',
+          contentType,
+          cfMitigated,
+          cfRay,
+          elapsedMs(),
+          readCount.get().toDouble(),
+          byteCount.get().toDouble(),
+          false,
+          stage != 'JS_CALLBACK'))
+      }
     } finally {
-      try { activeReader?.close() } catch (_: Throwable) {}
-      activeConnection?.disconnect()
-      if (!closed.get() && completed.compareAndSet(false, true)) options.onClosed()
+      releaseTransport()
+      reportClosed()
+      const terminalFailure = pendingFailure
+      if (!closedByCaller.get() && terminalFailure != null) {
+        try { options.onError(terminalFailure) } catch (_: Throwable) {}
+      } else if (!closedByCaller.get() && completed.compareAndSet(false, true)) {
+        try { options.onClosed() } catch (error: Throwable) {
+          console.log(
+            `[ait-sse] code=AI_CONVERSATION_SSE_ANDROID_CALLBACK stage=JS_CALLBACK`
+              + ` exceptionType=${throwableType(error)}`)
+        }
+      }
     }
   })
   worker.setName('ait-ai-conversation-sse')
   worker.start()
 
   return {
-    close: () => {
+    close: (callerInitiated: boolean) => {
+      if (callerInitiated) closedByCaller.set(true)
       if (!closed.compareAndSet(false, true)) return
-      try { activeReader?.close() } catch (_: Throwable) {}
-      activeConnection?.disconnect()
+      completed.compareAndSet(false, true)
+      releaseTransport()
       worker.interrupt()
+      reportClosed()
     }
   }
 }

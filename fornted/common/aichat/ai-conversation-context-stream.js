@@ -1,5 +1,6 @@
 import { prepareAuthorizedStreamingRequest } from '../auth/http-client.js'
 import { clientPlatform } from '../auth/config.js'
+import { buildQueryString } from '../platform/query-string.js'
 import { openAiConversationSseH5 } from './ai-conversation-sse-h5.js'
 // #ifdef APP-PLUS
 import { openAiConversationSseApp } from './ai-conversation-sse-app.js'
@@ -15,10 +16,10 @@ function wait(milliseconds) {
 }
 
 async function openOnce(command, handlers) {
-	const query = new URLSearchParams({
-		modelPublicId: command.modelPublicId,
-		afterRevision: String(command.afterRevision || 0)
-	})
+	const query = buildQueryString([
+		['modelPublicId', command.modelPublicId],
+		['afterRevision', command.afterRevision || 0]
+	])
 	const prepared = await prepareAuthorizedStreamingRequest(
 		`/api/ai/conversations/${encodeURIComponent(command.conversationPublicId)}/context/events?${query}`,
 		{ method: 'GET', headers: { Accept: 'text/event-stream' } }

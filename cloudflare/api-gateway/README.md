@@ -55,25 +55,38 @@ Spring Boot 首次部署使用 `EDGE_PROXY_MODE=OPTIONAL`；Worker、H5 与 Andr
 `/ws/voice` 全部要求有效 Worker HMAC，不为无 Origin Android 保留直连例外。生产环境不得启用
 `workers.dev`，不得把 Secret 写入 `wrangler.jsonc`、日志或 Git。
 
-Worker 把请求运输分成 `H5_BROWSER` 与 `ANDROID_NATIVE`。Android 只有在
-`X-Client-Platform: ANDROID`、无 Origin 且没有任何 `Sec-Fetch-*` 头时才使用原生运输；
-否则伪造 Android 平台的请求返回 `403 EDGE_CLIENT_TRANSPORT_INVALID`。Android 不要求 H5
-Cookie Scope，回源前删除 Cookie、Origin、Referer 与 Fetch Metadata，同时保留显式 Token、
-PreAuth、CSRF 和设备安装 ID 头。Android 上游响应出现任何 Set-Cookie 时返回
-`502 EDGE_ANDROID_COOKIE_POLICY_VIOLATION`。缺少或未知平台按更严格的 H5 Cookie Scope
-策略处理，不能降级为 Android。
+Worker 把请求运输分成 `H5_BROWSER`、`ANDROID_NATIVE` 与
+`ANDROID_WEBVIEW_DOCUMENT`。Android 原生 API 只有在 `X-Client-Platform: ANDROID`、
+无 Origin 且没有任何 `Sec-Fetch-*` 头时才使用原生运输。受控 WebView 运输只允许根域
+`GET /api/auth/turnstile/page`，并要求合法的 challenge、action、PreAuth 与设备安装 ID；
+出现 Fetch Metadata 时必须是顶层 `navigate`、`document` 导航，Site 只接受缺失、`none`
+或 `same-origin`，User 只接受缺失或 `?1`，Origin 只接受缺失或精确根域。该兼容分支
+不依赖 User-Agent、`wv`、`X-Requested-With` 或具体 WebView 版本。
+
+两类 Android 运输都不要求 H5 Cookie Scope，回源前删除 Cookie、Origin、Referer 与
+Fetch Metadata，同时保留显式 Token、PreAuth、CSRF 和设备安装 ID 头，并统一规范化为
+`X-Client-Platform: ANDROID`。Android 上游响应出现任何 Set-Cookie 时返回
+`502 EDGE_ANDROID_COOKIE_POLICY_VIOLATION`。除精确 WebView 文档导航外，任何携带 Origin
+或 Fetch Metadata 的 Android 请求仍返回 `403 EDGE_CLIENT_TRANSPORT_INVALID`；禁止全局
+放宽该规则。缺少或未知平台按更严格的 H5 Cookie Scope 策略处理，不能降级为 Android。
 
 邮件检查实时接口固定匹配
 `/api/admin/mail-inspection/jobs/{22字符jobId}/events`。Worker 不读取完整响应体，
 直接流式转发 Origin 的 `text/event-stream`，透传 `Last-Event-ID`、`X-Trace-Id`，
 并把客户端取消信号传播到 Origin。响应固定禁止浏览器和 CDN 缓存及转换。
 
-语音 WebSocket 只允许根域名的精确 `/ws/voice` 路径。H5 与 Android 均由 Worker 校验 GET
-Upgrade，删除 Cookie、Authorization 和客户端伪造的边缘头，为握手生成同一套 v2 HMAC，再向
-`https://api.niko000o.site/ws/voice` 发起上游 Upgrade。上游必须返回不携带 Set-Cookie 的
-101 WebSocket 响应；Worker 直接返回运行时 WebSocket 对象，不读取音频帧或转写内容。H5
-回源固定使用主域 Origin，Android 回源不带 Origin；两类客户端的身份仍由连接后的平台匹配
-一次性语音 Ticket 确定。生产发布顺序固定为 Worker、Android/H5、后端 REQUIRED 验签收口。
+语音 WebSocket 只允许根域名的精确 `/ws/voice` 路径，并已严格切换到 Voice v2。H5 与
+Android 都必须在 Upgrade 中提交且只提交两个 `Sec-WebSocket-Protocol` token：固定
+`ait-voice-v2` 与 `ait-ticket.<43位Base64URL>`。Worker 校验 GET、Upgrade、子协议长度与结构，
+删除 Cookie、Authorization 和客户端伪造的边缘头，保留合法子协议，并为握手生成同一套 v2
+HMAC 后回源。Spring 在返回 101 前重新校验 Origin、平台、全局设备封禁、PreAuth 设备绑定、
+WebRTC generation 与登录 Session；连接建立后不再接收认证 Ticket。
+
+上游 101 必须带运行时 WebSocket 对象、只选择 `ait-voice-v2` 且不得设置 Set-Cookie。反射
+`ait-ticket.*`、选择其他协议或缺少双向通道一律转换为 502。Spring 的
+400/401/403/428/503 受控拒绝只保留状态并返回统一边缘错误体。Worker 不读取音频帧或转写
+内容；H5 回源固定使用主域 Origin，Android 回源不带 Origin。生产发布必须在同一维护窗口完成
+Spring、Worker、H5 与 Android，旧版首帧 Ticket 客户端不再兼容。
 
 Android API 或 SSE 收到 `CF-Mitigated: challenge` 时，通过以下两个精确主域入口完成托管
 验证和 Cookie 共享确认：

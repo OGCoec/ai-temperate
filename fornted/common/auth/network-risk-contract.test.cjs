@@ -31,6 +31,30 @@ test('ordinary H5 bootstraps PreAuth before protected API requests without expos
 	assert.match(http, /clearSession\(\)[\s\S]*invalidatePreAuth\(\)/)
 })
 
+test('ordinary H5 loads phone country without waiting for the WebRTC report', () => {
+	const http = source('common/auth/http-client.js')
+	const authApi = source('common/auth/auth-api.js')
+	const publicRequest = http.slice(http.indexOf('export async function publicRequest'))
+
+	assert.match(http, /PHONE_COUNTRY_PATH\s*=\s*'\/api\/auth\/phone-country'/)
+	assert.match(
+		publicRequest,
+		/await ensureCookieScopeMigration\(\)[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(path !== PHONE_COUNTRY_PATH\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
+	)
+	assert.match(
+		publicRequest,
+		/error\.code === 'PREAUTH_REQUIRED'[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(path !== PHONE_COUNTRY_PATH\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
+	)
+	assert.equal(
+		(publicRequest.match(/if \(path !== PHONE_COUNTRY_PATH\) \{/g) || []).length,
+		2
+	)
+	assert.match(
+		authApi,
+		/phoneCountry\(\)\s*\{[\s\S]*publicRequest\('\/api\/auth\/phone-country'/
+	)
+})
+
 test('ordinary risk challenge uses the shared three-round state machine and a recoverable failure gate', () => {
 	const navigation = source('common/auth/risk-challenge-navigation.js')
 	const preAuth = source('common/auth/pre-auth.js')
@@ -163,7 +187,13 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	const http = source('common/auth/http-client.js')
 	const authApi = source('common/auth/auth-api.js')
 	const androidProbe = source('../shared-frontend/auth/android-webrtc-background-probe.js')
+	const diagnostics = source('../shared-frontend/auth/webrtc-diagnostics.js')
+	const cryptoInterface = source('uni_modules/ait-webrtc-crypto/utssdk/interface.uts')
+	const cryptoAndroid = source('uni_modules/ait-webrtc-crypto/utssdk/app-android/index.uts')
+	const adminCryptoInterface = source('../myuniappadmin/uni_modules/ait-webrtc-crypto/utssdk/interface.uts')
+	const adminCryptoAndroid = source('../myuniappadmin/uni_modules/ait-webrtc-crypto/utssdk/app-android/index.uts')
 	const localProbe = source('hybrid/html/webrtc-probe.js')
+	const localProbeHtml = source('hybrid/html/webrtc-probe.html')
 	const failurePage = source('pages/risk/webrtc-failed.vue')
 	const pages = source('pages.json')
 	const backendConfig = source('../ai-temperate-web/src/main/resources/application.yml')
@@ -179,6 +209,15 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	assert.match(verification, /activeEntry/)
 	assert.match(verification, /compareGeneration/)
 	assert.match(verification, /observeAndroidWebRtcVerificationHeaders/)
+	assert.match(verification, /createWebRtcDiagnosticLogger/)
+	assert.match(verification, /WEBRTC_DIAGNOSTICS_ENABLED\s*=\s*process\.env\.NODE_ENV\s*===\s*'development'/)
+	assert.match(verification, /createWebRtcDiagnosticLogger\(\s*'user-flow',\s*WEBRTC_DIAGNOSTICS_ENABLED\s*\)/)
+	assert.match(verification, /start_response_received/)
+	assert.match(verification, /platform_probe_completed/)
+	assert.match(verification, /report_payload_prepared/)
+	assert.match(verification, /report_completed/)
+	assert.match(verification, /nextProbeRunId/)
+	assert.match(verification, /probeRunId:\s*attempt\.probeRunId/)
 	assert.match(core, /X-AIT-WebRTC-State/i)
 	assert.match(core, /X-AIT-WebRTC-Generation/i)
 	assert.doesNotMatch(core, /RTCPeerConnection|plus\.webview/)
@@ -189,8 +228,17 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	assert.match(h5Verification, /collectH5WebRtcIps/)
 	assert.doesNotMatch(h5Verification, /plus\.webview|collectAndroidWebRtcIpsInBackground/)
 	assert.match(androidVerification, /collectAndroidWebRtcIpsInBackground/)
+	assert.match(androidVerification, /createWebRtcProbeChannel/)
+	assert.match(androidVerification, /decryptWebRtcProbePayload/)
+	assert.match(androidVerification, /cryptoBridge/)
+	assert.match(androidVerification, /createWebRtcDiagnosticLogger/)
+	assert.match(androidVerification, /WEBRTC_DIAGNOSTICS_ENABLED\s*=\s*process\.env\.NODE_ENV\s*===\s*'development'/)
+	assert.match(androidVerification, /createWebRtcDiagnosticLogger\(\s*'user-android-parent',\s*WEBRTC_DIAGNOSTICS_ENABLED\s*\)/)
+	assert.match(androidVerification, /diagnosticsEnabled/)
+	assert.match(androidVerification, /onDiagnostic/)
+	assert.match(androidVerification, /probeRunId:\s*options\.probeRunId/)
 	assert.match(androidVerification, /WEBRTC_VERIFICATION_FAILED/)
-	assert.doesNotMatch(androidVerification, /RTCPeerConnection|collectH5WebRtcIps/)
+	assert.doesNotMatch(androidVerification, /RTCPeerConnection|collectH5WebRtcIps|globalThis\.crypto|console\./)
 	assert.doesNotMatch(
 		verification,
 		/clientPlatform\(\)\s*===\s*'ANDROID'[\s\S]*collectAndroidWebRtcIpsInBackground[\s\S]*collectBrowserWebRtcIps/
@@ -205,12 +253,46 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	assert.match(http, /retryState\.preAuth/)
 	assert.match(verification, /probeGeneration/)
 	assert.match(androidProbe, /plus\.webview\.create/)
+	assert.match(androidProbe, /plusrequire:\s*'none'/)
 	assert.match(androidProbe, /overrideUrlLoading/)
+	assert.match(androidProbe, /const RESULT_URL_MATCH\s*=\s*'\^aitwebrtc:\/\/result\.\*\$'/)
+	assert.match(androidProbe, /match:\s*RESULT_URL_MATCH/)
+	assert.match(androidProbe, /effect:\s*'instant'/)
+	assert.doesNotMatch(androidProbe, /match:\s*'aitwebrtc:\/\/\*'/)
 	assert.match(androidProbe, /left:\s*'-10000px'/)
-	assert.match(androidProbe, /AES-GCM/)
+	assert.match(androidProbe, /cryptoBridge/)
+	assert.match(androidProbe, /decryptPayload/)
+	assert.match(androidProbe, /function parseAitWebRtcResultUrl\(rawUrl\)/)
+	assert.match(androidProbe, /const MAX_RESULT_URL_LENGTH\s*=\s*4608/)
+	assert.doesNotMatch(androidProbe, /\bnew\s+URL\s*\(/)
+	assert.doesNotMatch(androidProbe, /\bURLSearchParams\b|searchParams\.get/)
+	assert.doesNotMatch(androidProbe, /globalThis\.crypto|crypto\.subtle|randomBytes|randomHex/)
+	assert.doesNotMatch(diagnostics, /typeof process|process\.env/)
+	assert.match(diagnostics, /createWebRtcDiagnosticLogger\(scope, enabled = false\)/)
+	assert.match(diagnostics, /\[ait-webrtc\]/)
+	assert.doesNotMatch(
+		diagnostics,
+		/Cookie|PreAuth|deviceId|channelId|nonce|candidateAddress|['"]payload['"]/
+	)
+	assert.equal(cryptoInterface, adminCryptoInterface)
+	assert.equal(cryptoAndroid, adminCryptoAndroid)
+	assert.match(cryptoAndroid, /SecureRandom/)
+	assert.match(cryptoAndroid, /AES\/GCM\/NoPadding/)
+	assert.match(cryptoAndroid, /GCMParameterSpec/)
+	assert.doesNotMatch(cryptoAndroid, /console\.|AndroidKeyStore|Storage|HttpURLConnection|java\.net/)
 	assert.match(localProbe, /aitwebrtc:\/\/result/)
+	assert.match(localProbe, /AES-GCM/)
 	assert.match(localProbe, /nonce/)
+	assert.match(localProbe, /diagnosticsEnabled/)
+	assert.match(localProbe, /probeRunId/)
+	assert.match(localProbe, /acceptedCount/)
+	assert.match(localProbe, /sourceIndexes/)
 	assert.doesNotMatch(localProbe, /uni\.postMessage|localStorage|sessionStorage/)
+	assert.match(verification, /\{ probeGeneration: generation, webRtcIps \}/)
+	assert.doesNotMatch(verification, /probeGeneration:\s*generation[\s\S]{0,80}diagnostic/)
+	assert.doesNotMatch(h5Verification, /createWebRtcDiagnosticLogger|android-parent/)
+	assert.match(localProbeHtml, /script-src\s+'self'/)
+	assert.doesNotMatch(localProbeHtml, /unsafe-eval/)
 	assert.ok(localProbe.includes("split(/\\s+/)"))
 	assert.ok(localProbe.includes("/^stun:[a-z0-9.-]+:\\d{1,5}$/i"))
 	assert.doesNotMatch(verification, /timeoutMillis\s*\+\s*3000/)

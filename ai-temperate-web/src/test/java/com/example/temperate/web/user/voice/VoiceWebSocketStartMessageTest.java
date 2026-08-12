@@ -5,48 +5,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.temperate.service.user.voice.VoiceException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Base64;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证公开 WSS 首帧的票据、版本和 PCM 格式白名单。
+ * 验证公开 WSS 初始化帧只接受 v2 语音参数，并拒绝遗留 Ticket 字段。
  */
 final class VoiceWebSocketStartMessageTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final String ticket = Base64.getUrlEncoder()
-            .withoutPadding()
-            .encodeToString(new byte[32]);
-
     @Test
-    void stripsTicketBeforeBuildingLoopbackUpstreamMessage() {
+    void acceptsVersionTwoWithoutTicket() {
         VoiceWebSocketStartMessage message = VoiceWebSocketStartMessage.parse(
                 objectMapper,
-                "{\"type\":\"session.start\",\"protocolVersion\":1,"
-                        + "\"ticket\":\"" + ticket + "\",\"language\":\"auto\","
+                "{\"type\":\"session.start\",\"protocolVersion\":2,"
+                        + "\"language\":\"auto\","
                         + "\"format\":\"pcm_s16le\",\"sampleRate\":16000,"
                         + "\"channels\":1}");
 
-        assertThat(message.ticket()).isEqualTo(ticket);
         assertThat(message.upstreamJson(objectMapper))
                 .contains("\"type\":\"session.start\"")
-                .doesNotContain(ticket, "protocolVersion");
+                .doesNotContain("protocolVersion", "ticket");
     }
 
     @Test
     void rejectsUnsupportedProtocolAndUnexpectedFields() {
         String base = "{\"type\":\"session.start\",\"protocolVersion\":%d,"
-                + "\"ticket\":\"" + ticket + "\",\"language\":\"auto\","
+                + "\"language\":\"auto\","
                 + "\"format\":\"pcm_s16le\",\"sampleRate\":16000,"
                 + "\"channels\":1%s}";
 
         assertThatThrownBy(() -> VoiceWebSocketStartMessage.parse(
                 objectMapper,
-                base.formatted(2, "")))
+                base.formatted(1, "")))
                 .isInstanceOf(VoiceException.class);
         assertThatThrownBy(() -> VoiceWebSocketStartMessage.parse(
                 objectMapper,
-                base.formatted(1, ",\"unexpected\":true")))
+                base.formatted(2, ",\"ticket\":\"" + "A".repeat(43) + "\"")))
                 .isInstanceOf(VoiceException.class);
     }
 
@@ -54,8 +48,8 @@ final class VoiceWebSocketStartMessageTest {
     void rejectsTextThatOnlyLooksLikeANumericProtocolField() {
         assertThatThrownBy(() -> VoiceWebSocketStartMessage.parse(
                 objectMapper,
-                "{\"type\":\"session.start\",\"protocolVersion\":\"1\","
-                        + "\"ticket\":\"" + ticket + "\",\"language\":\"auto\","
+                "{\"type\":\"session.start\",\"protocolVersion\":\"2\","
+                        + "\"language\":\"auto\","
                         + "\"format\":\"pcm_s16le\",\"sampleRate\":16000,"
                         + "\"channels\":1}"))
                 .isInstanceOf(VoiceException.class);

@@ -13,17 +13,39 @@ async function loadApi(request) {
 	const httpClient = sourceUrl(
 		'export const authorizedRequest = (...args) => globalThis.__aiConversationRequest(...args)'
 	)
+	const queryString = sourceUrl(fs.readFileSync(
+		path.resolve(__dirname, '../platform/query-string.js'),
+		'utf8'
+	))
 	const source = fs.readFileSync(
 		path.resolve(__dirname, 'ai-conversation-api.js'),
 		'utf8'
-	).replace("from '../auth/http-client.js'", `from '${httpClient}#${nonce}'`)
+	)
+		.replace("from '../auth/http-client.js'", `from '${httpClient}#${nonce}'`)
+		.replace("from '../platform/query-string.js'", `from '${queryString}#${nonce}'`)
 	return import(`${sourceUrl(source)}#${nonce}`)
+}
+
+async function withoutUrlSearchParams(callback) {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'URLSearchParams')
+	try {
+		Object.defineProperty(globalThis, 'URLSearchParams', {
+			configurable: true,
+			writable: true,
+			value: undefined
+		})
+		return await callback()
+	} finally {
+		if (descriptor) Object.defineProperty(globalThis, 'URLSearchParams', descriptor)
+		else delete globalThis.URLSearchParams
+	}
 }
 
 const conversationId = 'AAAAAAAAAAAAAAAAAAAAAQ'
 const messageId = 'AAAAAAAAAAE'
 const usageId = 'AAAAAAAAAAAAAAAAAAAAAg'
 const attachmentId = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL'
+const conversationCursor = 'abcdefghijklmnopqrstuvwxyzABCDEF'
 
 function availableAttachment() {
 	return {
@@ -73,6 +95,40 @@ test('reads PostgreSQL conversation history through the authenticated API', asyn
 	assert.equal(page.messages[0].contentText, ' hello ')
 	assert.equal(page.messages[0].contentAttachments[0].sizeBytes, '428716')
 	delete globalThis.__aiConversationRequest
+})
+
+test('builds conversation and message pagination URLs without URLSearchParams', async () => {
+	await withoutUrlSearchParams(async () => {
+		const calls = []
+		const module = await loadApi(async (url, options) => {
+			calls.push([url, options])
+			if (url.startsWith('/api/ai/conversations?')) {
+				return { conversations: [], nextCursor: null, hasMore: false }
+			}
+			return { messages: [], nextBefore: null, hasMore: false }
+		})
+
+		await module.aiConversationApi.listConversations({
+			pageSize: 20,
+			cursor: conversationCursor
+		})
+		await module.aiConversationApi.messages(conversationId, {
+			pageSize: 50,
+			before: messageId
+		})
+
+		assert.deepEqual(calls, [
+			[
+				`/api/ai/conversations?pageSize=20&cursor=${conversationCursor}`,
+				{ method: 'GET' }
+			],
+			[
+				`/api/ai/conversations/${conversationId}/messages?pageSize=50&before=${messageId}`,
+				{ method: 'GET' }
+			]
+		])
+		delete globalThis.__aiConversationRequest
+	})
 })
 
 test('validates preupload fields without exposing object keys or credentials', async () => {
@@ -175,8 +231,8 @@ test('reads authoritative context usage and requests asynchronous compaction', a
 			}
 	})
 
-	const snapshot = await module.aiConversationApi.contextUsage(
-		conversationId, modelPublicId)
+	const snapshot = await withoutUrlSearchParams(() =>
+		module.aiConversationApi.contextUsage(conversationId, modelPublicId))
 	const requested = await module.aiConversationApi.requestCompaction(
 		conversationId,
 		modelPublicId,

@@ -4,11 +4,15 @@ const path = require('node:path')
 const test = require('node:test')
 
 function loadModule() {
+	const httpUrl = fs.readFileSync(path.join(__dirname,
+		'../platform/http-url.js'), 'utf8')
+		.replaceAll('export function ', 'function ')
 	const source = fs.readFileSync(path.join(__dirname,
 		'ai-conversation-research-session.js'), 'utf8')
+		.replace(/^import\s+.*$/gm, '')
 		.replaceAll('export const ', 'const ')
 		.replaceAll('export function ', 'function ')
-	const factory = new Function(`${source}; return {
+	const factory = new Function(`${httpUrl}\n${source}; return {
 		createAiConversationResearchSession,
 		findAiConversationResearchSession,
 		clearAiConversationResearchSessions }`)

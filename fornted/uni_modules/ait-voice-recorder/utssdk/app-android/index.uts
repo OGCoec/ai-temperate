@@ -1,8 +1,12 @@
 import AudioFormat from 'android.media.AudioFormat'
 import AudioRecord from 'android.media.AudioRecord'
 import MediaRecorder from 'android.media.MediaRecorder'
+import Base64 from 'android.util.Base64'
+import SystemClock from 'android.os.SystemClock'
 import ByteBuffer from 'java.nio.ByteBuffer'
+import ByteOrder from 'java.nio.ByteOrder'
 import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import AtomicLong from 'java.util.concurrent.atomic.AtomicLong'
 import Thread from 'java.lang.Thread'
 import { UTSAndroid } from 'io.dcloud.uts'
 
@@ -10,17 +14,38 @@ import {
   AitVoicePermissionOptions,
   AitVoiceRecorderFailure,
   AitVoiceRecorderOptions,
-  AitVoiceRecorderSession,
+  RenewRecordingLeaseApi,
   RequestRecordPermissionApi,
-  StartRecordingApi
+  StopRecordingApi
 } from '../interface.uts'
 
 const RECORD_AUDIO = 'android.permission.RECORD_AUDIO'
 const SAMPLE_RATE: Int = 16000
+const SAMPLES_PER_FRAME: Int = 1600
+const BYTES_PER_SAMPLE: Int = 2
 const BYTES_PER_FRAME: Int = 3200
+const LEASE_TIMEOUT_MS: Long = 2500
+
+let recordingSequence: Int = 0
+let activeRecordingId: Int = 0
+let activeRecorderRenewLease: (() => void) | null = null
+let activeRecorderReplaceStop: (() => void) | null = null
+let activeRecorderStop: (() => void) | null = null
 
 function failure(code: string, message: string): AitVoiceRecorderFailure {
   return { code, message }
+}
+
+/**
+ * 只提取原生异常类型用于定位跨桥失败，禁止把可能包含运行时对象信息的异常正文写入日志。
+ */
+function throwableType(error: Throwable): string {
+  try {
+    const name = UTSAndroid.getJavaClass(error).simpleName
+    return name.length > 0 ? name : 'UNKNOWN'
+  } catch (_: Throwable) {
+    return 'UNKNOWN'
+  }
 }
 
 /**
@@ -49,12 +74,54 @@ export const requestRecordPermission: RequestRecordPermissionApi =
 }
 
 /**
+ * 通过顶层 UTS API 续约当前录音，避免把函数字段放进返回对象后跨桥丢失可调用代理。
+ */
+export const renewRecordingLease: RenewRecordingLeaseApi =
+  function(recordingId: number): boolean {
+  const requestedRecordingId = recordingId.toInt()
+  if (requestedRecordingId != activeRecordingId) return false
+  const renewLease = activeRecorderRenewLease
+  if (renewLease == null) return false
+  renewLease()
+  return true
+}
+
+/**
+ * 只允许调用方停止自己持有编号的活动录音，迟到的旧页面控制请求不得影响新会话。
+ */
+export const stopRecording: StopRecordingApi =
+  function(recordingId: number): boolean {
+  const requestedRecordingId = recordingId.toInt()
+  if (requestedRecordingId != activeRecordingId) return false
+  const stop = activeRecorderStop
+  if (stop == null) return false
+  stop()
+  return true
+}
+
+/**
  * AudioRecord 直接产出目标 PCM，避免经过有损容器编码后再解码造成延迟和额外复制。
  */
-export const startRecording: StartRecordingApi =
-  function(options: AitVoiceRecorderOptions): AitVoiceRecorderSession {
+// HBuilderX 4.25+ 会在首次调用后回收 JS 回调；录音帧需要持续投递，因此必须保持整个 options 回调组存活。
+@UTSJS.keepAlive
+export function startRecording(
+  options: AitVoiceRecorderOptions
+): number {
+  // 新会话必须先终止同一进程中的旧录音，避免多个 AudioRecord 同时占用麦克风。
+  const previousRecorderStop = activeRecorderReplaceStop
+  if (previousRecorderStop != null) previousRecorderStop()
+  recordingSequence += 1
+  const recordingId = recordingSequence
+  activeRecordingId = recordingId
+  console.log(
+    `event=voice_android_native phase=START_ENTERED diagnosticRunId=${options.diagnosticRunId} recordingId=${recordingId}`)
   const running = new AtomicBoolean(true)
   const stopped = new AtomicBoolean(false)
+  const callbacksAvailable = new AtomicBoolean(true)
+  const lastLeaseAt = new AtomicLong(SystemClock.elapsedRealtime())
+  const framesRead = new AtomicLong(0)
+  const framesDispatchReturned = new AtomicLong(0)
+  const renewalCount = new AtomicLong(0)
   const minimumBuffer = AudioRecord.getMinBufferSize(
     SAMPLE_RATE,
     AudioFormat.CHANNEL_IN_MONO,
@@ -66,55 +133,208 @@ export const startRecording: StartRecordingApi =
     AudioFormat.CHANNEL_IN_MONO,
     AudioFormat.ENCODING_PCM_16BIT,
     nativeBufferBytes)
+  const recorderState = recorder.getState() == AudioRecord.STATE_INITIALIZED
+    ? 'INITIALIZED'
+    : 'UNINITIALIZED'
+  console.log(
+    `event=voice_android_native phase=AUDIO_RECORD_INITIALIZED diagnosticRunId=${options.diagnosticRunId}`
+      + ` recordingId=${recordingId} state=${recorderState}`
+      + ` minimumBufferBytes=${minimumBuffer} nativeBufferBytes=${nativeBufferBytes}`
+      + ` sampleRate=${SAMPLE_RATE} samplesPerFrame=${SAMPLES_PER_FRAME}`)
+  let worker: Thread | null = null
 
-  const releaseRecorder = () => {
+  const releaseRecorder = (releaseReason: string) => {
     if (!stopped.compareAndSet(false, true)) return
     running.set(false)
     try { recorder.stop() } catch (_: Throwable) {}
     try { recorder.release() } catch (_: Throwable) {}
-    options.onStopped()
+    if (activeRecordingId == recordingId) {
+      activeRecordingId = 0
+      activeRecorderRenewLease = null
+      activeRecorderReplaceStop = null
+      activeRecorderStop = null
+    }
+    console.log(
+      `event=voice_android_native phase=RELEASED diagnosticRunId=${options.diagnosticRunId}`
+        + ` recordingId=${recordingId} releaseReason=${releaseReason}`
+        + ` framesRead=${framesRead.get()} framesDispatchReturned=${framesDispatchReturned.get()}`)
+    if (callbacksAvailable.get()) {
+      try { options.onStopped() } catch (_: Throwable) {}
+    }
   }
+
+  const requestStop = (stopReason: string) => {
+    if (!running.compareAndSet(true, false)) return
+    console.log(
+      `event=voice_android_native phase=STOP_REQUESTED diagnosticRunId=${options.diagnosticRunId}`
+        + ` recordingId=${recordingId} stopReason=${stopReason}`)
+    try { recorder.stop() } catch (_: Throwable) {}
+    worker?.interrupt()
+    releaseRecorder(stopReason)
+  }
+
+  const notifyError = (value: AitVoiceRecorderFailure) => {
+    if (!callbacksAvailable.get()) return
+    try { options.onError(value) } catch (_: Throwable) {}
+  }
+
+  // 控制闭包只保留在 UTS/Kotlin 模块内部；跨桥只暴露录音编号和顶层函数。
+  activeRecorderRenewLease = () => {
+    if (running.get()) {
+      const renewedAt = SystemClock.elapsedRealtime()
+      const leaseAgeMs = renewedAt - lastLeaseAt.get()
+      lastLeaseAt.set(renewedAt)
+      const count = renewalCount.incrementAndGet().toInt()
+      if (count == 1 || count % 10 == 0) {
+        console.log(
+          `event=voice_android_native phase=LEASE_RENEWED diagnosticRunId=${options.diagnosticRunId}`
+            + ` recordingId=${recordingId} renewalCount=${count} leaseAgeMs=${leaseAgeMs}`)
+      }
+    }
+  }
+  activeRecorderReplaceStop = () => requestStop('REPLACED_BY_NEW_SESSION')
+  activeRecorderStop = () => requestStop('CLIENT_CONTROL')
 
   if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-    releaseRecorder()
-    options.onError(failure('VOICE_RECORDER_FAILED', 'Android 录音设备初始化失败。'))
-    return { stop: releaseRecorder }
+    console.warn(
+      `event=voice_android_native phase=INITIALIZATION_FAILED diagnosticRunId=${options.diagnosticRunId}`
+        + ` recordingId=${recordingId} state=${recorderState}`)
+    releaseRecorder('INITIALIZATION_FAILED')
+    notifyError(failure('VOICE_RECORDER_FAILED', 'Android 录音设备初始化失败。'))
+    return recordingId
   }
 
-  const worker = new Thread(() => {
+  const recordingWorker = new Thread(() => {
+    let workerExitReason = 'WORKER_FINALLY'
     try {
       recorder.startRecording()
       if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
-        options.onError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风未进入录音状态。'))
+        workerExitReason = 'INITIALIZATION_FAILED'
+        notifyError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风未进入录音状态。'))
         return
       }
-      options.onStarted()
-      const buffer = ByteArray(BYTES_PER_FRAME)
+      lastLeaseAt.set(SystemClock.elapsedRealtime())
+      console.log(
+        `event=voice_android_native phase=WORKER_STARTED diagnosticRunId=${options.diagnosticRunId}`
+          + ` recordingId=${recordingId} threadAlive=true`)
+      console.log(
+        `event=voice_android_native phase=START_CALLBACK_DISPATCH_ATTEMPT diagnosticRunId=${options.diagnosticRunId}`
+          + ` recordingId=${recordingId}`)
+      try {
+        options.onStarted()
+        console.log(
+          `event=voice_android_native phase=START_CALLBACK_DISPATCH_RETURNED diagnosticRunId=${options.diagnosticRunId}`
+            + ` recordingId=${recordingId}`)
+      } catch (error: Throwable) {
+        workerExitReason = 'START_CALLBACK_FAILED'
+        console.warn(
+          `event=voice_android_native phase=START_CALLBACK_DISPATCH_FAILED diagnosticRunId=${options.diagnosticRunId}`
+            + ` recordingId=${recordingId} exceptionType=${throwableType(error)}`)
+      }
+      const samples = ShortArray(SAMPLES_PER_FRAME)
       while (running.get()) {
-        const length = recorder.read(buffer, 0, buffer.size)
-        if (length > 0) {
-          // slice 把容量限制为本次真实读取长度，禁止把上一帧残留字节发送给服务端。
-          const byteBuffer = ByteBuffer.wrap(buffer, 0, length).slice()
-          options.onFrame(ArrayBuffer.fromByteBuffer(byteBuffer))
-        } else if (length < 0 && running.get()) {
-          options.onError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风读取失败。'))
+        const lastRenewalAgeMs = SystemClock.elapsedRealtime() - lastLeaseAt.get()
+        if (lastRenewalAgeMs > LEASE_TIMEOUT_MS) {
+          callbacksAvailable.set(false)
+          console.warn(
+            `event=voice_android_native phase=LEASE_EXPIRED diagnosticRunId=${options.diagnosticRunId}`
+              + ` recordingId=${recordingId} lastRenewalAgeMs=${lastRenewalAgeMs}`
+              + ` framesRead=${framesRead.get()} framesDispatchReturned=${framesDispatchReturned.get()}`)
+          requestStop('LEASE_EXPIRED')
+          break
+        }
+        const sampleCount = recorder.read(samples, 0, samples.size)
+        if (sampleCount > 0) {
+          const frameSequence = framesRead.incrementAndGet().toInt()
+          const frameBytes = sampleCount * BYTES_PER_SAMPLE
+          if (frameSequence == 1) {
+            console.log(
+              `event=voice_android_pcm_bridge phase=NATIVE_FRAME_READ diagnosticRunId=${options.diagnosticRunId}`
+                + ` recordingId=${recordingId} frameSequence=${frameSequence}`
+                + ` sampleCount=${sampleCount} frameBytes=${frameBytes}`)
+          }
+          const frameBuffer = ByteBuffer.allocate(frameBytes)
+          frameBuffer.order(ByteOrder.LITTLE_ENDIAN)
+          // 每次读取都生成独立的小端缓冲区，避免 UTS 与 SocketTask 共享复用内存并保证每个 PCM16 采样完整。
+          let sampleIndex: Int = 0
+          while (sampleIndex < sampleCount) {
+            frameBuffer.putShort(samples[sampleIndex])
+            sampleIndex += 1
+          }
+          frameBuffer.flip()
+          const frameByteArray = frameBuffer.array()
+          let payloadBase64: string
+          try {
+            payloadBase64 = Base64.encodeToString(frameByteArray, Base64.NO_WRAP)
+          } catch (error: Throwable) {
+            workerExitReason = 'WORKER_EXCEPTION'
+            console.warn(
+              `event=voice_android_pcm_bridge phase=NATIVE_FRAME_ENCODE_FAILED diagnosticRunId=${options.diagnosticRunId}`
+                + ` recordingId=${recordingId} frameSequence=${frameSequence}`
+                + ` exceptionType=${throwableType(error)}`)
+            notifyError(failure(
+              'VOICE_AUDIO_BRIDGE_INVALID',
+              'Android 音频帧编码失败。'))
+            return
+          }
+          if (frameSequence == 1) {
+            console.log(
+              `event=voice_android_pcm_bridge phase=NATIVE_FRAME_ENCODED diagnosticRunId=${options.diagnosticRunId}`
+                + ` recordingId=${recordingId} frameSequence=${frameSequence}`
+                + ` declaredBytes=${frameBytes} base64Characters=${payloadBase64.length}`)
+          }
+          if (callbacksAvailable.get()) {
+            if (frameSequence == 1) {
+              console.log(
+                `event=voice_android_pcm_bridge phase=NATIVE_FRAME_DISPATCH_ATTEMPT diagnosticRunId=${options.diagnosticRunId}`
+                  + ` recordingId=${recordingId} frameSequence=${frameSequence}`)
+            }
+            try {
+              options.onFrame(payloadBase64, frameBytes, frameSequence)
+              framesDispatchReturned.incrementAndGet()
+              if (frameSequence == 1) {
+                console.log(
+                  `event=voice_android_pcm_bridge phase=NATIVE_FRAME_DISPATCH_RETURNED diagnosticRunId=${options.diagnosticRunId}`
+                    + ` recordingId=${recordingId} frameSequence=${frameSequence}`)
+              } else if (frameSequence % 50 == 0) {
+                console.log(
+                  `event=voice_android_pcm_bridge phase=NATIVE_FRAME_SUMMARY diagnosticRunId=${options.diagnosticRunId}`
+                    + ` recordingId=${recordingId} framesRead=${framesRead.get()}`
+                    + ` framesDispatchReturned=${framesDispatchReturned.get()} lastFrameBytes=${frameBytes}`)
+              }
+            } catch (error: Throwable) {
+              workerExitReason = 'FRAME_CALLBACK_FAILED'
+              console.warn(
+                `event=voice_android_pcm_bridge phase=NATIVE_FRAME_DISPATCH_FAILED diagnosticRunId=${options.diagnosticRunId}`
+                  + ` recordingId=${recordingId} frameSequence=${frameSequence}`
+                  + ` exceptionType=${throwableType(error)}`)
+              return
+            }
+          }
+        } else if (sampleCount < 0 && running.get()) {
+          workerExitReason = 'READ_FAILED'
+          console.warn(
+            `event=voice_android_native phase=READ_FAILED diagnosticRunId=${options.diagnosticRunId}`
+              + ` recordingId=${recordingId} sampleCount=${sampleCount}`)
+          notifyError(failure('VOICE_RECORDER_FAILED', 'Android 麦克风读取失败。'))
           return
         }
       }
-    } catch (_: Throwable) {
-      if (running.get()) options.onError(failure('VOICE_RECORDER_FAILED', 'Android 录音过程异常。'))
+    } catch (error: Throwable) {
+      if (running.get()) {
+        workerExitReason = 'WORKER_EXCEPTION'
+        console.warn(
+          `event=voice_android_native phase=WORKER_EXCEPTION diagnosticRunId=${options.diagnosticRunId}`
+            + ` recordingId=${recordingId} exceptionType=${throwableType(error)}`)
+        notifyError(failure('VOICE_RECORDER_FAILED', 'Android 录音过程异常。'))
+      }
     } finally {
-      releaseRecorder()
+      releaseRecorder(workerExitReason)
     }
   })
-  worker.setName('ait-voice-pcm-recorder')
-  worker.start()
+  worker = recordingWorker
+  recordingWorker.setName('ait-voice-pcm-recorder')
+  recordingWorker.start()
 
-  return {
-    stop: () => {
-      running.set(false)
-      try { recorder.stop() } catch (_: Throwable) {}
-      worker.interrupt()
-    }
-  }
+  return recordingId
 }

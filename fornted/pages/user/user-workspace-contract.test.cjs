@@ -107,6 +107,18 @@ test('workspace forwards explicit chat actions and page lifecycle without persis
 	assert.doesNotMatch(workspace, /setStorageSync\([^)]*conversation/i)
 })
 
+test('workspace exposes stable conversation errors without raw runtime messages', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const refresh = workspace.slice(
+		workspace.indexOf('async refreshConversations()'),
+		workspace.indexOf('copyConversationId(')
+	)
+
+	assert.match(refresh, /会话列表暂时无法加载，请重试。/)
+	assert.match(refresh, /更多会话暂时无法加载，请重试。/)
+	assert.doesNotMatch(refresh, /error\?\.message/)
+})
+
 test('all ordinary user pages use a custom navigation bar and one viewport shell', () => {
 	const pages = JSON.parse(read('pages.json'))
 	const expected = new Set([
@@ -126,7 +138,7 @@ test('all ordinary user pages use a custom navigation bar and one viewport shell
 test('chat video previews preserve their aspect ratio and stay within the available viewport', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 	const videoCardBindings = chatPanel.match(
-		/:class="\{ 'is-video': previewVideo\(attachment\) \}"/g) || []
+		/:class="\{ 'is-video': previewVideo\(attachment\)(?:, 'is-android-media': androidClient)? \}"/g) || []
 	const videoStyleBindings = chatPanel.match(
 		/:style="previewVideo\(attachment\) \? generatedVideoCardStyle\(attachment(?:, message\.videoMetadata)?\) : null"/g) || []
 	const metadataBindings = chatPanel.match(

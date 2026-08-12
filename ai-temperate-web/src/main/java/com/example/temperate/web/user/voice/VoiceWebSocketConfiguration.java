@@ -17,21 +17,24 @@ public class VoiceWebSocketConfiguration implements WebSocketConfigurer {
 
     private final VoiceWebSocketHandler handler;
     private final VoiceWebSocketOriginInterceptor originInterceptor;
+    private final VoiceWebSocketSecurityHandshakeInterceptor securityInterceptor;
     private final VoiceProperties properties;
 
     public VoiceWebSocketConfiguration(
             VoiceWebSocketHandler handler,
             VoiceWebSocketOriginInterceptor originInterceptor,
+            VoiceWebSocketSecurityHandshakeInterceptor securityInterceptor,
             VoiceProperties properties) {
         this.handler = handler;
         this.originInterceptor = originInterceptor;
+        this.securityInterceptor = securityInterceptor;
         this.properties = properties;
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(handler, properties.publicPath())
-                .addInterceptors(originInterceptor)
+                .addInterceptors(originInterceptor, securityInterceptor)
                 .setAllowedOrigins(properties.allowedOrigins().toArray(String[]::new));
     }
 }

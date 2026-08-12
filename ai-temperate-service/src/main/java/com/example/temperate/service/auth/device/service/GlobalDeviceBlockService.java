@@ -1,13 +1,17 @@
 package com.example.temperate.service.auth.device.service;
 
+import com.example.temperate.common.security.hmac.HmacIdentifier;
 import java.time.Duration;
 
 /**
- * 提供基于设备安装标识的全局认证入口封禁查询能力。
+ * 提供基于原始设备安装标识或既有 HMAC 摘要的全局认证入口封禁查询能力。
  *
- * <p>调用方只传入原始客户端设备标识，服务内部负责格式校验、HMAC 保护和 Redis Key 访问；接口不负责决定哪些 HTTP 路径需要被拦截。</p>
+ * <p>MVC 调用方传入原始 UUID，Voice 握手只传递 Ticket 中的受保护摘要；两条路径必须命中同一
+ * Redis Key。该接口不负责决定哪些 HTTP 或 WebSocket 路径需要拦截。</p>
  */
 public interface GlobalDeviceBlockService {
 
     Duration remainingBlockTtl(String deviceInstallationId);
+
+    Duration remainingBlockTtlByDigest(HmacIdentifier globalDeviceBlockDigest);
 }

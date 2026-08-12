@@ -2,6 +2,7 @@ package com.example.temperate.web.auth.device.interceptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -12,6 +13,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Constructor;
 import java.time.Clock;
 import java.time.Duration;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +35,10 @@ class GlobalDeviceBlockInterceptorTest {
     @BeforeEach
     void setUp() {
         blockService = mock(GlobalDeviceBlockService.class);
-        interceptor = new GlobalDeviceBlockInterceptor(blockService);
+        interceptor = new GlobalDeviceBlockInterceptor(
+                blockService,
+                new ObjectMapper().findAndRegisterModules(),
+                Clock.systemUTC());
         handler = new Object();
     }
 
@@ -139,6 +145,36 @@ class GlobalDeviceBlockInterceptorTest {
         assertThat(interceptor.preHandle(health, healthResponse, handler)).isTrue();
 
         verifyNoInteractions(blockService);
+    }
+
+    @Test
+    void voiceTicketIssuePathIsRegisteredForGlobalDeviceBlocking() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/com/example/temperate/web/auth/device/config/GlobalDeviceBlockInterceptorConfiguration.java"));
+
+        assertThat(source).contains("/api/users/me/voice/session-tickets");
+    }
+
+    @Test
+    void voiceTicketIssuePathActuallyChecksTheCurrentDeviceBlock() throws Exception {
+        MockHttpServletRequest request = request(
+                "POST",
+                "/api/users/me/voice/session-tickets");
+        request.addHeader(
+                "X-Device-Installation-Id",
+                "550e8400-e29b-41d4-a716-446655440000");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        when(blockService.remainingBlockTtl(
+                "550e8400-e29b-41d4-a716-446655440000"))
+                .thenReturn(Duration.ofSeconds(30));
+
+        boolean allowed = interceptor.preHandle(request, response, handler);
+
+        assertThat(allowed).isFalse();
+        assertThat(response.getStatus()).isEqualTo(429);
+        assertThat(response.getHeader("Retry-After")).isEqualTo("30");
+        verify(blockService).remainingBlockTtl(
+                "550e8400-e29b-41d4-a716-446655440000");
     }
 
     private static MockHttpServletRequest request(String method, String uri) {

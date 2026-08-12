@@ -37,6 +37,7 @@
 		buildAiSourceFaviconUrl,
 		normalizeAiSourceFaviconDomain
 	} from '@/common/aichat/ai-source-favicon.js'
+	import { openExternalHttpUrl } from '@/common/platform/external-url-opener.js'
 
 	const SOURCE_VARIANTS = new Set(['inline', 'activity', 'card'])
 
@@ -91,13 +92,7 @@
 		methods: {
 			activate() {
 				if (this.inactive) return
-				const url = this.linkUrl
-				// #ifdef H5
-				window.open(url, '_blank', 'noopener,noreferrer')
-				// #endif
-				// #ifdef APP-PLUS
-				plus.runtime.openURL(url)
-				// #endif
+				openExternalHttpUrl(this.linkUrl)
 			},
 			handleFaviconError() {
 				this.faviconFailed = true

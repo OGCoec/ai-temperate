@@ -13,6 +13,7 @@ import com.example.temperate.service.user.voice.config.VoiceProperties;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketIssue;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketSnapshot;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketStore;
+import com.example.temperate.service.user.voice.ticket.VoiceTicketSecurityBinding;
 import java.net.URI;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -42,8 +43,7 @@ final class VoiceSessionTicketServiceImplTest {
                 new SecureRandom(new byte[] {1, 2, 3, 4}));
 
         VoiceSessionTicketIssue issue = service.issue(
-                10001L,
-                VoiceClientPlatform.H5,
+                binding(),
                 DEVICE_ID);
         VoiceSessionTicketSnapshot consumed = service.consume(issue.ticket());
 
@@ -52,12 +52,34 @@ final class VoiceSessionTicketServiceImplTest {
         assertThat(issue.toString()).doesNotContain(issue.ticket()).contains("ticket=redacted");
         assertThat(store.ticketTtl).isEqualTo(Duration.ofSeconds(30));
         assertThat(store.ticketHash.value()).isNotEqualTo(issue.ticket());
-        assertThat(consumed.userId()).isEqualTo(10001L);
-        assertThat(consumed.platform()).isEqualTo(VoiceClientPlatform.H5);
+        assertThat(consumed.schemaVersion()).isEqualTo(2);
+        assertThat(consumed.binding().userId()).isEqualTo(10001L);
+        assertThat(consumed.binding().platform()).isEqualTo(VoiceClientPlatform.H5);
+        assertThat(consumed.toString()).doesNotContain(DEVICE_ID);
         assertThatThrownBy(() -> service.consume(issue.ticket()))
                 .isInstanceOfSatisfying(VoiceException.class,
                         exception -> assertThat(exception.code())
                                 .isEqualTo(VoiceErrorCode.VOICE_TICKET_INVALID));
+    }
+
+    @Test
+    void rejectsLegacySchemaOneSnapshots() {
+        assertThatThrownBy(() -> new VoiceSessionTicketSnapshot(
+                1, binding(), NOW.plusSeconds(30)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static VoiceTicketSecurityBinding binding() {
+        return new VoiceTicketSecurityBinding(
+                10001L,
+                VoiceClientPlatform.H5,
+                "A".repeat(43),
+                "B".repeat(43),
+                "C".repeat(43),
+                "D".repeat(43),
+                "E".repeat(43),
+                "F".repeat(43),
+                7L);
     }
 
     private static AuthSessionSecretProtector protector() {

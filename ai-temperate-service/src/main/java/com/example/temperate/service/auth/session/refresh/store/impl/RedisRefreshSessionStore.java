@@ -52,6 +52,9 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
     private static final RedisScript<List> VALIDATE_ACCESS_SCRIPT = listScript(
             "validate_access_session.lua");
     @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> VALIDATE_BINDING_SCRIPT = listScript(
+            "validate_session_binding.lua");
+    @SuppressWarnings("rawtypes")
     private static final RedisScript<List> VALIDATE_ACCESS_WITH_PREAUTH_SCRIPT = listScript(
             "validate_access_session_with_preauth.lua");
     @SuppressWarnings("rawtypes")
@@ -144,6 +147,21 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                 List.of(redisKeyFactory.sessionRefreshTokenKey(validRefresh)),
                 requireIdentifier("device hash", deviceHash).value(),
                 requireIdentifier("CSRF hash", csrfHash).value(),
+                redisKeyFactory.sessionUserIndexKeyPrefix(),
+                validRefresh.value()));
+    }
+
+    @Override
+    public RefreshSessionValidation validateBinding(
+            HmacIdentifier refreshTokenHash,
+            HmacIdentifier deviceHash) {
+        HmacIdentifier validRefresh = requireIdentifier(
+                "refresh token hash", refreshTokenHash);
+        // 该 Lua 是握手专用只读路径，不接受 CSRF，也绝不延长会话 TTL。
+        return validation(executeList(
+                VALIDATE_BINDING_SCRIPT,
+                List.of(redisKeyFactory.sessionRefreshTokenKey(validRefresh)),
+                requireIdentifier("device hash", deviceHash).value(),
                 redisKeyFactory.sessionUserIndexKeyPrefix(),
                 validRefresh.value()));
     }

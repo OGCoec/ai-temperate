@@ -95,7 +95,7 @@ function safeDeltaSequence(value) {
 }
 
 /**
- * 创建仅记录字节数、事件数和耗时的 H5 流式诊断；关闭时复用无状态空实现。
+ * 创建仅记录字节数、事件数和耗时的跨平台流式诊断；关闭时复用无状态空实现。
  */
 export function createAiConversationStreamDiagnostics(options = {}) {
 	const enabled = options.enabled === undefined

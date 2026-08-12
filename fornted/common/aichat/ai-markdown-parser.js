@@ -1,6 +1,6 @@
 import MarkdownIt from 'markdown-it'
+import { parseAbsoluteHttpUrl } from '../platform/http-url.js'
 
-const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 const LANGUAGE_LABELS = new Map([
 	['c++', 'C++'],
 	['csharp', 'C#'],
@@ -83,16 +83,13 @@ function sanitizeUrl(value) {
 	if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../') || href.startsWith('#')) {
 		return { href, safe: true }
 	}
-	let protocol = ''
-	try {
-		protocol = new URL(href).protocol.toLowerCase()
-	} catch {
-		const match = href.match(/^([a-z][a-z0-9+.-]*):/i)
-		protocol = match ? match[1].toLowerCase() + ':' : ''
+	const parsed = parseAbsoluteHttpUrl(href)
+	if (!parsed && /^mailto:[^\s<>]+$/i.test(href)) {
+		return { href, safe: true }
 	}
 	return {
-		href,
-		safe: SAFE_PROTOCOLS.has(protocol)
+		href: parsed?.href || href,
+		safe: Boolean(parsed)
 	}
 }
 

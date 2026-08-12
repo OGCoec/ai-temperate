@@ -1,6 +1,5 @@
 (function(){
   'use strict';
-  const MAX_AUTO_RETRIES=1;
   const SDK_READY_TIMEOUT_MS=15000;
   const SCRIPT_ID='ait-turnstile-sdk';
   const ALLOWED_ACTIONS=new Set(['register','login','password_reset']);
@@ -9,59 +8,76 @@
   const action=parameters.get('action')||'';
   const status=document.getElementById('status');
   const error=document.getElementById('error');
-  const retry=document.getElementById('retry');
   let siteKey='';
+  let channel='';
   let widgetId=null;
   let renderGeneration=0;
-  let configGeneration=0;
   let sdkLoadGeneration=0;
-  let autoRetryCount=0;
-  let retryTimer;
   let readyTimer;
-  let errorHandled=false;
+  let sdkFailed=false;
   let tokenDelivered=false;
 
   function sanitizeCode(value){
     const code=String(value==null?'':value);
     return /^[0-9]{6}$/.test(code)?code:'unknown';
   }
-  function isRetryable(code){
-    return code==='110600'||code==='110620'||code==='200500'||/^(300|600)[0-9]{3}$/.test(code);
+
+  function resultUrl(kind,fields){
+    const entries=[['channel',channel]].concat(fields||[]);
+    return 'aiturnstile://'+kind+'?'+entries.map(function(entry){
+      return encodeURIComponent(entry[0])+'='+encodeURIComponent(entry[1]);
+    }).join('&');
   }
-  function hideFailure(){
-    error.textContent='';
-    retry.hidden=true;
+
+  function dispatchResult(kind,fields){
+    if(!channel)return false;
+    window.location.href=resultUrl(kind,fields);
+    return true;
   }
-  function showFailure(code,message){
-    errorHandled=true;
-    clearTimeout(retryTimer);
-    status.textContent='验证未完成，请手动重试。';
-    error.textContent=message||'安全验证失败（代码：'+code+'）。';
-    retry.hidden=false;
-    retry.focus();
-  }
+
   function finish(token,generation){
-    if(generation!==renderGeneration||tokenDelivered||!token)return;
+    if(generation!==renderGeneration||tokenDelivered||typeof token!=='string'||!token||token.length>4096)return;
     tokenDelivered=true;
-    clearTimeout(retryTimer);
-    window.location.href='aiturnstile://verified?token='+encodeURIComponent(token);
+    status.textContent='安全验证已完成，正在确认结果…';
+    dispatchResult('verified',[['token',token]]);
   }
+
+  function providerError(rawCode,generation){
+    if(generation!==renderGeneration||tokenDelivered)return;
+    const code=sanitizeCode(rawCode);
+    status.textContent='安全验证出现暂时异常，正在重试…';
+    error.textContent='安全验证失败（代码：'+code+'）。';
+    dispatchResult('error',[['code',code]]);
+  }
+
+  function terminalResult(kind,message,generation){
+    if(generation!==renderGeneration||tokenDelivered)return;
+    status.textContent=message;
+    error.textContent=message;
+    dispatchResult(kind);
+  }
+
+  function failConfiguration(){
+    status.textContent='安全验证配置无效。';
+    error.textContent='安全验证配置或流程无效，请重新验证。';
+    dispatchResult('error',[['code','config_invalid']]);
+  }
+
   function renderWidget(){
     if(!window.turnstile||typeof window.turnstile.render!=='function'){
-      handleError('200500',renderGeneration);
+      providerError('200500',renderGeneration);
       return;
     }
     const generation=++renderGeneration;
-    errorHandled=false;
     tokenDelivered=false;
-    hideFailure();
-    status.textContent='请完成下方安全验证。';
+    status.textContent='请完成安全验证。';
+    error.textContent='';
     if(widgetId!==null){
       try{
         window.turnstile.remove(widgetId);
         widgetId=null;
       }catch(ignored){
-        handleError('200500',generation);
+        providerError('200500',generation);
         return;
       }
     }
@@ -71,51 +87,33 @@
         action:action,
         cData:challenge,
         theme:'dark',
-        retry:'never',
+        size:'normal',
+        language:'auto',
+        retry:'auto',
+        'retry-interval':8000,
         callback:function(token){finish(token,generation);},
-        'error-callback':function(code){handleError(code,generation);},
+        'error-callback':function(code){providerError(code,generation);},
         'expired-callback':function(){
-          if(generation===renderGeneration)showFailure('unknown','安全验证已过期，请重新验证。');
+          terminalResult('expired','安全验证已过期，请重新验证。',generation);
         },
         'timeout-callback':function(){
-          if(generation===renderGeneration)showFailure('unknown','安全验证等待超时，请重新验证。');
+          terminalResult('timeout','安全验证等待超时，请重新验证。',generation);
         }
       });
     }catch(ignored){
-      handleError('200500',generation);
+      providerError('200500',generation);
     }
   }
-  function retryCurrent(generation){
-    if(generation!==renderGeneration)return;
-    if(!siteKey){loadConfig();return;}
-    if(window.turnstile&&typeof window.turnstile.render==='function'){renderWidget();return;}
-    loadSdk();
-  }
-  function handleError(rawCode,generation){
-    if(generation!==renderGeneration||errorHandled)return;
-    errorHandled=true;
-    tokenDelivered=false;
-    const code=sanitizeCode(rawCode);
-    if(isRetryable(code)&&autoRetryCount<MAX_AUTO_RETRIES){
-      autoRetryCount+=1;
-      status.textContent='验证出现暂时异常（代码：'+code+'），正在自动重试…';
-      retry.hidden=true;
-      retryTimer=setTimeout(function(){
-        if(generation!==renderGeneration)return;
-        errorHandled=false;
-        retryCurrent(generation);
-      },1000);
-      return;
-    }
-    showFailure(code);
-  }
+
   function sdkFailure(loadGeneration){
-    if(loadGeneration!==sdkLoadGeneration)return;
+    if(loadGeneration!==sdkLoadGeneration||sdkFailed)return;
+    sdkFailed=true;
     clearTimeout(readyTimer);
     const script=document.getElementById(SCRIPT_ID);
     if(script)script.remove();
-    handleError('200500',renderGeneration);
+    providerError('200500',renderGeneration);
   }
+
   window.aitTurnstileSdkReady=function(){
     clearTimeout(readyTimer);
     if(!window.turnstile||typeof window.turnstile.render!=='function'){
@@ -124,13 +122,14 @@
     }
     renderWidget();
   };
+
   function loadSdk(){
     if(window.turnstile&&typeof window.turnstile.render==='function'){
       renderWidget();
       return;
     }
-    hideFailure();
     status.textContent='正在加载安全验证…';
+    sdkFailed=false;
     const loadGeneration=++sdkLoadGeneration;
     const stale=document.getElementById(SCRIPT_ID);
     if(stale)stale.remove();
@@ -143,42 +142,58 @@
     readyTimer=setTimeout(function(){sdkFailure(loadGeneration);},SDK_READY_TIMEOUT_MS);
     document.head.appendChild(script);
   }
-  async function loadConfig(){
-    const generation=++configGeneration;
-    hideFailure();
-    status.textContent='正在读取安全验证配置…';
+
+  function fragmentChannel(hash){
+    if(!hash||hash.charAt(0)!=='#')return '';
+    const matches=hash.substring(1).split('&').filter(function(part){
+      return part.indexOf('channel=')===0;
+    });
+    if(matches.length!==1)return '';
     try{
-      const response=await fetch('/api/auth/turnstile/config',{
-        method:'GET',
-        credentials:'same-origin',
-        cache:'no-store',
-        headers:{Accept:'application/json'}
-      });
-      if(!response.ok)throw new Error('Turnstile config request failed.');
-      const payload=await response.json();
-      if(generation!==configGeneration)return;
-      const configuredSiteKey=String(payload&&payload.siteKey||'');
-      if(!/^[A-Za-z0-9_-]{20,200}$/.test(configuredSiteKey)){
-        throw new Error('Turnstile site key is invalid.');
-      }
-      siteKey=configuredSiteKey;
-      loadSdk();
+      const value=decodeURIComponent(matches[0].substring('channel='.length));
+      return /^[A-Za-z0-9_-]{8,80}$/.test(value)?value:'';
     }catch(ignored){
-      if(generation===configGeneration)handleError('200500',renderGeneration);
+      return '';
     }
   }
-  retry.addEventListener('click',function(){
-    clearTimeout(retryTimer);
-    autoRetryCount=0;
-    errorHandled=false;
-    hideFailure();
-    retryCurrent(renderGeneration);
-  });
-  document.getElementById('cancel').addEventListener('click',function(){
-    window.location.href='aiturnstile://cancelled';
-  });
+
+  function loadConfig(){
+    status.textContent='正在读取安全验证配置…';
+    const hash=window.location.hash;
+    channel=fragmentChannel(hash);
+    try{
+      const parts=hash&&hash.charAt(0)==='#'?hash.substring(1).split('&'):[];
+      if(parts.length!==2)throw new Error('Turnstile fragment is invalid.');
+      const values=new Map();
+      parts.forEach(function(part){
+        const separator=part.indexOf('=');
+        if(separator<=0)throw new Error('Turnstile fragment is invalid.');
+        const name=decodeURIComponent(part.substring(0,separator));
+        const value=decodeURIComponent(part.substring(separator+1));
+        if(values.has(name)||!new Set(['siteKey','channel']).has(name)){
+          throw new Error('Turnstile fragment is invalid.');
+        }
+        values.set(name,value);
+      });
+      const configuredSiteKey=values.get('siteKey')||'';
+      const configuredChannel=values.get('channel')||'';
+      if(!/^[A-Za-z0-9_-]{20,200}$/.test(configuredSiteKey)||
+        !/^[A-Za-z0-9_-]{8,80}$/.test(configuredChannel)){
+        throw new Error('Turnstile fragment is invalid.');
+      }
+      // Fragment只在受控WebView内交付公开Site Key和一次性通道，读取后立即从历史记录移除。
+      window.history.replaceState(null,'',window.location.pathname+window.location.search);
+      siteKey=configuredSiteKey;
+      channel=configuredChannel;
+      loadSdk();
+    }catch(ignored){
+      failConfiguration();
+    }
+  }
+
   if(!/^[A-Za-z0-9_-]{38}$/.test(challenge)||!ALLOWED_ACTIONS.has(action)){
-    showFailure('unknown','验证流程无效，请返回后重试。');
+    channel=fragmentChannel(window.location.hash);
+    failConfiguration();
     return;
   }
   loadConfig();

@@ -1,0 +1,11 @@
+{
+  "id": "ait-webrtc-crypto",
+  "displayName": "AIT Android WebRTC Crypto",
+  "version": "1.0.0",
+  "description": "Android WebRTC probe ephemeral SecureRandom and AES-GCM bridge.",
+  "uni_modules": {
+    "artifacts": [
+      "utssdk"
+    ]
+  }
+}

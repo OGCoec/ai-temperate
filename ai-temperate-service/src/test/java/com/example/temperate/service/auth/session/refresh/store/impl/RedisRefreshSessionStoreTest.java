@@ -146,6 +146,35 @@ class RedisRefreshSessionStoreTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
+    void mapsReadOnlyHandshakeBindingWithoutRenewingSessionTtl() {
+        doReturn(
+                snapshot(0L, session.csrfHash()),
+                List.of(1L),
+                List.of(2L),
+                List.of(4L),
+                List.of(6L))
+                .when(template).execute(
+                        any(RedisScript.class), anyList(), any(Object[].class));
+
+        assertThat(store.validateBinding(
+                session.refreshTokenHash(), session.deviceHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.VALID);
+        assertThat(store.validateBinding(
+                session.refreshTokenHash(), session.deviceHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.MISSING_OR_EXPIRED);
+        assertThat(store.validateBinding(
+                session.refreshTokenHash(), session.deviceHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.DEVICE_MISMATCH);
+        assertThat(store.validateBinding(
+                session.refreshTokenHash(), session.deviceHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.INDEX_MISSING);
+        assertThat(store.validateBinding(
+                session.refreshTokenHash(), session.deviceHash()).status())
+                .isEqualTo(RefreshSessionValidation.Status.TTL_INVARIANT_VIOLATION);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
     void mapsCurrentAndAllSessionRevocationResults() {
         doReturn(1L, 0L, -2L, -3L, -4L).when(template).execute(
                 any(RedisScript.class), anyList(), any(Object[].class));

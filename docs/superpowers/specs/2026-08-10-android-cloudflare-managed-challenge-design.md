@@ -19,9 +19,10 @@ GET /__edge/android-clearance/status
 ```
 
 两个路由都在边缘终止，不访问 `api.niko000o.site`。完成页只有在请求携带非空、长度有界且
-不含控制字符的 `cf_clearance` 时返回独立HTML；页面通过 `ait-edge://verified` 通知Android。
-状态接口携带同一Cookie时返回204，缺少时返回 `428 EDGE_CLEARANCE_REQUIRED`。响应统一
-`no-store`，不返回或记录Cookie值。
+不含控制字符的 `cf_clearance` 时返回独立HTML；页面通过 `ait-edge://verified` 向Android
+发送快速完成信号。该scheme不是成功事实来源，WebView未送达scheme回调时仍由页面 `loaded`
+事件触发状态探测。状态接口携带同一Cookie时返回204，缺少时返回
+`428 EDGE_CLEARANCE_REQUIRED`。响应统一 `no-store`，不返回或记录Cookie值。
 
 Cloudflare控制台只对以下表达式执行 `Managed Challenge`：
 
@@ -35,10 +36,17 @@ and http.request.uri.path eq "/__edge/android-clearance"
 
 ## Android恢复协调器
 
-协调器在同一时刻只允许一个验证WebView；并发失败请求等待同一Promise。WebView使用完整屏幕
-打开主域验证入口，拦截精确 `ait-edge://verified` 后刷新Android CookieManager，并执行状态
-探测。CookieManager只提取 `cf_clearance`，不把Access Token、Refresh Token、CSRF或其他
-Cookie复制到请求，也不写入Storage、Pinia、Keystore、URL或日志。
+协调器在同一时刻只允许一个验证WebView；并发失败请求等待同一Promise。协调器先创建空白
+WebView并注册URL拦截及页面事件，再加载主域验证入口，避免导航发生在监听器安装之前。
+`ait-edge://verified` 是快速通道，顶层页面 `loaded` 是兼容兜底；两个信号进入同一个单飞确认
+状态机。状态机刷新Android CookieManager，并按0、150、400、800、1500毫秒的固定有界间隔
+探测状态接口。只有204表示验证Cookie已共享并允许关闭WebView及恢复原请求；428表示尚未共享，
+不得当成成功。其他状态返回受控失败，网络失败只在当前有界窗口内重试。
+
+CookieManager只提取 `cf_clearance`，不把Access Token、Refresh Token、CSRF或其他Cookie复制
+到请求，也不写入Storage、Pinia、Keystore、URL或日志。scheme和 `loaded` 并发到达时只执行
+一次状态确认、一次关闭和一次请求恢复。用户主动关闭在状态确认期间仍立即取消；120秒兜底
+关闭属于超时失败，不得描述或展示为验证成功。
 
 取消、120秒超时、Cookie未共享和重复Challenge分别返回：
 
@@ -51,6 +59,9 @@ EDGE_CHALLENGE_REPEATED
 
 第一次确认的 `EDGE_CHALLENGE` 完成验证后可重试一次；第二次仍被挑战时停止。用户再次点击
 原业务按钮属于新的显式尝试，不进行后台无限循环。
+
+H5由浏览器在同一页面和Cookie上下文中继续原始导航，不创建Android验证WebView，也不进入
+上述scheme、`loaded`或状态探测协调器。
 
 ## HTTP、SSE与WebSocket边界
 
@@ -76,9 +87,13 @@ Android UTS SSE上报状态码、Content-Type、CF-Mitigated和CF-Ray，不读�
 
 ## 验证和发布
 
-第一阶段只提交生产代码和测试源码，并执行 `git diff --check`。第二阶段获得明确授权后运行
-Worker、认证网络风险、聊天SSE、HTTPS和语音测试，再由HBuilderX生成Android开发包。Cloudflare
-Worker部署和Managed Challenge规则分别需要外部修改授权。
+第一阶段只提交生产代码和测试源码，并执行 `git diff --check`。第二阶段获得明确授权后，仅在
+前端目录运行Android协调器、认证网络风险和认证回归测试，不运行Maven，也不连接生产数据库、
+Redis或RabbitMQ。自动化测试通过后，再由HBuilderX生成Android开发包进行真实设备验收；本次
+修复不要求部署Worker、Java后端或修改Managed Challenge规则。
 
-真实验收必须覆盖：交互式或自动Managed Challenge、Cookie状态204、PreAuth成功重试、SSE在
-accepted前恢复、重复Challenge停止、用户取消、超时、H5回归和语音Ticket后WebSocket连接。
+真实验收必须覆盖：交互式或自动Managed Challenge、scheme快速完成、scheme缺失时的
+`loaded`兜底、Cookie延迟后状态204、PreAuth成功重试、SSE在accepted前恢复、重复Challenge
+停止、确认期间用户取消、超时不得冒充成功、H5回归和语音Ticket后WebSocket连接。Android
+成功验收必须在抓包中同时看到状态接口204和原请求单次重放；仅观察到最终回到登录页不构成
+成功证据。

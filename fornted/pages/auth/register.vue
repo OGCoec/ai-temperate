@@ -75,8 +75,8 @@
 					ref="turnstile"
 					action="register"
 					:challenge="flow.challengeHandle"
+					:page-scroll-top="turnstilePageScrollTop"
 					@verified="verifyHuman"
-					@visibility-change="turnstileOpen = $event"
 				/>
 				<template v-else>
 					<view class="verified-note" role="status">
@@ -267,6 +267,7 @@
 				emailCooldown: 0,
 				smsCooldown: 0,
 				phoneDeliveryMethod: 'SMS',
+				turnstilePageScrollTop: 0,
 				timer: null,
 				busy: false,
 				error: '',
@@ -274,7 +275,6 @@
 				focusedField: '',
 				phoneInputKey: 0,
 				countryPickerOpen: false,
-				turnstileOpen: false,
 				turnstileVerifying: false,
 				flowSuperseded: false,
 				registrationFlowChannel: null
@@ -350,7 +350,16 @@
 				if (this.smsCooldown > 0) this.smsCooldown -= 1
 			}, 1000)
 		},
-		onShow() { this.syncPhoneCountrySelection() },
+		onShow() {
+			this.syncPhoneCountrySelection()
+			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'show' }))
+		},
+		onPageScroll(event) {
+			this.syncTurnstileBounds({ scrollTop: event?.scrollTop, reason: 'scroll' })
+		},
+		onResize() {
+			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'resize' }))
+		},
 		onUnload() {
 			this.phoneCountryPageActive = false
 			this.clearRegistrationIdentityMemory()
@@ -358,15 +367,16 @@
 			this.closeRegistrationFlowChannel()
 		},
 		onBackPress() {
-			if (this.turnstileOpen) {
-				this.$refs.turnstile?.closeVerification()
-				return true
-			}
 			if (!this.countryPickerOpen) return false
 			this.$refs.countryPicker?.closePicker()
 			return true
 		},
 		methods: {
+			syncTurnstileBounds(context = {}) {
+				const scrollTop = Number(context?.scrollTop)
+				if (Number.isFinite(scrollTop) && scrollTop >= 0) this.turnstilePageScrollTop = scrollTop
+				this.$refs.turnstile?.syncAndroidBounds({ ...context, scrollTop: this.turnstilePageScrollTop })
+			},
 			isAndroid() { return clientPlatform() === 'ANDROID' },
 			applyRegistrationIdentity(status) {
 				if (status?.humanVerified !== true) return false
@@ -529,6 +539,7 @@
 			},
 			async verifyHuman(token) {
 				if (this.turnstileVerifying || this.busy || this.flowSuperseded || !token) return
+				this.$refs.turnstile?.markServerVerificationStarted()
 				const attemptId = createTurnstileAttemptId()
 				let responseDiagnostics = null
 				this.turnstileVerifying = true
@@ -547,6 +558,7 @@
 					})
 					if (currentStatus?.humanVerified) {
 						this.applyRegistrationIdentity(currentStatus)
+						this.$refs.turnstile?.markServerAccepted()
 						this.humanVerified = true
 						logTurnstileAttempt('ALREADY_CONFIRMED', attemptId)
 						return
@@ -571,6 +583,7 @@
 						throw confirmationError
 					}
 					this.applyRegistrationIdentity(status)
+					this.$refs.turnstile?.markServerAccepted()
 					this.humanVerified = true
 					logTurnstileAttempt('CONFIRMED', attemptId, responseDiagnostics || {})
 				} catch (error) {

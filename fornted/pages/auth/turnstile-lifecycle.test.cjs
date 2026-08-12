@@ -118,3 +118,110 @@ test('Turnstile request carries only a correlation id in addition to existing cr
 	assert.match(source, /registerStatus\(flow, options = \{\}\)/)
 	assert.doesNotMatch(source, /console\.(?:log|info|warn)\([^\n]*turnstileToken/)
 })
+
+test('Android Turnstile embeds a bounded child WebView and never opens the legacy full-screen gate', () => {
+	const source = read('components/auth/auth-turnstile.vue')
+
+	assert.match(source, /class="turnstile-widget turnstile-native-host"/)
+	assert.match(source, /createAndroidTurnstileWebViewSession/)
+	assert.match(source, /syncAndroidBounds\(context\s*=\s*\{\}\)/)
+	assert.match(source, /reason\s*===\s*'scroll'/)
+	assert.match(source, /androidBoundsRevision/)
+	assert.match(source, /resolveAndroidTurnstileAnchor/)
+	assert.match(source, /retryAndroidVerification\(\)/)
+	assert.match(source, /parentWebview,/)
+	assert.match(source, /\bchannel,/)
+	assert.match(source, /timeoutMillis:\s*ANDROID_TURNSTILE_TIMEOUT_MS/)
+	assert.doesNotMatch(source, /开始安全验证/)
+	assert.doesNotMatch(source, /visibility-change/)
+	assert.doesNotMatch(source, /closeVerification\(\)/)
+	assert.doesNotMatch(source, /webview\.show\(/)
+	assert.doesNotMatch(source, /top:\s*'0px'[\s\S]{0,80}bottom:\s*'0px'/)
+	assert.doesNotMatch(source, /match:\s*'aiturnstile:\/\/\*'/)
+})
+
+test('Android Turnstile page receives public config through a cleared fragment and never refetches config', () => {
+	const pageScript = fs.readFileSync(
+		path.resolve(frontendRoot, '../ai-temperate-web/src/main/resources/verification-pages/turnstile-page.js'),
+		'utf8')
+
+	assert.match(pageScript, /location\.hash/)
+	assert.match(pageScript, /history\.replaceState/)
+	assert.match(pageScript, /siteKey/)
+	assert.match(pageScript, /channel/)
+	assert.match(pageScript, /dispatchResult\('verified'/)
+	assert.match(pageScript, /terminalResult\('expired'/)
+	assert.match(pageScript, /terminalResult\('timeout'/)
+	assert.doesNotMatch(pageScript, /fetch\(['"]\/api\/auth\/turnstile\/config/)
+})
+
+test('Every Android Turnstile consumer supplies page scroll without moving the native child per frame', () => {
+	for (const relativePath of [
+		'pages/auth/login.vue',
+		'pages/auth/register.vue',
+		'pages/auth/password-reset.vue'
+	]) {
+		const source = read(relativePath)
+		assert.match(source, /onPageScroll\(event\)/, relativePath)
+		assert.match(source, /reason:\s*'scroll'/, relativePath)
+		assert.match(source, /:page-scroll-top="turnstilePageScrollTop"/, relativePath)
+		assert.match(source, /turnstilePageScrollTop:\s*0/, relativePath)
+		assert.match(source, /onResize\(\)/, relativePath)
+		assert.doesNotMatch(source, /@visibility-change="turnstileOpen/, relativePath)
+		assert.doesNotMatch(source, /turnstileOpen/, relativePath)
+	}
+
+	const totp = read('pages/account/totp-security.vue')
+	assert.doesNotMatch(totp, /<scroll-view[^>]*@scroll=/)
+	assert.match(totp, /onPageScroll\(event\)/)
+	assert.match(totp, /reason:\s*'scroll'/)
+	assert.match(totp, /:page-scroll-top="turnstilePageScrollTop"/)
+	assert.match(totp, /turnstilePageScrollTop:\s*0/)
+	assert.match(totp, /onResize\(\)/)
+})
+
+test('H5 keeps the normal widget while Android scales only the Cloudflare module to 80 percent', () => {
+	const component = read('components/auth/auth-turnstile.vue')
+	const pageScript = fs.readFileSync(
+		path.resolve(frontendRoot, '../ai-temperate-web/src/main/resources/verification-pages/turnstile-page.js'),
+		'utf8')
+	const pageCss = fs.readFileSync(
+		path.resolve(frontendRoot, '../ai-temperate-web/src/main/resources/verification-pages/turnstile-page.css'),
+		'utf8')
+
+	assert.match(component, /size:\s*'normal'/)
+	assert.match(component, /language:\s*'auto'/)
+	assert.match(pageScript, /size:'normal'/)
+	assert.match(pageScript, /language:'auto'/)
+	assert.doesNotMatch(component, /v-if="loading" class="turnstile-status"/)
+	assert.doesNotMatch(component, /\{\{ retryStatus \}\}/)
+	assert.match(component, /class="turnstile-assistive"/)
+	assert.match(component, /width:\s*300px/)
+	assert.match(component, /height:\s*76px/)
+	assert.match(component, /\.turnstile-native-host\s*\{[\s\S]*?width:\s*240px/)
+	assert.match(pageCss, /transform:\s*scale\(0\.8\)/)
+	assert.match(pageCss, /transform-origin:\s*top left/)
+})
+
+test('Android embedded page contains no independent full-screen security gate', () => {
+	const pageHtml = fs.readFileSync(
+		path.resolve(frontendRoot, '../ai-temperate-web/src/main/resources/verification-pages/turnstile-page.html'),
+		'utf8')
+	const pageCss = fs.readFileSync(
+		path.resolve(frontendRoot, '../ai-temperate-web/src/main/resources/verification-pages/turnstile-page.css'),
+		'utf8')
+
+	assert.doesNotMatch(pageHtml, /完成安全验证|id="cancel"|class="actions"/)
+	assert.match(pageHtml, /id="widget"/)
+	assert.match(pageHtml, /rel="preconnect" href="https:\/\/challenges\.cloudflare\.com" crossorigin/)
+	assert.match(pageCss, /background:\s*transparent/)
+	assert.doesNotMatch(pageCss, /min-height:\s*100%|padding:\s*24px/)
+})
+
+test('H5 Turnstile renderer does not import or execute the Android navigation bridge', () => {
+	const source = read('components/auth/auth-turnstile.vue')
+	const renderJs = source.slice(source.indexOf('<script module="turnstile"'))
+
+	assert.doesNotMatch(renderJs, /android-turnstile-navigation|loadAndroidTurnstilePage/)
+	assert.doesNotMatch(renderJs, /ensurePreAuth|getDeviceInstallationId/)
+})

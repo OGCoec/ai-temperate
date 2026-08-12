@@ -19,7 +19,7 @@ export function attachmentCategory(file) {
 	if (contentType.startsWith('image/')) return 'IMAGE'
 	if (contentType.startsWith('audio/')) return 'AUDIO'
 	if (contentType.startsWith('video/')) return 'VIDEO'
-	if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(fileName)) return 'ARCHIVE'
+	if (/\.(zip|rar|7z|tar|gz|bz2|xz|jar|war|ear)$/.test(fileName)) return 'ARCHIVE'
 	if (/^(text\/|application\/(pdf|msword|vnd\.|rtf|json|xml))/.test(contentType)) return 'DOCUMENT'
 	return 'OTHER'
 }

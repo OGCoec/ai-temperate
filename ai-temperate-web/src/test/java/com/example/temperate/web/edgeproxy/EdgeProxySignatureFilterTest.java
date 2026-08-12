@@ -2,6 +2,10 @@ package com.example.temperate.web.edgeproxy;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.example.temperate.service.user.voice.diagnostic.VoiceDiagnosticContext;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Clock;
@@ -12,6 +16,7 @@ import java.util.Base64;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -321,6 +326,83 @@ class EdgeProxySignatureFilterTest {
                 .isInstanceOf(TrustedEdgeNetworkContext.class);
     }
 
+    @Test
+    void logsVerifiedVoiceSignatureWithoutExposingSignatureOrNetworkHeaders()
+            throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        request.setRequestURI("/ws/voice");
+        request.setAttribute(
+                VoiceDiagnosticContext.ATTRIBUTE,
+                new VoiceDiagnosticContext("trace-edge-verified", "test-ray-ord"));
+        addSignature(request, "niko000o.site");
+        String suppliedSignature = request.getHeader(
+                EdgeProxySignatureVerifier.SIGNATURE_HEADER);
+        LoggerCapture capture = capture();
+        try {
+            filter.doFilter(
+                    request,
+                    new MockHttpServletResponse(),
+                    new MockFilterChain());
+
+            assertThat(capture.messages()).singleElement().satisfies(message -> {
+                assertThat(message).contains(
+                        "event=voice_ws_edge_signature",
+                        "traceId=trace-edge-verified",
+                        "edgeRay=test-ray-ord",
+                        "mode=REQUIRED",
+                        "edgeHeadersPresent=true",
+                        "edgeRayTrusted=true",
+                        "outcome=VERIFIED");
+                assertThat(message).doesNotContain(
+                        suppliedSignature,
+                        "203.0.113.10",
+                        "41.8781",
+                        "-87.6298");
+            });
+        } finally {
+            capture.close();
+        }
+    }
+
+    @Test
+    void logsMissingRequiredAndInvalidVoiceSignaturesAsDistinctOutcomes()
+            throws Exception {
+        LoggerCapture capture = capture();
+        try {
+            MockHttpServletRequest missing =
+                    new MockHttpServletRequest("GET", "/ws/voice");
+            filter(EdgeProxyMode.REQUIRED).doFilter(
+                    missing,
+                    new MockHttpServletResponse(),
+                    new MockFilterChain());
+
+            MockHttpServletRequest invalid =
+                    new MockHttpServletRequest("GET", "/ws/voice");
+            invalid.setRequestURI("/ws/voice");
+            addSignature(invalid, "niko000o.site");
+            invalid.removeHeader(EdgeProxySignatureVerifier.SIGNATURE_HEADER);
+            invalid.addHeader(EdgeProxySignatureVerifier.SIGNATURE_HEADER, "forged");
+            filter(EdgeProxyMode.REQUIRED).doFilter(
+                    invalid,
+                    new MockHttpServletResponse(),
+                    new MockFilterChain());
+
+            assertThat(capture.messages()).hasSize(2);
+            assertThat(capture.messages().get(0)).contains(
+                    "outcome=MISSING_REQUIRED",
+                    "edgeRayTrusted=false");
+            assertThat(capture.messages().get(1)).contains(
+                    "outcome=INVALID",
+                    "edgeRayTrusted=false");
+            assertThat(capture.messages()).allSatisfy(message ->
+                    assertThat(message).doesNotContain("forged"));
+        } finally {
+            capture.close();
+        }
+    }
+
     private static EdgeProxySignatureFilter filter(EdgeProxyMode mode) {
         EdgeProxyProperties properties = new EdgeProxyProperties(
                 mode,
@@ -330,6 +412,14 @@ class EdgeProxySignatureFilterTest {
                 properties,
                 Clock.fixed(NOW, ZoneOffset.UTC));
         return new EdgeProxySignatureFilter(properties, verifier);
+    }
+
+    private static LoggerCapture capture() {
+        Logger logger = (Logger) LoggerFactory.getLogger(EdgeProxySignatureFilter.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return new LoggerCapture(logger, appender);
     }
 
     private static void addSignature(
@@ -375,6 +465,23 @@ class EdgeProxySignatureFilterTest {
                             mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8))));
         } catch (GeneralSecurityException exception) {
             throw new IllegalStateException(exception);
+        }
+    }
+
+    private record LoggerCapture(
+            Logger logger,
+            ListAppender<ILoggingEvent> appender) implements AutoCloseable {
+
+        private java.util.List<String> messages() {
+            return appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+            appender.stop();
         }
     }
 }

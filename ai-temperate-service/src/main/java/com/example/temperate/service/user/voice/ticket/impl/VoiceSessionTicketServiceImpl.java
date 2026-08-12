@@ -2,7 +2,6 @@ package com.example.temperate.service.user.voice.ticket.impl;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
-import com.example.temperate.service.user.voice.VoiceClientPlatform;
 import com.example.temperate.service.user.voice.VoiceErrorCode;
 import com.example.temperate.service.user.voice.VoiceException;
 import com.example.temperate.service.user.voice.config.VoiceProperties;
@@ -10,6 +9,7 @@ import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketIssue;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketService;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketSnapshot;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketStore;
+import com.example.temperate.service.user.voice.ticket.VoiceTicketSecurityBinding;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
@@ -51,9 +51,9 @@ public final class VoiceSessionTicketServiceImpl implements VoiceSessionTicketSe
 
     @Override
     public VoiceSessionTicketIssue issue(
-            long userId,
-            VoiceClientPlatform platform,
-            String deviceInstallationId) {
+            VoiceTicketSecurityBinding binding,
+            String rawDeviceInstallationId) {
+        VoiceTicketSecurityBinding validBinding = Objects.requireNonNull(binding);
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.ticketTtl());
         byte[] randomBytes = new byte[32];
@@ -61,17 +61,15 @@ public final class VoiceSessionTicketServiceImpl implements VoiceSessionTicketSe
         String rawTicket = ENCODER.encodeToString(randomBytes);
 
         HmacIdentifier ticketHash = protector.voiceTicket(rawTicket);
-        HmacIdentifier userHash = protector.voiceTicketUser(userId);
-        HmacIdentifier deviceHash = protector.voiceTicketDevice(deviceInstallationId);
+        HmacIdentifier userHash = protector.voiceTicketUser(validBinding.userId());
+        HmacIdentifier deviceHash = protector.voiceTicketDevice(rawDeviceInstallationId);
         store.create(
                 ticketHash,
                 userHash,
                 deviceHash,
                 new VoiceSessionTicketSnapshot(
-                        1,
-                        userId,
-                        Objects.requireNonNull(platform),
-                        deviceInstallationId,
+                        2,
+                        validBinding,
                         expiresAt),
                 properties.ticketTtl(),
                 properties.ticketRateWindow(),
@@ -89,7 +87,7 @@ public final class VoiceSessionTicketServiceImpl implements VoiceSessionTicketSe
         }
         VoiceSessionTicketSnapshot snapshot = store.consume(ticketHash)
                 .orElseThrow(VoiceSessionTicketServiceImpl::invalidTicket);
-        if (!snapshot.expiresAt().isAfter(clock.instant())) {
+        if (snapshot.schemaVersion() != 2 || !snapshot.expiresAt().isAfter(clock.instant())) {
             throw invalidTicket();
         }
         return snapshot;

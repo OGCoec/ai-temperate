@@ -3,6 +3,7 @@ import {
 	mergeAiConversationSources
 } from './ai-conversation-source-presentation.js'
 import { normalizeAiSourceFaviconDomain } from './ai-source-favicon.js'
+import { parseAbsoluteHttpUrl } from '../platform/http-url.js'
 
 const COMPLETE_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/i
 const SITE_TARGET_PATTERN = /(?:^|\s)site:([^\s]+)/i
@@ -10,18 +11,9 @@ const SITE_TARGET_PATTERN = /(?:^|\s)site:([^\s]+)/i
 function normalizedSearchUrl(value) {
 	let candidate = String(value || '').trim().replace(/[\]\[}{),;]+$/g, '')
 	if (!candidate) return null
-	try {
-		const parsed = new URL(candidate)
-		if (!['http:', 'https:'].includes(parsed.protocol.toLowerCase())
-			|| parsed.username || parsed.password) return null
-		const domain = normalizeAiSourceFaviconDomain(parsed.hostname)
-		if (!domain) return null
-		parsed.protocol = parsed.protocol.toLowerCase()
-		parsed.hostname = domain
-		return parsed
-	} catch (_) {
-		return null
-	}
+	const parsed = parseAbsoluteHttpUrl(candidate)
+	const domain = normalizeAiSourceFaviconDomain(parsed?.hostname)
+	return parsed && domain ? { ...parsed, hostname: domain } : null
 }
 
 function directUrlTarget(query) {
@@ -48,7 +40,7 @@ function siteQueryTarget(query) {
 }
 
 function sourcePathname(source) {
-	try { return new URL(source.url).pathname } catch (_) { return '' }
+	return parseAbsoluteHttpUrl(source?.url)?.pathname || ''
 }
 
 function matchesPathPrefix(pathname, pathHint) {

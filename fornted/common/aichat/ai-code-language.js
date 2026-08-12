@@ -11,7 +11,9 @@ function requestedLanguageId(language) {
 		.replace(/\\/g, '/')
 		.split('/')
 		.pop()
-		.replace(/[^a-z0-9+#._-]/g, '')
+		// Shiki 4.4.1 的 wenyan grammar 包含“文言”别名；这里仅扩展其所需的中日韩统一表意文字范围，
+		// 仍保留固定长度和注册表精确匹配，输入不会参与动态 import 或路径拼接。
+		.replace(/[^a-z0-9+#._\-\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g, '')
 	return normalized.slice(0, MAX_LANGUAGE_ID_LENGTH)
 }
 

@@ -19,6 +19,7 @@ import com.example.temperate.model.auth.enums.AccountStatus;
 import com.example.temperate.service.auth.protection.component.AuthSessionSecretProtector;
 import com.example.temperate.service.auth.session.access.dto.SessionAccessCommand;
 import com.example.temperate.service.auth.session.access.dto.SessionAccessResult;
+import com.example.temperate.service.auth.session.access.dto.SessionBindingAccessCommand;
 import com.example.temperate.service.auth.session.access.observability.AccessSessionMetrics;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -56,6 +57,7 @@ class AccessSessionServiceImplTest {
     private AuthTokenService tokenService;
     private RefreshSessionStore refreshSessionStore;
     private UserLoginIdentityMapper identityMapper;
+    private AuthSessionSecretProtector protector;
     private AccessSessionServiceImpl service;
     private RefreshSessionSnapshot session;
     private String publicId;
@@ -66,7 +68,7 @@ class AccessSessionServiceImplTest {
         refreshSessionStore = mock(RefreshSessionStore.class);
         identityMapper = mock(UserLoginIdentityMapper.class);
         publicId = new PublicIdCodec().encode(USER_ID);
-        AuthSessionSecretProtector protector = new AuthSessionSecretProtector(
+        protector = new AuthSessionSecretProtector(
                 new HmacSha256Identifier(
                         "0123456789abcdef0123456789abcdef"
                                 .getBytes(StandardCharsets.UTF_8)));
@@ -305,6 +307,38 @@ class AccessSessionServiceImplTest {
                                 SessionAuthenticationErrorCode.PREAUTH_REQUIRED));
 
         verifyNoInteractions(tokenService, identityMapper);
+    }
+
+    @Test
+    void validatesExistingRefreshBindingWithoutRenewingOrIssuingTokens() {
+        when(refreshSessionStore.validateBinding(any(), any())).thenReturn(valid(session));
+        when(identityMapper.findAuthenticationById(USER_ID)).thenReturn(activeAccount());
+
+        SessionPrincipal principal = service.validateActiveBinding(
+                new SessionBindingAccessCommand(
+                        USER_ID,
+                        protector.refreshToken(REFRESH_TOKEN),
+                        protector.device(DEVICE_ID)));
+
+        assertThat(principal.userId()).isEqualTo(USER_ID);
+        verify(refreshSessionStore).validateBinding(any(), any());
+        verifyNoInteractions(tokenService);
+    }
+
+    @Test
+    void rejectsRefreshBindingOwnedByAnotherExpectedUser() {
+        when(refreshSessionStore.validateBinding(any(), any())).thenReturn(valid(session));
+
+        assertThatThrownBy(() -> service.validateActiveBinding(
+                new SessionBindingAccessCommand(
+                        USER_ID + 1,
+                        protector.refreshToken(REFRESH_TOKEN),
+                        protector.device(DEVICE_ID))))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                SessionAuthenticationErrorCode.SESSION_MISMATCH));
+
+        verifyNoInteractions(identityMapper, tokenService);
     }
 
     private SessionAccessCommand command(String accessToken) {

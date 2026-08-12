@@ -1,3 +1,5 @@
+import { parseAbsoluteHttpUrl } from '../platform/http-url.js'
+
 const MAX_FAVICON_HOSTNAME_LENGTH = 253
 
 function isIpv4Literal(value) {
@@ -11,19 +13,15 @@ export function normalizeAiSourceFaviconDomain(value) {
 	if (!raw || raw.length > MAX_FAVICON_HOSTNAME_LENGTH + 1
 		|| /[\u0000-\u001f\u007f]/.test(raw)
 		|| /[:\/@\\]/.test(raw)) return ''
-	try {
-		const parsed = new URL(`https://${raw}`)
-		const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '')
-		if (!hostname || hostname.length > MAX_FAVICON_HOSTNAME_LENGTH
-			|| hostname === 'localhost' || isIpv4Literal(hostname)
-			|| /^\d+$/.test(hostname)) return ''
-		const labels = hostname.split('.')
-		if (labels.some(label => !label || label.length > 63
-			|| !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) return ''
-		return hostname
-	} catch (_) {
-		return ''
-	}
+	const parsed = parseAbsoluteHttpUrl(`https://${raw}`)
+	const hostname = parsed?.hostname || ''
+	if (!hostname || parsed.port || hostname.length > MAX_FAVICON_HOSTNAME_LENGTH
+		|| hostname === 'localhost' || isIpv4Literal(hostname)
+		|| /^\d+$/.test(hostname)) return ''
+	const labels = hostname.split('.')
+	if (labels.some(label => !label || label.length > 63
+		|| !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) return ''
+	return hostname
 }
 
 export function buildAiSourceFaviconUrl(value) {

@@ -9,14 +9,15 @@ export type AitVoicePermissionOptions = {
 }
 
 export type AitVoiceRecorderOptions = {
-  onFrame: (frame: ArrayBuffer) => void
+  diagnosticRunId: string
+  onFrame: (
+    payloadBase64: string,
+    declaredByteLength: number,
+    frameSequence: number
+  ) => void
   onStarted: () => void
   onStopped: () => void
   onError: (failure: AitVoiceRecorderFailure) => void
-}
-
-export type AitVoiceRecorderSession = {
-  stop: () => void
 }
 
 /**
@@ -26,7 +27,19 @@ export type RequestRecordPermissionApi =
   (options: AitVoicePermissionOptions) => void
 
 /**
- * 定义 Android PCM 录音启动 API，返回值继续提供可重复调用的停止操作。
+ * 定义 Android PCM 录音启动 API，只返回可安全跨越 UTS 桥的原生录音编号。
  */
 export type StartRecordingApi =
-  (options: AitVoiceRecorderOptions) => AitVoiceRecorderSession
+  (options: AitVoiceRecorderOptions) => number
+
+/**
+ * 定义 Android PCM 录音续约 API，布尔结果表示编号是否仍指向当前活动录音。
+ */
+export type RenewRecordingLeaseApi =
+  (recordingId: number) => boolean
+
+/**
+ * 定义 Android PCM 录音停止 API，布尔结果表示是否命中并停止当前活动录音。
+ */
+export type StopRecordingApi =
+  (recordingId: number) => boolean

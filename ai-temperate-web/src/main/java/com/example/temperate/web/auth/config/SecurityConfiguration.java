@@ -1,15 +1,18 @@
 package com.example.temperate.web.auth.config;
 
+import com.example.temperate.service.user.voice.config.VoiceProperties;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -129,8 +132,35 @@ public class SecurityConfiguration {
         return source;
     }
 
+    /**
+     * 为公开语音 WebSocket 建立不含 CSRF Filter 的精确安全链，避免 101 响应生成浏览器 Cookie。
+     *
+     * <p>该链仍保留 Edge HMAC 和无状态安全边界；Origin 与一次性 Ticket 继续由握手拦截器验证，
+     * 普通 H5 与管理员请求仍进入各自的 Cookie CSRF 安全链。</p>
+     */
     @Bean
     @Order(2)
+    @ConditionalOnProperty(
+            prefix = "app.voice",
+            name = "enabled",
+            havingValue = "true")
+    SecurityFilterChain voiceWebSocketSecurityFilterChain(
+            HttpSecurity http,
+            @Qualifier("corsConfigurationSource")
+                    CorsConfigurationSource corsConfigurationSource,
+            EdgeProxySignatureFilter edgeProxySignatureFilter,
+            VoiceProperties voiceProperties) throws Exception {
+        configureCommon(http, corsConfigurationSource);
+        return http
+                .securityMatcher(request -> isVoiceWebSocketRequest(
+                        request, voiceProperties.publicPath()))
+                .csrf(AbstractHttpConfigurer::disable)
+                .addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)
+                .build();
+    }
+
+    @Bean
+    @Order(3)
     SecurityFilterChain androidSecurityFilterChain(
             HttpSecurity http,
             @Qualifier("corsConfigurationSource")
@@ -146,7 +176,7 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    @Order(3)
+    @Order(4)
     SecurityFilterChain h5SecurityFilterChain(
             HttpSecurity http,
             @Qualifier("corsConfigurationSource")
@@ -167,6 +197,15 @@ public class SecurityConfiguration {
                         .accessDeniedHandler(csrfAccessDeniedHandler))
                 .addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)
                 .build();
+    }
+
+    static boolean isVoiceWebSocketRequest(
+            HttpServletRequest request,
+            String publicPath) {
+        // Request URI 包含 Servlet Context Path；精确拼接可阻止尾斜杠、子路径和编码变体误入无 CSRF 的语音链。
+        String contextPath = request.getContextPath();
+        String expectedUri = (contextPath == null ? "" : contextPath) + publicPath;
+        return expectedUri.equals(request.getRequestURI());
     }
 
     private static void configureCommon(

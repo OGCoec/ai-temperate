@@ -4,37 +4,42 @@ const path = require('node:path')
 const test = require('node:test')
 const { loadEsmModule } = require('./ai-code-test-loader.cjs')
 
-const ANDROID_LANGUAGE_IDS = [
-	'c', 'cpp', 'csharp', 'css', 'go', 'html', 'java', 'javascript', 'json',
-	'kotlin', 'php', 'python', 'rust', 'shellscript', 'sql', 'typescript', 'vue'
-]
-
 function appPlusSource(source) {
 	return source
 		.replace(/\/\/ #ifndef APP-PLUS[\s\S]*?\/\/ #endif/g, '')
 		.replace(/\/\/ #ifdef APP-PLUS\s*([\s\S]*?)\/\/ #endif/g, '$1')
 }
 
-test('uses a static common-language registry for App while preserving the full H5 registry', async () => {
+test('uses the complete generated Shiki registry for App and the full H5 registry', async () => {
 	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
 	const appRegistrySource = fs.readFileSync(path.join(__dirname, 'ai-code-languages-app.js'), 'utf8')
+	const generatedRegistrySource = fs.readFileSync(path.join(__dirname,
+		'ai-code-languages-app.generated.js'), 'utf8')
 	const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'))
 	const appRegistry = await loadEsmModule(path.join(__dirname, 'ai-code-languages-app.js'))
+	const { bundledLanguagesInfo: fullLanguagesInfo } = await import('shiki/langs')
 
 	assert.equal(packageJson.dependencies['@shikijs/langs'], '4.4.1')
+	assert.equal(packageJson.scripts['generate:ai-code-languages-app'],
+		'node scripts/generate-ai-code-languages-app.mjs')
+	assert.equal(packageJson.scripts['verify:ai-code-languages-app'],
+		'node scripts/generate-ai-code-languages-app.mjs --check')
 	assert.match(highlighterSource, /#ifdef APP-PLUS[\s\S]*from '\.\/ai-code-languages-app\.js'[\s\S]*#endif/)
 	assert.match(highlighterSource, /#ifndef APP-PLUS[\s\S]*from 'shiki\/langs'[\s\S]*#endif/)
-	assert.match(highlighterSource, /#ifdef APP-PLUS[\s\S]*import shikiWasm from 'shiki\/wasm'[\s\S]*#endif/)
+	assert.match(highlighterSource,
+		/#ifdef APP-PLUS[\s\S]*instantiateAppOniguruma[\s\S]*from '\.\/ai-code-wasm-app\.js'[\s\S]*#endif/)
 	assert.match(highlighterSource, /#ifndef APP-PLUS[\s\S]*createOnigurumaEngine\(import\('shiki\/wasm'\)\)[\s\S]*#endif/)
 	assert.doesNotMatch(appRegistrySource, /import\s*\(/)
-	for (const id of ANDROID_LANGUAGE_IDS) {
+	assert.doesNotMatch(generatedRegistrySource, /import\s*\(/)
+	assert.equal(appRegistry.bundledLanguagesInfo.length, fullLanguagesInfo.length)
+	for (const info of fullLanguagesInfo) {
+		const id = info.id
 		assert.ok(appRegistry.bundledLanguages[id], id)
-		assert.equal(
-			appRegistry.bundledLanguagesInfo.some(language => language.id === id),
-			true,
-			id
-		)
+		const serializableInfo = JSON.parse(JSON.stringify(info))
+		assert.deepEqual(appRegistry.bundledLanguagesInfo.find(language => language.id === id),
+			serializableInfo)
 	}
+	for (const id of ['java', 'json', 'xml']) assert.ok(appRegistry.bundledLanguages[id], id)
 })
 
 test('keeps the unsupported JavaScript regex fallback out of the App bundle', () => {
@@ -44,7 +49,24 @@ test('keeps the unsupported JavaScript regex fallback out of the App bundle', ()
 	assert.doesNotMatch(androidSource, /shiki\/engine\/javascript/)
 	assert.doesNotMatch(androidSource, /createJavaScriptRegexEngine/)
 	assert.doesNotMatch(androidSource, /javascriptHighlighter/)
-	assert.match(androidSource, /createOnigurumaEngine\(shikiWasm\)/)
+	assert.doesNotMatch(androidSource, /import shikiWasm from 'shiki\/wasm'/)
+	assert.match(androidSource, /createOnigurumaEngine\(instantiateAppOniguruma\)/)
+})
+
+test('marks every App highlighter initialization boundary with bounded diagnostics', () => {
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const androidSource = appPlusSource(source)
+
+	for (const stage of [
+		'ONIGURUMA_BINDING',
+		'HIGHLIGHTER_CORE',
+		'LANGUAGE_GRAMMAR',
+		'TOKENIZER'
+	]) {
+		assert.match(androidSource, new RegExp(`['"]${stage}['"]`), stage)
+	}
+	assert.match(androidSource, /AI_CODE_STAGE_START/)
+	assert.match(androidSource, /AI_CODE_STAGE_READY/)
 })
 
 test('keeps browser TransformStream code out of App while preserving the H5 Shiki stream path', () => {
@@ -104,7 +126,7 @@ test('loads real Shiki grammars and produces Antigravity-colored Java tokens', a
 	const language = resolveAiCodeLanguage('java')
 	const prepared = await createAiCodeTokenizer(language)
 	const result = await prepared.tokenizer.enqueue(
-		'// comment\npublic final class Main { String value = "warm"; }'
+		'// comment\npublic final class Main { private int count = 42; String run() { String value = "warm"; return value; } }'
 	)
 	const colors = new Set([...result.stable, ...result.unstable].map(token => token.color?.toUpperCase()))
 
@@ -112,7 +134,10 @@ test('loads real Shiki grammars and produces Antigravity-colored Java tokens', a
 	assert.equal(colors.has('#6A9955'), true)
 	assert.equal(colors.has('#569CD6'), true)
 	assert.equal(colors.has('#4EC9B0'), true)
+	assert.equal(colors.has('#DCDCAA'), true)
+	assert.equal(colors.has('#9CDCFE'), true)
 	assert.equal(colors.has('#CE9178'), true)
+	assert.equal(colors.has('#B5CEA8'), true)
 })
 
 test('supports representative backend and frontend language aliases', async () => {
@@ -122,7 +147,7 @@ test('supports representative backend and frontend language aliases', async () =
 	const cases = new Map([
 		['c++', 'cpp'], ['cs', 'csharp'], ['go', 'go'], ['php', 'php'],
 		['py', 'python'], ['rs', 'rust'], ['js', 'javascript'], ['ts', 'typescript'],
-		['vue', 'vue'], ['sql', 'sql'], ['sh', 'shellscript']
+		['vue', 'vue'], ['sql', 'sql'], ['sh', 'shellscript'], ['xml', 'xml']
 	])
 
 	for (const [input, expected] of cases) {
@@ -140,7 +165,16 @@ test('recognizes every language id in the fixed Shiki bundled registry', async (
 		const resolved = resolveAiCodeLanguage(info.id)
 		assert.equal(resolved.supported, true, info.id)
 		assert.equal(resolved.canonicalId, info.id, info.id)
+		for (const alias of info.aliases || []) {
+			assert.equal(resolveAiCodeLanguage(alias).canonicalId, info.id, alias)
+		}
 	}
+})
+
+test('clears failed shared engine promises so later code blocks can retry', () => {
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	assert.match(source, /onigurumaHighlighterPromise = operation\.catch\(error => \{[\s\S]*?onigurumaHighlighterPromise = null/)
+	assert.match(source, /javascriptHighlighterPromise = operation\.catch\(error => \{[\s\S]*?javascriptHighlighterPromise = null/)
 })
 
 test('loads representative backend and frontend grammars without changing source text', async () => {
@@ -192,6 +226,53 @@ test('preserves Unicode, emoji, CRLF and every random-size streamed chunk', asyn
 	}
 	stable.push(...prepared.tokenizer.close().stable)
 	assert.equal(stable.map(token => token.content).join(''), code)
+})
+
+test('produces identical H5 and App token colors for streamed Java, JSON, and XML', async () => {
+	const { ShikiStreamTokenizer } = await import('@shikijs/stream')
+	const {
+		AppShikiStreamTokenizer
+	} = await loadEsmModule(path.join(__dirname, 'ai-code-stream-tokenizer-app.js'))
+	const {
+		prepareAiCodeHighlighterWithFallback,
+		resolveAiCodeLanguage
+	} = await loadEsmModule(path.join(__dirname, 'ai-code-highlighter.js'))
+	const { AI_CODE_THEME_NAME } = await loadEsmModule(
+		path.join(__dirname, 'ai-code-theme-antigravity.js'))
+	const fixtures = new Map([
+		['java', '@Deprecated\npublic final class Main<T> {\n  // comment\n  private int count = 42;\n  String run(T value) { return "warm" + value; }\n}'],
+		['json', '{"name":"warm","count":42,"enabled":true}'],
+		['xml', '<root enabled="true"><name>warm</name></root>']
+	])
+
+	for (const [id, code] of fixtures) {
+		const language = resolveAiCodeLanguage(id)
+		const prepared = await prepareAiCodeHighlighterWithFallback(language)
+		const options = {
+			highlighter: prepared.highlighter,
+			lang: language.canonicalId,
+			theme: AI_CODE_THEME_NAME,
+			includeExplanation: 'scopeName'
+		}
+		const browser = new ShikiStreamTokenizer(options)
+		const app = new AppShikiStreamTokenizer(options)
+		const browserTokens = []
+		const appTokens = []
+		for (const chunk of [code.slice(0, 7), code.slice(7, 19), code.slice(19)]) {
+			const browserResult = await browser.enqueue(chunk)
+			const appResult = await app.enqueue(chunk)
+			browserTokens.splice(browserTokens.length - browserResult.recall,
+				browserResult.recall, ...browserResult.stable, ...browserResult.unstable)
+			appTokens.splice(appTokens.length - appResult.recall,
+				appResult.recall, ...appResult.stable, ...appResult.unstable)
+		}
+		const view = token => ({
+			content: token.content,
+			color: String(token.color || '').toUpperCase(),
+			fontStyle: token.fontStyle || 0
+		})
+		assert.deepEqual(appTokens.map(view), browserTokens.map(view), id)
+	}
 })
 
 test('falls back from Oniguruma to the JavaScript engine and reports total engine failure', async () => {

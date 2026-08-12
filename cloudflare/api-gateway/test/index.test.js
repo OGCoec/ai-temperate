@@ -15,6 +15,36 @@ const ENV = {
 		.toString('base64')
 }
 const NOW = 1784916000000
+const TURNSTILE_CHALLENGE = 'A'.repeat(38)
+const ANDROID_PREAUTH_TOKEN = 'B'.repeat(43)
+const ANDROID_DEVICE_ID = 'eb00070b-d902-4793-b5a9-c5d14e878264'
+const VOICE_TICKET = 'C'.repeat(43)
+const VOICE_PROTOCOL_HEADER = `ait-voice-v2, ait-ticket.${VOICE_TICKET}`
+
+function turnstilePagePath(options = {}) {
+	const challenge = options.challenge ?? TURNSTILE_CHALLENGE
+	const action = options.action ?? 'login'
+	return '/api/auth/turnstile/page'
+		+ `?challenge=${encodeURIComponent(challenge)}`
+		+ `&action=${encodeURIComponent(action)}`
+}
+
+function androidWebViewHeaders(overrides = {}) {
+	const headers = {
+		'X-Client-Platform': 'ANDROID',
+		'X-AIT-PreAuth': ANDROID_PREAUTH_TOKEN,
+		'X-Device-Installation-Id': ANDROID_DEVICE_ID,
+		'Sec-Fetch-Site': 'none',
+		'Sec-Fetch-Mode': 'navigate',
+		'Sec-Fetch-Dest': 'document',
+		'Sec-Fetch-User': '?1'
+	}
+	for (const [name, value] of Object.entries(overrides)) {
+		if (value === undefined) delete headers[name]
+		else headers[name] = value
+	}
+	return headers
+}
 
 function request(host, path, options = {}) {
 	const headers = new Headers(options.headers)
@@ -40,17 +70,38 @@ function request(host, path, options = {}) {
 	return value
 }
 
-function runtime(fetchImpl) {
+function runtime(fetchImpl, log = { info() {}, warn() {} }) {
 	return {
 		fetch: fetchImpl,
-		now: () => NOW
+		now: () => NOW,
+		log
+	}
+}
+
+function diagnosticLogger() {
+	const entries = []
+	return {
+		entries,
+		logger: {
+			info(value) {
+				entries.push(JSON.parse(value))
+			},
+			warn(value) {
+				entries.push(JSON.parse(value))
+			}
+		}
 	}
 }
 
 function websocketUpgradeResponse(options = {}) {
+	const headers = new Headers(options.headers)
+	if ((options.status ?? 101) === 101
+		&& !headers.has('Sec-WebSocket-Protocol')) {
+		headers.set('Sec-WebSocket-Protocol', 'ait-voice-v2')
+	}
 	return {
 		status: options.status ?? 101,
-		headers: new Headers(options.headers),
+		headers,
 		webSocket: Object.hasOwn(options, 'webSocket')
 			? options.webSocket
 			: Object.freeze({ kind: 'test-websocket' })
@@ -234,6 +285,243 @@ test('Android HTTP uses the primary-domain Worker without Cookie Scope and prese
 	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expectedSignature)
 })
 
+test('Android Turnstile WebView document navigation is normalized to the Android upstream transport', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', turnstilePagePath(), {
+			migrated: false,
+			headers: androidWebViewHeaders({
+				Cookie: 'cf_clearance=edge-only; captured_proxy_cookie=must-not-pass',
+				Referer: 'https://untrusted.example/source'
+			})
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(
+		captured.url,
+		`https://api.niko000o.site${turnstilePagePath()}`
+	)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), ANDROID_PREAUTH_TOKEN)
+	assert.equal(captured.headers.get('X-Device-Installation-Id'), ANDROID_DEVICE_ID)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Referer'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Site'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Mode'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Dest'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-User'), null)
+})
+
+test('Android Turnstile WebView accepts same-origin document navigation metadata', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', turnstilePagePath({ action: 'register' }), {
+			migrated: false,
+			headers: androidWebViewHeaders({
+				Origin: 'https://niko000o.site',
+				'Sec-Fetch-Site': 'same-origin'
+			})
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+})
+
+test('Android Turnstile WebView accepts document metadata when optional site and user fields are absent', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', turnstilePagePath(), {
+			migrated: false,
+			headers: androidWebViewHeaders({
+				'Sec-Fetch-Site': undefined,
+				'Sec-Fetch-User': undefined
+			})
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+})
+
+test('Android Turnstile WebView remains compatible when an older runtime omits Fetch Metadata', async () => {
+	let captured
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			`/api/auth/turnstile/page?action=password_reset&challenge=${TURNSTILE_CHALLENGE}`,
+			{
+				migrated: false,
+				headers: androidWebViewHeaders({
+					'Sec-Fetch-Site': undefined,
+					'Sec-Fetch-Mode': undefined,
+					'Sec-Fetch-Dest': undefined,
+					'Sec-Fetch-User': undefined
+				})
+			}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), ANDROID_PREAUTH_TOKEN)
+	assert.equal(captured.headers.get('X-Device-Installation-Id'), ANDROID_DEVICE_ID)
+})
+
+test('Android Turnstile WebView rejects every request outside the controlled document-navigation contract', async () => {
+	let upstreamCalls = 0
+	const fetchImpl = () => {
+		upstreamCalls += 1
+		return new Response(null, { status: 204 })
+	}
+	const invalidRequests = [
+		{
+			name: 'different API path',
+			path: '/api/auth/turnstile/config',
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'non-GET method',
+			path: turnstilePagePath(),
+			method: 'POST',
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'fetch instead of navigation',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({
+				'Sec-Fetch-Mode': 'cors',
+				'Sec-Fetch-Dest': 'empty'
+			})
+		},
+		{
+			name: 'iframe destination',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'Sec-Fetch-Dest': 'iframe' })
+		},
+		{
+			name: 'cross-site navigation',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'Sec-Fetch-Site': 'cross-site' })
+		},
+		{
+			name: 'invalid user activation metadata',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'Sec-Fetch-User': '?0' })
+		},
+		{
+			name: 'foreign origin',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ Origin: 'https://evil.example' })
+		},
+		{
+			name: 'opaque origin',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ Origin: 'null' })
+		},
+		{
+			name: 'missing PreAuth',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'X-AIT-PreAuth': undefined })
+		},
+		{
+			name: 'older WebView cannot fall back to native without PreAuth',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({
+				'X-AIT-PreAuth': undefined,
+				'Sec-Fetch-Site': undefined,
+				'Sec-Fetch-Mode': undefined,
+				'Sec-Fetch-Dest': undefined,
+				'Sec-Fetch-User': undefined
+			})
+		},
+		{
+			name: 'malformed PreAuth',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'X-AIT-PreAuth': 'A'.repeat(42) })
+		},
+		{
+			name: 'missing device id',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({ 'X-Device-Installation-Id': undefined })
+		},
+		{
+			name: 'malformed device id',
+			path: turnstilePagePath(),
+			headers: androidWebViewHeaders({
+				'X-Device-Installation-Id': 'not-a-uuid'
+			})
+		},
+		{
+			name: 'malformed challenge',
+			path: turnstilePagePath({ challenge: 'A'.repeat(37) }),
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'unknown action',
+			path: turnstilePagePath({ action: 'verify' }),
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'duplicate query parameter',
+			path: `${turnstilePagePath()}&challenge=${TURNSTILE_CHALLENGE}`,
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'unknown query parameter',
+			path: `${turnstilePagePath()}&debug=1`,
+			headers: androidWebViewHeaders()
+		},
+		{
+			name: 'missing action',
+			path: `/api/auth/turnstile/page?challenge=${TURNSTILE_CHALLENGE}`,
+			headers: androidWebViewHeaders()
+		}
+	]
+
+	for (const invalid of invalidRequests) {
+		const response = await handleRequest(
+			request('niko000o.site', invalid.path, {
+				method: invalid.method,
+				migrated: false,
+				headers: invalid.headers
+			}),
+			ENV,
+			runtime(fetchImpl)
+		)
+
+		assert.equal(response.status, 403, invalid.name)
+		assert.equal(
+			(await response.json()).code,
+			'EDGE_CLIENT_TRANSPORT_INVALID',
+			invalid.name
+		)
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
 test('Android transport rejects browser Origin or Fetch Metadata before proxying', async () => {
 	let upstreamCalls = 0
 	const fetchImpl = () => {
@@ -295,6 +583,26 @@ test('Android responses reject every upstream Set-Cookie header', async () => {
 			method: 'POST',
 			migrated: false,
 			headers: { 'X-Client-Platform': 'ANDROID' }
+		}),
+		ENV,
+		runtime(() => new Response(null, {
+			status: 204,
+			headers: {
+				'Set-Cookie': '__Host-ait-preauth=unexpected; Path=/; Secure; HttpOnly'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.equal((await response.json()).code,
+		'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
+})
+
+test('Android Turnstile WebView responses keep the Android upstream Cookie prohibition', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', turnstilePagePath(), {
+			migrated: false,
+			headers: androidWebViewHeaders()
 		}),
 		ENV,
 		runtime(() => new Response(null, {
@@ -977,6 +1285,7 @@ test('root voice WebSocket is signed and transparently upgraded without credenti
 			migrated: false,
 			headers: {
 				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER,
 				Connection: 'Upgrade',
 				Authorization: 'Bearer test-credential',
 				Cookie: `${COOKIE_SCOPE_MARKER_NAME}=1; access_token=test-credential`,
@@ -1015,6 +1324,7 @@ test('root voice WebSocket is signed and transparently upgraded without credenti
 	assert.equal(captured.url, 'https://api.niko000o.site/ws/voice')
 	assert.equal(captured.method, 'GET')
 	assert.equal(captured.headers.get('Upgrade'), 'websocket')
+	assert.equal(captured.headers.get('Sec-WebSocket-Protocol'), VOICE_PROTOCOL_HEADER)
 	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
 	assert.equal(captured.headers.get('X-Client-Platform'), 'H5')
 	assert.equal(captured.headers.get('Cookie'), null)
@@ -1024,7 +1334,118 @@ test('root voice WebSocket is signed and transparently upgraded without credenti
 	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expected)
 })
 
-test('Android voice WebSocket skips Cookie Scope and preserves native ticket transport semantics', async () => {
+test('voice WebSocket emits one sanitized success summary without changing upgrade response', async () => {
+	const diagnostic = diagnosticLogger()
+	const upstreamResponse = websocketUpgradeResponse()
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			migrated: false,
+			headers: {
+				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER,
+				Cookie: `${COOKIE_SCOPE_MARKER_NAME}=1; access_token=do-not-log`
+			}
+		}),
+		ENV,
+		runtime(() => upstreamResponse, diagnostic.logger)
+	)
+
+	assert.equal(response, upstreamResponse)
+	assert.equal(diagnostic.entries.length, 1)
+	assert.deepEqual(diagnostic.entries[0], {
+		event: 'voice_ws_edge_summary',
+		cfRay: 'test-ray-ord',
+		transport: 'H5_BROWSER',
+		clientCookiePresent: true,
+		upstreamCookieForwarded: false,
+		upstreamStatus: 101,
+		responseWebSocketPresent: true,
+		protocolMatched: true,
+		setCookieReadable: true,
+		setCookieCount: 0,
+		edgeOutcome: 'EDGE_WEBSOCKET_UPGRADED',
+		exceptionType: 'ABSENT',
+		elapsedMs: 0
+	})
+	const serialized = JSON.stringify(diagnostic.entries[0])
+	assert.doesNotMatch(serialized, /access_token|do-not-log|ait-ticket|C{43}/)
+})
+
+test('voice WebSocket logging failure never changes the upstream upgrade response', async () => {
+	const upstreamResponse = websocketUpgradeResponse()
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', { headers: {
+			Upgrade: 'websocket',
+			'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER
+		} }),
+		ENV,
+		runtime(
+			() => upstreamResponse,
+			{
+				info() { throw new Error('diagnostic sink unavailable') },
+				warn() { throw new Error('diagnostic sink unavailable') }
+			})
+	)
+
+	assert.equal(response, upstreamResponse)
+})
+
+test('voice WebSocket summaries distinguish upstream, authorization, upgrade and cookie failures', async () => {
+	const cases = [
+		{
+			response: () => { throw new TypeError('sensitive-upstream-message') },
+			outcome: 'EDGE_UPSTREAM_UNAVAILABLE',
+			status: -1,
+			exceptionType: 'TypeError'
+		},
+		{
+			response: () => websocketUpgradeResponse({ status: 403, webSocket: null }),
+			outcome: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED',
+			status: 403,
+			exceptionType: 'ABSENT'
+		},
+		{
+			response: () => websocketUpgradeResponse({ webSocket: null }),
+			outcome: 'EDGE_WEBSOCKET_UPGRADE_FAILED',
+			status: 101,
+			exceptionType: 'ABSENT'
+		},
+		{
+			response: () => websocketUpgradeResponse({
+				headers: { 'Set-Cookie': 'secret=do-not-log; Secure; HttpOnly' }
+			}),
+			outcome: 'EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION',
+			status: 101,
+			exceptionType: 'ABSENT',
+			setCookieCount: 1
+		}
+	]
+
+	for (const item of cases) {
+		const diagnostic = diagnosticLogger()
+		await handleRequest(
+			request('niko000o.site', '/ws/voice', { headers: {
+				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER
+			} }),
+			ENV,
+			runtime(item.response, diagnostic.logger)
+		)
+
+		assert.equal(diagnostic.entries.length, 1)
+		assert.equal(diagnostic.entries[0].edgeOutcome, item.outcome)
+		assert.equal(diagnostic.entries[0].upstreamStatus, item.status)
+		assert.equal(diagnostic.entries[0].exceptionType, item.exceptionType)
+		if (item.setCookieCount !== undefined) {
+			assert.equal(diagnostic.entries[0].setCookieCount, item.setCookieCount)
+		}
+		assert.doesNotMatch(
+			JSON.stringify(diagnostic.entries[0]),
+			/sensitive-upstream-message|secret=|do-not-log|ait-ticket/)
+	}
+})
+
+test('Android voice WebSocket accepts App-Plus browser metadata and strips unsafe upstream headers', async () => {
 	let captured
 	const upstreamResponse = websocketUpgradeResponse()
 	const response = await handleRequest(
@@ -1032,8 +1453,14 @@ test('Android voice WebSocket skips Cookie Scope and preserves native ticket tra
 			migrated: false,
 			headers: {
 				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER,
 				Connection: 'Upgrade',
 				'X-Client-Platform': 'ANDROID',
+				Origin: 'https://niko000o.site',
+				Referer: 'https://niko000o.site/pages/ai-chat/index',
+				'Sec-Fetch-Site': 'same-origin',
+				'Sec-Fetch-Mode': 'websocket',
+				'Sec-Fetch-Dest': 'empty',
 				Authorization: 'Bearer must-not-pass-to-websocket',
 				Cookie: 'captured_proxy_cookie=must-not-pass'
 			}
@@ -1067,8 +1494,14 @@ test('Android voice WebSocket skips Cookie Scope and preserves native ticket tra
 	assert.equal(captured.url, 'https://api.niko000o.site/ws/voice')
 	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
 	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Referer'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Site'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Mode'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Dest'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-User'), null)
 	assert.equal(captured.headers.get('Cookie'), null)
 	assert.equal(captured.headers.get('Authorization'), null)
+	assert.equal(captured.headers.get('Sec-WebSocket-Protocol'), VOICE_PROTOCOL_HEADER)
 	assert.equal(captured.headers.get('X-AIT-Edge-Signature'), expectedSignature)
 })
 
@@ -1121,7 +1554,10 @@ test('voice WebSocket accepts only the exact path and a GET Upgrade request', as
 })
 
 test('voice WebSocket fails closed when the upstream handshake is unsafe', async () => {
-	const requestOptions = { headers: { Upgrade: 'websocket' } }
+	const requestOptions = { headers: {
+		Upgrade: 'websocket',
+		'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER
+	} }
 	const unavailable = await handleRequest(
 		request('niko000o.site', '/ws/voice', requestOptions),
 		ENV,
@@ -1157,9 +1593,9 @@ test('voice WebSocket fails closed when the upstream handshake is unsafe', async
 		code: 'EDGE_UPSTREAM_UNAVAILABLE',
 		message: 'The edge request was rejected.'
 	})
-	assert.equal(rejected.status, 502)
+	assert.equal(rejected.status, 503)
 	assert.deepEqual(await rejected.json(), {
-		code: 'EDGE_WEBSOCKET_UPGRADE_FAILED',
+		code: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED',
 		message: 'The edge request was rejected.'
 	})
 	assert.equal(missingSocket.status, 502)
@@ -1170,12 +1606,40 @@ test('voice WebSocket fails closed when the upstream handshake is unsafe', async
 	})
 })
 
+test('voice WebSocket preserves only the controlled Spring authorization statuses', async () => {
+	const requestOptions = { headers: {
+		Upgrade: 'websocket',
+		'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER
+	} }
+	for (const status of [400, 401, 403, 428, 503]) {
+		const response = await handleRequest(
+			request('niko000o.site', '/ws/voice', requestOptions),
+			ENV,
+			runtime(() => websocketUpgradeResponse({ status, webSocket: null }))
+		)
+		assert.equal(response.status, status)
+		assert.deepEqual(await response.json(), {
+			code: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED',
+			message: 'The edge request was rejected.'
+		})
+	}
+	const unexpected = await handleRequest(
+		request('niko000o.site', '/ws/voice', requestOptions),
+		ENV,
+		runtime(() => websocketUpgradeResponse({ status: 409, webSocket: null }))
+	)
+	assert.equal(unexpected.status, 502)
+	assert.equal((await unexpected.json()).code, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
+})
+
 test('Android voice WebSocket rejects upstream cookies with the native policy code', async () => {
+	const diagnostic = diagnosticLogger()
 	const response = await handleRequest(
 		request('niko000o.site', '/ws/voice', {
 			migrated: false,
 			headers: {
 				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER,
 				'X-Client-Platform': 'ANDROID'
 			}
 		}),
@@ -1184,12 +1648,18 @@ test('Android voice WebSocket rejects upstream cookies with the native policy co
 			headers: {
 				'Set-Cookie': 'access_token=unexpected; Path=/; Secure; HttpOnly'
 			}
-		}))
+		}), diagnostic.logger)
 	)
 
 	assert.equal(response.status, 502)
 	assert.equal((await response.json()).code,
 		'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
+	assert.equal(diagnostic.entries.length, 1)
+	assert.equal(diagnostic.entries[0].transport, 'ANDROID_NATIVE')
+	assert.equal(diagnostic.entries[0].setCookieCount, 1)
+	assert.equal(diagnostic.entries[0].edgeOutcome,
+		'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
+	assert.doesNotMatch(JSON.stringify(diagnostic.entries[0]), /access_token|unexpected/)
 })
 
 test('pre-auth and risk challenge paths are isolated to their matching host', async () => {
@@ -1223,6 +1693,54 @@ test('pre-auth and risk challenge paths are isolated to their matching host', as
 		'/api/_edge/pre-auth',
 		'/api/admin/_edge/pre-auth'
 	])
+})
+
+test('voice WebSocket rejects invalid v2 subprotocols before calling upstream', async () => {
+	let upstreamCalls = 0
+	const fetchImpl = () => {
+		upstreamCalls += 1
+		return websocketUpgradeResponse()
+	}
+	const values = [
+		undefined,
+		'ait-voice-v1, ait-ticket.' + VOICE_TICKET,
+		'ait-voice-v2',
+		'ait-voice-v2, ait-ticket.short',
+		VOICE_PROTOCOL_HEADER + ', unknown',
+		'ait-voice-v2, ait-voice-v2',
+		'a'.repeat(129)
+	]
+	for (const value of values) {
+		const headers = { Upgrade: 'websocket' }
+		if (value !== undefined) headers['Sec-WebSocket-Protocol'] = value
+		const response = await handleRequest(
+			request('niko000o.site', '/ws/voice', { headers }),
+			ENV,
+			runtime(fetchImpl)
+		)
+		assert.equal(response.status, 400)
+		assert.equal((await response.json()).code, 'EDGE_WEBSOCKET_PROTOCOL_INVALID')
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
+test('voice WebSocket rejects a reflected ticket subprotocol', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/ws/voice', {
+			headers: {
+				Upgrade: 'websocket',
+				'Sec-WebSocket-Protocol': VOICE_PROTOCOL_HEADER
+			}
+		}),
+		ENV,
+		runtime(() => websocketUpgradeResponse({
+			headers: {
+				'Sec-WebSocket-Protocol': `ait-ticket.${VOICE_TICKET}`
+			}
+		}))
+	)
+	assert.equal(response.status, 502)
+	assert.equal((await response.json()).code, 'EDGE_WEBSOCKET_UPGRADE_FAILED')
 })
 
 test('Android WebView risk navigation preserves only the matching host bridge cookie', async () => {

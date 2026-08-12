@@ -111,7 +111,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 	let closeDetails = {}
 	const diagnostics = handlers.diagnostics
 		|| createAiConversationStreamDiagnostics({
-			enabled: clientPlatform() === 'H5' ? undefined : false,
+			enabled: clientPlatform() === 'ANDROID' ? true : undefined,
 			onSummary: reportAiConversationStreamDiagnostics
 		})
 	const lifecycleDiagnostics = handlers.lifecycleDiagnostics
@@ -409,7 +409,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 export async function openAiConversationGenerationStream(generationPublicId, handlers = {}) {
 	const diagnostics = handlers.diagnostics
 		|| createAiConversationStreamDiagnostics({
-			enabled: clientPlatform() === 'H5' ? undefined : false,
+			enabled: clientPlatform() === 'ANDROID' ? true : undefined,
 			onSummary: reportAiConversationStreamDiagnostics
 		})
 	diagnostics.bindGenerationPublicId?.(generationPublicId)

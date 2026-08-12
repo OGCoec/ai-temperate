@@ -5,8 +5,6 @@ import {
 	buildSafeAiCodeLines
 } from './ai-code-theme-antigravity.js'
 
-const DEFAULT_LANGUAGE_TIMEOUT_MS = 1000
-
 function defaultScheduleFrame(callback) {
 	if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(callback)
 	return setTimeout(callback, 0)
@@ -22,19 +20,14 @@ function initialLanguage(language) {
 	}
 }
 
-function withTimeout(promise, timeoutMs, setTimer, clearTimer) {
-	let timer = null
-	const timeout = new Promise((resolve, reject) => {
-		timer = setTimer(() => reject(new Error('AI_CODE_LANGUAGE_TIMEOUT')), timeoutMs)
-	})
-	return Promise.race([promise, timeout]).finally(() => clearTimer(timer))
-}
-
 export function createAiCodeHighlightSessionFactory(services = {}) {
 	const createTokenizer = services.createTokenizer || createAiCodeTokenizer
-	const languageTimeoutMs = Number(services.languageTimeoutMs) || DEFAULT_LANGUAGE_TIMEOUT_MS
-	const setTimer = services.setTimer || setTimeout
-	const clearTimer = services.clearTimer || clearTimeout
+	const languageTimeoutMs = Number.isFinite(services.languageTimeoutMs)
+		&& services.languageTimeoutMs > 0
+		? services.languageTimeoutMs
+		: 5000
+	const scheduleTimeout = services.scheduleTimeout || setTimeout
+	const cancelTimeout = services.cancelTimeout || clearTimeout
 
 	return function createSession(options = {}) {
 		const onSnapshot = typeof options.onSnapshot === 'function' ? options.onSnapshot : () => {}
@@ -44,9 +37,9 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 
 		let revision = 1
 		let language = initialLanguage(sourceLanguage)
-		let status = 'loading'
+		let status = language.supported ? 'loading' : 'plain'
 		let closed = false
-		let plainLocked = false
+		let plainLocked = !language.supported
 		let initialized = false
 		let tokenizer = null
 		let bracketState = createAiCodeBracketState(language.canonicalId)
@@ -59,6 +52,7 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 		let processingPromise = null
 		let pendingSnapshot = null
 		let framePending = false
+		const reportedErrors = new Set()
 
 		function publish(snapshot) {
 			pendingSnapshot = snapshot
@@ -109,11 +103,7 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 			if (appendedLines.length) stableLines = stableLines.concat(appendedLines)
 		}
 
-		function lockPlain(errorCode = 'AI_CODE_HIGHLIGHT_UNAVAILABLE') {
-			const firstFailure = !plainLocked
-			plainLocked = true
-			status = 'plain'
-			if (firstFailure) onError({ code: errorCode, languageId: language.canonicalId })
+		function publishPlain() {
 			publish(createViewSnapshot(
 				buildPlainAiCodeLines(requestedCode),
 				[],
@@ -121,32 +111,99 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 			))
 		}
 
+		function handleFailure(error) {
+			const failureCode = String(error?.code || error?.message || '')
+			const unsupported = failureCode === 'AI_CODE_LANGUAGE_UNSUPPORTED'
+			const knownFailureCodes = new Set([
+				'AI_CODE_ENGINE_INIT_FAILED',
+				'AI_CODE_ENGINE_INIT_TIMEOUT',
+				'AI_CODE_LANGUAGE_LOAD_FAILED',
+				'AI_CODE_WASM_COMPILE_FAILED',
+				'AI_CODE_WASM_INSTANTIATE_FAILED',
+				'AI_CODE_WASM_UNAVAILABLE'
+			])
+			const errorCode = unsupported
+				? 'AI_CODE_LANGUAGE_UNSUPPORTED'
+				: (knownFailureCodes.has(failureCode)
+					? failureCode
+					: 'AI_CODE_HIGHLIGHT_UNAVAILABLE')
+			if (!reportedErrors.has(errorCode)) {
+				reportedErrors.add(errorCode)
+				try {
+					onError({
+						code: errorCode,
+						languageId: language.canonicalId,
+						...(error?.stage ? { stage: error.stage } : {}),
+						...(Number.isFinite(error?.elapsedMs)
+							? { elapsedMs: error.elapsedMs }
+							: {})
+					})
+				} catch (_) {
+					// 诊断输出失败不能阻断纯文本降级或后续重试。
+				}
+			}
+			plainLocked = unsupported
+			initialized = false
+			tokenizer = null
+			stableLines = []
+			unstableTokens = []
+			processedCode = ''
+			tokenizerDirty = false
+			status = 'plain'
+			revision += 1
+			publishPlain()
+		}
+
+		function createTokenizerWithDeadline() {
+			return new Promise((resolve, reject) => {
+				let settled = false
+				const timer = scheduleTimeout(() => {
+					if (settled) return
+					settled = true
+					const error = new Error('AI_CODE_ENGINE_INIT_TIMEOUT')
+					error.code = 'AI_CODE_ENGINE_INIT_TIMEOUT'
+					error.stage = 'TOKENIZER'
+					error.elapsedMs = languageTimeoutMs
+					reject(error)
+				}, languageTimeoutMs)
+				Promise.resolve()
+					.then(() => createTokenizer(sourceLanguage))
+					.then(value => {
+						if (settled) return
+						settled = true
+						cancelTimeout(timer)
+						resolve(value)
+					}, error => {
+						if (settled) return
+						settled = true
+						cancelTimeout(timer)
+						reject(error)
+					})
+			})
+		}
+
 		async function initialize() {
-			if (initialized || plainLocked) return
+			if (initialized) return true
+			if (plainLocked) return false
 			try {
-				const prepared = await withTimeout(
-					createTokenizer(sourceLanguage),
-					languageTimeoutMs,
-					setTimer,
-					clearTimer
-				)
-				if (closed || plainLocked) return
+				const prepared = await createTokenizerWithDeadline()
+				if (closed || plainLocked) return false
 				language = prepared.language
 				tokenizer = prepared.tokenizer
 				bracketState = createAiCodeBracketState(language.canonicalId)
 				initialized = true
 				status = 'ready'
+				return true
 			} catch (error) {
-				lockPlain(error?.message === 'AI_CODE_LANGUAGE_TIMEOUT'
-					? 'AI_CODE_LANGUAGE_TIMEOUT'
-					: 'AI_CODE_HIGHLIGHT_UNAVAILABLE')
+				handleFailure(error)
+				return false
 			}
 		}
 
 		async function resetTokenizer(incrementRevision = true) {
 			if (incrementRevision) revision += 1
 			const resetRevision = revision
-			const prepared = await createTokenizer(sourceLanguage)
+			const prepared = await createTokenizerWithDeadline()
 			if (closed || resetRevision !== revision) return false
 			language = prepared.language
 			tokenizer = prepared.tokenizer
@@ -180,8 +237,7 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 		async function drain() {
 			if (processingPromise) return processingPromise
 			processingPromise = (async () => {
-				await initialize()
-				if (closed || plainLocked) return
+				if (!await initialize() || closed || plainLocked) return
 				while (!closed && processedCode !== requestedCode) {
 					const targetCode = requestedCode
 					if (tokenizerDirty && !await resetTokenizer(false)) continue
@@ -205,7 +261,7 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 					completionRequested = false
 					publishTokens()
 				}
-			})().catch(() => lockPlain()).finally(() => {
+			})().catch(error => handleFailure(error)).finally(() => {
 				processingPromise = null
 			})
 			return processingPromise
@@ -216,10 +272,15 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 		return {
 			update({ code } = {}) {
 				if (closed) return Promise.resolve()
+				completionRequested = false
 				replaceRequestedCode(code)
 				if (plainLocked) {
-					lockPlain('AI_CODE_PLAIN_LOCKED')
+					publishPlain()
 					return Promise.resolve()
+				}
+				if (!initialized) {
+					status = 'loading'
+					publishPlain()
 				}
 				return drain()
 			},
@@ -228,8 +289,12 @@ export function createAiCodeHighlightSessionFactory(services = {}) {
 				replaceRequestedCode(finalCode)
 				completionRequested = true
 				if (plainLocked) {
-					lockPlain('AI_CODE_PLAIN_LOCKED')
+					publishPlain()
 					return Promise.resolve()
+				}
+				if (!initialized) {
+					status = 'loading'
+					publishPlain()
 				}
 				return drain()
 			},

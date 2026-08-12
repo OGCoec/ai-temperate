@@ -193,7 +193,7 @@ public final class AuthSessionSecretProtector {
      */
     public HmacIdentifier voiceTicket(String rawTicket) {
         String ticket = requireCanonicalBase64Url32("voice ticket", rawTicket);
-        return identify("voice:session:ticket:v1", ticket);
+        return identify("voice:session:ticket:v2", ticket);
     }
 
     /**
@@ -207,7 +207,7 @@ public final class AuthSessionSecretProtector {
     }
 
     /**
-     * 保护语音票据的设备限流标识，使设备安装 ID 只在短期票据 Value 中存在。
+     * 保护语音票据的设备限流标识；原始设备安装 ID 只参与当前请求计算，不写入 Ticket Value。
      */
     public HmacIdentifier voiceTicketDevice(String deviceInstallationId) {
         return identify(

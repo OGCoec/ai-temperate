@@ -97,7 +97,8 @@ public final class RedisVoiceSessionTicketStore implements VoiceSessionTicketSto
                     serialized,
                     VoiceSessionTicketSnapshot.class));
         } catch (JsonProcessingException | IllegalArgumentException exception) {
-            throw unavailable(exception);
+            // v1 或损坏快照已经被原子删除；按无效 Ticket 收敛，不能恢复或重新写回。
+            return Optional.empty();
         }
     }
 

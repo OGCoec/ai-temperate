@@ -168,6 +168,7 @@
 	import { logoutAllSessions, logoutSession } from '@/common/auth/http-client.js'
 	import { clearAiConversationStoppedDrafts } from '@/common/aichat/ai-conversation-stopped-draft.js'
 	import { clearAiConversationResearchSessions } from '@/common/aichat/ai-conversation-research-session.js'
+	import { formatLocalDateTimeZhCn } from '@/common/platform/date-time.js'
 	import {
 		getCurrentUserProfile,
 		loadCurrentUserProfile,
@@ -266,13 +267,8 @@
 				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.totpSecurity })
 			},
 			formatQuotaResetAt(value) {
-				if (!value) return '首次使用后开始计算'
-				const date = new Date(value)
-				if (Number.isNaN(date.getTime())) return '暂不可用'
-				return new Intl.DateTimeFormat('zh-CN', {
-					dateStyle: 'medium',
-					timeStyle: 'short'
-				}).format(date)
+				if (value == null || value === '') return '首次使用后开始计算'
+				return formatLocalDateTimeZhCn(value) || '暂不可用'
 			},
 			onAuthenticatedPageReady() {
 				this.refreshProfile()

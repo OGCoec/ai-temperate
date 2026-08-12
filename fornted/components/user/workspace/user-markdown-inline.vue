@@ -34,7 +34,7 @@
 		variant="inline"
 	/>
 	<navigator
-		v-else-if="node?.type === 'link' && node.safe"
+		v-else-if="node?.type === 'link' && node.safe && navigationLink(node.href)"
 		class="ai-markdown-link"
 		:url="node.href"
 		target="_blank"
@@ -47,6 +47,23 @@
 			:message-key="messageKey"
 		/>
 	</navigator>
+	<text
+		v-else-if="node?.type === 'link' && node.safe"
+		class="ai-markdown-link"
+		role="link"
+		tabindex="0"
+		@click.stop="activateLink(node.href)"
+		@keyup.enter.stop="activateLink(node.href)"
+		@keyup.space.prevent.stop="activateLink(node.href)"
+	>
+		<user-markdown-inline
+			v-for="(child, index) in children(node)"
+			:key="nodeKey(child, path.concat(String(index)))"
+			:node="child"
+			:path="path.concat(String(index))"
+			:message-key="messageKey"
+		/>
+	</text>
 	<text v-else-if="node?.type === 'link'">
 		<user-markdown-inline
 			v-for="(child, index) in children(node)"
@@ -60,6 +77,7 @@
 </template>
 
 <script>
+	import { openExternalHttpUrl } from '@/common/platform/external-url-opener.js'
 	import UserSourceChip from './user-source-chip.vue'
 
 	const INLINE_TYPES = new Set([
@@ -80,6 +98,15 @@
 			messageKey: { type: String, default: '' }
 		},
 		methods: {
+			navigationLink(value) {
+				const href = String(value || '')
+				return href.startsWith('/') || href.startsWith('./')
+					|| href.startsWith('../') || href.startsWith('#')
+					|| /^mailto:/i.test(href)
+			},
+			activateLink(value) {
+				openExternalHttpUrl(value)
+			},
 			children(node) {
 				return Array.isArray(node?.children) ? node.children : []
 			},

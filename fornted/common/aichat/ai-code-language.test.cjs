@@ -12,13 +12,15 @@ test('normalizes common aliases against the registered Shiki language catalog', 
 		{ id: 'typescript', name: 'TypeScript', aliases: ['ts'] },
 		{ id: 'python', name: 'Python', aliases: ['py'] },
 		{ id: 'cpp', name: 'C++', aliases: ['c++'] },
-		{ id: 'csharp', name: 'C#', aliases: ['cs'] }
+		{ id: 'csharp', name: 'C#', aliases: ['cs'] },
+		{ id: 'wenyan', name: '文言', aliases: ['文言'] }
 	])
 
 	assert.equal(resolve('JS').canonicalId, 'javascript')
 	assert.equal(resolve({ id: 'c++', label: 'C++' }).canonicalId, 'cpp')
 	assert.equal(resolve('cs').canonicalId, 'csharp')
 	assert.equal(resolve('py').canonicalId, 'python')
+	assert.equal(resolve('文言').canonicalId, 'wenyan')
 })
 
 test('rejects unregistered or unsafe language identifiers without creating import paths', async () => {

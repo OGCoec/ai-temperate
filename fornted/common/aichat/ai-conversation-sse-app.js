@@ -4,37 +4,125 @@ import { applySessionRenewalHeaders } from '../auth/http-client.js'
 import { openSseRequest } from '@/uni_modules/ait-sse'
 // #endif
 
+function diagnosticContentType(value) {
+	const mediaType = String(value || '').split(';', 1)[0].trim().toLowerCase()
+	return mediaType === 'text/event-stream' || mediaType === 'application/json'
+		? mediaType
+		: 'other'
+}
+
+function utf8ByteLength(value) {
+	const text = String(value || '')
+	let bytes = 0
+	for (let index = 0; index < text.length; index += 1) {
+		const code = text.charCodeAt(index)
+		if (code <= 0x7f) bytes += 1
+		else if (code <= 0x7ff) bytes += 2
+		else if (code >= 0xd800 && code <= 0xdbff
+			&& index + 1 < text.length
+			&& text.charCodeAt(index + 1) >= 0xdc00
+			&& text.charCodeAt(index + 1) <= 0xdfff) {
+			bytes += 4
+			index += 1
+		} else bytes += 3
+	}
+	return bytes
+}
+
+function callbackFailure() {
+	const error = new Error('Android 模型流回调失败。')
+	error.code = 'AI_CONVERSATION_SSE_ANDROID_CALLBACK'
+	error.stage = 'JS_CALLBACK'
+	return error
+}
+
+function protocolFailure(value) {
+	if (value?.code === 'AI_CONVERSATION_SSE_ANDROID_CALLBACK') return value
+	const error = new Error('模型流事件协议无效。')
+	error.code = 'AI_CONVERSATION_SSE_PROTOCOL_INVALID'
+	error.stage = 'RESPONSE_BODY'
+	return error
+}
+
+function nativeFailure(failure) {
+	const error = new Error(failure?.message || 'Android 模型流已中断。')
+	error.code = String(failure?.code || 'AI_CONVERSATION_SSE_ANDROID_IO')
+	error.stage = String(failure?.stage || 'RESPONSE_BODY')
+	error.exceptionType = String(failure?.exceptionType || 'UNKNOWN')
+	error.statusCode = Number(failure?.statusCode || 0)
+	error.cfMitigated = String(failure?.cfMitigated || '')
+	error.contentType = String(failure?.contentType || '')
+	error.cfRay = String(failure?.cfRay || '')
+	error.elapsedMs = Math.max(0, Number(failure?.elapsedMs || 0))
+	error.readCount = Math.max(0, Number(failure?.readCount || 0))
+	error.byteCount = Math.max(0, Number(failure?.byteCount || 0))
+	error.closedByCaller = failure?.closedByCaller === true
+	error.retryable = failure?.retryable === true
+	return error
+}
+
 export function openAiConversationSseApp(request, handlers = {}) {
 	// #ifdef APP-PLUS
-	let closed = false
+	let callerClosed = false
+	let settled = false
 	let terminalReceived = false
+	let nativeConnection = null
 	let rejectCompleted
 	let resolveCompleted
 	const completed = new Promise((resolve, reject) => {
 		resolveCompleted = resolve
 		rejectCompleted = reject
 	})
+
+	function resolveOnce() {
+		if (settled) return
+		settled = true
+		resolveCompleted()
+	}
+
+	function rejectOnce(error, closeNative = false) {
+		if (settled || callerClosed) return
+		settled = true
+		rejectCompleted(error)
+		if (closeNative) nativeConnection?.close?.(false)
+	}
+
 	const parser = createAiConversationSseParser(event => {
-		const terminal = typeof handlers.isTerminalEvent === 'function'
-			? handlers.isTerminalEvent(event)
-			: ['completed', 'error', 'video_ready', 'video_failed']
-				.includes(event.type)
-		if (terminal) terminalReceived = true
-		handlers.onEvent?.(event)
+		try {
+			const terminal = typeof handlers.isTerminalEvent === 'function'
+				? handlers.isTerminalEvent(event)
+				: ['completed', 'error', 'video_ready', 'video_failed']
+					.includes(event.type)
+			if (terminal) terminalReceived = true
+			handlers.onEvent?.(event)
+		} catch (_) {
+			throw callbackFailure()
+		}
 	})
-	const connection = openSseRequest({
+
+	nativeConnection = openSseRequest({
 		url: request.url,
 		method: request.method || 'POST',
 		headers: { ...request.headers },
-		body: request.body == null ? undefined : JSON.stringify(request.body),
+		body: request.body == null ? '' : JSON.stringify(request.body),
 		onOpen(renewal) {
+			if (callerClosed || settled) return
 			applySessionRenewalHeaders({
 				'X-Session-Renewed': renewal?.sessionRenewed || '',
 				'X-New-Access-Token': renewal?.newAccessToken || ''
 			})
+			handlers.lifecycleDiagnostics?.bindServerTraceId?.(
+				renewal?.traceId)
+			handlers.diagnostics?.bindTraceId?.(renewal?.traceId)
+			handlers.diagnostics?.bindUsagePublicId?.(renewal?.usagePublicId)
 			handlers.lifecycleDiagnostics?.record?.('CLIENT_RESPONSE_HEADERS', {
 				statusCode: Number(renewal?.statusCode || 0),
-				contentType: String(renewal?.contentType || '')
+				contentType: diagnosticContentType(renewal?.contentType)
+			})
+			handlers.diagnostics?.record?.('BROWSER_READ', {
+				eventType: 'HEADERS',
+				statusCode: Number(renewal?.statusCode || 0),
+				contentType: diagnosticContentType(renewal?.contentType)
 			})
 			const isEventStream = String(renewal?.contentType || '')
 				.toLowerCase().includes('text/event-stream')
@@ -42,40 +130,57 @@ export function openAiConversationSseApp(request, handlers = {}) {
 				&& Number(renewal?.statusCode || 0) < 300
 			if (isSuccessful && isEventStream) handlers.onOpen?.()
 		},
-		onChunk(chunk) { if (!closed) parser.push(String(chunk || '')) },
+		onChunk(value) {
+			if (callerClosed || settled) return
+			const chunk = String(value || '')
+			if (!chunk) return
+			handlers.diagnostics?.record?.('BROWSER_READ', {
+				eventType: 'BYTES',
+				byteCount: utf8ByteLength(chunk)
+			})
+			try {
+				parser.push(chunk)
+			} catch (error) {
+				rejectOnce(protocolFailure(error), true)
+			}
+		},
+		onDiagnostic(diagnostic) {
+			try { handlers.onNativeDiagnostic?.(diagnostic) } catch (_) {}
+		},
 		onError(failure) {
-			if (closed) return
-			const error = new Error(failure?.message || 'Android 模型流已中断。')
-			error.code = String(failure?.code || 'AI_CONVERSATION_SSE_ANDROID_IO')
-			error.statusCode = Number(failure?.statusCode || 0)
-			error.cfMitigated = String(failure?.cfMitigated || '')
-			error.contentType = String(failure?.contentType || '')
-			error.cfRay = String(failure?.cfRay || '')
-			rejectCompleted(error)
+			if (callerClosed || settled) return
+			if (terminalReceived) {
+				resolveOnce()
+				return
+			}
+			rejectOnce(nativeFailure(failure))
 		},
 		onClosed() {
-			if (closed) return
+			if (callerClosed || settled) return
 			try {
 				parser.finish()
 				if (!terminalReceived) {
 					const error = new Error('模型流在终态事件前关闭。')
 					error.code = 'AI_CONVERSATION_SSE_CLOSED'
-					rejectCompleted(error)
+					error.stage = 'RESPONSE_BODY'
+					rejectOnce(error)
 					return
 				}
-				resolveCompleted()
+				resolveOnce()
 			} catch (error) {
-				rejectCompleted(error)
+				rejectOnce(protocolFailure(error))
 			}
 		}
 	})
 	return Object.freeze({
 		completed,
-		close() {
+		close(reason = 'USER_STOP', details = {}) {
+			if (callerClosed || settled) return
+			handlers.lifecycleDiagnostics?.stopRequested?.(reason, details)
 			handlers.lifecycleDiagnostics?.abortCalled?.()
-			closed = true
-			connection.close()
-			resolveCompleted()
+			callerClosed = true
+			nativeConnection?.close?.(true)
+			resolveOnce()
 		}
 	})
 	// #endif

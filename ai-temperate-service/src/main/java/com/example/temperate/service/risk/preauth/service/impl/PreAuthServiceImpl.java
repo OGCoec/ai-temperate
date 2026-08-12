@@ -143,6 +143,28 @@ public final class PreAuthServiceImpl implements PreAuthService {
     }
 
     @Override
+    public Optional<PreAuthAccess> resolveBound(
+            RiskScope scope,
+            HmacIdentifier tokenDigest,
+            HmacIdentifier deviceDigest,
+            RiskSessionType sessionType,
+            HmacIdentifier sessionReferenceDigest) {
+        if (scope == null || tokenDigest == null || deviceDigest == null
+                || sessionType == null || sessionType == RiskSessionType.NONE
+                || sessionReferenceDigest == null) {
+            return Optional.empty();
+        }
+        // 握手只持有受保护摘要；所有绑定字段必须来自同一份当前 Redis 状态，禁止信任 Ticket 快照本身。
+        return store.find(scope, tokenDigest)
+                .filter(state -> state.schemaVersion() == PreAuthState.CURRENT_SCHEMA_VERSION)
+                .filter(state -> state.scope() == scope)
+                .filter(state -> state.deviceDigest().equals(deviceDigest))
+                .filter(state -> state.sessionType() == sessionType)
+                .filter(state -> sessionReferenceDigest.equals(state.sessionRefDigest()))
+                .map(state -> new PreAuthAccess(tokenDigest, state));
+    }
+
+    @Override
     public boolean touch(PreAuthAccess access, Instant seenAt) {
         return store.touch(
                 access.state().scope(),

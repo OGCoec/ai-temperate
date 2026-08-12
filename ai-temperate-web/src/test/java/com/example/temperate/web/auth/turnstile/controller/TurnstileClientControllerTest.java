@@ -15,12 +15,12 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 
 /**
- * 验证 Android Turnstile 页面只在供应商 ready 回调后渲染，并保持有界重试与错误码净化边界。
+ * 验证 Android Turnstile 页面以独立透明资源嵌入原页，并通过一次性通道回传净化后的结果。
  */
 class TurnstileClientControllerTest {
 
     @Test
-    void returnsSeparatedPageResourcesWithReadyCallbackAndBoundedRecovery()
+    void returnsSeparatedEmbeddedPageResourcesWithCorrelatedCallbacks()
             throws IOException {
         AuthSecurityProperties properties = mock(AuthSecurityProperties.class);
         when(properties.turnstile()).thenReturn(new AuthSecurityProperties.Turnstile(
@@ -48,17 +48,28 @@ class TurnstileClientControllerTest {
                         "api.js?render=explicit&onload=aitTurnstileSdkReady"));
         assertThat(html)
                 .contains("./page.css", "./page.js")
+                .doesNotContain("完成安全验证", "id=\"cancel\"", "class=\"actions\"")
                 .doesNotContain("<style", "<script>")
                 .doesNotContain("style=");
         assertThat(css)
-                .contains(".shell", ".actions", "#retry");
+                .contains(".shell", "#widget", "background: transparent")
+                .doesNotContain(".actions", "#retry", "min-height: 100%");
         assertThat(javascript)
-                .contains("/api/auth/turnstile/config")
+                .doesNotContain("fetch('/api/auth/turnstile/config")
+                .contains("window.location.hash")
+                .contains("window.history.replaceState")
+                .contains("'aiturnstile://'+kind")
+                .contains("channel")
+                .contains("dispatchResult('verified'")
+                .contains("terminalResult('expired'")
+                .contains("terminalResult('timeout'")
                 .contains("window.location.search")
                 .doesNotContain("if(!window.turnstile){if(attempts++")
-                .contains("MAX_AUTO_RETRIES=1")
+                .doesNotContain("MAX_AUTO_RETRIES")
                 .contains("SDK_READY_TIMEOUT_MS=15000")
-                .contains("retry:'never'")
+                .contains("retry:'auto'")
+                .contains("'retry-interval':8000")
+                .contains("size:'flexible'")
                 .contains("sanitizeCode")
                 .contains("重新验证")
                 .doesNotContain("0000000000000000000000000000000AA");

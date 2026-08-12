@@ -35,7 +35,13 @@ public final class RedisGlobalDeviceBlockService implements GlobalDeviceBlockSer
     @Override
     public Duration remainingBlockTtl(String deviceInstallationId) {
         HmacIdentifier globalDeviceHash = protector.deviceBlock(deviceInstallationId);
-        String key = keyFactory.globalDeviceBlockKey(globalDeviceHash);
+        return remainingBlockTtlByDigest(globalDeviceHash);
+    }
+
+    @Override
+    public Duration remainingBlockTtlByDigest(HmacIdentifier globalDeviceBlockDigest) {
+        HmacIdentifier validDigest = Objects.requireNonNull(globalDeviceBlockDigest);
+        String key = keyFactory.globalDeviceBlockKey(validDigest);
         try {
             // getExpire 返回 Long 秒数，-2 表示 Key 不存在，-1 表示无过期时间，正数为剩余秒数。
             Long seconds = redisTemplate.getExpire(key, TimeUnit.SECONDS);

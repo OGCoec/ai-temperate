@@ -1,17 +1,22 @@
 package com.example.temperate.web.user.voice;
 
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.user.voice.VoiceClientPlatform;
 import com.example.temperate.service.user.voice.VoiceErrorCode;
 import com.example.temperate.service.user.voice.VoiceException;
 import com.example.temperate.service.user.voice.config.VoiceProperties;
+import com.example.temperate.service.user.voice.security.VoiceTicketIssueCommand;
+import com.example.temperate.service.user.voice.security.VoiceWebSocketAuthorizationService;
 import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketIssue;
-import com.example.temperate.service.user.voice.ticket.VoiceSessionTicketService;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
+import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Cookie;
 import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
@@ -34,24 +39,25 @@ import org.springframework.web.bind.annotation.RestController;
         description = "供已认证 H5 和 Android 用户申请短期单次语音 WebSocket 票据；接口不接收音频、不执行转写，也不会自动发送 AI 对话消息。")
 public final class VoiceSessionTicketController {
 
-    private static final int PROTOCOL_VERSION = 1;
+    private static final int PROTOCOL_VERSION = 2;
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
     private static final String PLATFORM_HEADER = "X-Client-Platform";
+    private static final String REFRESH_HEADER = "X-Refresh-Token";
 
-    private final VoiceSessionTicketService ticketService;
+    private final VoiceWebSocketAuthorizationService authorizationService;
     private final VoiceProperties properties;
 
     public VoiceSessionTicketController(
-            VoiceSessionTicketService ticketService,
+            VoiceWebSocketAuthorizationService authorizationService,
             VoiceProperties properties) {
-        this.ticketService = ticketService;
+        this.authorizationService = authorizationService;
         this.properties = properties;
     }
 
     @PostMapping
     @Operation(
             summary = "申请一次性语音连接票据",
-            description = "票据三十秒内有效且只能消费一次；响应禁止缓存，票据必须通过 WSS 首个 JSON 控制帧提交，不得放入 URL。")
+            description = "票据三十秒内有效且只能消费一次；响应禁止缓存，票据必须通过 Sec-WebSocket-Protocol 提交，不得放入 URL、Cookie、Authorization 或消息帧。")
     public ResponseEntity<VoiceSessionTicketResponse> issue(
             @RequestHeader(DEVICE_HEADER) String deviceInstallationId,
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
@@ -61,10 +67,16 @@ public final class VoiceSessionTicketController {
                 == AuthClientPlatform.ANDROID
                 ? VoiceClientPlatform.ANDROID
                 : VoiceClientPlatform.H5;
-        VoiceSessionTicketIssue issue = ticketService.issue(
-                principal.userId(),
-                platform,
-                deviceInstallationId);
+        String rawRefreshToken = platform == VoiceClientPlatform.ANDROID
+                ? request.getHeader(REFRESH_HEADER)
+                : cookie(request, AuthCookieWriter.REFRESH_COOKIE);
+        VoiceSessionTicketIssue issue = authorizationService.issueTicket(
+                new VoiceTicketIssueCommand(
+                        principal,
+                        platform,
+                        deviceInstallationId,
+                        rawRefreshToken,
+                        preAuthAccess(request)));
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore().cachePrivate())
                 .body(new VoiceSessionTicketResponse(
@@ -85,6 +97,30 @@ public final class VoiceSessionTicketController {
                 VoiceErrorCode.VOICE_TICKET_INVALID,
                 "当前登录会话无法签发语音连接票据。",
                 false);
+    }
+
+    private static PreAuthAccess preAuthAccess(HttpServletRequest request) {
+        Object value = request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
+        if (value instanceof PreAuthAccess access) {
+            return access;
+        }
+        throw new VoiceException(
+                VoiceErrorCode.VOICE_PREAUTH_REQUIRED,
+                "Voice ticket requires an authenticated PreAuth binding.",
+                false);
+    }
+
+    private static String cookie(HttpServletRequest request, String name) {
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return null;
+        }
+        for (Cookie cookie : cookies) {
+            if (name.equals(cookie.getName())) {
+                return cookie.getValue();
+            }
+        }
+        return null;
     }
 
     /**

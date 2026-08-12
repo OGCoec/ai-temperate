@@ -113,8 +113,8 @@
 					ref="turnstile"
 					action="login"
 					:challenge="flow.challengeHandle"
+					:page-scroll-top="turnstilePageScrollTop"
 					@verified="verifyHuman"
-					@visibility-change="turnstileOpen = $event"
 				/>
 				<template v-else>
 					<view class="auth-field">
@@ -217,14 +217,14 @@
 				phoneDeliveryMethod: 'SMS',
 				code: '',
 				cooldown: 0,
+				turnstilePageScrollTop: 0,
 				timer: null,
 				busy: false,
 				error: '',
 				successMessage: '',
 				fieldErrors: emptyFieldErrors(),
 				focusedField: '',
-				countryPickerOpen: false,
-				turnstileOpen: false
+				countryPickerOpen: false
 			}
 		},
 		computed: {
@@ -254,21 +254,31 @@
 			this.initializePageCsrf()
 			this.timer = setInterval(() => { if (this.cooldown > 0) this.cooldown -= 1 }, 1000)
 		},
-		onShow() { this.syncPhoneCountrySelection() },
+		onShow() {
+			this.syncPhoneCountrySelection()
+			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'show' }))
+		},
+		onPageScroll(event) {
+			this.syncTurnstileBounds({ scrollTop: event?.scrollTop, reason: 'scroll' })
+		},
+		onResize() {
+			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'resize' }))
+		},
 		onUnload() {
 			this.phoneCountryPageActive = false
 			clearInterval(this.timer)
 		},
 		onBackPress() {
-			if (this.turnstileOpen) {
-				this.$refs.turnstile?.closeVerification()
-				return true
-			}
 			if (!this.countryPickerOpen) return false
 			this.$refs.identifierFields?.closeCountryPicker()
 			return true
 		},
 		methods: {
+			syncTurnstileBounds(context = {}) {
+				const scrollTop = Number(context?.scrollTop)
+				if (Number.isFinite(scrollTop) && scrollTop >= 0) this.turnstilePageScrollTop = scrollTop
+				this.$refs.turnstile?.syncAndroidBounds({ ...context, scrollTop: this.turnstilePageScrollTop })
+			},
 			completePrimaryFactor(result) {
 				if (result?.status === 'TOTP_REQUIRED') {
 					uni.navigateTo({ url: AUTH_ROUTES.totpLogin })
@@ -470,11 +480,13 @@
 			},
 			async verifyHuman(token) {
 				let verificationFailed = false
+				this.$refs.turnstile?.markServerVerificationStarted()
 				const result = await this.run(
 					() => authApi.loginCodeTurnstile(this.flow, token),
 					() => { verificationFailed = true }
 				)
 				if (result?.accepted) {
+					this.$refs.turnstile?.markServerAccepted()
 					this.humanVerified = true
 					return
 				}

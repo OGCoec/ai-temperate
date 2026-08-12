@@ -1,20 +1,33 @@
 import {
 	WEBRTC_DEFAULT_TIMEOUT_MILLIS,
-	collectBrowserWebRtcIps,
 	isWebRtcFailureCode,
 	isWebRtcRetryCode,
 	webRtcErrorFromResponse,
 	webRtcTriggerFromHeaders
 } from '@shared-auth/webrtc-verification-core.js'
 import {
-	collectAndroidWebRtcIpsInBackground
-} from '@shared-auth/android-webrtc-background-probe.js'
+	createWebRtcDiagnosticLogger
+} from '@shared-auth/webrtc-diagnostics.js'
+// #ifdef H5
+import {
+	collectAdminH5VerificationIps
+} from './admin-webrtc-verification-h5.js'
+// #endif
+// #ifdef APP-PLUS
+import {
+	collectAdminAndroidVerificationIps
+} from './admin-webrtc-verification-android.js'
+// #endif
 import { ADMIN_API_BASE_URL, adminClientPlatform } from './admin-config.js'
 import { adminDeviceInstallationId } from './admin-device.js'
 import { currentAdminPreAuthToken } from './admin-pre-auth.js'
 
 const START_PATH = '/api/admin/_edge/webrtc/start'
 const FAILURE_PAGE = '/pages/risk/webrtc-failed'
+const WEBRTC_DIAGNOSTICS_ENABLED = process.env.NODE_ENV === 'development'
+const webRtcDiagnostics = createWebRtcDiagnosticLogger(
+	'admin-flow',
+	WEBRTC_DIAGNOSTICS_ENABLED)
 
 let preAuthEpoch = 0
 let latestGeneration = ''
@@ -22,6 +35,7 @@ let verifiedInMemory = false
 const verificationTasks = new Map()
 let latestFailure = null
 let failureNavigationInFlight = false
+let diagnosticProbeSequence = 0
 
 export function invalidateAdminWebRtcVerification() {
 	preAuthEpoch += 1
@@ -59,7 +73,19 @@ export function currentAdminWebRtcFailure() {
 }
 
 export function startAdminWebRtcVerificationInBackground(expectedGeneration = '') {
+	const requestProbeRunId = nextProbeRunId(
+		'admin',
+		`${preAuthEpoch}:${expectedGeneration || 'discover'}`)
+	traceAndroidVerification('verification_requested', {
+		reason: expectedGeneration ? 'expected_generation' : 'discover',
+		probeRunId: requestProbeRunId
+	})
 	if (verifiedInMemory && !expectedGeneration) {
+		traceAndroidVerification('verification_short_circuited', {
+			reason: 'verified_memory',
+			state: 'VERIFIED',
+			probeRunId: requestProbeRunId
+		})
 		return Promise.resolve({ verificationState: 'VERIFIED', webRtcStatus: true })
 	}
 	const normalized = /^[1-9][0-9]{0,18}$/.test(String(expectedGeneration || ''))
@@ -77,7 +103,12 @@ export function startAdminWebRtcVerificationInBackground(expectedGeneration = ''
 	}
 	const key = `${epoch}:${normalized || 'discover'}`
 	if (!verificationTasks.has(key)) {
-		const attempt = { epoch, expectedGeneration: normalized, resolvedGeneration: '' }
+		const attempt = {
+			epoch,
+			expectedGeneration: normalized,
+			resolvedGeneration: '',
+			probeRunId: requestProbeRunId
+		}
 		const task = verify(attempt, true)
 			.finally(() => {
 				if (verificationTasks.get(key) === task) verificationTasks.delete(key)
@@ -134,19 +165,50 @@ export function presentAdminWebRtcFailure(error) {
 }
 
 async function verify(attempt, allowGenerationRefresh) {
+	let phase = 'start'
+	const trace = (stage, fields = {}) => traceAndroidVerification(stage, {
+		...fields,
+		probeRunId: attempt.probeRunId
+	})
 	try {
+		trace('start_request_started')
 		const start = await requestEdge(START_PATH, 'GET')
 		const state = verificationState(start)
 		const generation = String(start?.probeGeneration || '')
+		trace('start_response_received', {
+			mode: diagnosticCode(start?.mode, 'UNKNOWN'),
+			state: diagnosticCode(state, 'UNKNOWN'),
+			stunCount: Array.isArray(start?.stunUrls) ? start.stunUrls.length : 0,
+			timeoutMillis: nonNegativeNumber(start?.timeoutMillis, 0),
+			remainingMillis: nonNegativeNumber(start?.pendingRemainingMillis, 0)
+		})
 		if (start?.mode === 'DISABLED' || state === 'VERIFIED') {
+			trace('verification_short_circuited', {
+				reason: start?.mode === 'DISABLED' ? 'disabled' : 'verified',
+				mode: diagnosticCode(start?.mode, 'UNKNOWN'),
+				state: diagnosticCode(state, 'UNKNOWN')
+			})
 			if (isInvocationCurrent(attempt)) {
 				verifiedInMemory = true
 				latestFailure = null
 			}
 			return start
 		}
-		if (start?.mode === 'OBSERVE' && state === 'FAILED') return start
-		if (state === 'FAILED') throw failureError(start)
+		if (start?.mode === 'OBSERVE' && state === 'FAILED') {
+			trace('verification_short_circuited', {
+				reason: 'observe_failed',
+				mode: 'OBSERVE',
+				state: 'FAILED'
+			})
+			return start
+		}
+		if (state === 'FAILED') {
+			trace('verification_short_circuited', {
+				reason: 'failed',
+				state: 'FAILED'
+			})
+			throw failureError(start)
+		}
 		if (state !== 'PENDING' || !/^[1-9][0-9]{0,18}$/.test(generation)) {
 			throw failureError(start)
 		}
@@ -165,37 +227,105 @@ async function verify(attempt, allowGenerationRefresh) {
 			boundedTimeout(start?.timeoutMillis),
 			Math.max(1, remainingMillis - reportGraceMillis))
 		const deadlineAt = Date.now() + remainingMillis
-		const webRtcIps = adminClientPlatform() === 'ANDROID'
-			? await collectAndroidWebRtcIpsInBackground({
-				attemptId: `${activeAttempt.epoch}:${generation}`,
-				webviewId: 'ait-admin-webrtc',
-				resourcePath: '/hybrid/html/webrtc-probe.html',
-				stunUrls: start?.stunUrls,
-				timeoutMillis: probeMillis
-			})
-			: await collectBrowserWebRtcIps(start?.stunUrls, probeMillis)
+		phase = 'probe'
+		trace('platform_probe_started', {
+			timeoutMillis: probeMillis,
+			stunCount: Array.isArray(start?.stunUrls) ? start.stunUrls.length : 0
+		})
+		const webRtcIps = await collectPlatformVerificationIps({
+			attemptId: `${activeAttempt.epoch}:${generation}`,
+			probeRunId: attempt.probeRunId,
+			stunUrls: start?.stunUrls,
+			timeoutMillis: probeMillis
+		})
+		trace('platform_probe_completed', {
+			candidateCount: webRtcIps.length
+		})
 		if (!isAttemptActive(activeAttempt)) return ignoredResult()
+		phase = 'report'
+		const reportPayload = { probeGeneration: generation, webRtcIps }
+		trace('report_payload_prepared', {
+			candidateCount: reportPayload.webRtcIps.length
+		})
+		trace('report_started', {
+			candidateCount: reportPayload.webRtcIps.length
+		})
 		const report = await submitReport(
 			start?.reportPath || '/api/admin/_edge/webrtc/report',
-			{ probeGeneration: generation, webRtcIps },
+			reportPayload,
 			deadlineAt)
+		trace('report_completed', {
+			candidateCount: webRtcIps.length,
+			webRtcStatus: report?.webRtcStatus === true
+		})
 		if (!isAttemptActive(activeAttempt)) return ignoredResult()
 		if (start?.mode === 'OBSERVE' || report?.webRtcStatus === true) {
 			verifiedInMemory = true
 			latestFailure = null
+			trace('verification_succeeded', {
+				candidateCount: webRtcIps.length,
+				webRtcStatus: report?.webRtcStatus === true
+			})
 			return report
 		}
 		throw failureError(report)
 	} catch (error) {
 		if (!isInvocationCurrent(attempt)) return ignoredResult()
+		if (phase === 'report') {
+			trace('report_failed', {
+				errorCode: diagnosticCode(error?.code, 'REPORT_FAILED'),
+				retryable: error?.retryable === true,
+				webRtcStatus: error?.webRtcStatus === true
+			})
+		}
+		trace('verification_failed', {
+			errorCode: diagnosticCode(error?.code, 'VERIFICATION_FAILED'),
+			retryable: error?.retryable === true
+		})
 		if (allowGenerationRefresh && isWebRtcRetryCode(error?.code)) {
 			verifiedInMemory = false
 			attempt.expectedGeneration = ''
 			attempt.resolvedGeneration = ''
+			attempt.probeRunId = nextProbeRunId('admin', `${attempt.epoch}:refresh`)
 			return verify(attempt, false)
 		}
 		throw error
 	}
+}
+
+function traceAndroidVerification(stage, fields = {}) {
+	if (adminClientPlatform() !== 'ANDROID') return
+	webRtcDiagnostics(stage, fields)
+}
+
+function diagnosticCode(value, fallback) {
+	const normalized = String(value || fallback)
+		.replace(/[^A-Za-z0-9_-]/g, '')
+		.slice(0, 64)
+	return normalized || fallback
+}
+
+function nextProbeRunId(role, attemptId) {
+	diagnosticProbeSequence = diagnosticProbeSequence >= 999999
+		? 1
+		: diagnosticProbeSequence + 1
+	const safeAttemptId = String(attemptId || 'discover')
+		.replace(/[^A-Za-z0-9:_-]/g, '')
+		.slice(0, 40) || 'discover'
+	return `${role}-${safeAttemptId}-${diagnosticProbeSequence}`
+}
+
+async function collectPlatformVerificationIps(options) {
+	// #ifdef H5
+	return collectAdminH5VerificationIps(options)
+	// #endif
+
+	// #ifdef APP-PLUS
+	if (adminClientPlatform() === 'ANDROID') {
+		return collectAdminAndroidVerificationIps(options)
+	}
+	// #endif
+	return []
 }
 
 async function submitReport(path, data, deadlineAt) {

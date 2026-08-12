@@ -209,7 +209,7 @@
 					return true
 				} catch (error) {
 					this.applyConversationState(setConversationError(
-						error?.message || '会话列表加载失败。'
+						'会话列表暂时无法加载，请重试。'
 					))
 					this.syncChatStore()
 					return false
@@ -227,7 +227,7 @@
 					))
 				} catch (error) {
 					this.applyConversationState(setConversationError(
-						error?.message || '更多会话加载失败。'
+						'更多会话暂时无法加载，请重试。'
 					))
 				}
 				this.syncChatStore()

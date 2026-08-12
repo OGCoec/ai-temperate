@@ -266,15 +266,18 @@ public final class AiConversationResponseController {
 
     private static ResponseEntity<Flux<ServerSentEvent<Object>>> directSseResponse(
             AiConversationResponseStream stream) {
+        AiConversationAcceptedData accepted = (AiConversationAcceptedData) stream.accepted().data();
         Flux<ServerSentEvent<Object>> body = Flux.concat(
                         Flux.just(stream.accepted()),
                         stream.events())
                 .map(AiConversationResponseController::sse);
+        // Usage 公共编号在响应头阶段即可获得，使 Android 能在首个正文块之前关联安全流诊断。
         return ResponseEntity.ok()
                 .header(
                         HttpHeaders.CACHE_CONTROL,
                         "private, no-store, no-transform")
                 .header("X-Accel-Buffering", "no")
+                .header("X-AI-Usage-Id", accepted.usagePublicId())
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .body(body);
     }

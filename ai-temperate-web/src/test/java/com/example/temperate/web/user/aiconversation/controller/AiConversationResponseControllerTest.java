@@ -24,10 +24,14 @@ import com.example.temperate.service.user.aiconversation.model.AiConversationRea
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationDirectResponseCancellationStatus;
 import com.example.temperate.service.user.aiconversation.response.AiConversationAcceptedData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationActivityData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationCompletedData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationDeltaData;
+import com.example.temperate.service.user.aiconversation.response.AiConversationReasoningSummaryData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseCommand;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseService;
 import com.example.temperate.service.user.aiconversation.response.AiConversationResponseStream;
+import com.example.temperate.service.user.aiconversation.response.AiConversationSourceData;
 import com.example.temperate.service.user.aiconversation.response.AiConversationStreamEvent;
 import com.example.temperate.web.aiconversation.AiConversationPublicId;
 import com.example.temperate.web.user.aiconversation.api.AiConversationExceptionHandler;
@@ -122,11 +126,47 @@ final class AiConversationResponseControllerTest {
                                 "0",
                                 "5",
                                 "0",
-                                "1",
-                                "STOP"));
+                                 "1",
+                                 "STOP"));
+        AiConversationStreamEvent activity = AiConversationStreamEvent.activity(
+                new AiConversationActivityData(
+                        1L,
+                        "activity-event",
+                        "activity-id",
+                        "WEB_SEARCH",
+                        "STARTED",
+                        "safe query",
+                        "2026-08-12T13:01:00Z"));
+        AiConversationStreamEvent source = AiConversationStreamEvent.source(
+                new AiConversationSourceData(
+                        2L,
+                        "activity-id",
+                        "source-id",
+                        "Oracle documentation",
+                        "https://docs.oracle.com/example",
+                        "docs.oracle.com",
+                        "PRIMARY",
+                        "2026-08-12T13:01:01Z"));
+        AiConversationStreamEvent reasoningSummary =
+                AiConversationStreamEvent.reasoningSummary(
+                        new AiConversationReasoningSummaryData(
+                                3L,
+                                "activity-id",
+                                "summary",
+                                "2026-08-12T13:01:02Z"));
+        AiConversationStreamEvent delta = AiConversationStreamEvent.delta(
+                new AiConversationDeltaData(4L, "TEXT", "answer"));
+        AiConversationStreamEvent heartbeat = AiConversationStreamEvent.heartbeat();
         when(service.respondAsync(any())).thenReturn(Mono.just(
                 new AiConversationResponseStream(
-                        accepted, Flux.just(completed))));
+                        accepted,
+                        Flux.just(
+                                activity,
+                                source,
+                                reasoningSummary,
+                                delta,
+                                heartbeat,
+                                completed))));
         AiConversationResponseController controller =
                 new AiConversationResponseController(service);
 
@@ -149,9 +189,21 @@ final class AiConversationResponseControllerTest {
                 .contains("no-transform");
         assertThat(response.getHeaders().getFirst("X-Accel-Buffering"))
                 .isEqualTo("no");
+        assertThat(response.getHeaders().getFirst("X-AI-Usage-Id"))
+                .isEqualTo("BBBBBBBBBBBBBBBBBBBBBB");
         StepVerifier.create(response.getBody())
                 .assertNext(event -> assertThat(event.event())
                         .isEqualTo("accepted"))
+                .assertNext(event -> assertThat(event.event())
+                        .isEqualTo("activity"))
+                .assertNext(event -> assertThat(event.event())
+                        .isEqualTo("source"))
+                .assertNext(event -> assertThat(event.event())
+                        .isEqualTo("reasoning_summary"))
+                .assertNext(event -> assertThat(event.event())
+                        .isEqualTo("delta"))
+                .assertNext(event -> assertThat(event.event())
+                        .isEqualTo("heartbeat"))
                 .assertNext(event -> assertThat(event.event())
                         .isEqualTo("completed"))
                 .verifyComplete();

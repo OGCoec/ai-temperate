@@ -7,6 +7,21 @@ async function loadProtocol() {
 	return loadEsmModule(path.join(__dirname, 'ai-html-preview-protocol.js'))
 }
 
+async function withoutUrlSearchParams(callback) {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'URLSearchParams')
+	try {
+		Object.defineProperty(globalThis, 'URLSearchParams', {
+			configurable: true,
+			writable: true,
+			value: undefined
+		})
+		return await callback()
+	} finally {
+		if (descriptor) Object.defineProperty(globalThis, 'URLSearchParams', descriptor)
+		else delete globalThis.URLSearchParams
+	}
+}
+
 function deterministicCrypto() {
 	return {
 		getRandomValues(bytes) {
@@ -26,22 +41,24 @@ test('creates a 128-bit channel identifier using Web Crypto', async () => {
 })
 
 test('builds a fragment-only iframe URL with exact parent and preview origins', async () => {
-	const { createAiHtmlPreviewFrameUrl } = await loadProtocol()
-	const channelId = '000102030405060708090a0b0c0d0e0f'
-	const value = createAiHtmlPreviewFrameUrl({
-		previewOrigin: 'https://ai-temperate-html-preview.pages.dev',
-		parentOrigin: 'https://niko000o.site',
-		channelId
-	})
+	await withoutUrlSearchParams(async () => {
+		const { createAiHtmlPreviewFrameUrl } = await loadProtocol()
+		const channelId = '000102030405060708090a0b0c0d0e0f'
+		const value = createAiHtmlPreviewFrameUrl({
+			previewOrigin: 'https://ai-temperate-html-preview.pages.dev',
+			parentOrigin: 'https://niko000o.site',
+			channelId
+		})
 
-	assert.equal(value.startsWith('https://ai-temperate-html-preview.pages.dev/#'), true)
-	assert.equal(value.includes('channelId=' + channelId), true)
-	assert.equal(value.includes('parentOrigin=https%3A%2F%2Fniko000o.site'), true)
-	assert.throws(() => createAiHtmlPreviewFrameUrl({
-		previewOrigin: 'https://ai-temperate-html-preview.pages.dev/path',
-		parentOrigin: 'https://niko000o.site',
-		channelId
-	}), /精确的 HTTPS Origin/)
+		assert.equal(value.startsWith('https://ai-temperate-html-preview.pages.dev/#'), true)
+		assert.equal(value.includes('channelId=' + channelId), true)
+		assert.equal(value.includes('parentOrigin=https%3A%2F%2Fniko000o.site'), true)
+		assert.throws(() => createAiHtmlPreviewFrameUrl({
+			previewOrigin: 'https://ai-temperate-html-preview.pages.dev/path',
+			parentOrigin: 'https://niko000o.site',
+			channelId
+		}), /精确的 HTTPS Origin/)
+	})
 })
 
 test('enforces the HTML byte limit before creating a render message', async () => {

@@ -52,6 +52,7 @@ import {
 
 const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
+const PHONE_COUNTRY_PATH = '/api/auth/phone-country'
 const TERMINAL_SESSION_ERRORS = new Set([
 	'AT_REQUIRED',
 	'AT_INVALID',
@@ -220,7 +221,10 @@ export async function publicRequest(
 	await ensurePreAuth()
 	try {
 		// #ifdef H5
-		await ensureH5WebRtcVerified()
+		// 国家解析是只读初始化请求，允许与 WebRTC 探针并行；其余请求继续等待 report 终态。
+		if (path !== PHONE_COUNTRY_PATH) {
+			await ensureH5WebRtcVerified()
+		}
 		// #endif
 		const method = String(options.method || 'POST').toUpperCase()
 		const headers = clientContextHeaders()
@@ -280,7 +284,9 @@ export async function publicRequest(
 			invalidateWebRtcVerification()
 			await ensurePreAuth()
 			// #ifdef H5
-			await ensureH5WebRtcVerified()
+			if (path !== PHONE_COUNTRY_PATH) {
+				await ensureH5WebRtcVerified()
+			}
 			// #endif
 			// #ifdef APP-PLUS
 			void startAndroidWebRtcVerificationInBackground().catch(() => {})

@@ -139,3 +139,17 @@ test('media operation delegates media compatibility to its dedicated mode gate',
 		mediaOperation: true
 	}).reason, /正在上传/)
 })
+
+test('classifies Java archives as binary archives without treating Java source as an archive', async () => {
+	const state = await loadState()
+	for (const fileName of ['library.jar', 'application.war', 'module.ear']) {
+		assert.equal(state.attachmentCategory({
+			fileName,
+			contentType: 'application/octet-stream'
+		}), 'ARCHIVE', fileName)
+	}
+	assert.equal(state.attachmentCategory({
+		fileName: 'Main.java',
+		contentType: 'text/x-java-source'
+	}), 'DOCUMENT')
+})

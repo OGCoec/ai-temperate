@@ -4,17 +4,22 @@ const path = require('node:path')
 const test = require('node:test')
 
 function loadModule() {
+	const httpUrl = fs.readFileSync(path.join(__dirname,
+		'../platform/http-url.js'), 'utf8')
+		.replaceAll('export function ', 'function ')
 	const sourcePresentation = fs.readFileSync(path.join(__dirname,
 		'ai-conversation-source-presentation.js'), 'utf8')
+		.replace(/^import\s+.*$/gm, '')
 		.replaceAll('export function ', 'function ')
 	const favicon = fs.readFileSync(path.join(__dirname,
 		'ai-source-favicon.js'), 'utf8')
+		.replace(/^import\s+.*$/gm, '')
 		.replaceAll('export function ', 'function ')
 	const research = fs.readFileSync(path.join(__dirname,
 		'ai-conversation-research-presentation.js'), 'utf8')
 		.replace(/^import\s*\{[\s\S]*?\}\s*from\s*'[^']+'\s*$/gm, '')
 		.replaceAll('export function ', 'function ')
-	const factory = new Function(`${sourcePresentation}\n${favicon}\n${research}; return {
+	const factory = new Function(`${httpUrl}\n${sourcePresentation}\n${favicon}\n${research}; return {
 		presentAiSearchActivity,
 		presentAiResearchTimeline,
 		formatAiReasoningSummaryMarkdown }`)

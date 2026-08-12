@@ -48,4 +48,46 @@ final class VoiceConfigurationContractTest {
         assertThat(source).contains("@Tag(", "@Operation(", "CacheControl.noStore()");
         assertThat(source).doesNotContain("<html", "<style", "<script", "javascript:");
     }
+
+    @Test
+    void websocketUsesOriginThenSecurityHandshakeInterceptors() throws IOException {
+        String configuration = Files.readString(Path.of(
+                "src/main/java/com/example/temperate/web/user/voice/VoiceWebSocketConfiguration.java"));
+        String handler = Files.readString(Path.of(
+                "src/main/java/com/example/temperate/web/user/voice/VoiceWebSocketHandler.java"));
+
+        assertThat(configuration).contains(
+                ".addInterceptors(originInterceptor, securityInterceptor)");
+        assertThat(handler)
+                .contains("implements SubProtocolCapable", "ait-voice-v2")
+                .doesNotContain("VoiceSessionTicketService", "scheduleAuthenticationTimeout");
+    }
+
+    @Test
+    void websocketHasAnExactCsrfFreeSecurityChainWithoutWeakeningOtherSurfaces()
+            throws IOException {
+        String security = Files.readString(Path.of(
+                        "src/main/java/com/example/temperate/web/auth/config/SecurityConfiguration.java"))
+                .replace("\r\n", "\n");
+        String csrfHandler = Files.readString(Path.of(
+                "src/main/java/com/example/temperate/web/auth/config/"
+                        + "SpaCsrfTokenRequestHandler.java"));
+        String worker = Files.readString(Path.of(
+                "../cloudflare/api-gateway/src/index.js"));
+
+        assertThat(security).contains(
+                "@Order(2)\n    @ConditionalOnProperty(",
+                "SecurityFilterChain voiceWebSocketSecurityFilterChain(",
+                ".securityMatcher(request -> isVoiceWebSocketRequest(",
+                ".csrf(AbstractHttpConfigurer::disable)",
+                ".addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)",
+                "@Order(3)\n    SecurityFilterChain androidSecurityFilterChain(",
+                "@Order(4)\n    SecurityFilterChain h5SecurityFilterChain(");
+        assertThat(csrfHandler)
+                .contains("csrfToken.get();")
+                .doesNotContain("/ws/voice");
+        assertThat(worker).contains(
+                "setCookies === null || setCookies.length > 0",
+                "EDGE_WEBSOCKET_COOKIE_POLICY_VIOLATION");
+    }
 }

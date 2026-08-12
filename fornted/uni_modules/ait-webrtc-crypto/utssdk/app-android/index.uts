@@ -1,0 +1,168 @@
+import Base64 from 'android.util.Base64'
+import SecureRandom from 'java.security.SecureRandom'
+import StringBuilder from 'java.lang.StringBuilder'
+import Cipher from 'javax.crypto.Cipher'
+import AEADBadTagException from 'javax.crypto.AEADBadTagException'
+import GCMParameterSpec from 'javax.crypto.spec.GCMParameterSpec'
+import SecretKeySpec from 'javax.crypto.spec.SecretKeySpec'
+import Charsets from 'kotlin.text.Charsets'
+
+import {
+  AitWebRtcCryptoChannelResult,
+  AitWebRtcDecryptOptions,
+  AitWebRtcDecryptResult,
+  CreateWebRtcProbeChannelApi,
+  DecryptWebRtcProbePayloadApi
+} from '../interface.uts'
+
+const CHANNEL_BYTES: Int = 16
+const NONCE_BYTES: Int = 16
+const AES_KEY_BYTES: Int = 32
+const GCM_IV_BYTES: Int = 12
+const MAX_PAYLOAD_LENGTH = 4096
+const BASE64_URL_FLAGS = Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING
+const INVALID_INPUT = 'INVALID_INPUT'
+const AUTHENTICATION_FAILED = 'AUTHENTICATION_FAILED'
+const CRYPTO_FAILURE = 'CRYPTO_FAILURE'
+
+function channelFailure(errorCode: string): AitWebRtcCryptoChannelResult {
+  return {
+    success: false,
+    channelId: '',
+    nonce: '',
+    key: '',
+    errorCode
+  }
+}
+
+function decryptFailure(errorCode: string): AitWebRtcDecryptResult {
+  return {
+    success: false,
+    plaintext: '',
+    errorCode
+  }
+}
+
+function lowerHex(bytes: ByteArray): string {
+  const alphabet = '0123456789abcdef'
+  const output = new StringBuilder(bytes.size * 2)
+  for (let index: Int = 0; index < bytes.size; index++) {
+    const value = bytes[index].toInt() & 0xff
+    output.append(alphabet.substring(value >> 4, (value >> 4) + 1))
+    output.append(alphabet.substring(value & 0x0f, (value & 0x0f) + 1))
+  }
+  return output.toString()
+}
+
+function base64Url(bytes: ByteArray): string {
+  return Base64.encodeToString(bytes, BASE64_URL_FLAGS)
+}
+
+function containsOnly(value: string, alphabet: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    if (!alphabet.contains(value.substring(index, index + 1))) return false
+  }
+  return true
+}
+
+function isLowerHex32(value: string): boolean {
+  return value.length == 32 && containsOnly(value, '0123456789abcdef')
+}
+
+function isBase64Url(value: string): boolean {
+  return value.length > 0
+    && containsOnly(
+      value,
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-')
+}
+
+function decodeCanonicalBase64Url(
+  value: string,
+  expectedBytes: number
+): ByteArray | null {
+  if (!isBase64Url(value)) return null
+  try {
+    const decoded = Base64.decode(value, BASE64_URL_FLAGS)
+    if (decoded.size != expectedBytes || base64Url(decoded) != value) return null
+    return decoded
+  } catch (_: Throwable) {
+    return null
+  }
+}
+
+/**
+ * 使用系统安全随机源生成每次探针独占的通道材料，避免逻辑层缺少 Web Crypto 时退化到弱随机数。
+ */
+export const createWebRtcProbeChannel: CreateWebRtcProbeChannelApi =
+  function(): AitWebRtcCryptoChannelResult {
+  try {
+    const random = new SecureRandom()
+    const channelBytes = ByteArray(CHANNEL_BYTES)
+    const nonceBytes = ByteArray(NONCE_BYTES)
+    const keyBytes = ByteArray(AES_KEY_BYTES)
+    random.nextBytes(channelBytes)
+    random.nextBytes(nonceBytes)
+    random.nextBytes(keyBytes)
+    return {
+      success: true,
+      channelId: lowerHex(channelBytes),
+      nonce: lowerHex(nonceBytes),
+      key: base64Url(keyBytes),
+      errorCode: ''
+    }
+  } catch (_: Throwable) {
+    return channelFailure(CRYPTO_FAILURE)
+  }
+}
+
+/**
+ * 先执行规范编码和长度校验，再以通道标识与 nonce 作为 AAD 解密；Tag 校验失败不得返回任何明文。
+ */
+export const decryptWebRtcProbePayload: DecryptWebRtcProbePayloadApi =
+  function(
+  options: AitWebRtcDecryptOptions
+): AitWebRtcDecryptResult {
+  if (!isLowerHex32(options.channelId)
+    || !isLowerHex32(options.nonce)
+    || options.key.length != 43
+    || options.iv.length != 16
+    || options.payload.length == 0
+    || options.payload.length > MAX_PAYLOAD_LENGTH
+    || !isBase64Url(options.payload)) {
+    return decryptFailure(INVALID_INPUT)
+  }
+
+  const keyBytes = decodeCanonicalBase64Url(options.key, AES_KEY_BYTES)
+  const ivBytes = decodeCanonicalBase64Url(options.iv, GCM_IV_BYTES)
+  if (keyBytes == null || ivBytes == null) return decryptFailure(INVALID_INPUT)
+
+  let encrypted: ByteArray
+  try {
+    encrypted = Base64.decode(options.payload, BASE64_URL_FLAGS)
+    if (encrypted.size < 16 || base64Url(encrypted) != options.payload) {
+      return decryptFailure(INVALID_INPUT)
+    }
+  } catch (_: Throwable) {
+    return decryptFailure(INVALID_INPUT)
+  }
+
+  try {
+    const cipher = Cipher.getInstance('AES/GCM/NoPadding')
+    const secretKey = new SecretKeySpec(keyBytes, 'AES')
+    const parameters = new GCMParameterSpec(128, ivBytes)
+    cipher.init(Cipher.DECRYPT_MODE, secretKey, parameters)
+    cipher.updateAAD(
+      `${options.channelId}|${options.nonce}`.toByteArray(Charsets.UTF_8))
+    const plaintext = cipher.doFinal(encrypted)
+    return {
+      success: true,
+      plaintext: plaintext.toString(Charsets.UTF_8),
+      errorCode: ''
+    }
+  } catch (error: Throwable) {
+    if (error instanceof AEADBadTagException) {
+      return decryptFailure(AUTHENTICATION_FAILED)
+    }
+    return decryptFailure(CRYPTO_FAILURE)
+  }
+}

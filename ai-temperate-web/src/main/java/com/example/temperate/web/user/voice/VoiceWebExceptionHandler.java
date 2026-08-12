@@ -29,6 +29,10 @@ public final class VoiceWebExceptionHandler {
         HttpStatus status = switch (exception.code()) {
             case VOICE_TICKET_RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
             case VOICE_TICKET_INVALID -> HttpStatus.UNAUTHORIZED;
+            case VOICE_SESSION_INVALID -> HttpStatus.UNAUTHORIZED;
+            case VOICE_DEVICE_BLOCKED -> HttpStatus.FORBIDDEN;
+            case VOICE_PREAUTH_REQUIRED, VOICE_WEBRTC_REQUIRED ->
+                    HttpStatus.PRECONDITION_REQUIRED;
             case VOICE_INFRASTRUCTURE_UNAVAILABLE,
                     VOICE_UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;

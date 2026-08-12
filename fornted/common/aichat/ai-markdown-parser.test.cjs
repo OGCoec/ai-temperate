@@ -10,12 +10,14 @@ function sourceUrl(source) {
 
 async function loadParser() {
 	const parserPath = path.join(__dirname, 'ai-markdown-parser.js')
+	const httpUrlPath = path.join(__dirname, '../platform/http-url.js')
 	const source = fs.readFileSync(parserPath, 'utf8')
 	const markdownItPath = require.resolve('markdown-it')
+	const httpUrlModule = sourceUrl(fs.readFileSync(httpUrlPath, 'utf8'))
 	const patchedSource = source.replace(
 		"import MarkdownIt from 'markdown-it'",
 		'import MarkdownIt from ' + JSON.stringify(pathToFileURL(markdownItPath).href)
-	)
+	).replace("from '../platform/http-url.js'", `from '${httpUrlModule}'`)
 	return import(sourceUrl(patchedSource) + '#' + Date.now() + '-' + Math.random())
 }
 

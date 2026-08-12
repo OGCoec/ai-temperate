@@ -1,3 +1,5 @@
+import { parseAbsoluteHttpUrl } from '../platform/http-url.js'
+
 const STORAGE_KEY = 'ait.user.ai.research.v1'
 const SCHEMA_VERSION = 2
 const LEGACY_SCHEMA_VERSION = 1
@@ -24,12 +26,7 @@ function safeSequence(value) {
 }
 
 function safeHttpUrl(value) {
-	try {
-		const parsed = new URL(text(value, 4096))
-		return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null
-	} catch (_) {
-		return null
-	}
+	return parseAbsoluteHttpUrl(text(value, 4096))?.href || null
 }
 
 function normalizeActivity(value) {

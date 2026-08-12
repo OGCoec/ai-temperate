@@ -1,6 +1,5 @@
 package com.example.temperate.service.user.voice.ticket;
 
-import com.example.temperate.service.user.voice.VoiceClientPlatform;
 import java.time.Instant;
 
 /**
@@ -8,15 +7,11 @@ import java.time.Instant;
  */
 public record VoiceSessionTicketSnapshot(
         int schemaVersion,
-        long userId,
-        VoiceClientPlatform platform,
-        String deviceInstallationId,
+        VoiceTicketSecurityBinding binding,
         Instant expiresAt) {
 
     public VoiceSessionTicketSnapshot {
-        if (schemaVersion != 1 || userId <= 0 || platform == null
-                || deviceInstallationId == null || deviceInstallationId.isBlank()
-                || expiresAt == null) {
+        if (schemaVersion != 2 || binding == null || expiresAt == null) {
             throw new IllegalArgumentException("Voice session ticket snapshot is invalid.");
         }
     }
@@ -24,7 +19,6 @@ public record VoiceSessionTicketSnapshot(
     @Override
     public String toString() {
         return "VoiceSessionTicketSnapshot[schemaVersion=" + schemaVersion
-                + ", userId=redacted, platform=" + platform
-                + ", deviceInstallationId=redacted, expiresAt=" + expiresAt + "]";
+                + ", binding=redacted, expiresAt=" + expiresAt + "]";
     }
 }

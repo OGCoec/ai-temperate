@@ -146,6 +146,7 @@
 
 <script>
 	import { createAiCodeHighlightSession } from '@/common/aichat/ai-code-highlight-session.js'
+	import { reportAiCodeHighlightError } from '@/common/aichat/ai-code-diagnostics.js'
 	import { getAiHtmlPreviewConfig } from '@/common/aichat/ai-html-preview-config.js'
 	import { isAiHtmlPreviewLanguage } from '@/common/aichat/ai-html-preview-document.js'
 	import UserMarkdownHtmlPreview from './user-markdown-html-preview.vue'
@@ -253,7 +254,7 @@
 						this.highlightedStableLines = snapshot.stableLines
 						this.highlightedUnstableLines = snapshot.unstableLines
 					},
-					onError: () => {}
+					onError: failure => reportAiCodeHighlightError(failure)
 				})
 				const operation = this.streaming
 					? this.highlightSession.update({ code: this.code, previousCode: '', streaming: true })

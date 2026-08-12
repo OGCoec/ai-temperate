@@ -1,3 +1,5 @@
+import { buildQueryString } from '../platform/query-string.js'
+
 export const AI_HTML_PREVIEW_MESSAGE_SOURCE = 'ait-html-preview'
 export const AI_HTML_PREVIEW_PROTOCOL_VERSION = 1
 export const AI_HTML_PREVIEW_MAX_HTML_BYTES = 1024 * 1024
@@ -50,8 +52,11 @@ export function createAiHtmlPreviewFrameUrl({ previewOrigin, parentOrigin, chann
 	if (!isAiHtmlPreviewSecureId(channelId)) {
 		throw new Error('HTML 预览 channelId 无效')
 	}
-	const hash = new URLSearchParams({ channelId, parentOrigin: normalizedParentOrigin })
-	return normalizedPreviewOrigin + '/#' + hash.toString()
+	const hash = buildQueryString([
+		['channelId', channelId],
+		['parentOrigin', normalizedParentOrigin]
+	])
+	return normalizedPreviewOrigin + '/#' + hash
 }
 
 export function createAiHtmlPreviewRenderMessage({ channelId, renderId, html, theme = 'dark' }) {

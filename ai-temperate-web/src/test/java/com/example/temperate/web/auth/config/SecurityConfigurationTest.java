@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -15,6 +16,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.security.web.csrf.DefaultCsrfToken;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 
@@ -113,6 +115,54 @@ class SecurityConfigurationTest {
                         "X-Session-Renewed",
                         "CF-Ray",
                         "cf-mitigated");
+    }
+
+    @Test
+    void matchesOnlyTheConfiguredVoiceWebSocketPathAcrossServletContexts() {
+        MockHttpServletRequest rootGet =
+                new MockHttpServletRequest("GET", "/ws/voice");
+        MockHttpServletRequest rootPost =
+                new MockHttpServletRequest("POST", "/ws/voice");
+        MockHttpServletRequest contextRequest =
+                new MockHttpServletRequest("GET", "/app/ws/voice");
+        contextRequest.setContextPath("/app");
+
+        assertThat(SecurityConfiguration.isVoiceWebSocketRequest(
+                rootGet, "/ws/voice")).isTrue();
+        assertThat(SecurityConfiguration.isVoiceWebSocketRequest(
+                rootPost, "/ws/voice")).isTrue();
+        assertThat(SecurityConfiguration.isVoiceWebSocketRequest(
+                contextRequest, "/ws/voice")).isTrue();
+
+        for (String uri : List.of(
+                "/ws/voice/",
+                "/ws/voice/extra",
+                "/api/ws/voice",
+                "/ws%2Fvoice",
+                "/api/health")) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", uri);
+            assertThat(SecurityConfiguration.isVoiceWebSocketRequest(
+                    request, "/ws/voice"))
+                    .as("only the exact configured voice path is isolated: %s", uri)
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void ordinaryH5RequestsStillResolveTheDeferredCsrfToken() {
+        SpaCsrfTokenRequestHandler handler = new SpaCsrfTokenRequestHandler();
+        AtomicInteger resolutions = new AtomicInteger();
+
+        handler.handle(
+                new MockHttpServletRequest("GET", "/api/health"),
+                new MockHttpServletResponse(),
+                () -> {
+                    resolutions.incrementAndGet();
+                    return new DefaultCsrfToken(
+                            "X-CSRF-Token", "_csrf", "test-csrf-token");
+                });
+
+        assertThat(resolutions).hasValue(1);
     }
 
     private static AuthSecurityProperties propertiesWithCookieDomain(String domain) {

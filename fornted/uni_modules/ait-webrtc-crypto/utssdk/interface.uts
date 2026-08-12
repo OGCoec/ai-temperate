@@ -1,0 +1,33 @@
+export type AitWebRtcCryptoChannelResult = {
+  success: boolean
+  channelId: string
+  nonce: string
+  key: string
+  errorCode: string
+}
+
+export type AitWebRtcDecryptOptions = {
+  channelId: string
+  nonce: string
+  key: string
+  iv: string
+  payload: string
+}
+
+export type AitWebRtcDecryptResult = {
+  success: boolean
+  plaintext: string
+  errorCode: string
+}
+
+/**
+ * 为一次 Android WebRTC 后台探针创建不可复用的通道标识、随机数和 AES-256 密钥。
+ */
+export type CreateWebRtcProbeChannelApi =
+  () => AitWebRtcCryptoChannelResult
+
+/**
+ * 使用 Android 原生 AES-GCM 验证并解密隐藏 WebView 回传的一次性密文。
+ */
+export type DecryptWebRtcProbePayloadApi =
+  (options: AitWebRtcDecryptOptions) => AitWebRtcDecryptResult

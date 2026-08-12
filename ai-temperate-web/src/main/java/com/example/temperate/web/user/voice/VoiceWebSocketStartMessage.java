@@ -5,19 +5,18 @@ import com.example.temperate.service.user.voice.VoiceException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 解析公开 WSS 的首个 session.start 控制帧并在转发前剥离一次性票据。
+ * 解析已完成握手授权的 Voice v2 session.start 控制帧，并生成上游语音会话初始化消息。
  *
- * <p>字段使用严格白名单，避免客户端把票据或未定义配置透传给本机 Whisper 服务。</p>
+ * <p>字段使用严格白名单，Ticket 已在返回 101 前消费，因此首帧出现 Ticket 或其他未定义字段必须拒绝，
+ * 防止认证凭据透传给本机 Whisper 服务。</p>
  */
 public record VoiceWebSocketStartMessage(
-        String ticket,
         String language,
         String format,
         int sampleRate,
@@ -26,12 +25,10 @@ public record VoiceWebSocketStartMessage(
     private static final Set<String> ALLOWED_FIELDS = Set.of(
             "type",
             "protocolVersion",
-            "ticket",
             "language",
             "format",
             "sampleRate",
             "channels");
-    private static final Pattern TICKET = Pattern.compile("^[A-Za-z0-9_-]{43}$");
     private static final Pattern LANGUAGE = Pattern.compile(
             "^(?:auto|[a-z]{2,3}(?:-[a-z]{2})?)$",
             Pattern.CASE_INSENSITIVE);
@@ -44,17 +41,15 @@ public record VoiceWebSocketStartMessage(
             if (root == null || !root.isObject()
                     || !"session.start".equals(text(root, "type"))
                     || !root.path("protocolVersion").isIntegralNumber()
-                    || root.path("protocolVersion").asInt(-1) != 1
+                    || root.path("protocolVersion").asInt(-1) != 2
                     || !allFieldsAllowed(root)) {
                 throw invalid();
             }
-            String ticket = text(root, "ticket");
             String language = text(root, "language");
             String format = text(root, "format");
             int sampleRate = root.path("sampleRate").asInt(-1);
             int channels = root.path("channels").asInt(-1);
-            if (!canonicalTicket(ticket)
-                    || language == null || !LANGUAGE.matcher(language).matches()
+            if (language == null || !LANGUAGE.matcher(language).matches()
                     || !"pcm_s16le".equals(format)
                     || !root.path("sampleRate").isIntegralNumber()
                     || !root.path("channels").isIntegralNumber()
@@ -63,7 +58,6 @@ public record VoiceWebSocketStartMessage(
                 throw invalid();
             }
             return new VoiceWebSocketStartMessage(
-                    ticket,
                     language.toLowerCase(java.util.Locale.ROOT),
                     format,
                     sampleRate,
@@ -93,7 +87,7 @@ public record VoiceWebSocketStartMessage(
 
     @Override
     public String toString() {
-        return "VoiceWebSocketStartMessage[ticket=redacted, language=" + language
+        return "VoiceWebSocketStartMessage[language=" + language
                 + ", format=" + format + ", sampleRate=" + sampleRate
                 + ", channels=" + channels + "]";
     }
@@ -106,20 +100,6 @@ public record VoiceWebSocketStartMessage(
             }
         }
         return true;
-    }
-
-    private static boolean canonicalTicket(String value) {
-        if (value == null || !TICKET.matcher(value).matches()) {
-            return false;
-        }
-        try {
-            byte[] decoded = Base64.getUrlDecoder().decode(value);
-            return decoded.length == 32
-                    && Base64.getUrlEncoder().withoutPadding()
-                    .encodeToString(decoded).equals(value);
-        } catch (IllegalArgumentException exception) {
-            return false;
-        }
     }
 
     private static String text(JsonNode root, String field) {

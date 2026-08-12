@@ -50,6 +50,18 @@ class RedisGlobalDeviceBlockServiceTest {
     }
 
     @Test
+    void readsTheSameBlockKeyFromAnAlreadyProtectedDigest() {
+        var digest = protector.deviceBlock(DEVICE_ID);
+        String expectedKey = keyFactory.globalDeviceBlockKey(digest);
+        when(redisTemplate.getExpire(expectedKey, TimeUnit.SECONDS)).thenReturn(45L);
+
+        assertThat(service.remainingBlockTtlByDigest(digest))
+                .isEqualTo(Duration.ofSeconds(45));
+
+        verify(redisTemplate).getExpire(expectedKey, TimeUnit.SECONDS);
+    }
+
+    @Test
     void rejectsMissingUppercaseAndWhitespaceDeviceIdsBeforeRedisLookup() {
         assertThatThrownBy(() -> service.remainingBlockTtl(null))
                 .isInstanceOf(IllegalArgumentException.class);

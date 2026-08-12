@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 在 MVC Controller 执行前统一拦截命中全局设备封禁规则的认证入口请求。
+ * 在 MVC Controller 执行前统一拦截命中全局设备封禁规则的认证入口与 Voice Ticket 签发请求。
  *
  * <p>该拦截器只读取设备安装标识并查询封禁状态，不创建封禁记录；具体封禁写入仍由登录、注册和找回密码各自的风控流程完成。
  * Spring 运行时使用完整构造器注入统一 ObjectMapper 和 Clock，测试便捷构造器只用于轻量单元测试。</p>
@@ -100,7 +100,8 @@ public final class GlobalDeviceBlockInterceptor implements HandlerInterceptor {
         return matchesProtectedPrefix(path, "/api/auth/login")
                 || matchesProtectedPrefix(path, "/api/auth/register")
                 || matchesProtectedPrefix(path, "/api/auth/password-reset")
-                || "/api/auth/session/bootstrap".equals(path);
+                || "/api/auth/session/bootstrap".equals(path)
+                || "/api/users/me/voice/session-tickets".equals(path);
     }
 
     private static boolean matchesProtectedPrefix(String path, String prefix) {

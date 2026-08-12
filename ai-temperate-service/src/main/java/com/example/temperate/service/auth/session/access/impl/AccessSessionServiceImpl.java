@@ -8,6 +8,7 @@ import com.example.temperate.service.auth.protection.component.AuthSessionSecret
 import com.example.temperate.service.auth.session.access.AccessSessionService;
 import com.example.temperate.service.auth.session.access.dto.SessionAccessCommand;
 import com.example.temperate.service.auth.session.access.dto.SessionAccessResult;
+import com.example.temperate.service.auth.session.access.dto.SessionBindingAccessCommand;
 import com.example.temperate.service.auth.session.access.observability.AccessSessionMetrics;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -102,6 +103,29 @@ public final class AccessSessionServiceImpl implements AccessSessionService {
                 true,
                 renewedAccessToken,
                 renewedSession.expiresAt());
+    }
+
+    @Override
+    public SessionPrincipal validateActiveBinding(SessionBindingAccessCommand command) {
+        SessionBindingAccessCommand valid = Objects.requireNonNull(command);
+        final RefreshSessionValidation validation;
+        try {
+            validation = refreshSessionStore.validateBinding(
+                    valid.refreshSessionDigest(),
+                    valid.deviceDigest());
+        } catch (RuntimeException exception) {
+            metrics.infrastructureFailure();
+            throw error(SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+                    "Session binding validation is temporarily unavailable.", false, exception);
+        }
+        RefreshSessionSnapshot session = validateRefresh(validation);
+        if (session.userId() != valid.expectedUserId()) {
+            metrics.sessionMismatch();
+            throw error(SessionAuthenticationErrorCode.SESSION_MISMATCH,
+                    "Refresh session does not belong to the expected user.", true);
+        }
+        // 握手校验不续期、不轮换 CSRF；只复用当前账号 ACTIVE 规则生成最小安全主体。
+        return principal(requireCurrentAccount(session), session);
     }
 
     private RefreshSessionValidation readValidation(

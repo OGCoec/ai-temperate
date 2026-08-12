@@ -1,3 +1,5 @@
+import { canonicalHttpUrl, parseAbsoluteHttpUrl } from '../platform/http-url.js'
+
 const MAX_SOURCES = 200
 const MAX_SOURCE_ID = 128
 const MAX_ACTIVITY_ID = 128
@@ -14,16 +16,9 @@ function boundedText(value, maximum) {
 function normalizedSourceUrl(value, includeFragment = true) {
 	const raw = boundedText(value, MAX_URL)
 	if (!raw) return null
-	try {
-		const parsed = new URL(raw)
-		if (!['http:', 'https:'].includes(parsed.protocol.toLowerCase())) return null
-		parsed.protocol = parsed.protocol.toLowerCase()
-		parsed.hostname = parsed.hostname.toLowerCase()
-		if (!includeFragment) parsed.hash = ''
-		return parsed
-	} catch (_) {
-		return null
-	}
+	const parsed = parseAbsoluteHttpUrl(raw)
+	if (!parsed || includeFragment) return parsed
+	return parseAbsoluteHttpUrl(canonicalHttpUrl(raw, { stripFragment: true }))
 }
 
 export function canonicalAiConversationSourceUrl(value) {
