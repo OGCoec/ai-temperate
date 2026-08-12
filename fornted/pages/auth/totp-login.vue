@@ -116,24 +116,24 @@
 <style lang="scss">
 	.totp-page {
 		min-height: 100vh;
+		min-height: 100dvh;
 		box-sizing: border-box;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 48rpx 28rpx;
+		padding: 48rpx 40rpx;
 		background: #0b0d0c;
 		color: #f1f5f3;
 	}
 
 	.totp-card {
 		width: 100%;
-		max-width: 720rpx;
+		max-width: 760rpx;
 		box-sizing: border-box;
-		padding: 52rpx 40rpx;
-		border: 1px solid #29312d;
-		border-radius: 28rpx;
-		background: #121614;
-		box-shadow: 0 28rpx 80rpx rgba(0, 0, 0, 0.28);
+		padding: 48rpx 40rpx;
+		border: 1px solid rgba(151, 170, 160, .22);
+		border-radius: 24rpx;
+		background: #151816;
 	}
 
 	.totp-kicker { display: block; color: #37d39a; font-size: 22rpx; letter-spacing: 0.16em; }
@@ -142,9 +142,9 @@
 	.totp-error { margin-top: 28rpx; padding: 20rpx; border: 1px solid #774945; border-radius: 14rpx; color: #ffb4ac; background: #2b1918; }
 	.totp-field { margin-top: 36rpx; }
 	.totp-label { display: block; margin-bottom: 14rpx; color: #dbe4df; font-size: 26rpx; }
-	.totp-input { height: 104rpx; padding: 0 30rpx; border: 1px solid #3a4640; border-radius: 18rpx; background: #0d100f; color: #f4faf7; font-size: 42rpx; letter-spacing: 0.28em; }
+	.totp-input { height: 104rpx; padding: 0 30rpx; border: 1px solid #3a4640; border-radius: 20rpx; background: #171a18; color: #f4faf7; font-size: 42rpx; letter-spacing: 0.28em; }
 	.totp-help { display: block; margin-top: 12rpx; color: #87938d; font-size: 24rpx; }
-	.totp-submit, .totp-cancel { width: 100%; min-height: 92rpx; margin-top: 28rpx; display: flex; align-items: center; justify-content: center; border-radius: 18rpx; font-size: 28rpx; }
+	.totp-submit, .totp-cancel { width: 100%; min-height: 92rpx; margin-top: 28rpx; display: flex; align-items: center; justify-content: center; border-radius: 20rpx; font-size: 28rpx; }
 	.totp-submit { border: 0; color: #07110d; background: #37d39a; font-weight: 700; }
 	.totp-cancel { margin-top: 16rpx; border: 1px solid #36413c; color: #b8c3bd; background: transparent; }
 	.totp-submit:focus-visible, .totp-cancel:focus-visible, .totp-input:focus { outline: 3px solid rgba(55, 211, 154, 0.45); outline-offset: 3px; }

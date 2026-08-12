@@ -32,9 +32,9 @@ $auth-danger-border: rgba(239, 119, 119, .62);
 	padding: 0 18px;
 	display: flex;
 	align-items: center;
-	border-radius: 10px;
+	border-radius: 12px;
 	box-sizing: border-box;
-	transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+	transition: border-color 140ms ease-out, background-color 140ms ease-out, box-shadow 140ms ease-out;
 }
 
 .auth-control:focus-within,
@@ -106,14 +106,14 @@ $auth-danger-border: rgba(239, 119, 119, .62);
 	margin: 0;
 	padding: 0;
 	border: 0;
-	border-radius: 9px;
+	border-radius: 12px;
 	background: transparent;
 	line-height: 1;
 }
 
 .password-toggle:active {
 	background: $auth-input-hover;
-	transform: scale(.94);
+	transform: scale(.985);
 }
 
 .password-toggle:focus-visible,
