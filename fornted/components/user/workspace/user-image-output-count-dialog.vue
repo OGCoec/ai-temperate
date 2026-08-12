@@ -86,16 +86,18 @@
 
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
-	.image-count-dialog { width: min(360px, calc(100vw - 36px)); padding: 20px; border: 1px solid #34413a; border-radius: 18px; background: #151a17; box-shadow: 0 24px 64px rgba(0, 0, 0, .48); box-sizing: border-box; }
+	.image-count-dialog { width: min(360px, calc(100vw - 36px)); padding: 20px; border: 1px solid rgba(151, 170, 160, .28); border-radius: 16px; background: rgba(22, 27, 24, .96); box-shadow: 0 8px 24px rgba(0, 0, 0, .32); box-sizing: border-box; }
 	.image-count-title, .image-count-help, .image-count-error { display: block; }
 	.image-count-title { color: #edf6f1; font-size: 17px; font-weight: 760; }
 	.image-count-help { margin-top: 8px; color: #9ba6a0; font-size: 12px; line-height: 1.55; }
-	.image-count-input { height: 44px; margin-top: 16px; padding: 0 12px; border: 1px solid #435149; border-radius: 11px; background: #0f1311; color: #edf6f1; font-size: 16px; font-variant-numeric: tabular-nums; box-sizing: border-box; }
+	.image-count-input { height: 44px; margin-top: 16px; padding: 0 12px; border: 1px solid #435149; border-radius: 12px; background: #171a18; color: #edf6f1; font-size: 16px; font-variant-numeric: tabular-nums; box-sizing: border-box; }
 	.image-count-input:focus { border-color: #37d39a; outline: 2px solid rgba(55, 211, 154, .28); outline-offset: 1px; }
 	.image-count-error { min-height: 18px; margin-top: 6px; color: #ff9b94; font-size: 11px; }
 	.image-count-actions { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
-	.image-count-button { @include user-frosted-control; min-width: 72px; min-height: 38px; margin: 0; padding: 0 14px; border-radius: 10px; color: #dce5e0; font-size: 13px; }
+	.image-count-button { @include user-frosted-control; min-width: 72px; min-height: 44px; margin: 0; padding: 0 14px; border-radius: 12px; color: #dce5e0; font-size: 13px; }
 	.image-count-button::after { border: 0; }
 	.image-count-confirm { background: #37d39a; color: #07110d; font-weight: 750; }
 	.image-count-confirm[disabled] { opacity: .45; }
+	@supports (backdrop-filter: blur(12px)) { .image-count-dialog { background: rgba(22, 27, 24, .86); backdrop-filter: blur(20px) saturate(118%); -webkit-backdrop-filter: blur(20px) saturate(118%); } }
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) { .image-count-dialog { background: #161b18; backdrop-filter: none; -webkit-backdrop-filter: none; } }
 </style>

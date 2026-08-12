@@ -16,6 +16,8 @@ test('custom model selector preserves the native picker change payload contract'
 
 	assert.match(selector, /this\.\$emit\('change',\s*\{\s*detail:\s*\{\s*value:\s*String\(index\)\s*\}\s*\}\)/)
 	assert.match(chatPanel, /<user-model-selector[\s\S]*:options="models"[\s\S]*:selected-index="selectedModelIndex"[\s\S]*@change="selectModel"/)
+	assert.match(chatPanel, /:disabled="generating \|\| !models\.length"/)
+	assert.doesNotMatch(chatPanel, /<picker[\s\S]{0,240}:range="models"/)
 	assert.match(chatPanel, /async selectModel\(event\)[\s\S]*normalizeReasoningEffortForModel/)
 })
 

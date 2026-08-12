@@ -245,4 +245,12 @@
 			transition: none;
 		}
 	}
+
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		.workspace-history-drawer {
+			background: #151816;
+			backdrop-filter: none;
+			-webkit-backdrop-filter: none;
+		}
+	}
 </style>

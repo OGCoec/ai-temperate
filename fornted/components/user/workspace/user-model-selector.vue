@@ -57,6 +57,7 @@
 
 <script>
 	export default {
+		name: 'UserModelSelector',
 		props: {
 			options: {
 				type: Array,

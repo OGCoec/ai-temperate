@@ -4073,4 +4073,8 @@
 		.research-row { grid-template-columns: 1fr; gap: 2px; }
 		.composer-note { padding-left: 10px; text-align: left; }
 	}
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		.chat-header { background: #0b0d0c; backdrop-filter: none; -webkit-backdrop-filter: none; }
+		.composer { background: #1a1e1b; backdrop-filter: none; -webkit-backdrop-filter: none; }
+	}
 </style>
