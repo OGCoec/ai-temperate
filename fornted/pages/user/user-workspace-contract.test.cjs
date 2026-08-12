@@ -169,3 +169,22 @@ test('chat composer removes the motion preference control after motion is manual
 	assert.match(chatPanel,
 		/<button[\s\S]*?class="motion-toggle"[\s\S]*?@click="toggleMotionPreference"/)
 })
+
+test('desktop voice composer keeps live recognition compact until the final transcript is ready', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(chatPanel,
+		/<view\s+class="composer"\s+:class="\{ 'is-voice-active': voiceInteractionActive \}"/)
+	assert.match(chatPanel,
+		/<button v-if="!voiceInteractionActive" class="composer-icon"/)
+	assert.match(chatPanel, /<textarea\s+v-if="!voiceInteractionActive"\s+v-model="draft"/)
+	assert.doesNotMatch(chatPanel, /voice-transcript-placeholder/)
+	assert.match(chatPanel,
+		/@media screen and \(min-width: 768px\)[\s\S]*?\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active \.voice-cancel-button[\s\S]*?width:\s*38px/)
+	assert.match(chatPanel,
+		/@media screen and \(min-width: 768px\)[\s\S]*?\.chat-main:not\(\.is-android-client\) \.composer-input\s*\{\s*font-size:\s*14px/)
+	assert.match(chatPanel,
+		/\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active \.voice-cancel-button\s*\{\s*order:\s*-1/)
+	assert.match(chatPanel,
+		/\.is-android-client \.voice-cancel-button,[\s\S]*?width:\s*48px/)
+})

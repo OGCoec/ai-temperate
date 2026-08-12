@@ -387,8 +387,11 @@
 					@remove="removePending"
 					@retry="retryAttachment"
 				/>
-				<view class="composer">
-					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || voiceInteractionActive || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
+				<view
+					class="composer"
+					:class="{ 'is-voice-active': voiceInteractionActive }"
+				>
+					<button v-if="!voiceInteractionActive" class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
 						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
 					</button>
 					<view class="composer-entry">
@@ -416,11 +419,12 @@
 								:aria-label="voiceActivityPresentation.label"
 							/>
 							<textarea
+								v-if="!voiceInteractionActive"
 								v-model="draft"
 								class="composer-input"
 								auto-height
 								:maxlength="65536"
-								:placeholder="voiceInteractionActive ? '语音识别文字会显示在这里' : '输入消息'"
+								placeholder="输入消息"
 								aria-label="聊天消息"
 								:disabled="generating || voiceInteractionActive"
 								@confirm="send"
@@ -4054,6 +4058,21 @@
 	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
 		.mobile-only { display: none !important; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active { min-height: 58px; padding: 7px; align-items: center; gap: 7px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .composer-icon,
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button,
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-button { width: 38px; height: 38px; min-height: 38px; border-radius: 12px; }
+		.chat-main:not(.is-android-client) .composer-input { font-size: 14px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .composer-entry { align-self: stretch; justify-content: center; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status { width: 100%; min-height: 18px; padding-top: 0; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status .user-voice-waveform { height: 18px; min-height: 18px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row { min-height: 30px; gap: 8px; overflow: hidden; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row .user-thinking-orb { width: 26px; min-width: 26px; height: 26px; min-height: 26px; flex-basis: 26px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button { order: -1; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-glyph { font-size: 23px; line-height: 34px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-stack { width: 38px; min-width: 38px; flex-basis: 38px; align-self: center; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-duration { width: 38px; min-height: 18px; font-size: 10px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-square { width: 12px; height: 12px; }
 		.generated-image-gallery.is-hero-two { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
 		.generated-image-gallery.is-hero-three { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(3, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
 		.generated-image-gallery.is-hero-two .generated-image-gallery-tile, .generated-image-gallery.is-hero-three .generated-image-gallery-tile { aspect-ratio: auto; }
