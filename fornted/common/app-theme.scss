@@ -1,10 +1,20 @@
 $app-bg: #0b0d0c;
 $app-surface: #151816;
 $app-raised: #171a18;
+$app-raised-strong: #1a1e1b;
 $app-border: #303733;
+$app-border-subtle: rgba(151, 170, 160, .18);
 $app-text: #f3f5f4;
 $app-muted: #8b9690;
+$app-muted-strong: #a0aaa5;
 $app-green: #37d39a;
 $app-green-pressed: #2dbb86;
 $app-lime: #a8db4d;
 $app-teal: #65c7c2;
+
+$app-radius-small: 8px;
+$app-radius-control: 12px;
+$app-radius-surface: 14px;
+$app-radius-float: 16px;
+
+$app-shadow-float: 0 8px 24px rgba(0, 0, 0, .28);

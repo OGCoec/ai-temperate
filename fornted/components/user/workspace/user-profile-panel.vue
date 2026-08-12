@@ -441,18 +441,18 @@
 	}
 
 	.profile-shell {
-		max-width: 720px;
+		max-width: 800px;
 		min-height: 100%;
 		box-sizing: border-box;
 		margin: 0 auto;
-		padding: 34px 20px calc(108px + env(safe-area-inset-bottom));
+		padding: 32px 16px calc(108px + env(safe-area-inset-bottom));
 	}
 
-	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 	.profile-heading { min-width: 0; display: flex; flex-direction: column; }
 	.profile-kicker { color: #37d39a; font-size: 13px; font-weight: 700; letter-spacing: 2px; }
-	.profile-title { color: #f3f5f4; font-size: 36px; line-height: 1.2; font-weight: 750; margin-top: 10px; }
-	.profile-subtitle { color: #8b9690; font-size: 15px; line-height: 1.6; margin-top: 10px; }
+	.profile-title { color: #f3f5f4; font-size: 32px; line-height: 1.2; font-weight: 760; margin-top: 8px; letter-spacing: -.45px; }
+	.profile-subtitle { color: #a0aaa5; font-size: 15px; line-height: 1.6; margin-top: 8px; }
 	.profile-refresh {
 		@include user-frosted-control;
 		min-width: 72px;
@@ -564,7 +564,7 @@
 	.profile-status { margin-top: 6px; color: #8b9690; font-size: 13px; }
 	.profile-status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #a8db4d; }
 
-	.profile-section { margin-top: 28px; }
+	.profile-section { margin-top: 24px; }
 	.profile-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 10px; }
 	.profile-section-title { display: block; margin: 0 0 10px 4px; color: #8b9690; font-size: 13px; font-weight: 650; }
 	.profile-section-heading .profile-section-title { margin: 0; }
@@ -641,7 +641,7 @@
 	}
 	@media screen and (min-width: 1024px) {
 		.profile-scroll { height: 100%; }
-		.profile-shell { max-width: 840px; padding: 48px 40px; }
+		.profile-shell { max-width: 800px; padding: 48px 24px; }
 	}
 	@media (hover: hover) and (pointer: fine) {
 		.profile-refresh:hover { background: #202520; border-color: #4d6258; }

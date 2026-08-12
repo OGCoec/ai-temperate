@@ -300,5 +300,6 @@
 		height: 100%;
 		flex: 1 1 0%;
 		overflow: hidden;
+		background: #0b0d0c;
 	}
 </style>

@@ -264,7 +264,7 @@
 		position: absolute;
 		z-index: 12;
 		top: 50%;
-		left: 12px;
+		left: 16px;
 		width: 28px;
 		max-height: min(calc(100% - 32px), 460px);
 		align-items: center;
@@ -312,7 +312,7 @@
 		height: 2px;
 		border-radius: 999px;
 		background: rgba(183, 194, 188, .34);
-		transition: width 150ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out;
+		transition: width 140ms ease-out, background-color 140ms ease-out, box-shadow 140ms ease-out;
 	}
 
 	.turn-marker-button.is-active .turn-marker-line {
@@ -359,17 +359,17 @@
 		max-height: 176px;
 		padding: 10px 12px;
 		overflow: hidden;
-		border: 1px solid rgba(94, 111, 101, .58);
+		border: 1px solid rgba(151, 170, 160, .26);
 		border-radius: 14px;
 		background: rgba(31, 36, 33, .96);
-		box-shadow: 0 18px 48px rgba(0, 0, 0, .36);
-		backdrop-filter: blur(20px) saturate(115%);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+		backdrop-filter: blur(16px) saturate(112%);
 		color: #e8eeeb;
 		cursor: pointer;
 		line-height: normal;
 		text-align: left;
 		transform: translateY(-50%);
-		animation: turn-preview-enter 140ms cubic-bezier(.23, 1, .32, 1);
+		animation: turn-preview-enter 170ms cubic-bezier(.2, .8, .2, 1);
 		box-sizing: border-box;
 	}
 
@@ -423,7 +423,7 @@
 	}
 
 	@media screen and (min-width: 1200px) {
-		.conversation-turn-rail { left: calc(50% - 438px); }
+		.conversation-turn-rail { left: calc(50% - 454px); }
 	}
 
 	@media screen and (max-width: 767px) {

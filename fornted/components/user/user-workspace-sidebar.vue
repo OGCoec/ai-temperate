@@ -147,16 +147,16 @@
 	}
 
 	.workspace-new-chat {
-		width: calc(100% - 8px);
-		min-height: 44px;
-		margin: 0 4px 8px;
-		padding: 7px 10px;
+		width: calc(100% - 12px);
+		min-height: 48px;
+		margin: 0 6px 12px;
+		padding: 8px 12px;
 		display: flex;
 		align-items: center;
 		justify-content: flex-start;
 		gap: 9px;
 		border: 0;
-		border-radius: 10px;
+		border-radius: 12px;
 		background: transparent;
 		color: #dce5e0;
 		font-size: 14px;
@@ -180,16 +180,16 @@
 		position: fixed;
 		inset: 0 auto 0 0;
 		z-index: 35;
-		width: min(86vw, 320px);
-		padding: 18px 12px calc(92px + env(safe-area-inset-bottom));
+		width: min(88vw, 360px);
+		padding: 16px 12px calc(92px + env(safe-area-inset-bottom));
 		display: flex;
 		flex-direction: column;
 		box-sizing: border-box;
-		border-right: 1px solid rgba(86, 101, 93, .44);
-		background: rgba(18, 22, 20, .96);
-		backdrop-filter: blur(20px) saturate(115%);
+		border-right: 1px solid rgba(151, 170, 160, .22);
+		background: rgba(21, 24, 22, .96);
+		backdrop-filter: blur(16px) saturate(112%);
 		transform: translateX(-105%);
-		transition: transform 180ms ease-out;
+		transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
 	}
 
 	.workspace-history-drawer.is-open {
@@ -200,7 +200,7 @@
 		position: fixed;
 		inset: 0;
 		z-index: 34;
-		background: rgba(0, 0, 0, .58);
+		background: rgba(0, 0, 0, .56);
 	}
 
 	.workspace-drawer-heading {
@@ -212,8 +212,8 @@
 	}
 
 	.workspace-drawer-title {
-		font-size: 18px;
-		font-weight: 720;
+		font-size: 17px;
+		font-weight: 740;
 	}
 
 	.workspace-icon-button {

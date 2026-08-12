@@ -84,8 +84,8 @@
 		left: 0;
 		z-index: 20;
 		box-sizing: border-box;
-		padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
-		border-top: 1px solid rgba(70, 81, 75, .54);
+		padding: 8px 16px calc(10px + env(safe-area-inset-bottom));
+		border-top: 1px solid rgba(151, 170, 160, .18);
 	}
 
 	.user-primary-navigation-before,
@@ -98,7 +98,7 @@
 		margin: 0 auto;
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 8px;
+		gap: 6px;
 	}
 
 	.user-primary-navigation-item {
@@ -110,7 +110,7 @@
 		justify-content: center;
 		gap: 8px;
 		border: 1px solid transparent;
-		border-radius: 14px;
+		border-radius: 12px;
 		background: transparent;
 		color: #9ba6a0;
 		font-size: 14px;
@@ -118,12 +118,12 @@
 		line-height: 1.2;
 		text-align: center;
 		box-sizing: border-box;
-		transition: transform 120ms ease-out, background-color 180ms ease-out, color 180ms ease-out;
+		transition: transform 90ms ease-out, background-color 140ms ease-out, color 140ms ease-out;
 	}
 
 	.user-primary-navigation-item::after { border: 0; }
 	.user-primary-navigation-item.is-active {
-		background: rgba(55, 211, 154, .16);
+		background: rgba(55, 211, 154, .13);
 		color: #dff8ed;
 	}
 	.user-primary-navigation-item:active { transform: scale(.985); }
@@ -142,12 +142,12 @@
 	@media screen and (min-width: 768px) {
 		.user-primary-navigation {
 			position: static;
-			width: 216px;
+		width: 232px;
 			min-height: 100%;
-			padding: 28px 12px;
+		padding: 20px 12px;
 			flex-shrink: 0;
 			border-top: 0;
-			border-right: 1px solid #303733;
+		border-right: 1px solid rgba(151, 170, 160, .18);
 		}
 
 		.user-primary-navigation-inner {
@@ -194,12 +194,23 @@
 		}
 
 		.is-chat-sidebar .user-primary-navigation-item.is-active {
+			position: relative;
 			background: rgba(243, 245, 244, .055);
 			color: #e5ece8;
 		}
+
+		.is-chat-sidebar .user-primary-navigation-item.is-active::before {
+			width: 3px;
+			height: 20px;
+			position: absolute;
+			left: 0;
+			border-radius: 0 3px 3px 0;
+			background: #37d39a;
+			content: '';
+		}
 	}
 
-	@media screen and (min-width: 1024px) {
+	@media screen and (min-width: 1100px) {
 		.user-primary-navigation {
 			padding-right: 16px;
 			padding-left: 16px;
@@ -212,7 +223,7 @@
 
 		.user-primary-navigation.is-chat-sidebar {
 			--sidebar-inline-padding: 16px;
-			width: 280px;
+			width: 272px;
 		}
 	}
 

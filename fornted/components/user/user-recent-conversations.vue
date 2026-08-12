@@ -133,8 +133,8 @@
 
 	.recent-toggle {
 		width: 100%;
-		min-height: 42px;
-		padding: 7px 12px;
+		min-height: 44px;
+		padding: 8px 12px;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -162,12 +162,12 @@
 
 	.conversation-row {
 		min-width: 0;
-		margin: 1px 4px;
+		margin: 2px 6px;
 		display: flex;
 		align-items: center;
-		border-radius: 9px;
+		border-radius: 10px;
 		background: transparent;
-		transition: background-color 150ms ease-out;
+		transition: background-color 140ms ease-out;
 	}
 
 	.conversation-row.is-active {
@@ -176,8 +176,8 @@
 
 	.conversation-open {
 		min-width: 0;
-		min-height: 40px;
-		padding: 7px 8px;
+		min-height: 44px;
+		padding: 8px;
 		flex: 1;
 		display: flex;
 		align-items: center;
@@ -244,7 +244,7 @@
 		}
 
 		.conversation-row {
-			margin-right: calc(4px + var(--sidebar-inline-padding, 0px));
+		margin-right: calc(6px + var(--sidebar-inline-padding, 0px));
 		}
 
 		.recent-status,

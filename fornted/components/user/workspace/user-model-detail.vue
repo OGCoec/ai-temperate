@@ -180,18 +180,18 @@
 
 	.model-detail-page { min-width: 0; min-height: 0; height: 100%; background: #0b0d0c; color: #f3f5f4; }
 	.model-detail-scroll { height: 100%; min-height: 0; }
-	.model-detail-shell { max-width: 720px; min-height: 100%; margin: 0 auto; padding: 18px 20px calc(40px + env(safe-area-inset-bottom)); box-sizing: border-box; }
-	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; margin-bottom: 24px; }
+	.model-detail-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 20px 16px calc(40px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; margin-bottom: 20px; }
 	.model-detail-back { @include user-frosted-control; min-width: 84px; min-height: 48px; margin: 0; padding: 0 10px; justify-content: flex-start; gap: 6px; border-radius: 12px; color: #dce5e0; font-size: 14px; font-weight: 650; line-height: 1.2; }
 	.model-detail-back::after, .model-detail-retry::after { border: 0; }
 	.model-detail-back:active, .model-detail-retry:active { transform: scale(.985); }
-	.model-detail-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }
+	.model-detail-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
 	.model-detail-icon { width: 58px; height: 58px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 16px; background: #1b211d; }
 	.model-detail-icon-image { display: block; }
 	.model-detail-hero-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; }
 	.model-detail-kicker { color: #65c7c2; font-size: 13px; font-weight: 650; line-height: 1.4; }
-	.model-detail-title { margin-top: 4px; overflow-wrap: anywhere; color: #f3f5f4; font-size: 28px; font-weight: 750; line-height: 1.18; }
-	.model-detail-section { margin-top: 28px; }
+	.model-detail-title { margin-top: 4px; overflow-wrap: anywhere; color: #f3f5f4; font-size: 28px; font-weight: 760; line-height: 1.18; letter-spacing: -.35px; }
+	.model-detail-section { margin-top: 24px; }
 	.model-detail-section-title { display: block; margin: 0 0 10px 4px; color: #8b9690; font-size: 13px; font-weight: 650; }
 	.model-detail-panel { @include user-frosted-surface; padding: 18px; border-radius: 16px; }
 	.model-detail-description { color: #dce5e0; font-size: 15px; line-height: 1.65; white-space: pre-wrap; }
@@ -221,7 +221,7 @@
 		.model-detail-retry:hover { background: rgba(55, 211, 154, .2); }
 	}
 	@media screen and (min-width: 768px) { .model-detail-shell { padding-top: 32px; } }
-	@media screen and (min-width: 1024px) { .model-detail-shell { max-width: 840px; padding-right: 40px; padding-left: 40px; } }
+	@media screen and (min-width: 1024px) { .model-detail-shell { max-width: 800px; padding-right: 24px; padding-left: 24px; } }
 	@media (prefers-reduced-motion: reduce) {
 		.model-detail-back, .model-detail-retry { transition: none; }
 		.model-detail-skeleton-icon, .model-detail-skeleton-line { animation: none; }
