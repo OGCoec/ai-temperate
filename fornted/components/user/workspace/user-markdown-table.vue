@@ -169,8 +169,8 @@
 </script>
 
 <style lang="scss">
-	.ai-markdown-table-region { width: 100%; max-width: 100%; min-width: 0; margin: 14px 0; overflow: hidden; border: 1px solid rgba(120, 145, 132, .35); border-radius: 14px; background: #121815; box-sizing: border-box; }
-	.ai-markdown-table-toolbar { min-height: 42px; padding: 0 10px 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(120, 145, 132, .25); }
+	.ai-markdown-table-region { width: 100%; max-width: 100%; min-width: 0; margin: 16px 0; overflow: hidden; border: 1px solid rgba(151, 170, 160, .26); border-radius: 12px; background: #151816; box-sizing: border-box; }
+	.ai-markdown-table-toolbar { min-height: 40px; padding: 0 8px 0 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(151, 170, 160, .18); }
 	.ai-markdown-table-label { color: #b9c7bf; font-size: 12px; font-weight: 700; }
 	.ai-markdown-table-copy { min-width: 44px; min-height: 44px; flex: 0 0 auto; margin: 0; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: #8fe8c4; font-size: 12px; }
 	.ai-markdown-table-copy:active { background: rgba(143, 232, 196, .14); }
@@ -183,7 +183,7 @@
 	.ai-markdown-table { display: table; border-collapse: collapse; table-layout: fixed; }
 	.ai-markdown-table-row { display: table-row; }
 	.ai-markdown-table-head { background: rgba(255, 255, 255, .045); }
-	.ai-markdown-table-cell { padding: 10px 12px; display: table-cell; border-bottom: 1px solid rgba(120, 145, 132, .18); color: #e5eee9; font-size: 13px; line-height: 1.55; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
+	.ai-markdown-table-cell { padding: 8px 10px; display: table-cell; border-bottom: 1px solid rgba(151, 170, 160, .14); color: #e5eee9; font-size: 13px; line-height: 1.55; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
 	.ai-markdown-table-cell.is-breakable { word-break: break-all; }
 	.ai-markdown-table-cell.is-numeric { white-space: nowrap; overflow-wrap: normal; word-break: normal; font-variant-numeric: tabular-nums; }
 	.ai-markdown-table-cell .ai-markdown-inline-code,

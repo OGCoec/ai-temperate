@@ -102,12 +102,12 @@
 </script>
 
 <style lang="scss">
-	.user-source-chip { min-width: 0; min-height: 26px; margin: 0; padding: 0 8px; display: inline-flex; align-items: center; justify-content: flex-start; gap: 6px; border: 1px solid rgba(113, 151, 134, .38); border-radius: 999px; background: rgba(28, 38, 33, .82); color: #a9ead0; font-size: 11px; line-height: 1; vertical-align: middle; cursor: pointer; }
+	.user-source-chip { min-width: 0; min-height: 28px; margin: 0; padding: 0 9px; display: inline-flex; align-items: center; justify-content: flex-start; gap: 6px; border: 1px solid rgba(151, 170, 160, .24); border-radius: 999px; background: rgba(26, 30, 27, .86); color: #bfe9d6; font-size: 11px; line-height: 1; vertical-align: middle; cursor: pointer; }
 	.user-source-chip::after { border: 0; }
 	.user-source-chip:focus-visible { outline: 2px solid #8fe8c4; outline-offset: 2px; }
 	.user-source-chip:not(.is-disabled):active { background: rgba(55, 211, 154, .16); }
 	.user-source-chip.is-disabled { border-style: dashed; color: #91a49b; cursor: default; opacity: .78; }
-	.user-source-chip.is-card { width: 100%; min-height: 48px; padding: 7px 10px; border-radius: 10px; color: #d5ded9; text-align: left; }
+	.user-source-chip.is-card { width: 100%; min-height: 46px; padding: 7px 10px; border-radius: 10px; color: #d5ded9; text-align: left; }
 	.user-source-chip-favicon, .user-source-chip-fallback { width: 14px; height: 14px; flex: 0 0 14px; }
 	.user-source-chip-favicon { border-radius: 3px; }
 	.user-source-chip.is-card .user-source-chip-favicon, .user-source-chip.is-card .user-source-chip-fallback { width: 17px; height: 17px; flex-basis: 17px; }
@@ -115,5 +115,5 @@
 	.user-source-chip-title, .user-source-chip-domain { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.user-source-chip-title { color: #d5ded9; font-size: 12px; line-height: 1.25; }
 	.user-source-chip-domain { color: inherit; font-size: 11px; }
-	.user-source-chip.is-card .user-source-chip-domain { color: #718078; font-size: 10px; }
+	.user-source-chip.is-card .user-source-chip-domain { color: #8b9690; font-size: 10px; }
 </style>

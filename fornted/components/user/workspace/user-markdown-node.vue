@@ -133,18 +133,18 @@
 </script>
 
 <style lang="scss">
-	.ai-markdown-document { min-width: 0; color: #edf3f0; font-size: 15px; line-height: 1.72; word-break: break-word; }
-	.ai-markdown-paragraph { margin: 0 0 13px; }
-	.ai-markdown-heading { margin: 20px 0 10px; color: #f5faf7; line-height: 1.3; }
+	.ai-markdown-document { min-width: 0; color: #edf3f0; font-size: 16px; line-height: 1.68; word-break: break-word; }
+	.ai-markdown-paragraph { margin: 0 0 14px; }
+	.ai-markdown-heading { margin: 24px 0 10px; color: #f5faf7; line-height: 1.32; letter-spacing: -.2px; }
 	.ai-markdown-heading-1 { font-size: 25px; font-weight: 780; }
 	.ai-markdown-heading-2 { font-size: 21px; font-weight: 760; }
 	.ai-markdown-heading-3 { font-size: 18px; font-weight: 730; }
 	.ai-markdown-heading-4, .ai-markdown-heading-5, .ai-markdown-heading-6 { font-size: 16px; font-weight: 700; }
-	.ai-markdown-blockquote { min-height: 64px; margin: 14px 0; padding: 2px 0 2px 14px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; border-left: 3px solid #37d39a; color: #b9c7bf; text-align: left; }
+	.ai-markdown-blockquote { min-height: 0; margin: 16px 0; padding: 12px 14px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; border: 1px solid rgba(151, 170, 160, .24); border-radius: 12px; background: rgba(26, 30, 27, .58); color: #c2cdc7; text-align: left; }
 	.ai-markdown-blockquote > .ai-markdown-paragraph { margin-bottom: 0; }
-	.ai-markdown-thematic-break { height: 1px; margin: 20px 0; background: rgba(151, 171, 160, .45); }
-	.ai-markdown-list { margin: 0 0 13px; padding: 0; }
-	.ai-markdown-list-row { min-width: 0; display: flex; align-items: flex-start; gap: 9px; }
+	.ai-markdown-thematic-break { height: 1px; margin: 24px 0; background: rgba(151, 170, 160, .24); }
+	.ai-markdown-list { margin: 0 0 14px; padding: 0; }
+	.ai-markdown-list-row { min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
 	.ai-markdown-list-marker { min-width: 19px; color: #8fe8c4; line-height: 1.72; text-align: right; }
 	.ai-markdown-list-content { min-width: 0; flex: 1; }
 	.ai-markdown-list-item .ai-markdown-paragraph { margin-bottom: 7px; }

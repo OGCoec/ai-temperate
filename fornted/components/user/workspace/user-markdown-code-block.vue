@@ -374,9 +374,9 @@
 </script>
 
 <style lang="scss">
-	.ai-markdown-code-block { margin: 14px 0; overflow: hidden; border: 1px solid rgba(120, 145, 132, .35); border-radius: 14px; background: #1f1f1f; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
+	.ai-markdown-code-block { margin: 16px 0; overflow: hidden; border: 1px solid rgba(151, 170, 160, .28); border-radius: 12px; background: #1f1f1f; }
 	.ai-markdown-code-block.is-fullscreen { position: fixed; inset: 0; z-index: 10000; margin: 0; display: flex; flex-direction: column; border: 0; border-radius: 0; background: #1f1f1f; box-shadow: none; }
-	.ai-markdown-code-toolbar { min-height: 48px; padding: 0 6px 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(120, 145, 132, .25); background: rgba(255, 255, 255, .035); }
+	.ai-markdown-code-toolbar { min-height: 44px; padding: 0 6px 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(151, 170, 160, .18); background: rgba(255, 255, 255, .035); }
 	.ai-markdown-code-language { min-width: 0; overflow: hidden; color: #b9c7bf; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 	.ai-markdown-code-actions { display: flex; align-items: center; gap: 2px; }
 	.ai-code-view-toggle { position: relative; width: 74px; height: 36px; display: flex; align-items: center; gap: 2px; }

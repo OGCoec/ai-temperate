@@ -162,10 +162,10 @@
 
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
-	.pending-attachment-scroll { width: 100%; margin-bottom: 9px; white-space: nowrap; }
-	.pending-attachment-list { display: inline-flex; align-items: flex-start; gap: 10px; padding: 2px; }
+	.pending-attachment-scroll { width: 100%; margin-bottom: 8px; white-space: nowrap; }
+	.pending-attachment-list { display: inline-flex; align-items: flex-start; gap: 8px; padding: 2px; }
 	.pending-attachment-card { position: relative; width: 88px; flex: 0 0 88px; padding-bottom: 2px; white-space: normal; }
-	.pending-attachment-preview { position: relative; width: 88px; height: 88px; overflow: hidden; border: 1px solid #34413a; border-radius: 13px; background: #181d1a; box-sizing: border-box; }
+	.pending-attachment-preview { position: relative; width: 88px; height: 88px; overflow: hidden; border: 1px solid rgba(151, 170, 160, .28); border-radius: 12px; background: #181d1a; box-sizing: border-box; }
 	.pending-attachment-image { width: 100%; height: 100%; display: block; }
 	.pending-attachment-kind { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: #9be4c5; font-size: 10px; font-weight: 750; }
 	.pending-attachment-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 11, 9, .62); }
