@@ -4,11 +4,9 @@ const BAR_GAP = 3
 const BAR_PITCH = BAR_WIDTH + BAR_GAP
 const MINIMUM_BAR_HEIGHT = 2
 const MAXIMUM_BAR_HEIGHT = 20
-const LEVEL_INTERVAL_MS = 20
+const VISUAL_INTERVAL_MS = 300
 const MAXIMUM_QUEUE_LEVELS = 15
-const SILENCE_DELAY_MS = 250
-const FINALIZING_DURATION_MS = 180
-const REDUCED_INTERVAL_MS = 200
+const REDUCED_INTERVAL_MS = VISUAL_INTERVAL_MS
 
 function clamp01(value) {
 	return Math.max(0, Math.min(1, Number(value) || 0))
@@ -77,8 +75,7 @@ export function createVoiceWaveformRenderState(capacity = 1, sessionEpoch = -1) 
 		historyStart: 0,
 		historyLength: 0,
 		currentLevel: 0,
-		lastPacketAt: 0,
-		lastConsumeAt: 0
+		nextAdvanceAt: null
 	}
 }
 
@@ -120,8 +117,7 @@ export function resetVoiceWaveformRenderState(state, sessionEpoch, capacity = st
 	state.historyStart = 0
 	state.historyLength = 0
 	state.currentLevel = 0
-	state.lastPacketAt = 0
-	state.lastConsumeAt = 0
+	state.nextAdvanceAt = null
 }
 
 export function acceptVoiceWaveformPacket(state, packet, sessionEpoch, nowMillis) {
@@ -133,69 +129,38 @@ export function acceptVoiceWaveformPacket(state, packet, sessionEpoch, nowMillis
 	const levels = packet.levels.slice(0, 5).map(clamp01)
 	if (levels.length === 0) return false
 
-	const queueWasEmpty = state.queue.length === 0
 	state.packetSequence = sequence
 	state.queue.push(...levels)
 	if (state.queue.length > MAXIMUM_QUEUE_LEVELS) {
 		state.queue.splice(0, state.queue.length - MAXIMUM_QUEUE_LEVELS)
 	}
-	state.lastPacketAt = Number(nowMillis) || 0
-	// 音频帧每 100ms 批量到达；空队列恢复时只允许立即消费一个值，避免五根柱子成组跳动。
-	if (queueWasEmpty && state.lastConsumeAt
-		&& state.lastPacketAt - state.lastConsumeAt > LEVEL_INTERVAL_MS) {
-		state.lastConsumeAt = state.lastPacketAt - LEVEL_INTERVAL_MS
-	}
 	return true
 }
 
-function consumeOne(state, nowMillis) {
-	if (!state.queue.length) return false
-	appendHistory(state, state.queue.shift())
-	state.lastConsumeAt = Number(nowMillis) || 0
-	return true
+export function aggregateVoiceWaveformLevels(levels) {
+	if (!Array.isArray(levels) || levels.length === 0) return 0
+	let squareSum = 0
+	for (const level of levels) {
+		const value = clamp01(level)
+		squareSum += value * value
+	}
+	return clamp01(Math.sqrt(squareSum / levels.length))
 }
 
 export function advanceVoiceWaveformState(state, voiceState, nowMillis, reduced = false) {
 	if (String(voiceState || '').toUpperCase() !== 'RECORDING') return false
 	const now = Number(nowMillis) || 0
-
-	if (reduced) {
-		if (state.queue.length) {
-			const latest = state.queue[state.queue.length - 1]
-			state.queue.length = 0
-			appendHistory(state, latest)
-			state.lastConsumeAt = now
-			return true
-		}
-	} else if (state.queue.length) {
-		if (!state.historyLength) return consumeOne(state, now)
-		if (!state.lastConsumeAt) state.lastConsumeAt = now - LEVEL_INTERVAL_MS
-		let changed = false
-		let iterations = 0
-		while (state.queue.length
-			&& now - state.lastConsumeAt >= LEVEL_INTERVAL_MS
-			&& iterations < MAXIMUM_QUEUE_LEVELS) {
-			state.lastConsumeAt += LEVEL_INTERVAL_MS
-			appendHistory(state, state.queue.shift())
-			changed = true
-			iterations += 1
-		}
-		if (changed) return true
+	if (state.nextAdvanceAt == null) {
+		state.nextAdvanceAt = now + VISUAL_INTERVAL_MS
+		return false
 	}
+	if (now < state.nextAdvanceAt) return false
 
-	if (state.lastPacketAt && now - state.lastPacketAt >= SILENCE_DELAY_MS
-		&& (!state.lastConsumeAt || now - state.lastConsumeAt >= LEVEL_INTERVAL_MS)) {
-		appendHistory(state, state.currentLevel * 0.8)
-		state.lastConsumeAt = now
-		return true
-	}
-	return false
-}
-
-export function resolveVoiceWaveformFinalizingScale(startedAt, nowMillis) {
-	const start = Number(startedAt) || 0
-	if (!start) return 1
-	return clamp01(1 - ((Number(nowMillis) || 0) - start) / FINALIZING_DURATION_MS)
+	// 每个可视柱只汇总最近 300ms 的 20ms 包络；页面卡顿后从当前时刻重新计时，禁止追赶绘制旧柱。
+	appendHistory(state, aggregateVoiceWaveformLevels(state.queue))
+	state.queue.length = 0
+	state.nextAdvanceAt = now + VISUAL_INTERVAL_MS
+	return true
 }
 
 function interpolatedColor(level) {
@@ -213,8 +178,7 @@ function interpolatedColor(level) {
 export function drawVoiceWaveformFrame(context, {
 	width,
 	height = WAVEFORM_HEIGHT,
-	levels = [],
-	finalizingScale = 1
+	levels = []
 }) {
 	if (!context) return
 	const visibleBars = Math.max(1, Math.floor((Number(width) || 0) / BAR_PITCH))
@@ -226,8 +190,7 @@ export function drawVoiceWaveformFrame(context, {
 	context.lineCap = 'round'
 	for (let index = 0; index < visibleBars; index += 1) {
 		const sourceIndex = index - firstSourceIndex
-		const rawLevel = sourceIndex >= 0 ? clamp01(source[sourceIndex]) : 0
-		const level = clamp01(rawLevel * clamp01(finalizingScale))
+		const level = sourceIndex >= 0 ? clamp01(source[sourceIndex]) : 0
 		const barHeight = MINIMUM_BAR_HEIGHT
 			+ (MAXIMUM_BAR_HEIGHT - MINIMUM_BAR_HEIGHT) * level
 		const x = index * BAR_PITCH + BAR_WIDTH / 2
@@ -249,7 +212,6 @@ export default {
 			config: null,
 			dpr: 1,
 			renderState: createVoiceWaveformRenderState(),
-			finalizingStartedAt: 0,
 			raf: 0,
 			reducedTimer: 0,
 			running: false,
@@ -285,22 +247,22 @@ export default {
 					epoch,
 					this.renderState.history.length)
 			}
-			if (this.config?.state === 'FINALIZING' && previous?.state !== 'FINALIZING') {
-				this.finalizingStartedAt = currentTimeMillis()
-			} else if (this.config?.state !== 'FINALIZING') {
-				this.finalizingStartedAt = 0
+			if (stateChanged && this.config?.state === 'RECORDING') {
+				this.renderState.nextAdvanceAt = currentTimeMillis() + VISUAL_INTERVAL_MS
 			}
-			if (['IDLE', 'ERROR'].includes(this.config?.state)) {
+			if (['FINALIZING', 'IDLE', 'ERROR'].includes(this.config?.state)) {
 				resetVoiceWaveformRenderState(
 					this.renderState,
 					epoch,
 					this.renderState.history.length)
 			}
-			acceptVoiceWaveformPacket(
-				this.renderState,
-				this.config?.packet,
-				epoch,
-				currentTimeMillis())
+			if (this.config?.state === 'RECORDING') {
+				acceptVoiceWaveformPacket(
+					this.renderState,
+					this.config?.packet,
+					epoch,
+					currentTimeMillis())
+			}
 			this.connectCanvas()
 			if (epochChanged || stateChanged || reducedChanged
 				|| (!this.running && !this.reducedTimer)) this.restart()
@@ -380,17 +342,13 @@ export default {
 					this.config.state,
 					nowMillis,
 					Boolean(this.config.reduced))
-				const finalizingScale = this.config.state === 'FINALIZING'
-					? resolveVoiceWaveformFinalizingScale(this.finalizingStartedAt, nowMillis)
-					: 1
 				this.context.setTransform(1, 0, 0, 1, 0, 0)
 				this.context.clearRect(0, 0, metrics.pixelWidth, metrics.pixelHeight)
 				this.context.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0)
 				drawVoiceWaveformFrame(this.context, {
 					width: metrics.cssWidth,
 					height: metrics.cssHeight,
-					levels: voiceWaveformHistory(this.renderState),
-					finalizingScale
+					levels: voiceWaveformHistory(this.renderState)
 				})
 			} catch (_) {
 				// Canvas 只是反馈层，绘制失败时保留录音、传输和转写主流程。
@@ -401,7 +359,7 @@ export default {
 			this.stop()
 			if (!this.config || this.hidden || !this.visible) return
 			this.draw(currentTimeMillis())
-			if (!['RECORDING', 'FINALIZING'].includes(this.config.state)) return
+			if (this.config.state !== 'RECORDING') return
 			if (this.config.reduced) {
 				this.scheduleReduced()
 				return
@@ -414,13 +372,6 @@ export default {
 					return
 				}
 				this.draw(timestamp)
-				if (this.config?.state === 'FINALIZING'
-					&& resolveVoiceWaveformFinalizingScale(
-						this.finalizingStartedAt,
-						timestamp) === 0) {
-					this.stop()
-					return
-				}
 				this.raf = requestAnimationFrame(loop)
 			}
 			this.raf = requestAnimationFrame(loop)
@@ -431,11 +382,7 @@ export default {
 				this.reducedTimer = 0
 				const now = currentTimeMillis()
 				this.draw(now)
-				if (this.config?.state === 'FINALIZING'
-					&& resolveVoiceWaveformFinalizingScale(
-						this.finalizingStartedAt,
-						now) === 0) return
-				if (['RECORDING', 'FINALIZING'].includes(this.config?.state)) {
+				if (this.config?.state === 'RECORDING') {
 					this.scheduleReduced()
 				}
 			}, REDUCED_INTERVAL_MS)

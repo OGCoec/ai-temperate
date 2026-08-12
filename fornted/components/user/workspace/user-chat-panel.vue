@@ -1,5 +1,5 @@
 <template>
-	<view class="chat-main" role="main">
+	<view class="chat-main" :class="{ 'is-android-client': androidClient }" role="main">
 			<view class="chat-header">
 				<button class="icon-button mobile-only" type="button" aria-label="打开会话列表" @click="$emit('open-conversation-drawer')">
 					<uni-icons type="bars" size="22" color="#dce5e0" aria-hidden="true" />
@@ -65,9 +65,34 @@
 									v-for="attachment in message.contentAttachments"
 									:key="attachment.attachmentId"
 									class="attachment-card"
-									:class="{ 'is-video': previewVideo(attachment) }"
+									:class="{ 'is-video': previewVideo(attachment), 'is-android-media': androidClient }"
 									:style="previewVideo(attachment) ? generatedVideoCardStyle(attachment) : null"
 								>
+									<!-- #ifdef APP-PLUS -->
+									<user-android-chat-image
+										v-if="previewImage(attachment)"
+										:attachment="attachment"
+										variant="FULL"
+										@layout-change="handleAndroidMediaLayoutChange"
+										@preview="previewAndroidImage"
+									/>
+									<user-android-chat-video
+										v-else-if="previewVideo(attachment)"
+										:attachment="attachment"
+										:active="pageVisible"
+										@state-change="handleAndroidMediaState"
+										@layout-change="handleAndroidMediaLayoutChange"
+										@download="downloadAndroidAttachment"
+									/>
+									<user-android-file-card
+										v-else
+										:attachment="attachment"
+										@open="openAttachment"
+										@retry="retryAndroidAttachment"
+										@download="downloadAndroidAttachment"
+									/>
+									<!-- #endif -->
+									<!-- #ifndef APP-PLUS -->
 									<image v-if="previewImage(attachment)" class="attachment-image" :src="attachment.url" mode="aspectFill" />
 									<video
 										v-else-if="previewVideo(attachment)"
@@ -80,6 +105,7 @@
 										<uni-icons type="paperclip" size="20" color="#37d39a" />
 										<text>{{ attachment.fileName }}</text>
 									</view>
+									<!-- #endif -->
 								</view>
 							</view>
 						</view>
@@ -193,6 +219,17 @@
 											'is-partial': String(attachment.phase || '').toUpperCase() === 'PARTIAL'
 										}"
 									>
+										<!-- #ifdef APP-PLUS -->
+										<user-android-chat-image
+											v-if="previewImage(attachment)"
+											:attachment="attachment"
+											variant="THUMBNAIL"
+											:aspect-ratio="generatedImageGalleryAspectRatio(message)"
+											@layout-change="handleAndroidMediaLayoutChange"
+											@preview="previewAndroidImage"
+										/>
+										<!-- #endif -->
+										<!-- #ifndef APP-PLUS -->
 										<image
 											v-if="previewImage(attachment)"
 											class="generated-image-gallery-image"
@@ -200,6 +237,7 @@
 											mode="aspectFill"
 											@load="handleGeneratedResponseImageLoad(attachment, $event)"
 										/>
+										<!-- #endif -->
 										<view
 											v-if="galleryIndex === 3 && generatedImageGallery(message).hiddenCount > 0"
 											class="generated-image-gallery-overflow"
@@ -223,7 +261,7 @@
 									v-for="attachment in nonImageResponseAttachments(message)"
 									:key="attachment.attachmentId"
 									class="attachment-card"
-									:class="{ 'is-video': previewVideo(attachment) }"
+									:class="{ 'is-video': previewVideo(attachment), 'is-android-media': androidClient }"
 								>
 									<view
 										class="attachment-media-frame"
@@ -240,6 +278,32 @@
 										<text>图片 {{ Number(attachment.outputIndex) + 1 }}</text>
 										<text>{{ imageOutputStatusLabel(attachment) }}</text>
 									</view>
+									<!-- #ifdef APP-PLUS -->
+									<user-android-chat-image
+										v-else-if="previewImage(attachment)"
+										:attachment="attachment"
+										variant="FULL"
+										@layout-change="handleAndroidMediaLayoutChange"
+										@preview="previewAndroidImage"
+									/>
+									<user-android-chat-video
+										v-else-if="previewVideo(attachment)"
+										:attachment="attachment"
+										:metadata="message.videoMetadata"
+										:active="pageVisible"
+										@state-change="handleAndroidMediaState"
+										@layout-change="handleAndroidMediaLayoutChange"
+										@download="downloadAndroidAttachment"
+									/>
+									<user-android-file-card
+										v-else
+										:attachment="attachment"
+										@open="openAttachment"
+										@retry="retryAndroidAttachment"
+										@download="downloadAndroidAttachment"
+									/>
+									<!-- #endif -->
+									<!-- #ifndef APP-PLUS -->
 									<image
 										v-else-if="previewImage(attachment)"
 										class="attachment-image generated-response-image"
@@ -259,6 +323,7 @@
 										<uni-icons type="download" size="20" color="#37d39a" />
 										<text>{{ attachment.state === 'AVAILABLE' ? attachment.fileName : '生成内容保存失败' }}</text>
 									</button>
+									<!-- #endif -->
 									<text v-if="attachment.volatilePreview && attachment.url" class="image-preview-state">
 										{{ attachment.phase === 'FINAL' ? '最终图片正在保存到 OSS…' : '生成中的完整预览，仅最终图片会保存' }}
 									</text>
@@ -326,52 +391,90 @@
 					<button class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || voiceInteractionActive || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
 						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
 					</button>
-					<textarea v-model="draft" class="composer-input" auto-height :maxlength="65536" placeholder="输入消息" aria-label="聊天消息" :disabled="generating || voiceInteractionActive" @confirm="send" />
-					<button
-						class="voice-button"
-						:class="{ 'is-recording': voiceRecording, 'is-finalizing': voiceFinalizing }"
-						type="button"
-						:aria-label="voiceButtonLabel"
-						:aria-pressed="String(voiceRecording)"
-						:disabled="voiceButtonDisabled"
-						@click="toggleVoiceInput"
-					>
-						<uni-icons :type="voiceRecording ? 'micoff-filled' : 'mic-filled'" size="21" :color="voiceRecording ? '#fff4f2' : '#dce5e0'" aria-hidden="true" />
-					</button>
-					<button v-if="generating" class="send-button stop-button" type="button" aria-label="停止生成" @click="stop">
-						<view class="stop-square"></view>
-					</button>
-					<button v-else class="send-button" type="button" aria-label="发送消息" :disabled="!canSend" @click="send">
-						<uni-icons type="arrow-up" size="22" color="#07110d" aria-hidden="true" />
-					</button>
-				</view>
-				<view v-if="voiceInteractionActive || voicePartialText" class="voice-status" :class="{ 'is-finalizing': voiceFinalizing, 'is-queued': voiceQueued }" :aria-busy="String(voiceInteractionActive)">
-					<user-thinking-orb
-						v-if="voiceActivityPresentation"
-						:state="voiceActivityPresentation.state"
-						:size="64"
-						:reduced="motionReduced"
-						:aria-label="voiceActivityPresentation.label"
-					/>
-					<view class="voice-status-copy">
-						<view class="voice-status-heading">
-							<view class="voice-status-dot" aria-hidden="true"></view>
-							<text>{{ voiceStatusLabel }}</text>
-							<text v-if="voiceRecording" class="voice-duration">{{ voiceDurationLabel }}</text>
-							<button
-								v-if="voiceQueued"
-								class="voice-queue-cancel"
-								type="button"
-								aria-label="取消语音识别排队"
-								@click="cancelVoiceQueue"
-							>取消排队</button>
+					<view class="composer-entry">
+						<view
+							v-if="voiceInteractionActive"
+							class="voice-inline-status"
+							role="status"
+							aria-live="polite"
+							:aria-busy="String(voiceInteractionActive)"
+						>
+							<text class="visually-hidden">{{ voiceStatusLabel }}</text>
+							<user-voice-waveform
+								:state="voiceState"
+								:session-epoch="voiceSessionEpoch"
+								:packet="voiceWaveformPacket"
+								:reduced="motionReduced"
+							/>
 						</view>
-						<text v-if="voicePartialText" class="voice-preview">{{ voicePartialText }}</text>
+						<view class="voice-transcript-row">
+							<user-thinking-orb
+								v-if="voiceInteractionActive && voiceActivityPresentation"
+								:state="voiceActivityPresentation.state"
+								:size="40"
+								:reduced="motionReduced"
+								:aria-label="voiceActivityPresentation.label"
+							/>
+							<textarea
+								v-model="draft"
+								class="composer-input"
+								auto-height
+								:maxlength="65536"
+								:placeholder="voiceInteractionActive ? '语音识别文字会显示在这里' : '输入消息'"
+								aria-label="聊天消息"
+								:disabled="generating || voiceInteractionActive"
+								@confirm="send"
+							/>
+						</view>
 					</view>
-				</view>
+					<template v-if="voiceInteractionActive">
+						<button
+							class="voice-cancel-button"
+							type="button"
+							aria-label="放弃语音输入"
+							:disabled="voiceCancelDisabled"
+							@click="abortVoiceInput('USER_DISCARD')"
+						>
+							<text class="voice-cancel-glyph" aria-hidden="true">×</text>
+						</button>
+						<view class="voice-commit-stack">
+							<text
+								class="voice-duration"
+								:class="{ 'is-hidden': !(voiceRecording || voiceFinalizing) }"
+								aria-hidden="true"
+							>{{ voiceRecording || voiceFinalizing ? voiceDurationLabel : '00:00' }}</text>
+							<button
+								class="voice-commit-button"
+								type="button"
+								aria-label="停止录音并生成文字"
+								:disabled="voiceCommitDisabled"
+								@click="finalizeVoiceInput(false, 'USER_TAP')"
+							>
+								<view class="voice-commit-square" aria-hidden="true"></view>
+							</button>
+						</view>
+					</template>
+					<template v-else>
+						<button
+							class="voice-button"
+							type="button"
+							:aria-label="voiceButtonLabel"
+							:disabled="voiceButtonDisabled"
+							@click="toggleVoiceInput"
+						>
+							<uni-icons type="mic-filled" size="21" color="#dce5e0" aria-hidden="true" />
+						</button>
+						<button v-if="generating" class="send-button stop-button" type="button" aria-label="停止生成" @click="stop">
+							<view class="stop-square"></view>
+						</button>
+						<button v-else class="send-button" type="button" aria-label="发送消息" :disabled="!canSend" @click="send">
+							<uni-icons type="arrow-up" size="22" color="#07110d" aria-hidden="true" />
+						</button>
+					</template>
+					</view>
 				<view class="composer-meta">
 					<view class="composer-controls">
-						<picker :range="models" range-key="modelName" :value="selectedModelIndex" :disabled="generating || !models.length" @change="selectModel">
+						<picker class="model-picker-control" :range="models" range-key="modelName" :value="selectedModelIndex" :disabled="generating || !models.length" @change="selectModel">
 							<view class="model-picker"><text>{{ selectedModel?.modelName || '选择模型' }}</text><uni-icons type="down" size="14" color="#9ba6a0" /></view>
 						</picker>
 							<view
@@ -402,9 +505,19 @@
 							>
 								<view class="context-usage-fill" :style="{ width: `${contextUsageProgress}%` }"></view>
 							</view>
-						</view>
+							</view>
 						<button
-							v-if="multipleImageOutputsAvailable"
+							v-if="androidClient && (videoGenerationAvailable || imageGenerationAvailable)"
+							class="android-generation-settings-toggle"
+							type="button"
+							:aria-expanded="String(androidGenerationSettingsExpanded)"
+							@click="toggleAndroidGenerationSettings"
+						>
+							<text>{{ androidGenerationSettingsExpanded ? '收起参数' : androidGenerationSettingsSummary }}</text>
+							<uni-icons :type="androidGenerationSettingsExpanded ? 'up' : 'down'" size="14" color="#9bc8ec" />
+						</button>
+						<button
+							v-if="multipleImageOutputsAvailable && (!androidClient || androidGenerationSettingsExpanded)"
 							ref="imageOutputCountTrigger"
 							class="image-count-picker"
 							type="button"
@@ -415,7 +528,7 @@
 							<text>数量 · {{ selectedImageOutputCount }}</text>
 						</button>
 						<picker
-							v-if="videoGenerationAvailable"
+							v-if="videoGenerationAvailable && (!androidClient || androidGenerationSettingsExpanded)"
 							:range="videoModeOptions"
 							range-key="label"
 							:value="selectedVideoModeIndex"
@@ -425,7 +538,7 @@
 							<view class="video-option-picker"><text>模式 · {{ selectedVideoModeLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoDurationOptions.length"
+							v-if="videoGenerationAvailable && videoDurationOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
 							:range="videoDurationOptions"
 							range-key="label"
 							:value="selectedVideoDurationIndex"
@@ -435,7 +548,7 @@
 							<view class="video-option-picker"><text>时长 · {{ selectedVideoDuration }} 秒</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoResolutionOptions.length"
+							v-if="videoGenerationAvailable && videoResolutionOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
 							:range="videoResolutionOptions"
 							range-key="label"
 							:value="selectedVideoResolutionIndex"
@@ -445,7 +558,7 @@
 							<view class="video-option-picker"><text>清晰度 · {{ selectedVideoResolutionLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoAspectOptions.length"
+							v-if="videoGenerationAvailable && videoAspectOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
 							:range="videoAspectOptions"
 							range-key="label"
 							:value="selectedVideoAspectIndex"
@@ -455,7 +568,7 @@
 							<view class="video-option-picker"><text>画幅 · {{ selectedVideoAspectLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="!videoGenerationAvailable"
+							v-if="!videoGenerationAvailable && (!androidClient || !imageGenerationAvailable || androidGenerationSettingsExpanded)"
 							:range="reasoningEffortOptions"
 							range-key="label"
 							:value="selectedReasoningEffortIndex"
@@ -468,7 +581,7 @@
 							</view>
 						</picker>
 						<picker
-							v-if="imageGenerationAvailable"
+							v-if="imageGenerationAvailable && (!androidClient || androidGenerationSettingsExpanded)"
 							:range="imageAspectOptions"
 							range-key="label"
 							:value="selectedImageAspectIndex"
@@ -553,6 +666,7 @@
 	import { createAiConversationTextDrain } from '@/common/aichat/ai-conversation-text-drain.js'
 	import { createAiMarkdownRenderState } from '@/common/aichat/ai-markdown-render-state.js'
 	import { prewarmAiCodeHighlighter } from '@/common/aichat/ai-code-highlighter.js'
+	import { reportAiCodeHighlightError } from '@/common/aichat/ai-code-diagnostics.js'
 	import {
 		findAiConversationStoppedDraft,
 		removeAiConversationStoppedDraft,
@@ -641,6 +755,8 @@
 	} from '@/common/aichat/ai-conversation-turn-navigation.js'
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
 	import { createVoiceRecorder } from '@/common/voice/voice-recorder.js'
+	import { createVoiceWaveformAnalyzer } from '@/common/voice/voice-waveform-envelope.js'
+	import { appendVoiceTranscriptToDraft } from '@/common/voice/voice-draft-preview.js'
 	import {
 		createVoiceWebSocketSession,
 		voiceErrorMessage
@@ -660,6 +776,12 @@
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
 	import UserSourceChip from './user-source-chip.vue'
 	import UserThinkingOrb from './user-thinking-orb.vue'
+	import UserVoiceWaveform from './user-voice-waveform.vue'
+	// #ifdef APP-PLUS
+	import UserAndroidChatImage from './user-android-chat-image.vue'
+	import UserAndroidChatVideo from './user-android-chat-video.vue'
+	import UserAndroidFileCard from './user-android-file-card.vue'
+	// #endif
 	import {
 		appendLocalMessage,
 		clearAiConversationHistoryStale,
@@ -703,6 +825,9 @@
 	const TURN_WINDOW_EDGE_ENTER_PX = 96
 	const TURN_WINDOW_EDGE_RELEASE_PX = 180
 	const TURN_FOLLOW_LATEST_PX = 320
+	// #ifdef APP-PLUS
+	const ANDROID_VOICE_WAVEFORM_VISUAL_GAIN = 1 / 3
+	// #endif
 	const VOICE_ACTIVE_STATES = Object.freeze([
 		'REQUESTING_PERMISSION',
 		'ISSUING_TICKET',
@@ -711,18 +836,6 @@
 		'RECORDING',
 		'FINALIZING'
 	])
-
-	function appendTranscriptToDraft(draft, transcript) {
-		const existing = String(draft || '')
-		const text = String(transcript || '').trim()
-		if (!text) return existing
-		if (!existing) return text
-		if (/\s$/.test(existing) || /^[,.;:!?，。；：！？]/.test(text)) return existing + text
-		const previous = existing[existing.length - 1]
-		const first = text[0]
-		const bothCjk = /[\u3400-\u9fff]/.test(previous) && /[\u3400-\u9fff]/.test(first)
-		return `${existing}${bothCjk ? '' : ' '}${text}`
-	}
 
 	function positiveFiniteNumber(value) {
 		const number = Number(value)
@@ -838,7 +951,21 @@
 	}
 
 	export default {
-		components: { UserChatAttachmentList, UserConversationTurnRail, UserImageOutputCountDialog, UserMarkdownMessage, UserMediaUploadProgress, UserSourceChip, UserThinkingOrb },
+		components: {
+			UserChatAttachmentList,
+			UserConversationTurnRail,
+			UserImageOutputCountDialog,
+			UserMarkdownMessage,
+			UserMediaUploadProgress,
+			UserSourceChip,
+			UserThinkingOrb,
+			UserVoiceWaveform,
+			// #ifdef APP-PLUS
+			UserAndroidChatImage,
+			UserAndroidChatVideo,
+			UserAndroidFileCard
+			// #endif
+		},
 		data() {
 			return {
 				...readAiConversationStore(),
@@ -891,6 +1018,11 @@
 				composerError: '',
 				voiceState: 'IDLE',
 				voicePartialText: '',
+				voiceDraftBase: '',
+				voiceSessionEpoch: 0,
+				voiceWaveformAnalyzer: null,
+				voiceWaveformPacket: null,
+				voiceWaveformSequence: 0,
 				voiceElapsedMs: 0,
 				voiceMaximumDurationMs: 300000,
 				voiceLimitReached: false,
@@ -905,6 +1037,12 @@
 				motionPreference: AI_MOTION_PREFERENCES.SYSTEM,
 				motionController: null,
 				scrollTarget: '',
+				pageVisible: true,
+				androidScrollEpoch: 0,
+				androidScrollScheduled: false,
+				androidScrollTimer: null,
+				androidScrollReason: '',
+				androidGenerationSettingsExpanded: false,
 				historyResyncing: false,
 				modelsLoading: false,
 				turnNavigationDesktop: false,
@@ -925,7 +1063,11 @@
 				this.motionReduced = snapshot.reduced
 				this.motionPreference = snapshot.preference
 			})
-			void prewarmAiCodeHighlighter().catch(() => {})
+			void prewarmAiCodeHighlighter().catch(error => reportAiCodeHighlightError({
+				code: 'AI_CODE_ENGINE_INIT_FAILED',
+				languageId: 'text',
+				message: error?.message
+			}))
 			this.refreshGeneratedResponseImageViewportHeight()
 			this.refreshTurnNavigationViewport()
 			if (typeof uni.onWindowResize === 'function') {
@@ -935,9 +1077,11 @@
 			}
 		},
 		beforeUnmount() {
+			this.pageVisible = false
+			this.invalidateAndroidScroll()
 			this.motionController?.destroy?.()
 			this.motionController = null
-			void this.cancelVoiceInput('COMPONENT_UNMOUNT')
+			this.abortVoiceInput('COMPONENT_UNMOUNT')
 			this.clearCompletedImageUpgrades()
 			this.clearImageGalleryExitTimers()
 			this.closeContextObserver()
@@ -968,6 +1112,7 @@
 			this.releaseAllVideoDownloadObjectUrls()
 		},
 		computed: {
+			androidClient() { return clientPlatform() === 'ANDROID' },
 			selectedModel() { return this.models.find(model => model.publicId === this.selectedModelPublicId) || null },
 			selectedModelIndex() { return Math.max(0, this.models.findIndex(model => model.publicId === this.selectedModelPublicId)) },
 			imageGenerationAvailable() {
@@ -1018,6 +1163,13 @@
 			selectedVideoAspectLabel() {
 				return this.videoAspectOptions.find(option =>
 					option.value === this.selectedVideoAspect)?.label || '请选择'
+			},
+			androidGenerationSettingsSummary() {
+				if (this.videoGenerationAvailable) {
+					return `${this.selectedVideoDuration}秒 · ${this.selectedVideoResolutionLabel} · ${this.selectedVideoAspectLabel}`
+				}
+				if (this.imageGenerationAvailable) return `图片 · ${this.selectedImageAspectLabel}`
+				return '参数'
 			},
 			multipleImageOutputsAvailable() {
 				return modelSupportsMultipleImageOutputs(this.selectedModel)
@@ -1115,8 +1267,10 @@
 				return this.generating || !['IDLE', 'ERROR', 'RECORDING'].includes(this.voiceState)
 			},
 			voiceButtonLabel() {
-				return this.voiceRecording ? '结束语音输入' : '开始语音输入'
+				return '开始语音输入'
 			},
+			voiceCancelDisabled() { return this.voiceFinalizing },
+			voiceCommitDisabled() { return !this.voiceRecording },
 			voiceStatusLabel() { return this.voiceActivityPresentation?.label || '' },
 			voiceDurationLabel() {
 				const seconds = Math.max(0, Math.floor(this.voiceElapsedMs / 1000))
@@ -1179,9 +1333,83 @@
 			}
 		},
 		methods: {
+			normalizeAndroidVoiceErrorCode(value) {
+				const code = String(value || '')
+				return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'UNKNOWN'
+			},
+			normalizeAndroidVoiceStopSource(source) {
+				return [
+					'USER_DISCARD',
+					'USER_TAP',
+					'RUNTIME_FAILURE',
+					'PAGE_HIDE',
+					'PAGE_UNLOAD',
+					'COMPONENT_UNMOUNT',
+					'MAX_DURATION',
+					'SERVER_LIMIT',
+					'TRANSCRIPT_FINAL',
+					'STALE_ASYNC_BRANCH',
+					'UNSPECIFIED'
+				].includes(source) ? source : 'UNKNOWN'
+			},
+			logAndroidVoiceUi(phase, fields = '') {
+				// #ifdef APP-PLUS
+				console.log(
+					`event=voice_android_ui_lifecycle phase=${phase}`
+					+ (fields ? ` ${fields}` : ''))
+				// #endif
+			},
+			logAndroidVoiceStop(source) {
+				const controlledSource = this.normalizeAndroidVoiceStopSource(source)
+				this.logAndroidVoiceUi(
+					'STOP_REQUESTED',
+					`source=${controlledSource} voiceState=${this.voiceState}`
+					+ ` recorderPresent=${this.voiceRecorder != null}`
+					+ ` sessionPresent=${this.voiceSession != null}`)
+			},
+			voiceEpochActive(voiceEpoch) {
+				return this.voiceSessionEpoch === voiceEpoch
+			},
+			ownsVoiceSession(owner) {
+				return owner != null
+					&& this.voiceEpochActive(owner.voiceEpoch)
+					&& this.voiceSession === owner.session
+			},
+			resetVoiceWaveform(sessionEpoch = this.voiceSessionEpoch) {
+				if (Number(sessionEpoch) !== Number(this.voiceSessionEpoch)) return
+				try { this.voiceWaveformAnalyzer?.reset?.() } catch (_) {}
+				this.voiceWaveformAnalyzer = null
+				this.voiceWaveformPacket = null
+				this.voiceWaveformSequence = 0
+			},
+			publishVoiceWaveform(frame, voiceEpoch) {
+				if (this.voiceSessionEpoch !== voiceEpoch
+					|| this.voiceState !== 'RECORDING'
+					|| !this.voiceWaveformAnalyzer) return
+				let levels
+				try {
+					levels = this.voiceWaveformAnalyzer.analyze(frame)
+				} catch (_) {
+					return
+				}
+				if (!Array.isArray(levels) || levels.length === 0) return
+				let visualLevels = levels.slice(0, 5)
+				// #ifdef APP-PLUS
+				visualLevels = visualLevels.map(level => (
+					Math.max(0, Math.min(1, Number(level) || 0))
+					* ANDROID_VOICE_WAVEFORM_VISUAL_GAIN
+				))
+				// #endif
+				this.voiceWaveformSequence += 1
+				this.voiceWaveformPacket = Object.freeze({
+					epoch: voiceEpoch,
+					sequence: this.voiceWaveformSequence,
+					levels: Object.freeze(visualLevels)
+				})
+			},
 			async toggleVoiceInput() {
 				if (this.voiceRecording) {
-					await this.finalizeVoiceInput(false)
+					await this.finalizeVoiceInput(false, 'USER_TAP')
 					return
 				}
 				if (this.voiceState === 'IDLE' || this.voiceState === 'ERROR') {
@@ -1190,6 +1418,11 @@
 			},
 			async startVoiceInput() {
 				if (this.generating || this.voiceInteractionActive) return
+				const voiceEpoch = this.voiceSessionEpoch + 1
+				this.voiceSessionEpoch = voiceEpoch
+				this.resetVoiceWaveform(voiceEpoch)
+				this.voiceWaveformAnalyzer = markRaw(createVoiceWaveformAnalyzer())
+				this.voiceDraftBase = String(this.draft || '')
 				this.composerError = ''
 				this.voiceAnnouncement = ''
 				this.voicePartialText = ''
@@ -1198,51 +1431,103 @@
 				this.voiceQueueCapacity = 5
 				this.voiceElapsedMs = 0
 				const recorder = markRaw(createVoiceRecorder())
+				let session = null
 				this.voiceRecorder = recorder
 				try {
 					this.voiceState = 'REQUESTING_PERMISSION'
 					await recorder.requestPermission()
-					if (this.voiceRecorder !== recorder) {
+					if (this.voiceSessionEpoch !== voiceEpoch || this.voiceRecorder !== recorder) {
+						this.logAndroidVoiceStop('STALE_ASYNC_BRANCH')
 						try { await recorder.destroy() } catch (_) {}
 						return
 					}
 					this.voiceState = 'ISSUING_TICKET'
 					const ticket = await issueVoiceSessionTicket()
-					if (this.voiceRecorder !== recorder) {
+					this.logAndroidVoiceUi('TICKET_ISSUED')
+					if (this.voiceSessionEpoch !== voiceEpoch || this.voiceRecorder !== recorder) {
+						this.logAndroidVoiceStop('STALE_ASYNC_BRANCH')
 						try { await recorder.destroy() } catch (_) {}
 						return
 					}
 					this.voiceMaximumDurationMs = ticket.maxDurationMs
 					this.voiceState = 'CONNECTING'
-					let session = null
 					session = markRaw(createVoiceWebSocketSession({
 						language: 'auto',
 						onEvent: event => {
-							if (this.voiceSession === session) void this.handleVoiceEvent(event)
+							if (this.voiceSessionEpoch === voiceEpoch
+								&& this.voiceSession === session) {
+								void this.handleVoiceEvent(event, { voiceEpoch, session })
+							}
 						},
 						onError: error => {
-							if (this.voiceSession === session) void this.handleVoiceFailure(error)
+							if (this.voiceSessionEpoch === voiceEpoch
+								&& this.voiceSession === session) {
+								void this.handleVoiceFailure(error, { voiceEpoch, session })
+							}
 						}
 					}))
 					this.voiceSession = session
 					await session.connect(ticket)
-					if (this.voiceSession !== session || this.voiceRecorder !== recorder) {
+					this.logAndroidVoiceUi('WEBSOCKET_READY')
+					if (this.voiceSessionEpoch !== voiceEpoch
+						|| this.voiceSession !== session || this.voiceRecorder !== recorder) {
+						this.logAndroidVoiceStop('STALE_ASYNC_BRANCH')
 						try { await recorder.destroy() } catch (_) {}
-						try { await session.stop() } catch (_) {}
+						session.abort('STALE_ASYNC_BRANCH')
+						return
+					}
+					this.voiceQueuePosition = 0
+					// #ifdef APP-PLUS
+					let firstAndroidBinaryEnqueued = false
+					// #endif
+					this.logAndroidVoiceUi('RECORDER_START_REQUESTED')
+					await recorder.start(frame => {
+						if (this.voiceSessionEpoch !== voiceEpoch
+							|| this.voiceSession !== session
+							|| this.voiceLimitReached
+							|| !['RECORDING', 'FINALIZING'].includes(this.voiceState)) return
+						let sendOperation = session.sendAudio(frame)
+						// #ifdef APP-PLUS
+						sendOperation = sendOperation.then(enqueued => {
+							if (enqueued && !firstAndroidBinaryEnqueued) {
+								firstAndroidBinaryEnqueued = true
+								console.log(
+									`event=voice_android_pcm_bridge phase=FIRST_BINARY_ENQUEUED bytes=${frame.byteLength}`)
+							}
+							return enqueued
+						})
+						// #endif
+						this.publishVoiceWaveform(frame, voiceEpoch)
+						void sendOperation.catch(error => {
+							if (this.voiceSessionEpoch === voiceEpoch
+								&& this.voiceSession === session) {
+								return this.handleVoiceFailure(error, { voiceEpoch, session })
+							}
+							return undefined
+						})
+					}, error => {
+						if (this.voiceSessionEpoch === voiceEpoch
+							&& this.voiceSession === session) {
+							void this.handleVoiceFailure(error, { voiceEpoch, session })
+						}
+					})
+					if (this.voiceSessionEpoch !== voiceEpoch
+						|| this.voiceSession !== session || this.voiceRecorder !== recorder) {
+						try { await recorder.destroy() } catch (_) {}
+						session.abort('STALE_ASYNC_BRANCH')
 						return
 					}
 					this.voiceState = 'RECORDING'
-					this.voiceQueuePosition = 0
-					await recorder.start(frame => {
-						if (this.voiceSession !== session
-							|| this.voiceLimitReached
-							|| !['RECORDING', 'FINALIZING'].includes(this.voiceState)) return
-						void session.sendAudio(frame).catch(error => this.handleVoiceFailure(error))
-					}, error => { void this.handleVoiceFailure(error) })
+					this.logAndroidVoiceUi('RECORDER_START_RESOLVED')
 					this.voiceStartedAt = Date.now()
 					this.startVoiceTimer()
 				} catch (error) {
-					await this.handleVoiceFailure(error)
+					if (this.voiceSessionEpoch === voiceEpoch) {
+						await this.handleVoiceFailure(error, {
+							voiceEpoch,
+							session
+						})
+					}
 				}
 			},
 			startVoiceTimer() {
@@ -1253,26 +1538,40 @@
 						Date.now() - this.voiceStartedAt,
 						this.voiceMaximumDurationMs)
 					if (this.voiceElapsedMs >= this.voiceMaximumDurationMs) {
-						void this.finalizeVoiceInput(true)
+						void this.finalizeVoiceInput(true, 'MAX_DURATION')
 					}
 				}, 250)
 			},
-			async finalizeVoiceInput(limitReached) {
-				if (!this.voiceRecording) return
-				this.voiceState = 'FINALIZING'
-				this.voiceLimitReached = limitReached === true
+			freezeVoiceTimer() {
+				if (this.voiceStartedAt > 0) {
+					this.voiceElapsedMs = Math.min(
+						Math.max(0, Date.now() - this.voiceStartedAt),
+						this.voiceMaximumDurationMs)
+				}
 				clearInterval(this.voiceTimer)
 				this.voiceTimer = null
+			},
+			async finalizeVoiceInput(limitReached, source = limitReached ? 'MAX_DURATION' : 'USER_TAP') {
+				if (!this.voiceRecording) return
+				const voiceEpoch = this.voiceSessionEpoch
+				const session = this.voiceSession
+				this.freezeVoiceTimer()
+				this.voiceState = 'FINALIZING'
+				this.resetVoiceWaveform(voiceEpoch)
+				this.voiceLimitReached = limitReached === true
 				const recorder = this.voiceRecorder
+				this.logAndroidVoiceStop(source)
 				this.voiceRecorder = null
 				try {
 					await recorder?.stop?.()
-					await this.voiceSession?.commit?.()
+					if (this.voiceSessionEpoch !== voiceEpoch || this.voiceSession !== session) return
+					await session?.commit?.()
 				} catch (error) {
-					await this.handleVoiceFailure(error)
+					await this.handleVoiceFailure(error, { voiceEpoch, session })
 				}
 			},
-			async handleVoiceEvent(event) {
+			async handleVoiceEvent(event, owner) {
+				if (!this.ownsVoiceSession(owner)) return
 				if (event?.type === 'session.queued') {
 					this.voiceQueuePosition = Number(event.position)
 					this.voiceQueueCapacity = Number(event.queueCapacity)
@@ -1282,76 +1581,108 @@
 				}
 				if (event?.type === 'transcript.partial') {
 					this.voicePartialText = String(event.text || '')
+					this.draft = appendVoiceTranscriptToDraft(
+						this.voiceDraftBase,
+						this.voicePartialText)
 					return
 				}
 				if (event?.type === 'input.limit_reached') {
 					this.voiceLimitReached = true
+					this.freezeVoiceTimer()
 					this.voiceState = 'FINALIZING'
-					clearInterval(this.voiceTimer)
-					this.voiceTimer = null
+					this.resetVoiceWaveform(owner.voiceEpoch)
 					const recorder = this.voiceRecorder
+					this.logAndroidVoiceStop('SERVER_LIMIT')
 					this.voiceRecorder = null
-					await recorder?.stop?.()
+					try {
+						await recorder?.stop?.()
+					} catch (error) {
+						await this.handleVoiceFailure(error, owner)
+					}
 					return
 				}
 				if (event?.type === 'transcript.final') {
-					await this.acceptVoiceTranscript(event.text)
+					await this.acceptVoiceTranscript(event.text, owner)
 				}
 			},
-			async acceptVoiceTranscript(text) {
+			acceptVoiceTranscript(text, owner) {
+				if (!this.ownsVoiceSession(owner)) return
 				const transcript = String(text || '').trim()
 				clearInterval(this.voiceTimer)
 				this.voiceTimer = null
 				this.voicePartialText = ''
 				if (transcript) {
-					this.draft = appendTranscriptToDraft(this.draft, transcript)
+					this.draft = appendVoiceTranscriptToDraft(
+						this.voiceDraftBase,
+						transcript)
 					this.voiceAnnouncement = this.voiceLimitReached
 						? '已达到 5 分钟上限，最终文字已加入输入框。'
 						: '语音识别完成，最终文字已加入输入框。'
 				} else {
+					this.draft = this.voiceDraftBase
 					this.voiceAnnouncement = '未识别到有效语音。'
 					uni.showToast?.({ title: '未识别到有效语音', icon: 'none' })
 				}
-				await this.releaseVoiceResources(false)
+				this.completeVoiceInput('TRANSCRIPT_FINAL', owner)
+				if (!this.voiceEpochActive(owner.voiceEpoch)) return
+				this.voiceDraftBase = ''
 				this.voiceState = 'IDLE'
 			},
-			async handleVoiceFailure(error) {
+			async handleVoiceFailure(error, owner = null) {
+				if (owner && !this.ownsVoiceSession(owner)) return
 				if (this.voiceState === 'ERROR' && !this.voiceSession && !this.voiceRecorder) return
 				if (!this.voiceInteractionActive && this.voiceState !== 'ERROR') return
+				this.logAndroidVoiceUi(
+					'FAILURE_HANDLED',
+					`errorCode=${this.normalizeAndroidVoiceErrorCode(error?.code)}`
+					+ ` voiceState=${this.voiceState}`)
 				const message = voiceErrorMessage(error)
+				this.abortVoiceInput('RUNTIME_FAILURE')
 				this.composerError = message
 				this.voiceAnnouncement = message
-				this.voicePartialText = ''
-				this.voiceQueuePosition = 0
-				await this.releaseVoiceResources(true)
 				this.voiceState = 'ERROR'
 			},
-			async cancelVoiceInput() {
+			abortVoiceInput(source = 'USER_DISCARD') {
+				if (source === 'USER_DISCARD' && this.voiceFinalizing) return
 				if (!this.voiceInteractionActive && !this.voiceSession && !this.voiceRecorder) return
-				await this.releaseVoiceResources(true)
-				this.voicePartialText = ''
-				this.voiceQueuePosition = 0
-				this.voiceState = 'IDLE'
-			},
-			async cancelVoiceQueue() {
-				if (!this.voiceQueued) return
-				await this.releaseVoiceResources(true)
-				this.voiceQueuePosition = 0
-				this.voicePartialText = ''
-				this.voiceAnnouncement = '已取消语音识别排队。'
-				this.voiceState = 'IDLE'
-			},
-			async releaseVoiceResources(sendStop) {
-				clearInterval(this.voiceTimer)
-				this.voiceTimer = null
+				const controlledSource = this.normalizeAndroidVoiceStopSource(source)
 				const recorder = this.voiceRecorder
 				const session = this.voiceSession
+				this.voiceSessionEpoch += 1
+				this.resetVoiceWaveform(this.voiceSessionEpoch)
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = null
+				this.logAndroidVoiceStop(controlledSource)
 				this.voiceRecorder = null
 				this.voiceSession = null
-				try { await recorder?.destroy?.() } catch (_) {}
-				if (sendStop) {
-					try { await session?.stop?.() } catch (_) {}
-				}
+				session?.abort?.(controlledSource)
+				this.draft = this.voiceDraftBase
+				this.voiceDraftBase = ''
+				this.voicePartialText = ''
+				this.voiceQueuePosition = 0
+				this.voiceElapsedMs = 0
+				this.voiceLimitReached = false
+				this.voiceAnnouncement = ''
+				this.voiceState = 'IDLE'
+				try {
+					const release = recorder?.destroy?.()
+					if (release && typeof release.catch === 'function') void release.catch(() => {})
+				} catch (_) {}
+			},
+			completeVoiceInput(source = 'TRANSCRIPT_FINAL', owner = null) {
+				if (owner && !this.ownsVoiceSession(owner)) return
+				const controlledSource = this.normalizeAndroidVoiceStopSource(source)
+				clearInterval(this.voiceTimer)
+				this.voiceTimer = null
+				this.resetVoiceWaveform(this.voiceSessionEpoch)
+				const recorder = this.voiceRecorder
+				this.logAndroidVoiceStop(controlledSource)
+				this.voiceRecorder = null
+				this.voiceSession = null
+				try {
+					const release = recorder?.destroy?.()
+					if (release && typeof release.catch === 'function') void release.catch(() => {})
+				} catch (_) {}
 			},
 			onAuthenticatedPageReady() {
 				this.applyStore(readAiConversationStore())
@@ -1725,7 +2056,16 @@
 				const detail = event?.detail || {}
 				const root = this.turnScrollElement()
 				this.turnScrollTop = Number(detail.scrollTop ?? root?.scrollTop ?? 0)
-				this.turnViewportHeight = Number(root?.clientHeight || this.turnViewportHeight || 0)
+				const androidViewportEstimate = this.androidClient
+					? (currentWindowHeight() || 0) * 0.55 : 0
+				this.turnViewportHeight = Number(
+					detail.viewportHeight
+					|| detail.clientHeight
+					|| root?.clientHeight
+					|| this.turnViewportHeight
+					|| androidViewportEstimate
+					|| 0
+				)
 				const scrollHeight = Number(detail.scrollHeight || root?.scrollHeight || 0)
 				const distanceToBottom = Math.max(0, scrollHeight - this.turnScrollTop - this.turnViewportHeight)
 				this.turnFollowLatest = !this.hasHiddenTurnsAfter
@@ -1871,6 +2211,7 @@
 			},
 			async openConversation(publicId) {
 				if (publicId === this.currentConversationPublicId) return
+				this.invalidateAndroidScroll()
 				this.clearCompletedImageUpgrades()
 				if (this.generating && asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 				else if (this.generating) return
@@ -2230,9 +2571,9 @@
 				this.transportCancelRequested = false
 				this.generationCancelDispatching = false
 				this.generationCancelSentFor = ''
-				// 字节边界诊断只观测 H5；生命周期诊断则在各平台统一服从独立构建开关。
+				// H5 与 Android 共享读取、解析和渲染边界；只记录计数与耗时，不记录聊天内容。
 				this.streamDiagnostics = createAiConversationStreamDiagnostics({
-					enabled: clientPlatform() === 'H5' ? undefined : false,
+					enabled: clientPlatform() === 'ANDROID' ? true : undefined,
 					onSummary: reportAiConversationStreamDiagnostics
 				})
 				this.lifecycleDiagnostics = createAiConversationLifecycleDiagnostics({
@@ -2502,10 +2843,12 @@
 				} else if (event.type === 'source') {
 					if (this.activeResearchSession?.appendSource?.(event.data)) {
 						this.patchResearch(localId)
+						this.recordResearchRendered('source')
 					}
 				} else if (event.type === 'reasoning_summary') {
 					if (this.activeResearchSession?.appendReasoningSummary?.(event.data)) {
 						this.patchResearch(localId)
+						this.recordResearchRendered('reasoning_summary')
 					}
 				} else if (event.type === 'image-preview') {
 					const previewImage = imagePreviewAttachment(event.data)
@@ -2697,7 +3040,15 @@
 					patch.saving = true
 				}
 				this.applyStore(patchLocalMessage(localId, patch))
-				if (activityAccepted === true) this.patchResearch(localId)
+				if (activityAccepted === true) {
+					this.patchResearch(localId)
+					this.recordResearchRendered('activity')
+				}
+			},
+			recordResearchRendered(eventType) {
+				this.$nextTick(() => {
+					this.streamDiagnostics?.record?.('FRONTEND_RENDERED', { eventType })
+				})
 			},
 			patchResearch(localId) {
 				const research = this.activeResearchSession?.snapshot?.()
@@ -2908,15 +3259,79 @@
 				this.$nextTick(() =>
 					this.lifecycleDiagnostics?.finish?.('CANCEL'))
 			},
-			scrollBottom({ force = false } = {}) {
+			scrollBottom({ force = false, immediate = force, reason = 'content' } = {}) {
 				if (this.turnNavigationDesktop && !force && !this.turnFollowLatest) return
 				if (this.turnNavigationDesktop) {
 					this.renderWindow = createInitialTurnWindow(this.messages.length, TURN_WINDOW_SIZE)
 				}
+				if (this.androidClient) {
+					this.requestAndroidScrollBottom(reason, immediate)
+					return
+				}
 				this.setMessageScrollTarget('message-bottom')
+			},
+			requestAndroidScrollBottom(reason = 'content', immediate = false) {
+				if (!this.androidClient || !this.pageVisible) return
+				this.androidScrollReason = String(reason || 'content')
+				if (immediate && this.androidScrollTimer) {
+					clearTimeout(this.androidScrollTimer)
+					this.androidScrollTimer = null
+					this.androidScrollScheduled = false
+				}
+				if (this.androidScrollScheduled) return
+				this.androidScrollScheduled = true
+				const epoch = this.androidScrollEpoch
+				const conversationPublicId = this.currentConversationPublicId
+				const delay = immediate ? 0 : 50
+				this.androidScrollTimer = setTimeout(() => {
+					this.androidScrollTimer = null
+					this.androidScrollScheduled = false
+					if (epoch !== this.androidScrollEpoch
+						|| !this.pageVisible
+						|| conversationPublicId !== this.currentConversationPublicId) return
+					this.scrollTarget = ''
+					this.$nextTick(() => {
+						if (epoch !== this.androidScrollEpoch
+							|| !this.pageVisible
+							|| conversationPublicId !== this.currentConversationPublicId) return
+						this.scrollTarget = 'message-bottom'
+					})
+				}, delay)
+			},
+			invalidateAndroidScroll() {
+				this.androidScrollEpoch += 1
+				if (this.androidScrollTimer) clearTimeout(this.androidScrollTimer)
+				this.androidScrollTimer = null
+				this.androidScrollScheduled = false
+				this.androidScrollReason = ''
+			},
+			handleAndroidMediaState(event) {
+				if (!this.androidClient || !event) return
+				if (['READY', 'ERROR'].includes(event.phase)) {
+					this.handleAndroidMediaLayoutChange()
+				}
+			},
+			handleAndroidMediaLayoutChange() {
+				if (!this.androidClient) return
+				if (!this.turnFollowLatest) return
+				this.requestAndroidScrollBottom('media-layout', false)
+			},
+			previewAndroidImage(attachment) {
+				const url = String(attachment?.url || '')
+				if (!/^https:\/\//i.test(url)) return
+				uni.previewImage({ current: url, urls: [url] })
+			},
+			toggleAndroidGenerationSettings() {
+				if (!this.androidClient) return
+				this.androidGenerationSettingsExpanded = !this.androidGenerationSettingsExpanded
+				this.$nextTick(() => this.requestAndroidScrollBottom('generation-settings', true))
 			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
+			},
+			generatedImageGalleryAspectRatio(message) {
+				return imageGalleryAspectRatio(
+					message?.requestedImageAspect || this.selectedImageAspect)
 			},
 			generatedImageGallery(message) {
 				// The exit snapshot keeps a failed tile visible for one short transition;
@@ -2940,8 +3355,7 @@
 				})
 			},
 			generatedImageGalleryStyle(message) {
-				const aspect = imageGalleryAspectRatio(
-					message?.requestedImageAspect || this.selectedImageAspect)
+				const aspect = this.generatedImageGalleryAspectRatio(message)
 				return {
 					'--image-gallery-aspect': String(aspect),
 					'--image-gallery-mosaic-aspect': String(aspect * 1.52)
@@ -3225,11 +3639,47 @@
 				plus.runtime.openURL(attachment.url)
 				// #endif
 			},
+			downloadAndroidAttachment(attachment) {
+				if (!this.androidClient) return
+				const url = String(attachment?.url || '')
+				if (!/^https:\/\/[^\s]+$/i.test(url)) {
+					uni.showToast({ title: '文件地址无效', icon: 'none' })
+					return
+				}
+				uni.showLoading({ title: '正在下载', mask: false })
+				uni.downloadFile({
+					url,
+					success: result => {
+						if (Number(result?.statusCode) !== 200 || !result?.tempFilePath) {
+							uni.showToast({ title: '文件下载失败，请重试', icon: 'none' })
+							return
+						}
+						// #ifdef APP-PLUS
+						plus.runtime.openFile(result.tempFilePath, {}, () => {
+							uni.showToast({ title: '文件已下载，当前设备无法打开', icon: 'none' })
+						})
+						// #endif
+					},
+					fail: () => uni.showToast({ title: '文件下载失败，请重试', icon: 'none' }),
+					complete: () => uni.hideLoading()
+				})
+			},
+			retryAndroidAttachment() {
+				if (!this.androidClient || !this.currentConversationPublicId) return
+				void this.reloadCurrentMessages()
+			},
 			handlePageShow() {
+				this.pageVisible = true
 				this.syncStore()
 				this.resyncStaleHistory()
+				this.requestAndroidScrollBottom('page-show', true)
 			},
 			handlePageHide() {
+				this.pageVisible = false
+				this.invalidateAndroidScroll()
+				// #ifdef APP-PLUS
+				this.abortVoiceInput('PAGE_HIDE')
+				// #endif
 				// 页面切换只改变可见性，不代表用户取消生成；保留 SSE 和本地增量队列，返回页面后继续接收/展示。
 				if (this.generating) return
 				if (!asyncGenerationEnabled()) {
@@ -3257,6 +3707,11 @@
 				this.scrollBottom({ force: true })
 			},
 			handlePageUnload() {
+				this.pageVisible = false
+				this.invalidateAndroidScroll()
+				// #ifdef APP-PLUS
+				this.abortVoiceInput('PAGE_UNLOAD')
+				// #endif
 				this.clearCompletedImageUpgrades()
 				if (this.activeStream && this.currentConversationPublicId) {
 					this.applyStore(markAiConversationHistoryStale())
@@ -3436,7 +3891,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .voice-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker, .android-generation-settings-toggle { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; box-sizing: border-box; }
@@ -3458,8 +3913,8 @@
 	.assistant-message { width: 100%; max-width: 100%; min-width: 0; margin-top: 12px; padding-left: 2px; background: transparent; }
 	.assistant-label { gap: 8px; margin-bottom: 8px; color: #37d39a; font-size: 12px; font-weight: 800; letter-spacing: .8px; }
 	.stopped-label { color: #f2a24d; font-weight: 600; letter-spacing: 0; }
-	.model-activity { min-height: 28px; margin: 2px 0 8px; display: flex; align-items: center; gap: 8px; color: #9faaa4; font-size: 12px; }
-	.model-activity .user-thinking-orb { margin-left: -2px; }
+	.model-activity { min-height: 28px; margin: 2px 0 8px; display: flex; align-items: center; gap: 8px; overflow: visible; color: #9faaa4; font-size: 12px; }
+	.model-activity .user-thinking-orb { width: 20px; min-width: 20px; height: 20px; min-height: 20px; margin: 0; flex: 0 0 20px; }
 	.research-toggle { min-height: 36px; margin: 0 0 10px; padding: 0 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; color: #a9d8c5; font-size: 12px; }
 	.research-panel { max-width: 680px; margin: 0 0 12px; padding: 12px; border: 1px solid rgba(75, 101, 89, .52); border-radius: 13px; background: rgba(19, 25, 22, .72); }
 	.research-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 5px 0; color: #b9c5bf; font-size: 12px; line-height: 1.5; }
@@ -3512,30 +3967,34 @@
 	.message-bottom { height: 1px; }
 	.composer-wrap { width: min(100%, 820px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px 14px calc(10px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.composer { min-height: 58px; padding: 7px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid rgba(99, 117, 107, .55); border-radius: 18px; background: rgba(30, 35, 32, .84); box-shadow: inset 0 1px rgba(255, 255, 255, .05); backdrop-filter: blur(20px) saturate(115%); }
-	.composer-icon, .voice-button, .send-button { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 13px; }
-	.composer-input { min-height: 42px; max-height: 160px; flex: 1; padding: 10px 6px; color: #f3f5f4; font-size: 15px; line-height: 1.45; box-sizing: border-box; }
+	.composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 13px; }
+	.composer-entry { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
+	.voice-transcript-row { min-width: 0; min-height: 48px; display: flex; align-items: center; gap: 12px; overflow: visible; }
+	.voice-transcript-row .user-thinking-orb { width: 40px; min-width: 40px; height: 40px; min-height: 40px; margin: 0; flex: 0 0 40px; }
+	.voice-transcript-row .composer-input { width: auto; min-width: 0; flex: 1; }
+	.composer-input { width: 100%; min-height: 42px; max-height: 160px; padding: 10px 6px; color: #f3f5f4; font-size: 15px; line-height: 1.45; box-sizing: border-box; }
+	.composer-input:disabled { opacity: 1; -webkit-text-fill-color: #f3f5f4; }
 	.voice-button { border-color: rgba(111, 133, 122, .62); background: rgba(25, 31, 28, .9); }
-	.voice-button.is-recording { border-color: #ff746b; background: rgba(183, 57, 49, .72); box-shadow: 0 0 0 3px rgba(255, 116, 107, .13); }
-	.voice-button.is-finalizing { border-color: rgba(242, 162, 77, .5); opacity: .72; }
-	.voice-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
-	.voice-status { margin-top: 7px; padding: 9px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid rgba(255, 116, 107, .28); border-radius: 12px; background: rgba(76, 28, 25, .3); color: #f4c2be; }
-	.voice-status.is-finalizing { border-color: rgba(242, 162, 77, .3); background: rgba(75, 51, 24, .28); color: #f2c997; }
-	.voice-status.is-queued { border-color: rgba(77, 156, 242, .34); background: rgba(24, 48, 75, .3); color: #c8def8; }
-	.voice-status-copy { min-width: 0; flex: 1; }
-	.voice-status-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
-	.voice-status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #ff746b; box-shadow: 0 0 0 4px rgba(255, 116, 107, .12); }
-	.voice-status.is-finalizing .voice-status-dot { background: #f2a24d; box-shadow: 0 0 0 4px rgba(242, 162, 77, .12); }
-	.voice-status.is-queued .voice-status-dot { background: #66aef7; box-shadow: 0 0 0 4px rgba(102, 174, 247, .13); }
-	.voice-queue-cancel { min-height: 32px; margin: 0 0 0 auto; padding: 0 12px; border: 1px solid rgba(200, 222, 248, .42); border-radius: 9px; background: rgba(14, 30, 48, .72); color: #e5f1ff; font-size: 12px; font-weight: 700; line-height: 30px; }
-	.voice-queue-cancel:focus-visible { outline: 2px solid rgba(102, 174, 247, .9); outline-offset: 2px; }
-	.voice-duration { margin-left: auto; color: inherit; font-variant-numeric: tabular-nums; }
-	.voice-preview { display: block; max-height: 68px; margin-top: 8px; overflow: hidden; color: #e7eeea; font-size: 13px; line-height: 1.55; }
+	.voice-button:focus-visible, .voice-cancel-button:focus-visible, .voice-commit-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
+	// 波形跨过取消按钮上方的空白列：44px 按钮加两侧 6px 间距，到计时列左侧结束。
+	.voice-inline-status { width: calc(100% + 56px); min-height: 28px; padding: 2px 0 0; display: flex; align-items: center; color: #aeb9b3; font-size: 11px; line-height: 1.3; box-sizing: border-box; }
+	.voice-inline-status .user-voice-waveform { width: 100%; min-width: 0; flex: 1; }
+	.voice-commit-stack { width: 44px; min-width: 44px; align-self: stretch; display: flex; flex: 0 0 44px; flex-direction: column; align-items: center; justify-content: space-between; }
+	.voice-cancel-button, .voice-commit-button { border-color: rgba(111, 133, 122, .62); background: rgba(25, 31, 28, .9); color: #dce5e0; transition: transform 120ms ease, opacity 120ms ease; }
+	.voice-cancel-button:not(:disabled):active, .voice-commit-button:not(:disabled):active { transform: scale(.96); }
+	.voice-cancel-button:disabled, .voice-commit-button:disabled { cursor: not-allowed; opacity: .42; }
+	.voice-cancel-glyph { display: block; font-size: 28px; font-weight: 300; line-height: 40px; }
+	.voice-commit-square { width: 14px; height: 14px; margin: auto; border-radius: 3px; background: currentColor; }
+	.voice-duration { width: 44px; min-height: 28px; display: flex; align-items: center; justify-content: center; color: #aeb9b3; text-align: center; font-size: 11px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+	.voice-duration.is-hidden { visibility: hidden; }
 	.visually-hidden { width: 1px; height: 1px; position: absolute; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 	.send-button { border-color: #37d39a; background: #37d39a; }
 	.stop-button { background: rgba(55, 211, 154, .18); }
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
 	.composer-meta { justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 7px; padding: 0 4px; }
 	.composer-controls { min-width: 0; flex-wrap: wrap; gap: 4px; }
+	.android-generation-settings-toggle { min-height: 36px; margin: 0; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border-radius: 10px; color: #9bc8ec; font-size: 11px; line-height: 34px; }
+	.android-generation-settings-toggle::after { border: 0; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.context-usage { min-width: 142px; min-height: 36px; padding: 6px 10px; display: flex; flex-direction: column; justify-content: center; gap: 5px; border: 1px solid rgba(55, 211, 154, .24); border-radius: 10px; background: rgba(15, 22, 19, .72); color: #8fdcbe; box-sizing: border-box; }
@@ -3569,6 +4028,14 @@
 	.composer-note { color: #64706a; font-size: 10px; text-align: right; }
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #8ba198; font-size: 11px; }
 	.composer-error { display: block; padding: 5px 6px 0; }
+	.is-android-client .attachment-grid { grid-template-columns: minmax(0, 1fr); }
+	.is-android-client .attachment-card.is-android-media { width: 100% !important; max-width: 100%; overflow: visible; border: 0; border-radius: 0; background: transparent; }
+	.is-android-client .attachment-media-frame.is-video { width: 100% !important; max-width: 100%; max-height: none; aspect-ratio: auto !important; overflow: visible; border: 0; border-radius: 0; background: transparent; }
+	.is-android-client .composer-meta { align-items: stretch; gap: 4px; }
+	.is-android-client .composer-controls { width: 100%; gap: 6px; }
+	.is-android-client .model-picker-control { min-width: 0; flex: 1 1 145px; }
+	.is-android-client .model-picker { width: 100%; box-sizing: border-box; }
+	.is-android-client .composer-note { width: 100%; padding-top: 2px; text-align: left; }
 	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
 		.mobile-only { display: none !important; }

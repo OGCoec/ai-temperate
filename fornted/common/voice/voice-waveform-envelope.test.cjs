@@ -42,6 +42,17 @@ test('positive and negative PCM amplitudes produce the same bounded envelope', a
 	assert.ok(positive.every(level => level > 0 && level <= 1))
 })
 
+test('three-times-higher amplitude gate suppresses old-threshold room noise', async () => {
+	const { createVoiceWaveformAnalyzer } = await loadModule()
+	const belowNewGate = createVoiceWaveformAnalyzer().analyze(constantFrame(240))
+	const aboveNewGate = createVoiceWaveformAnalyzer().analyze(constantFrame(300))
+	const ordinarySpeech = createVoiceWaveformAnalyzer().analyze(constantFrame(12000))
+
+	assert.deepEqual(belowNewGate, [0, 0, 0, 0, 0])
+	assert.ok(aboveNewGate.every(level => level > 0 && level <= 1))
+	assert.ok(ordinarySpeech.at(-1) > 0.95)
+})
+
 test('a legal recorder tail emits only the windows represented by its samples', async () => {
 	const { createVoiceWaveformAnalyzer } = await loadModule()
 	const analyzer = createVoiceWaveformAnalyzer()

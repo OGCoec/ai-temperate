@@ -61,21 +61,85 @@ test('packets are epoch and sequence guarded, clamped, and limited to five level
 		epoch: 7,
 		sequence: 1,
 		levels: [-1, 0.25, 2, 0.5, 0.75, 0.9]
-	}, 100), true)
+	}, 7, 100), true)
 	assert.deepEqual(state.queue, [0, 0.25, 1, 0.5, 0.75])
 	assert.equal(acceptVoiceWaveformPacket(state, {
 		epoch: 6,
 		sequence: 2,
 		levels: [1]
-	}, 110), false)
+	}, 7, 110), false)
 	assert.equal(acceptVoiceWaveformPacket(state, {
 		epoch: 7,
 		sequence: 1,
 		levels: [1]
-	}, 120), false)
+	}, 7, 120), false)
 })
 
-test('visual backlog drops old levels while audio-independent history stays bounded', async () => {
+test('first and later bars advance only on strict three hundred millisecond boundaries', async () => {
+	const {
+		acceptVoiceWaveformPacket,
+		advanceVoiceWaveformState,
+		createVoiceWaveformRenderState,
+		voiceWaveformHistory
+	} = await loadRenderer()
+	const state = createVoiceWaveformRenderState(4, 2)
+
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 0), false)
+	for (let sequence = 1; sequence <= 3; sequence += 1) {
+		acceptVoiceWaveformPacket(state, {
+			epoch: 2,
+			sequence,
+			levels: [0.4, 0.4, 0.4, 0.4, 0.4]
+		}, 2, sequence * 100)
+	}
+
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 299), false)
+	assert.deepEqual(voiceWaveformHistory(state), [])
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 300), true)
+	assert.deepEqual(voiceWaveformHistory(state), [Math.fround(0.4)])
+
+	acceptVoiceWaveformPacket(state, {
+		epoch: 2,
+		sequence: 4,
+		levels: [0.8, 0.8, 0.8, 0.8, 0.8]
+	}, 2, 400)
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 599), false)
+	assert.equal(voiceWaveformHistory(state).length, 1)
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 600), true)
+	assert.deepEqual(voiceWaveformHistory(state), [Math.fround(0.4), Math.fround(0.8)])
+})
+
+test('fifteen twenty millisecond values collapse into one RMS bar', async () => {
+	const {
+		acceptVoiceWaveformPacket,
+		advanceVoiceWaveformState,
+		createVoiceWaveformRenderState,
+		voiceWaveformHistory
+	} = await loadRenderer()
+	const state = createVoiceWaveformRenderState(3, 4)
+	const values = [
+		0.1, 0.2, 0.3, 0.4, 0.5,
+		0.6, 0.7, 0.8, 0.9, 1,
+		0.9, 0.8, 0.7, 0.6, 0.5
+	]
+	const expected = Math.sqrt(
+		values.reduce((sum, value) => sum + value * value, 0) / values.length)
+
+	advanceVoiceWaveformState(state, 'RECORDING', 1000)
+	for (let index = 0; index < 3; index += 1) {
+		acceptVoiceWaveformPacket(state, {
+			epoch: 4,
+			sequence: index + 1,
+			levels: values.slice(index * 5, index * 5 + 5)
+		}, 4, 1100 + index * 100)
+	}
+	advanceVoiceWaveformState(state, 'RECORDING', 1300)
+
+	assert.equal(state.queue.length, 0)
+	assert.ok(Math.abs(voiceWaveformHistory(state)[0] - expected) < 1e-6)
+})
+
+test('visual backlog and history stay bounded without catch-up bursts', async () => {
 	const {
 		acceptVoiceWaveformPacket,
 		advanceVoiceWaveformState,
@@ -83,43 +147,77 @@ test('visual backlog drops old levels while audio-independent history stays boun
 		voiceWaveformHistory
 	} = await loadRenderer()
 	const state = createVoiceWaveformRenderState(3, 2)
+	advanceVoiceWaveformState(state, 'RECORDING', 0)
 
 	for (let sequence = 1; sequence <= 4; sequence += 1) {
 		acceptVoiceWaveformPacket(state, {
 			epoch: 2,
 			sequence,
 			levels: [sequence / 10, sequence / 10, sequence / 10, sequence / 10, sequence / 10]
-		}, sequence * 100)
+		}, 2, sequence * 100)
 	}
 	assert.equal(state.queue.length, 15)
 
-	advanceVoiceWaveformState(state, 'RECORDING', 400)
-	advanceVoiceWaveformState(state, 'RECORDING', 440)
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 950), true)
+	assert.equal(voiceWaveformHistory(state).length, 1)
+	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 951), false)
+	assert.equal(voiceWaveformHistory(state).length, 1)
+	for (let cycle = 0; cycle < 5; cycle += 1) {
+		acceptVoiceWaveformPacket(state, {
+			epoch: 2,
+			sequence: 5 + cycle,
+			levels: [0.5, 0.5, 0.5, 0.5, 0.5]
+		}, 2, 1000 + cycle * 300)
+		advanceVoiceWaveformState(state, 'RECORDING', 1250 + cycle * 300)
+	}
 	assert.ok(voiceWaveformHistory(state).length <= 3)
-	assert.ok(state.queue.length < 15)
+	assert.equal(state.queue.length, 0)
 })
 
-test('stalled recording decays to real silence and finalizing reaches zero in 180ms', async () => {
-	const {
-		acceptVoiceWaveformPacket,
-		advanceVoiceWaveformState,
-		createVoiceWaveformRenderState,
-		resolveVoiceWaveformFinalizingScale,
-		voiceWaveformHistory
-	} = await loadRenderer()
-	const state = createVoiceWaveformRenderState(5, 3)
-	acceptVoiceWaveformPacket(state, {
-		epoch: 3,
-		sequence: 1,
-		levels: [1]
-	}, 100)
+test('finalizing clears visual history, rejects late packets, and stays on a static baseline', async () => {
+	const { default: renderer, voiceWaveformHistory } = await loadRenderer()
+	const originalRaf = globalThis.requestAnimationFrame
+	const originalCancelRaf = globalThis.cancelAnimationFrame
+	let rafCount = 0
+	globalThis.requestAnimationFrame = () => ++rafCount
+	globalThis.cancelAnimationFrame = () => {}
 
-	advanceVoiceWaveformState(state, 'RECORDING', 100)
-	advanceVoiceWaveformState(state, 'RECORDING', 360)
-	const history = voiceWaveformHistory(state)
-	assert.ok(history.at(-1) < history[0])
-	assert.equal(resolveVoiceWaveformFinalizingScale(500, 500), 1)
-	assert.equal(resolveVoiceWaveformFinalizingScale(500, 680), 0)
+	try {
+		const instance = {
+			...renderer.data(),
+			...renderer.methods,
+			config: {
+				state: 'RECORDING',
+				sessionEpoch: 3,
+				packet: null,
+				reduced: false
+			},
+			visible: true,
+			hidden: false,
+			connectCanvas() {},
+			draw() {}
+		}
+		instance.renderState.sessionEpoch = 3
+		instance.renderState.queue.push(0.8)
+		instance.renderState.history[0] = 0.8
+		instance.renderState.historyLength = 1
+
+		instance.update({
+			state: 'FINALIZING',
+			sessionEpoch: 3,
+			packet: { epoch: 3, sequence: 9, levels: [1] },
+			reduced: false
+		})
+
+		assert.deepEqual(instance.renderState.queue, [])
+		assert.deepEqual(voiceWaveformHistory(instance.renderState), [])
+		assert.equal(instance.renderState.currentLevel, 0)
+		assert.equal(rafCount, 0)
+		assert.equal(instance.running, false)
+	} finally {
+		globalThis.requestAnimationFrame = originalRaf
+		globalThis.cancelAnimationFrame = originalCancelRaf
+	}
 })
 
 test('waveform bars remain centered and between the two and twenty pixel limits', async () => {
@@ -129,8 +227,7 @@ test('waveform bars remain centered and between the two and twenty pixel limits'
 	drawVoiceWaveformFrame(context, {
 		width: 50,
 		height: 24,
-		levels: [0, 0.5, 1],
-		finalizingScale: 1
+		levels: [0, 0.5, 1]
 	})
 
 	assert.equal(context.lines.length, 10)
@@ -142,7 +239,7 @@ test('waveform bars remain centered and between the two and twenty pixel limits'
 	}
 })
 
-test('reduced motion schedules a five hertz timer without continuous RAF', async () => {
+test('reduced motion uses the same three hundred millisecond cadence without continuous RAF', async () => {
 	const { default: renderer } = await loadRenderer()
 	const originalRaf = globalThis.requestAnimationFrame
 	const originalCancelRaf = globalThis.cancelAnimationFrame
@@ -150,9 +247,13 @@ test('reduced motion schedules a five hertz timer without continuous RAF', async
 	const originalClearTimeout = globalThis.clearTimeout
 	let rafCount = 0
 	let timeoutCount = 0
+	let timeoutDelay = 0
 	globalThis.requestAnimationFrame = () => ++rafCount
 	globalThis.cancelAnimationFrame = () => {}
-	globalThis.setTimeout = () => ++timeoutCount
+	globalThis.setTimeout = (callback, delay) => {
+		timeoutDelay = delay
+		return ++timeoutCount
+	}
 	globalThis.clearTimeout = () => {}
 
 	try {
@@ -172,6 +273,7 @@ test('reduced motion schedules a five hertz timer without continuous RAF', async
 		instance.restart()
 		assert.equal(rafCount, 0)
 		assert.equal(timeoutCount, 1)
+		assert.equal(timeoutDelay, 300)
 		instance.stop()
 	} finally {
 		globalThis.requestAnimationFrame = originalRaf

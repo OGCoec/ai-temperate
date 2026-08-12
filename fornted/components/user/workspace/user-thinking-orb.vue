@@ -1,13 +1,19 @@
 <template>
 	<view
 		class="user-thinking-orb"
-		:class="{ 'is-large': size === 64, 'is-reduced': effectiveMotionReduced }"
+		:class="{ 'is-medium': normalizedSize === 40, 'is-large': normalizedSize === 64, 'is-reduced': effectiveMotionReduced }"
+		:style="orbSizeStyle"
 		:aria-label="ariaLabel || defaultLabel"
 		role="img"
 		:orb-config="orbConfig"
 		:change:orb-config="orbRender.update"
 	>
-		<canvas class="user-thinking-orb-canvas" aria-hidden="true"></canvas>
+		<canvas
+			class="user-thinking-orb-canvas"
+			:hidpi="false"
+			:style="orbSizeStyle"
+			aria-hidden="true"
+		></canvas>
 	</view>
 </template>
 
@@ -48,13 +54,28 @@
 		},
 		computed: {
 			defaultLabel() { return LABELS[this.state] || LABELS.working },
+			normalizedSize() {
+				return this.size === 64 ? 64 : this.size === 40 ? 40 : 20
+			},
+			orbSizeStyle() {
+				const size = `${this.normalizedSize}px`
+				return {
+					width: size,
+					height: size,
+					minWidth: size,
+					minHeight: size,
+					maxWidth: size,
+					maxHeight: size,
+					flexBasis: size
+				}
+			},
 			effectiveMotionReduced() {
 				return this.reduced === null ? this.localMotionReduced : this.reduced
 			},
 			orbConfig() {
 				return {
 					state: this.state,
-					size: this.size === 64 ? 64 : 20,
+					size: this.normalizedSize,
 					speed: Number.isFinite(Number(this.speed)) ? Number(this.speed) : 1,
 					paused: Boolean(this.paused),
 					reduced: this.effectiveMotionReduced,
@@ -82,8 +103,10 @@
 </script>
 
 <style lang="scss">
-	.user-thinking-orb { width: 20px; height: 20px; flex: 0 0 20px; display: inline-flex; align-items: center; justify-content: center; overflow: visible; }
-	.user-thinking-orb.is-large { width: 64px; height: 64px; flex-basis: 64px; }
-	.user-thinking-orb-canvas { width: 20px; height: 20px; display: block; pointer-events: none; }
-	.user-thinking-orb.is-large .user-thinking-orb-canvas { width: 64px; height: 64px; }
+	.user-thinking-orb { width: 20px; min-width: 20px; height: 20px; min-height: 20px; padding: 0; flex: 0 0 20px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; overflow: visible; border: 0; box-sizing: content-box; line-height: 0; }
+	.user-thinking-orb.is-medium { width: 40px; min-width: 40px; height: 40px; min-height: 40px; flex-basis: 40px; }
+	.user-thinking-orb.is-large { width: 64px; min-width: 64px; height: 64px; min-height: 64px; flex-basis: 64px; }
+	.user-thinking-orb-canvas { width: 20px; min-width: 20px; height: 20px; min-height: 20px; padding: 0; flex: 0 0 20px; flex-shrink: 0; display: block; overflow: visible; border: 0; box-sizing: content-box; line-height: 0; pointer-events: none; }
+	.user-thinking-orb.is-medium .user-thinking-orb-canvas { width: 40px; min-width: 40px; height: 40px; min-height: 40px; flex-basis: 40px; }
+	.user-thinking-orb.is-large .user-thinking-orb-canvas { width: 64px; min-width: 64px; height: 64px; min-height: 64px; flex-basis: 64px; }
 </style>
