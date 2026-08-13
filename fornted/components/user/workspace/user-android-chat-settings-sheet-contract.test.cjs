@@ -26,9 +26,9 @@ test('chat panel builds capability sections from existing model option arrays', 
 	const chatPanel = read(chatPanelPath)
 
 	assert.match(chatPanel, /androidSettingsMode\(\)[\s\S]*'VIDEO'[\s\S]*'IMAGE'[\s\S]*'TEXT'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*key:\s*'reasoning'[\s\S]*key:\s*'webSearch'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*key:\s*'imageQuality'[\s\S]*key:\s*'imageAspect'[\s\S]*key:\s*'imageCount'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*key:\s*'videoMode'[\s\S]*key:\s*'videoResolution'[\s\S]*key:\s*'videoAspect'[\s\S]*key:\s*'videoDuration'/)
+	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('reasoning'[\s\S]*androidSettingsSection\('webSearch'/)
+	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('imageQuality'[\s\S]*androidSettingsSection\('imageAspect'[\s\S]*androidSettingsSection\('imageCount'/)
+	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('videoMode'[\s\S]*androidSettingsSection\('videoResolution'[\s\S]*androidSettingsSection\('videoAspect'[\s\S]*androidSettingsSection\('videoDuration'/)
 	assert.doesNotMatch(chatPanel, /key:\s*'videoCount'/)
 	assert.match(chatPanel, /handleAndroidSettingsChange\(event\)[\s\S]*selectModel[\s\S]*selectReasoningEffort[\s\S]*selectWebSearchMode[\s\S]*selectImageAspect[\s\S]*selectImageOutputCount[\s\S]*selectVideoMode[\s\S]*selectVideoDuration[\s\S]*selectVideoResolution[\s\S]*selectVideoAspect/)
 })

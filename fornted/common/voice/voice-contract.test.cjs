@@ -163,7 +163,7 @@ test('chat composer previews partial and final transcripts from the pre-recordin
 	assert.match(panel, /abortVoiceInput\('USER_DISCARD'\)/)
 })
 
-test('voice status row spans the cancel column and stops at the timer column', () => {
+test('voice status row stays compact across the H5 and Android composer shells', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const statusStart = panel.indexOf('class="voice-inline-status"')
 	const statusEnd = panel.indexOf('</view>', statusStart)
@@ -180,8 +180,9 @@ test('voice status row spans the cancel column and stops at the timer column', (
 	assert.doesNotMatch(statusTemplate, /class="voice-duration"/)
 	assert.doesNotMatch(statusTemplate, /<user-thinking-orb/)
 	assert.match(panel, /\.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 56px\)/s)
-	assert.match(panel, /\.composer\s*\{[^}]*gap:\s*6px/s)
-	assert.match(panel, /\.composer-icon, \.voice-button, \.voice-cancel-button, \.voice-commit-button, \.send-button\s*\{[^}]*width:\s*44px/s)
+	assert.match(panel, /\.composer\s*\{[^}]*gap:\s*8px/s)
+	assert.match(panel, /\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active\s*\{[^}]*gap:\s*7px/s)
+	assert.match(panel, /\.is-android-client \.voice-cancel-button,\s*\.is-android-client \.voice-commit-button\s*\{[^}]*width:\s*48px/s)
 	assert.match(panel, /\.voice-inline-status \.user-voice-waveform\s*\{[^}]*width:\s*100%/s)
 	assert.doesNotMatch(panel, /class="voice-status"/)
 })
