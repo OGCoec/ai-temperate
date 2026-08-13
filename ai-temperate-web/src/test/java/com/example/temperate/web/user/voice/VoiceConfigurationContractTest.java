@@ -41,6 +41,17 @@ final class VoiceConfigurationContractTest {
     }
 
     @Test
+    void voiceTicketAdvertisesTheEightHundredMillisecondPartialCadence()
+            throws IOException {
+        String yaml = Files.readString(
+                Path.of("src/main/resources/application.yml"),
+                StandardCharsets.UTF_8);
+
+        assertThat(yaml).contains(
+                "partial-interval: ${VOICE_PARTIAL_INTERVAL:800ms}");
+    }
+
+    @Test
     void controllerKeepsOpenApiMetadataAndContainsNoFrontendSource() throws IOException {
         String source = Files.readString(Path.of(
                 "src/main/java/com/example/temperate/web/user/voice/VoiceSessionTicketController.java"));

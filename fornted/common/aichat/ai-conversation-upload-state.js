@@ -86,6 +86,42 @@ export function createPendingAttachment(file, localId) {
 	}
 }
 
+export function createOptimisticInputPresentation(files, options = {}) {
+	const previewSources = {}
+	const attachments = Array.from(files || []).map(file => {
+		const attachmentId = String(file?.uploaded?.attachmentId || '').trim()
+		if (!attachmentId) {
+			throw stateError(
+				'AI_ATTACHMENT_UPLOAD_REFERENCE_INVALID',
+				'附件上传引用无效。'
+			)
+		}
+		const category = attachmentCategory(file)
+		const contentType = String(file?.contentType || '').trim().toLowerCase()
+		const localPath = String(file?.path || '').trim()
+		if (localPath) {
+			previewSources[attachmentId] = localPath
+		}
+		const suppressVideoPreview = options.suppressVideoPreview === true
+			&& category === 'VIDEO'
+		const localImagePreview = category === 'IMAGE'
+			&& contentType !== 'image/svg+xml'
+		return Object.freeze({
+			attachmentId,
+			fileName: String(file?.fileName || ''),
+			contentType,
+			sizeBytes: String(file?.sizeBytes),
+			category,
+			url: localImagePreview || suppressVideoPreview ? '' : localPath,
+			state: 'AVAILABLE'
+		})
+	})
+	return Object.freeze({
+		attachments: Object.freeze(attachments),
+		previewSources: Object.freeze(previewSources)
+	})
+}
+
 export function deriveSendGate({
 	model,
 	text,

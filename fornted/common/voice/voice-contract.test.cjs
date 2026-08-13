@@ -138,7 +138,7 @@ test('Android UTS recorder pins native AudioRecord arguments to Int', () => {
 	assert.doesNotMatch(recorder, /putShort\(samples\[sampleIndex\]\.toInt\(\)\)/)
 })
 
-test('chat composer previews partial and final transcripts from the pre-recording draft', () => {
+test('chat composer keeps partial text transient and commits only the final transcript', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const partialBranch = panel.slice(
 		panel.indexOf("event?.type === 'transcript.partial'"),
@@ -148,10 +148,14 @@ test('chat composer previews partial and final transcripts from the pre-recordin
 		panel.indexOf('async handleVoiceFailure'))
 
 	assert.match(partialBranch, /voicePartialText/)
-	assert.match(partialBranch, /this\.draft\s*=\s*appendVoiceTranscriptToDraft\(\s*this\.voiceDraftBase/)
+	assert.match(partialBranch, /voiceTranscriptPresenter\?\.setTarget\(/)
+	assert.doesNotMatch(partialBranch, /this\.draft\s*=/)
 	assert.match(finalMethod, /this\.draft\s*=\s*appendVoiceTranscriptToDraft\(\s*this\.voiceDraftBase/)
 	assert.doesNotMatch(finalMethod, /this\.send\(/)
 	assert.match(panel, /voiceDraftBase:\s*''/)
+	assert.match(panel, /voiceDisplayedPartialText:\s*''/)
+	assert.match(panel, /voiceTranscriptPresenter:\s*null/)
+	assert.match(panel, /voiceTranscriptTailSequence:\s*0/)
 	assert.match(panel, /voiceSessionEpoch:\s*0/)
 	assert.match(panel, /voiceMaximumDurationMs:\s*300000/)
 	assert.match(panel, /aria-label="聊天消息"/)
@@ -161,6 +165,51 @@ test('chat composer previews partial and final transcripts from the pre-recordin
 	assert.doesNotMatch(panel, /class="voice-queue-cancel"/)
 	assert.match(panel, /event\?\.type === 'session\.queued'/)
 	assert.match(panel, /abortVoiceInput\('USER_DISCARD'\)/)
+})
+
+test('active voice composer exposes one shared live transcript row without moving controls', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+	const rowStart = panel.indexOf('class="voice-transcript-row"')
+	const rowEnd = panel.indexOf('</view>', panel.indexOf('</scroll-view>', rowStart))
+	const rowTemplate = panel.slice(rowStart, rowEnd)
+
+	assert.ok(rowStart >= 0, 'voice transcript row must exist')
+	assert.match(rowTemplate, /<user-thinking-orb/)
+	assert.match(rowTemplate, /<scroll-view[\s\S]*v-if="voiceInteractionActive"/)
+	assert.match(rowTemplate, /class="voice-live-transcript"/)
+	assert.match(rowTemplate, /:scroll-into-view="voiceTranscriptTailAnchorId"/)
+	assert.match(rowTemplate, /\{\{ voiceLiveTranscriptLabel \}\}/)
+	assert.match(rowTemplate, /:id="voiceTranscriptTailAnchorId"/)
+	assert.ok(
+		rowTemplate.indexOf('<user-thinking-orb') < rowTemplate.indexOf('<scroll-view'),
+		'voice orb must stay before live transcript text')
+	assert.match(rowTemplate, /<textarea[\s\S]*v-if="!voiceInteractionActive"/)
+	assert.match(panel, /\.voice-live-transcript\s*\{[^}]*white-space:\s*nowrap/s)
+	assert.match(panel, /\.voice-live-transcript\s*\{[^}]*overflow:\s*hidden/s)
+	assert.match(panel, /\.voice-live-transcript-text\s*\{[^}]*white-space:\s*nowrap/s)
+	assert.doesNotMatch(rowTemplate, /#ifdef APP-PLUS|#ifndef APP-PLUS/)
+})
+
+test('voice transcript presenter is session owned and cleared on every terminal path', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+	const startMethod = panel.slice(
+		panel.indexOf('async startVoiceInput()'),
+		panel.indexOf('startVoiceTimer()', panel.indexOf('async startVoiceInput()')))
+	const abortMethod = panel.slice(
+		panel.indexOf("abortVoiceInput(source = 'USER_DISCARD')"),
+		panel.indexOf("completeVoiceInput(source = 'TRANSCRIPT_FINAL'"))
+	const completeMethod = panel.slice(
+		panel.indexOf("completeVoiceInput(source = 'TRANSCRIPT_FINAL'"),
+		panel.indexOf('onAuthenticatedPageReady()'))
+
+	assert.match(panel, /createVoiceLiveTranscriptPresenter/)
+	assert.match(startMethod, /resetVoiceTranscriptPresenter\(voiceEpoch\)/)
+	assert.match(panel, /onDisplay:\s*text\s*=>[\s\S]*voiceSessionEpoch !== voiceEpoch[\s\S]*voiceDisplayedPartialText = String\(text \|\| ''\)/)
+	assert.match(abortMethod, /disposeVoiceTranscriptPresenter\(\)/)
+	assert.match(completeMethod, /disposeVoiceTranscriptPresenter\(\)/)
+	assert.match(panel, /disposeVoiceTranscriptPresenter\(\)\s*\{[\s\S]*this\.voicePartialText = ''[\s\S]*this\.voiceDisplayedPartialText = ''/)
+	assert.match(panel, /beforeUnmount\(\)[\s\S]*abortVoiceInput\('COMPONENT_UNMOUNT'\)/)
+	assert.doesNotMatch(panel, /console\.(?:log|warn|error)\([^)]*voice(?:Partial|DisplayedPartial)Text/)
 })
 
 test('H5 voice status row keeps its existing compact Canvas presentation', () => {
@@ -214,7 +263,7 @@ test('voice duration sits above stop and freezes before finalizing begins', () =
 test('voice transcript row places a shared 40px orb before the textarea', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const rowStart = panel.indexOf('class="voice-transcript-row"')
-	const rowEnd = panel.indexOf('</view>', rowStart)
+	const rowEnd = panel.indexOf('</view>', panel.indexOf('</scroll-view>', rowStart))
 	const rowTemplate = panel.slice(rowStart, rowEnd)
 
 	assert.ok(rowStart >= 0, 'voice transcript row must exist')
@@ -294,7 +343,7 @@ test('voice discard is synchronous, restores the base draft, and ignores stale c
 	assert.match(abortMethod, /this\.voiceSessionEpoch \+= 1/)
 	assert.match(abortMethod, /session\?\.abort\?\.\(controlledSource\)/)
 	assert.match(abortMethod, /this\.draft = this\.voiceDraftBase/)
-	assert.match(abortMethod, /this\.voicePartialText = ''/)
+	assert.match(abortMethod, /this\.disposeVoiceTranscriptPresenter\(\)/)
 	assert.match(abortMethod, /this\.voiceState = 'IDLE'/)
 	assert.doesNotMatch(abortMethod, /\bawait\b/)
 	assert.match(session, /abort\(source = 'USER_DISCARD'\)/)

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -108,6 +109,64 @@ final class VoiceWebSocketHandlerTest {
                 .map(message -> String.valueOf(message.getPayload())))
                 .anyMatch(payload -> payload.contains("transcript.final") && payload.contains("你好"));
         verify(upstream).close(1000, "TRANSCRIPT_FINAL");
+    }
+
+    @Test
+    void forwardsIncrementalTranscriptsWithoutLoggingTextOrClosingBeforeFinal()
+            throws Exception {
+        try (LoggerCapture logs = capture()) {
+            handler.afterConnectionEstablished(client);
+            handler.handleMessage(client, new TextMessage(startMessage()));
+            upstreamListener.get().onText("{\"type\":\"session.ready\"}");
+            upstreamListener.get().onText(
+                    "{\"type\":\"transcript.partial\",\"sequence\":1,"
+                            + "\"text\":\"临时隐私文字\",\"startMs\":0,\"endMs\":800}");
+            upstreamListener.get().onText(
+                    "{\"type\":\"transcript.partial\",\"sequence\":2,"
+                            + "\"text\":\"临时隐私文字更新\",\"startMs\":0,\"endMs\":1600}");
+
+            ArgumentCaptor<WebSocketMessage<?>> partialMessages =
+                    ArgumentCaptor.forClass(WebSocketMessage.class);
+            verify(client, org.mockito.Mockito.atLeast(3))
+                    .sendMessage(partialMessages.capture());
+            assertThat(partialMessages.getAllValues().stream()
+                    .map(message -> String.valueOf(message.getPayload())))
+                    .anyMatch(payload -> payload.contains("transcript.partial")
+                            && payload.contains("临时隐私文字更新"));
+            verify(upstream, never()).close(anyInt(), anyString());
+            verify(client, never()).close(any(org.springframework.web.socket.CloseStatus.class));
+
+            handler.handleMessage(client, new TextMessage("{\"type\":\"input.commit\"}"));
+            verify(upstream).sendText("{\"type\":\"input.commit\"}");
+            upstreamListener.get().onText(
+                    "{\"type\":\"transcript.final\",\"sequence\":3,"
+                            + "\"text\":\"最终文字\",\"startMs\":0,\"endMs\":1700}");
+
+            verify(upstream).close(1000, "TRANSCRIPT_FINAL");
+            assertThat(logs.messages())
+                    .noneMatch(message -> message.contains("临时隐私文字")
+                            || message.contains("最终文字"));
+        }
+    }
+
+    @Test
+    void rejectsRepeatedTranscriptSequenceAsAnUpstreamProtocolFailure()
+            throws Exception {
+        handler.afterConnectionEstablished(client);
+        handler.handleMessage(client, new TextMessage(startMessage()));
+        upstreamListener.get().onText("{\"type\":\"session.ready\"}");
+        upstreamListener.get().onText(
+                "{\"type\":\"transcript.partial\",\"sequence\":1,\"text\":\"甲\"}");
+        upstreamListener.get().onText(
+                "{\"type\":\"transcript.partial\",\"sequence\":1,\"text\":\"乙\"}");
+
+        ArgumentCaptor<WebSocketMessage<?>> messages =
+                ArgumentCaptor.forClass(WebSocketMessage.class);
+        verify(client, org.mockito.Mockito.atLeast(3)).sendMessage(messages.capture());
+        assertThat(messages.getAllValues().stream()
+                .map(message -> String.valueOf(message.getPayload())))
+                .anyMatch(payload -> payload.contains("VOICE_PROTOCOL_INVALID"));
+        verify(upstream).close(anyInt(), anyString());
     }
 
     @Test
@@ -264,7 +323,7 @@ final class VoiceWebSocketHandlerTest {
                 Duration.ofMinutes(1),
                 10,
                 Duration.ofMinutes(5),
-                Duration.ofMillis(1500),
+                Duration.ofMillis(800),
                 3,
                 5,
                 Duration.ofSeconds(90),

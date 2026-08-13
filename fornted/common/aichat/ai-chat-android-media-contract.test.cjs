@@ -131,3 +131,29 @@ test('Android image and file components expose bounded visible failure paths', (
 	assert.equal(file.includes('Java 源文件'), true)
 	assert.equal(file.includes('v-html'), false)
 })
+
+test('input images keep local previews outside persisted attachment URLs', () => {
+	const panel = readComponent('user-chat-panel.vue')
+	const image = readComponent('user-android-chat-image.vue')
+
+	assert.equal(
+		panel.includes(':local-src="inputAttachmentLocalSrc(message, attachment)"'),
+		true
+	)
+	assert.equal(
+		panel.includes(':src="inputAttachmentDisplaySrc(message, attachment)"'),
+		true
+	)
+	assert.equal(panel.includes('createOptimisticInputPresentation'), true)
+	assert.equal(panel.includes('previewImage(attachment, message)'), true)
+	assert.equal(image.includes("localSrc: { type: String, default: '' }"), true)
+	assert.equal(image.includes('{ localSrc: this.localSrc }'), true)
+})
+
+test('Android input preview failure waits for the persisted URL instead of reporting upload failure', () => {
+	const image = readComponent('user-android-chat-image.vue')
+
+	assert.equal(image.includes("phase === 'WAITING_REMOTE'"), true)
+	assert.equal(image.includes('图片已上传，正在处理'), true)
+	assert.equal(image.includes('this.awaitingRemote'), true)
+})

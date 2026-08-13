@@ -78,4 +78,14 @@ test('native Android transport bounds JSON errors and suppresses duplicate close
 	assert.match(androidSource, /getErrorStream\(\)/)
 	assert.match(androidSource, /JSON\.parse\(errorBody\)\s+as\s+UTSJSONObject/)
 	assert.match(androidSource, /callbackCompleted\.compareAndSet\(false,\s*true\)/)
+	assert.doesNotMatch(androidSource, /getHeaderField\([^)]*\)\s*\?:/)
+	assert.match(
+		androidSource,
+		/const traceHeader = connection\.getHeaderField\('X-Trace-Id'\)[\s\S]*options\.onOpen\(traceHeader == null \? '' : traceHeader\)/)
+	assert.doesNotMatch(
+		androidSource,
+		/options\.headers\.forEach\(\([^)]*,[^)]*\)\s*=>/)
+	assert.match(
+		androidSource,
+		/options\.headers\.forEach\(\(name:\s*string\)\s*=>[\s\S]*const value = options\.headers\[name\][\s\S]*if \(value == null\) return[\s\S]*setRequestProperty\(name, value\.toString\(\)\)/)
 })

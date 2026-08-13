@@ -153,3 +153,103 @@ test('classifies Java archives as binary archives without treating Java source a
 		contentType: 'text/x-java-source'
 	}), 'DOCUMENT')
 })
+
+test('separates optimistic image metadata from local preview paths', async () => {
+	const state = await loadState()
+	const result = state.createOptimisticInputPresentation([{
+		fileName: 'shoe.png',
+		contentType: 'image/png',
+		sizeBytes: 305152,
+		path: '/data/user/0/com.example/cache/ait-conversation-picks/local',
+		uploaded: { attachmentId: 'attachment-1' }
+	}])
+
+	assert.equal(result.attachments[0].url, '')
+	assert.equal(result.attachments[0].attachmentId, 'attachment-1')
+	assert.equal(
+		result.previewSources['attachment-1'],
+		'/data/user/0/com.example/cache/ait-conversation-picks/local'
+	)
+	assert.equal(
+		JSON.stringify(result.attachments).includes('/data/user/0'),
+		false
+	)
+	assert.equal(Object.isFrozen(result), true)
+	assert.equal(Object.isFrozen(result.attachments), true)
+	assert.equal(Object.isFrozen(result.previewSources), true)
+})
+
+test('keeps non-image optimistic behavior outside the image preview fix', async () => {
+	const state = await loadState()
+	const videoPath = 'blob:https://app.example.test/video-preview'
+	const documentPath = 'blob:https://app.example.test/document-preview'
+	const svgPath = 'blob:https://app.example.test/svg-file'
+	const audioPath = 'blob:https://app.example.test/audio-file'
+	const result = state.createOptimisticInputPresentation([
+		{
+			fileName: 'clip.mp4',
+			contentType: 'video/mp4',
+			sizeBytes: 1024,
+			path: videoPath,
+			uploaded: { attachmentId: 'video-1' }
+		},
+		{
+			fileName: 'notes.pdf',
+			contentType: 'application/pdf',
+			sizeBytes: 2048,
+			path: documentPath,
+			uploaded: { attachmentId: 'document-1' }
+		},
+		{
+			fileName: 'diagram.svg',
+			contentType: 'image/svg+xml',
+			sizeBytes: 4096,
+			path: svgPath,
+			uploaded: { attachmentId: 'svg-1' }
+		},
+		{
+			fileName: 'voice.mp3',
+			contentType: 'audio/mpeg',
+			sizeBytes: 8192,
+			path: audioPath,
+			uploaded: { attachmentId: 'audio-1' }
+		}
+	])
+
+	assert.equal(result.attachments[0].url, videoPath)
+	assert.equal(result.attachments[1].url, documentPath)
+	assert.equal(result.attachments[2].url, svgPath)
+	assert.equal(result.attachments[3].url, audioPath)
+	assert.equal(result.attachments[3].category, 'AUDIO')
+	assert.deepEqual(result.previewSources, {
+		'video-1': videoPath,
+		'document-1': documentPath,
+		'svg-1': svgPath,
+		'audio-1': audioPath
+	})
+	assert.equal(
+		state.createOptimisticInputPresentation([
+			{
+				fileName: 'clip.mp4',
+				contentType: 'video/mp4',
+				sizeBytes: 1024,
+				path: videoPath,
+				uploaded: { attachmentId: 'video-1' }
+			}
+		], { suppressVideoPreview: true }).attachments[0].url,
+		''
+	)
+})
+
+test('rejects optimistic attachments without a server upload reference', async () => {
+	const state = await loadState()
+	assert.throws(
+		() => state.createOptimisticInputPresentation([{
+			fileName: 'shoe.png',
+			contentType: 'image/png',
+			sizeBytes: 305152,
+			path: '/data/user/0/com.example/cache/local'
+		}]),
+		error => error.code === 'AI_ATTACHMENT_UPLOAD_REFERENCE_INVALID'
+	)
+})

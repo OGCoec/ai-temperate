@@ -5,7 +5,7 @@
 		:style="frameStyle"
 	>
 		<image
-			v-if="renderSrc && phase !== 'ERROR'"
+			v-if="renderSrc && phase !== 'ERROR' && phase !== 'WAITING_REMOTE'"
 			:key="revision"
 			class="android-chat-image-element"
 			:src="renderSrc"
@@ -17,6 +17,10 @@
 		<view v-if="phase === 'LOADING'" class="android-image-placeholder" role="status">
 			<uni-icons type="image" size="24" color="#73827a" aria-hidden="true" />
 			<text>图片加载中…</text>
+		</view>
+		<view v-else-if="phase === 'WAITING_REMOTE'" class="android-image-placeholder" role="status">
+			<uni-icons type="image" size="24" color="#8fdcbe" aria-hidden="true" />
+			<text>图片已上传，正在处理</text>
 		</view>
 		<view v-else-if="phase === 'ERROR'" class="android-image-placeholder is-error" role="alert">
 			<uni-icons type="info" size="24" color="#ff9b94" aria-hidden="true" />
@@ -33,6 +37,7 @@
 		name: 'UserAndroidChatImage',
 		props: {
 			attachment: { type: Object, required: true },
+			localSrc: { type: String, default: '' },
 			variant: {
 				type: String,
 				default: 'FULL',
@@ -55,10 +60,19 @@
 		computed: {
 			descriptor() {
 				try {
-					return createMediaDescriptor(this.attachment)
+					return createMediaDescriptor(
+						this.attachment,
+						null,
+						{ localSrc: this.localSrc }
+					)
 				} catch (_) {
 					return null
 				}
+			},
+			awaitingRemote() {
+				const localSource = String(this.localSrc || '').trim()
+				const remoteSource = String(this.attachment?.url || '').trim()
+				return Boolean(localSource) && !/^https:\/\/[^\s]+$/i.test(remoteSource)
 			},
 			effectiveAspectRatio() {
 				const explicit = Number(this.aspectRatio)
@@ -71,6 +85,9 @@
 		},
 		watch: {
 			attachment() {
+				this.resetSource()
+			},
+			localSrc() {
 				this.resetSource()
 			}
 		},
@@ -89,8 +106,11 @@
 				this.autoRetryCount = 0
 				this.observedAspectRatio = null
 				this.layoutReported = false
-				this.phase = this.descriptor ? 'LOADING' : 'ERROR'
-				this.renderSrc = this.descriptor?.src || ''
+				const descriptor = this.descriptor
+				this.phase = descriptor
+					? 'LOADING'
+					: this.awaitingRemote ? 'WAITING_REMOTE' : 'ERROR'
+				this.renderSrc = descriptor?.src || ''
 				this.emitState()
 			},
 			handleLoad(event) {
@@ -117,7 +137,11 @@
 					this.scheduleReload(250)
 					return
 				}
-				this.phase = 'ERROR'
+				this.finishLoadFailure()
+			},
+			finishLoadFailure() {
+				this.renderSrc = ''
+				this.phase = this.awaitingRemote ? 'WAITING_REMOTE' : 'ERROR'
 				this.emitState()
 			},
 			scheduleReload(delay) {
@@ -129,8 +153,7 @@
 					this.retryTimer = null
 					this.renderSrc = this.descriptor?.src || ''
 					if (!this.renderSrc) {
-						this.phase = 'ERROR'
-						this.emitState()
+						this.finishLoadFailure()
 					}
 				}, delay)
 			},

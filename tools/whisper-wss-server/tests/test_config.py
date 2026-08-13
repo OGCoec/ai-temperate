@@ -36,6 +36,7 @@ class ServerSettingsTest(unittest.TestCase):
             self.assertEqual(3, settings.inference_concurrency)
             self.assertEqual(5, settings.waiting_queue_capacity)
             self.assertEqual(90000, settings.queue_wait_timeout_ms)
+            self.assertEqual(800, settings.partial_interval_ms)
             self.assertEqual(20000, settings.partial_window_ms)
 
     def test_rejects_invalid_concurrency_and_waiting_queue_boundaries(self):

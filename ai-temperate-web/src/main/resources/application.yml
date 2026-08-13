@@ -504,8 +504,8 @@ app:
     ticket-rate-limit: ${VOICE_TICKET_RATE_LIMIT:10}
     # 单次录音固定限制为五分钟，Java 与 Python 同时执行字节数硬边界。
     max-duration: ${VOICE_MAX_DURATION:5m}
-    # 临时转写目标每一千五百毫秒刷新一次，但不承诺逐字零延迟。
-    partial-interval: ${VOICE_PARTIAL_INTERVAL:1500ms}
+    # 临时转写每八百毫秒触发一次最新音频快照推理，但实际文字延迟仍取决于语音内容和 GPU 负载。
+    partial-interval: ${VOICE_PARTIAL_INTERVAL:800ms}
     # RTX 4070 默认同时承载三个实时识别会话，并与 Python 推理 Worker 数保持一致。
     max-active-sessions: ${VOICE_MAX_ACTIVE_SESSIONS:3}
     # 超出三路活动会话后最多保留五个仅等待准入且尚未采集音频的 WebSocket 连接。

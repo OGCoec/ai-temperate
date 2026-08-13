@@ -36,9 +36,70 @@ test('creates an immutable HTTPS media descriptor without mutating the attachmen
 	assert.equal(Object.isFrozen(descriptor), true)
 	assert.equal(descriptor.key, 'attachment-public-id')
 	assert.equal(descriptor.src, attachment.url)
+	assert.equal(descriptor.sourceKind, 'REMOTE_HTTPS')
 	assert.equal(descriptor.width, 1280)
 	assert.equal(descriptor.height, 720)
 	assert.equal(descriptor.durationMillis, 5000)
+})
+
+test('accepts an explicit App local image source without weakening remote URLs', async () => {
+	const presentation = await loadPresentation()
+	const attachment = {
+		attachmentId: 'input-image-1',
+		url: '',
+		fileName: 'shoe.png',
+		contentType: 'image/png'
+	}
+
+	const descriptor = presentation.createMediaDescriptor(
+		attachment,
+		null,
+		{ localSrc: '/data/user/0/com.example/cache/ait-conversation-picks/preview' }
+	)
+
+	assert.equal(
+		descriptor.src,
+		'/data/user/0/com.example/cache/ait-conversation-picks/preview'
+	)
+	assert.equal(descriptor.sourceKind, 'APP_LOCAL')
+	assert.equal(
+		presentation.createMediaDescriptor(
+			attachment,
+			null,
+			{ localSrc: '_doc/ait-conversation-picks/preview.png' }
+		).sourceKind,
+		'APP_LOCAL'
+	)
+})
+
+test('rejects unmarked or unsafe local media sources', async () => {
+	const presentation = await loadPresentation()
+	assert.throws(
+		() => presentation.createMediaDescriptor({
+			attachmentId: 'a',
+			url: '/data/user/0/com.example/cache/private.png'
+		}),
+		/HTTPS URL/
+	)
+	for (const localSrc of [
+		'http://media.example.test/private.png',
+		'javascript:alert(1)',
+		'data:image/png;base64,AAAA',
+		'content://media/external/images/1',
+		'/data/user/0/com.example/cache/../shared/secret.png',
+		'_doc/../secret.png',
+		'/data/user/0/com.example/cache/\u0000private.png',
+		'/data/user/0/com.example/cache/private.png\n'
+	]) {
+		assert.throws(
+			() => presentation.createMediaDescriptor(
+				{ attachmentId: 'a', url: '', contentType: 'image/png' },
+				null,
+				{ localSrc }
+			),
+			/App local media source/
+		)
+	}
 })
 
 test('rejects missing keys and non-HTTPS media sources', async () => {
@@ -75,6 +136,7 @@ test('normalizes invalid dimensions and resolves a stable aspect ratio', async (
 
 test('maps HTML media error codes to safe categories', async () => {
 	const presentation = await loadPresentation()
+	assert.equal(presentation.MEDIA_PHASES.WAITING_REMOTE, 'WAITING_REMOTE')
 	assert.equal(presentation.classifyHtmlMediaError(1), 'ABORTED')
 	assert.equal(presentation.classifyHtmlMediaError(2), 'NETWORK')
 	assert.equal(presentation.classifyHtmlMediaError(3), 'DECODE')

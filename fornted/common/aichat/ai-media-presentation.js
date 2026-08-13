@@ -2,6 +2,7 @@ export const MEDIA_PHASES = Object.freeze({
 	IDLE: 'IDLE',
 	OBSERVING: 'OBSERVING',
 	LOADING: 'LOADING',
+	WAITING_REMOTE: 'WAITING_REMOTE',
 	METADATA_READY: 'METADATA_READY',
 	READY: 'READY',
 	PLAYING: 'PLAYING',
@@ -44,21 +45,52 @@ function requireHttpsSource(value) {
 	return source
 }
 
+function requireAppLocalSource(value) {
+	const rawSource = String(value || '')
+	const source = rawSource.trim()
+	const absoluteAppPath = source.startsWith('/') && !source.startsWith('//')
+	const appDocumentPath = source.startsWith('_doc/')
+	const hasParentSegment = source.split('/').includes('..')
+	const hasControlCharacter = /[\u0000-\u001f\u007f]/.test(rawSource)
+	if ((!absoluteAppPath && !appDocumentPath)
+		|| hasParentSegment
+		|| hasControlCharacter) {
+		throw new TypeError('App local media source is invalid.')
+	}
+	return source
+}
+
+function resolveMediaSource(attachment, options) {
+	const localSrc = String(options?.localSrc || '')
+	if (localSrc.trim()) {
+		return Object.freeze({
+			src: requireAppLocalSource(localSrc),
+			kind: 'APP_LOCAL'
+		})
+	}
+	return Object.freeze({
+		src: requireHttpsSource(attachment.url || attachment.src),
+		kind: 'REMOTE_HTTPS'
+	})
+}
+
 function normalizedDurationMillis(value) {
 	const duration = Number(value)
 	return Number.isFinite(duration) && duration >= 0 ? duration : null
 }
 
-export function createMediaDescriptor(attachment, metadata = null) {
+export function createMediaDescriptor(attachment, metadata = null, options = {}) {
 	if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) {
 		throw new TypeError('Attachment must be an object.')
 	}
 	const key = publicAttachmentKey(attachment)
 	if (!key) throw new TypeError('Attachment public key is required.')
+	const source = resolveMediaSource(attachment, options)
 
 	return Object.freeze({
 		key,
-		src: requireHttpsSource(attachment.url || attachment.src),
+		src: source.src,
+		sourceKind: source.kind,
 		fileName: String(attachment.fileName || '').trim(),
 		contentType: String(attachment.contentType || '').trim().toLowerCase(),
 		width: positiveFiniteNumber(metadata?.width) ?? positiveFiniteNumber(attachment.width),

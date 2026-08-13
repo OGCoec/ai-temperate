@@ -111,7 +111,9 @@ export function openMailInspectionSse(
       connection.setReadTimeout(60000)
       connection.setUseCaches(false)
       connection.setDoInput(true)
-      options.headers.forEach((value: any, name: string) => {
+      options.headers.forEach((name: string) => {
+        const value = options.headers[name]
+        if (value == null) return
         connection.setRequestProperty(name, value.toString())
       })
       connection.connect()
@@ -122,7 +124,8 @@ export function openMailInspectionSse(
           readBoundedErrorBody(connection)))
         return
       }
-      options.onOpen(connection.getHeaderField('X-Trace-Id') ?: '')
+      const traceHeader = connection.getHeaderField('X-Trace-Id')
+      options.onOpen(traceHeader == null ? '' : traceHeader)
       // InputStreamReader 会跨底层字节分片保留不完整 UTF-8 序列，避免中文 JSON 被截断。
       const reader = new BufferedReader(
         new InputStreamReader(connection.getInputStream(), Charsets.UTF_8))

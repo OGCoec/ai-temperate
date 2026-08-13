@@ -239,13 +239,16 @@ test('Android UTS HTTP plugins use Int lengths and key-only UTSJSONObject iterat
 
 test('audio attachments use the generic cross-platform open flow', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
+	const state = read('common/aichat/ai-conversation-upload-state.js')
 
 	assert.doesNotMatch(page, /<audio\b/)
 	assert.doesNotMatch(page, /previewAudio/)
 	assert.match(page, /openAttachment\(attachment\)/)
 	assert.match(page, /window\.open\(attachment\.url, '_blank', 'noopener,noreferrer'\)/)
 	assert.match(page, /plus\.runtime\.openURL\(attachment\.url\)/)
-	assert.match(page, /attachmentCategory\(file\)/)
+	assert.match(page, /createOptimisticInputPresentation\(/)
+	assert.match(page, /contentAttachments: inputPresentation\.attachments/)
+	assert.match(state, /const category = attachmentCategory\(file\)/)
 })
 
 test('attachments preupload immediately and gate sending until every file is ready', () => {

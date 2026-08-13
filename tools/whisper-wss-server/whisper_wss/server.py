@@ -38,7 +38,7 @@ class WhisperWebSocketServer:
         transcriber,
         *,
         path="/ws/transcribe",
-        partial_interval_bytes=48000,
+        partial_interval_bytes=25600,
         max_frame_bytes=131072,
         max_turn_bytes=9600000,
         queue_capacity=64,
@@ -363,21 +363,39 @@ class WhisperWebSocketServer:
         pcm_buffer = bytearray()
         last_partial_size = 0
         last_partial_text = ""
+        partial_disabled = False
         sequence = 0
         accumulator = PartialTranscriptAccumulator(
             stability_delay_ms=self._stability_delay_ms,
         )
+
+        def append_audio(payload):
+            remaining_bytes = self._max_turn_bytes - len(pcm_buffer)
+            accepted_bytes = min(len(payload), remaining_bytes)
+            accepted_bytes -= accepted_bytes % 2
+            if accepted_bytes:
+                pcm_buffer.extend(payload[:accepted_bytes])
 
         while True:
             message_type, payload = await queue.get()
             if message_type == "closed" or message_type == "stop":
                 return
             if message_type == "audio":
-                remaining_bytes = self._max_turn_bytes - len(pcm_buffer)
-                accepted_bytes = min(len(payload), remaining_bytes)
-                accepted_bytes -= accepted_bytes % 2
-                if accepted_bytes:
-                    pcm_buffer.extend(payload[:accepted_bytes])
+                append_audio(payload)
+                pending_control = None
+                while True:
+                    try:
+                        queued_type, queued_payload = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if queued_type == "audio":
+                        append_audio(queued_payload)
+                        continue
+                    pending_control = queued_type
+                    break
+
+                if pending_control == "closed" or pending_control == "stop":
+                    return
 
                 if len(pcm_buffer) >= self._max_turn_bytes:
                     await self._send(websocket, {
@@ -393,6 +411,20 @@ class WhisperWebSocketServer:
                     )
                     await websocket.close(code=1000, reason="TRANSCRIPT_FINAL")
                     return
+
+                if pending_control == "commit":
+                    await self._send_final(
+                        websocket,
+                        pcm_buffer,
+                        config,
+                        sequence + 1,
+                        session_id,
+                    )
+                    await websocket.close(code=1000, reason="TRANSCRIPT_FINAL")
+                    return
+
+                if partial_disabled:
+                    continue
                 if len(pcm_buffer) - last_partial_size < self._partial_interval_bytes:
                     continue
 
@@ -402,12 +434,22 @@ class WhisperWebSocketServer:
                     accumulator.stable_until_ms * 32 - self._partial_overlap_bytes,
                 )
                 window_start_bytes -= window_start_bytes % 2
-                result = await self._infer(
-                    bytes(pcm_buffer[window_start_bytes:]),
-                    config.language,
-                    final=False,
-                    session_id=session_id,
-                )
+                try:
+                    result = await self._infer(
+                        bytes(pcm_buffer[window_start_bytes:]),
+                        config.language,
+                        final=False,
+                        session_id=session_id,
+                    )
+                except Exception as exception:
+                    partial_disabled = True
+                    last_partial_size = len(pcm_buffer)
+                    LOGGER.warning(
+                        "voice_partial_inference_disabled session_id=%s exception_type=%s",
+                        session_id,
+                        type(exception).__name__,
+                    )
+                    continue
                 text = accumulator.merge(
                     result,
                     window_start_ms=self._duration_ms(window_start_bytes),

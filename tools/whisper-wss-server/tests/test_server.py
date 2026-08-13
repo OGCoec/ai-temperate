@@ -6,6 +6,7 @@ import ssl
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 
 from cryptography import x509
@@ -59,6 +60,45 @@ class BlockingTranscriber(FakeTranscriber):
         finally:
             with self.lock:
                 self.active -= 1
+
+
+class RecordingTranscriber(FakeTranscriber):
+
+    def __init__(self):
+        self.calls = []
+
+    def transcribe(self, pcm_bytes, language, final):
+        self.calls.append((final, len(pcm_bytes)))
+        return super().transcribe(pcm_bytes, language, final)
+
+
+class PartialFailingTranscriber(RecordingTranscriber):
+
+    def __init__(self):
+        super().__init__()
+        self.partial_started = threading.Event()
+
+    def transcribe(self, pcm_bytes, language, final):
+        self.calls.append((final, len(pcm_bytes)))
+        if not final:
+            self.partial_started.set()
+            raise RuntimeError("partial inference failed")
+        return FakeTranscriber.transcribe(self, pcm_bytes, language, final)
+
+
+class CapturingWebSocket:
+
+    def __init__(self):
+        self.messages = []
+        self.message_sent = asyncio.Event()
+        self.closed = []
+
+    async def send(self, payload):
+        self.messages.append(json.loads(payload))
+        self.message_sent.set()
+
+    async def close(self, code, reason):
+        self.closed.append((code, reason))
 
 
 def tls_contexts(directory):
@@ -331,6 +371,100 @@ class WebSocketServerTest(unittest.IsolatedAsyncioTestCase):
                     final = json.loads(await asyncio.wait_for(websocket.recv(), 2))
                     self.assertEqual("transcript.final", final["type"])
                     self.assertEqual("final:zh:32000", final["text"])
+            application.close()
+
+    async def test_coalesces_audio_backlog_into_one_latest_partial(self):
+        transcriber = RecordingTranscriber()
+        application = WhisperWebSocketServer(
+            transcriber,
+            partial_interval_bytes=4000,
+        )
+        websocket = CapturingWebSocket()
+        queue = asyncio.Queue()
+        frame = b"\x00\x00" * 2000
+        for _ in range(4):
+            await queue.put(("audio", frame))
+
+        try:
+            worker = asyncio.create_task(application._transcribe(
+                websocket,
+                queue,
+                SimpleNamespace(language="zh"),
+                "coalesced-session",
+            ))
+            await asyncio.wait_for(websocket.message_sent.wait(), 2)
+            await queue.put(("stop", None))
+            await asyncio.wait_for(worker, 2)
+
+            partials = [message for message in websocket.messages
+                        if message["type"] == "transcript.partial"]
+            self.assertEqual(1, len(partials))
+            self.assertEqual("partial:zh:16000", partials[0]["text"])
+            self.assertEqual([(False, 16000)], transcriber.calls)
+        finally:
+            application.close()
+
+    async def test_commit_preempts_stale_partials_and_excludes_later_audio(self):
+        transcriber = RecordingTranscriber()
+        application = WhisperWebSocketServer(
+            transcriber,
+            partial_interval_bytes=4000,
+        )
+        websocket = CapturingWebSocket()
+        queue = asyncio.Queue()
+        frame = b"\x00\x00" * 2000
+        for _ in range(3):
+            await queue.put(("audio", frame))
+        await queue.put(("commit", None))
+        await queue.put(("audio", frame))
+
+        try:
+            await asyncio.wait_for(application._transcribe(
+                websocket,
+                queue,
+                SimpleNamespace(language="zh"),
+                "commit-session",
+            ), 2)
+
+            self.assertEqual([], [message for message in websocket.messages
+                                  if message["type"] == "transcript.partial"])
+            final = next(message for message in websocket.messages
+                         if message["type"] == "transcript.final")
+            self.assertEqual("final:zh:12000", final["text"])
+            self.assertEqual([(True, 12000)], transcriber.calls)
+        finally:
+            application.close()
+
+    async def test_partial_failure_disables_preview_but_preserves_final(self):
+        transcriber = PartialFailingTranscriber()
+        application = WhisperWebSocketServer(
+            transcriber,
+            partial_interval_bytes=4000,
+        )
+        websocket = CapturingWebSocket()
+        queue = asyncio.Queue()
+        await queue.put(("audio", b"\x00\x00" * 2000))
+
+        try:
+            worker = asyncio.create_task(application._transcribe(
+                websocket,
+                queue,
+                SimpleNamespace(language="zh"),
+                "partial-failure-session",
+            ))
+            started = await asyncio.to_thread(
+                transcriber.partial_started.wait, 2)
+            self.assertTrue(started)
+            await queue.put(("commit", None))
+            await asyncio.wait_for(worker, 2)
+
+            self.assertEqual([], [message for message in websocket.messages
+                                  if message["type"] == "transcript.partial"])
+            final = next(message for message in websocket.messages
+                         if message["type"] == "transcript.final")
+            self.assertEqual("final:zh:4000", final["text"])
+            self.assertEqual([(False, 4000), (True, 4000)], transcriber.calls)
+        finally:
             application.close()
 
     async def test_five_minute_limit_auto_commits_without_buffering_extra_audio(self):

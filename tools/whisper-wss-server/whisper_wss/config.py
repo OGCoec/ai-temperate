@@ -52,7 +52,7 @@ class ServerSettings:
         if not pkcs12_path.is_file():
             raise ValueError("WHISPER_WSS_PKCS12_PATH must point to a readable file.")
 
-        partial_interval_ms = int(environment.get("WHISPER_WSS_PARTIAL_INTERVAL_MS", "1500"))
+        partial_interval_ms = int(environment.get("WHISPER_WSS_PARTIAL_INTERVAL_MS", "800"))
         if partial_interval_ms < 500 or partial_interval_ms > 5000:
             raise ValueError("WHISPER_WSS_PARTIAL_INTERVAL_MS must be between 500 and 5000.")
 

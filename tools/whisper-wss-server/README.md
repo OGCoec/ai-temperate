@@ -50,7 +50,7 @@ READY wss://127.0.0.1:7896/ws/transcribe
 {"type":"input.commit"}
 ```
 
-服务返回 `session.queued`、`session.ready`、`transcript.partial` 和 `transcript.final` JSON 消息。临时转写只推理最近 20 秒并保留 1 秒语义重叠；提交时对完整录音执行一次 `beam_size=5` 的权威最终识别。
+服务返回 `session.queued`、`session.ready`、`transcript.partial` 和 `transcript.final` JSON 消息。临时转写默认每累计 800 毫秒新音频触发一次，只推理最近 20 秒并保留 1 秒语义重叠；800 毫秒是触发间隔，实际返回时间仍取决于语音内容和 GPU 负载。GPU 较慢时服务只处理最新快照，不补跑已经过期的临时推理；提交时对完整录音执行一次 `beam_size=5` 的权威最终识别。
 
 单次录音上限固定为五分钟。达到 `9,600,000` 字节后服务先返回 `input.limit_reached`，随后自动执行最终识别并关闭本轮连接。默认允许三个活动 GPU 会话并使用三个 faster-whisper Worker；额外五个连接进入最长九十秒的 FIFO 等待队列，第九个连接返回 `VOICE_QUEUE_FULL`。
 

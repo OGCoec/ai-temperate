@@ -97,3 +97,31 @@ test('multi-image presentation records arrival order without prebuilding empty t
 	assert.match(panel, /beginVisibleImageUpgrades\(/)
 	assert.doesNotMatch(panel, /createImageOutputSlots\(requestedImageCount\)/)
 })
+
+test('async terminal reconciles persisted input attachments before releasing local previews', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+	const videoReadyStart = panel.indexOf("event.type === 'video_ready'")
+	const videoReadyEnd = panel.indexOf("event.type === 'video_failed'", videoReadyStart)
+	const videoReady = panel.slice(videoReadyStart, videoReadyEnd)
+	const asyncCompletedStart = panel.indexOf(
+		"event.type === 'completed' && event.data?.generationPublicId"
+	)
+	const asyncCompletedEnd = panel.indexOf(
+		"} else if (event.type === 'completed')",
+		asyncCompletedStart
+	)
+	const asyncCompleted = panel.slice(asyncCompletedStart, asyncCompletedEnd)
+	const start = panel.indexOf('async reconcileCompletedInputAttachments')
+	const end = panel.indexOf('\n\t\t\thandleModelActivity', start)
+	const reconciliation = panel.slice(start, end)
+
+	assert.match(videoReady, /reconcileCompletedInputAttachments\(/)
+	assert.match(
+		asyncCompleted,
+		/void this\.reconcileCompletedInputAttachments\(\s*localId,\s*event\.data\?\.messagePublicId\s*\)/
+	)
+	assert.match(reconciliation, /aiConversationApi\.messages\(conversationPublicId\)/)
+	assert.match(reconciliation, /contentAttachments: persistedMessage\.contentAttachments/)
+	assert.match(reconciliation, /this\.localPreviewUrls\.delete\(localId\)/)
+	assert.match(reconciliation, /this\.\$nextTick\(\(\) =>\s*this\.releasePreviewUrls\(previewSources\)\)/)
+})

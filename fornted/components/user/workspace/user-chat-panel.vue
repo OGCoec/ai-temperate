@@ -91,8 +91,9 @@
 								>
 									<!-- #ifdef APP-PLUS -->
 									<user-android-chat-image
-										v-if="previewImage(attachment)"
+										v-if="previewImage(attachment, message)"
 										:attachment="attachment"
+										:local-src="inputAttachmentLocalSrc(message, attachment)"
 										variant="FULL"
 										@layout-change="handleAndroidMediaLayoutChange"
 										@preview="previewAndroidImage"
@@ -114,7 +115,7 @@
 									/>
 									<!-- #endif -->
 									<!-- #ifndef APP-PLUS -->
-									<image v-if="previewImage(attachment)" class="attachment-image" :src="attachment.url" mode="aspectFill" />
+									<image v-if="previewImage(attachment, message)" class="attachment-image" :src="inputAttachmentDisplaySrc(message, attachment)" mode="aspectFill" />
 									<video
 										v-else-if="previewVideo(attachment)"
 										class="attachment-video"
@@ -464,6 +465,25 @@
 								:reduced="motionReduced"
 								:aria-label="voiceActivityPresentation.label"
 							/>
+							<scroll-view
+								v-if="voiceInteractionActive"
+								class="voice-live-transcript"
+								scroll-x
+								:scroll-into-view="voiceTranscriptTailAnchorId"
+								:scroll-with-animation="false"
+								:show-scrollbar="false"
+								role="status"
+								aria-live="polite"
+							>
+								<view class="voice-live-transcript-line">
+									<text class="voice-live-transcript-text">{{ voiceLiveTranscriptLabel }}</text>
+									<text
+										:id="voiceTranscriptTailAnchorId"
+										class="voice-live-transcript-tail"
+										aria-hidden="true"
+									>&#8203;</text>
+								</view>
+							</scroll-view>
 							<textarea
 								v-if="!voiceInteractionActive"
 								v-model="draft"
@@ -902,6 +922,7 @@
 	import { uploadConversationFiles } from '@/common/aichat/ai-conversation-upload.js'
 	import { createVoiceRecorder } from '@/common/voice/voice-recorder.js'
 	import { createVoiceWaveformAnalyzer } from '@/common/voice/voice-waveform-envelope.js'
+	import { createVoiceLiveTranscriptPresenter } from '@/common/voice/voice-live-transcript-presenter.js'
 	import { appendVoiceTranscriptToDraft } from '@/common/voice/voice-draft-preview.js'
 	import {
 		createVoiceWebSocketSession,
@@ -910,7 +931,7 @@
 	import { issueVoiceSessionTicket } from '@/common/voice/voice-ticket-api.js'
 	import {
 		ATTACHMENT_UPLOAD_STATES,
-		attachmentCategory,
+		createOptimisticInputPresentation,
 		createPendingAttachment,
 		deriveSendGate,
 		validateAttachmentSelection
@@ -1180,6 +1201,9 @@
 				composerError: '',
 				voiceState: 'IDLE',
 				voicePartialText: '',
+				voiceDisplayedPartialText: '',
+				voiceTranscriptPresenter: null,
+				voiceTranscriptTailSequence: 0,
 				voiceDraftBase: '',
 				voiceSessionEpoch: 0,
 				voiceWaveformAnalyzer: null,
@@ -1249,6 +1273,7 @@
 			this.invalidateAndroidScroll()
 			this.motionController?.destroy?.()
 			this.motionController = null
+			this.disposeVoiceTranscriptPresenter()
 			this.abortVoiceInput('COMPONENT_UNMOUNT')
 			this.clearCompletedImageUpgrades()
 			this.clearImageGalleryExitTimers()
@@ -1502,6 +1527,17 @@
 			voiceCancelDisabled() { return this.voiceFinalizing },
 			voiceCommitDisabled() { return !this.voiceRecording },
 			voiceStatusLabel() { return this.voiceActivityPresentation?.label || '' },
+			voiceLiveTranscriptLabel() {
+				if (String(this.voiceDisplayedPartialText || '').trim()) {
+					return this.voiceDisplayedPartialText
+				}
+				if (this.voiceFinalizing) return '正在确认…'
+				if (this.voiceRecording) return '正在聆听…'
+				return this.voiceStatusLabel || '正在连接…'
+			},
+			voiceTranscriptTailAnchorId() {
+				return `voice-transcript-tail-${this.voiceTranscriptTailSequence}`
+			},
 			voiceDurationLabel() {
 				const seconds = Math.max(0, Math.floor(this.voiceElapsedMs / 1000))
 				return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -1560,6 +1596,12 @@
 			activeConversationTitle() {
 				if (!this.currentConversationPublicId) return '新聊天'
 				return this.conversations.find(item => item.conversationPublicId === this.currentConversationPublicId)?.title || '未命名对话'
+			}
+		},
+		watch: {
+			motionReduced(value) {
+				if (value !== true || !this.voiceTranscriptPresenter) return
+				this.voiceTranscriptPresenter.setTarget(this.voicePartialText, { reduced: true })
 			}
 		},
 		methods: {
@@ -1662,6 +1704,28 @@
 				this.voiceWaveformPacket = null
 				this.voiceWaveformSequence = 0
 			},
+			resetVoiceTranscriptPresenter(voiceEpoch = this.voiceSessionEpoch) {
+				this.disposeVoiceTranscriptPresenter()
+				if (Number(voiceEpoch) !== Number(this.voiceSessionEpoch)) return
+				let presenter = null
+				presenter = markRaw(createVoiceLiveTranscriptPresenter({
+					onDisplay: text => {
+						if (this.voiceSessionEpoch !== voiceEpoch
+							|| this.voiceTranscriptPresenter !== presenter) return
+						this.voiceDisplayedPartialText = String(text || '')
+						this.voiceTranscriptTailSequence += 1
+					}
+				}))
+				this.voiceTranscriptPresenter = presenter
+			},
+			disposeVoiceTranscriptPresenter() {
+				const presenter = this.voiceTranscriptPresenter
+				this.voiceTranscriptPresenter = null
+				try { presenter?.dispose?.() } catch (_) {}
+				this.voicePartialText = ''
+				this.voiceDisplayedPartialText = ''
+				this.voiceTranscriptTailSequence += 1
+			},
 			publishVoiceWaveform(frame, voiceEpoch) {
 				if (this.voiceSessionEpoch !== voiceEpoch
 					|| this.voiceState !== 'RECORDING'
@@ -1698,9 +1762,9 @@
 				this.resetVoiceWaveform(voiceEpoch)
 				this.voiceWaveformAnalyzer = markRaw(createVoiceWaveformAnalyzer())
 				this.voiceDraftBase = String(this.draft || '')
+				this.resetVoiceTranscriptPresenter(voiceEpoch)
 				this.composerError = ''
 				this.voiceAnnouncement = ''
-				this.voicePartialText = ''
 				this.voiceLimitReached = false
 				this.voiceQueuePosition = 0
 				this.voiceQueueCapacity = 5
@@ -1856,9 +1920,9 @@
 				}
 				if (event?.type === 'transcript.partial') {
 					this.voicePartialText = String(event.text || '')
-					this.draft = appendVoiceTranscriptToDraft(
-						this.voiceDraftBase,
-						this.voicePartialText)
+					this.voiceTranscriptPresenter?.setTarget(
+						this.voicePartialText,
+						{ reduced: this.motionReduced })
 					return
 				}
 				if (event?.type === 'input.limit_reached') {
@@ -1885,7 +1949,7 @@
 				const transcript = String(text || '').trim()
 				clearInterval(this.voiceTimer)
 				this.voiceTimer = null
-				this.voicePartialText = ''
+				this.disposeVoiceTranscriptPresenter()
 				if (transcript) {
 					this.draft = appendVoiceTranscriptToDraft(
 						this.voiceDraftBase,
@@ -1925,6 +1989,7 @@
 				const session = this.voiceSession
 				this.voiceSessionEpoch += 1
 				this.resetVoiceWaveform(this.voiceSessionEpoch)
+				this.disposeVoiceTranscriptPresenter()
 				clearInterval(this.voiceTimer)
 				this.voiceTimer = null
 				this.logAndroidVoiceStop(controlledSource)
@@ -1933,7 +1998,6 @@
 				session?.abort?.(controlledSource)
 				this.draft = this.voiceDraftBase
 				this.voiceDraftBase = ''
-				this.voicePartialText = ''
 				this.voiceQueuePosition = 0
 				this.voiceElapsedMs = 0
 				this.voiceLimitReached = false
@@ -1950,6 +2014,7 @@
 				clearInterval(this.voiceTimer)
 				this.voiceTimer = null
 				this.resetVoiceWaveform(this.voiceSessionEpoch)
+				this.disposeVoiceTranscriptPresenter()
 				const recorder = this.voiceRecorder
 				this.logAndroidVoiceStop(controlledSource)
 				this.voiceRecorder = null
@@ -2811,9 +2876,14 @@
 			cancelPendingUploads() {
 				this.pendingAttachments.forEach(file => file.uploadTask?.cancel?.())
 			},
-			releasePreviewUrls(urls) {
+			previewSourceValues(value) {
+				if (Array.isArray(value)) return value
+				if (value && typeof value === 'object') return Object.values(value)
+				return []
+			},
+			releasePreviewUrls(value) {
 				// #ifdef H5
-				Array.from(urls || []).forEach(url => {
+				this.previewSourceValues(value).forEach(url => {
 					if (String(url || '').startsWith('blob:')) {
 						globalThis.URL?.revokeObjectURL?.(url)
 					}
@@ -2835,31 +2905,26 @@
 				const attachmentRefs = selectedAttachments.map(file => file.uploaded)
 				const text = this.draft.trim()
 				const localId = uuidV4()
+				const inputPresentation = createOptimisticInputPresentation(
+					selectedAttachments,
+					{ suppressVideoPreview: this.videoGenerationAvailable }
+				)
 				const requestedImageCount = this.imageGenerationAvailable
 					&& !this.videoGenerationAvailable
 					? this.multipleImageOutputsAvailable
 						? normalizeImageOutputCount(this.selectedImageOutputCount)
 						: 1
 					: 0
-				if (selectedAttachments.length) {
+				if (Object.keys(inputPresentation.previewSources).length) {
 					this.localPreviewUrls.set(
 						localId,
-						selectedAttachments.map(file => file.path).filter(Boolean))
+						inputPresentation.previewSources)
 				}
 				this.activeLocalId = localId
 				this.applyStore(appendLocalMessage({
 					localId,
 					contentText: text,
-					contentAttachments: selectedAttachments.map(file => ({
-						attachmentId: file.uploaded.attachmentId,
-						fileName: file.fileName,
-						contentType: file.contentType,
-						sizeBytes: String(file.sizeBytes),
-						category: attachmentCategory(file),
-						url: this.videoGenerationAvailable
-							&& attachmentCategory(file) === 'VIDEO' ? '' : file.path,
-						state: 'AVAILABLE'
-					})),
+					contentAttachments: inputPresentation.attachments,
 					responseText: '',
 					responseAttachments: [],
 					requestedImageCount,
@@ -3126,8 +3191,10 @@
 							modelActivity: null,
 							error: ''
 						}))
-						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
-						this.localPreviewUrls.delete(localId)
+						void this.reconcileCompletedInputAttachments(
+							localId,
+							event.data?.messagePublicId
+						)
 						this.$emit('conversation-completed')
 						this.streamDiagnostics?.finish?.('COMPLETE')
 						this.$nextTick(() =>
@@ -3146,8 +3213,7 @@
 							modelActivity: null,
 							error: `视频生成未能交付（${stage}），费用已按供应商终态处理。`
 						}))
-						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
-						this.localPreviewUrls.delete(localId)
+						// 失败终态同样没有正式输入附件，不能提前回收仍在消息中使用的预览来源。
 						this.streamDiagnostics?.finish?.('SSE_ERROR')
 					})
 				} else if (event.type === 'source') {
@@ -3276,6 +3342,10 @@
 								? '模型响应未能完成，预扣额度已按终态处理。' : ''
 						}))
 						this.$emit('conversation-completed')
+						void this.reconcileCompletedInputAttachments(
+							localId,
+							event.data?.messagePublicId
+						)
 						if (!requestedImageCount) this.reloadCurrentMessages()
 						this.streamDiagnostics?.finish?.('COMPLETE')
 						this.$nextTick(() =>
@@ -3292,6 +3362,8 @@
 					})
 					removeAiConversationStoppedDraft(this.activeIdempotencyKey)
 					this.finishTextPresentation(() => {
+						const previewSources = this.localPreviewUrls.get(localId)
+						this.localPreviewUrls.delete(localId)
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: event.data.messagePublicId,
 							contentAttachments: event.data.inputAttachments || [],
@@ -3301,12 +3373,12 @@
 							modelActivity: null,
 							warnings: event.data.warnings || []
 						}))
-						this.releasePreviewUrls(this.localPreviewUrls.get(localId))
-						this.localPreviewUrls.delete(localId)
 						this.$emit('conversation-completed')
 						this.streamDiagnostics?.finish?.('COMPLETE')
-						this.$nextTick(() =>
-							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
+						this.$nextTick(() => {
+							this.releasePreviewUrls(previewSources)
+							this.lifecycleDiagnostics?.finish?.('COMPLETE')
+						})
 					})
 				} else if (event.type === 'error') {
 					this.activeResearchSession?.markTerminal?.('FAILED')
@@ -3329,6 +3401,31 @@
 						this.$nextTick(() =>
 							this.lifecycleDiagnostics?.finish?.('SSE_ERROR'))
 					})
+				}
+			},
+			async reconcileCompletedInputAttachments(localId, messagePublicId) {
+				const previewSources = this.localPreviewUrls.get(localId)
+				const conversationPublicId = String(this.currentConversationPublicId || '')
+				const persistedMessagePublicId = String(messagePublicId || '')
+				if (!previewSources || !conversationPublicId || !persistedMessagePublicId) return
+
+				try {
+					const page = await aiConversationApi.messages(conversationPublicId)
+					// 异步终态不携带正式输入附件；只有历史接口确认同一消息后，才能切换来源并回收 Blob。
+					if (conversationPublicId !== this.currentConversationPublicId
+						|| this.localPreviewUrls.get(localId) !== previewSources) return
+					const persistedMessage = page.messages.find(message =>
+						message.messagePublicId === persistedMessagePublicId)
+					if (!persistedMessage
+						|| !Array.isArray(persistedMessage.contentAttachments)) return
+
+					this.localPreviewUrls.delete(localId)
+					this.applyStore(patchLocalMessage(localId, {
+						contentAttachments: persistedMessage.contentAttachments
+					}))
+					this.$nextTick(() => this.releasePreviewUrls(previewSources))
+				} catch (_) {
+					// 历史对账失败时保留仍可用的本地预览，后续切换会话或卸载组件会统一回收。
 				}
 			},
 			handleModelActivity(localId, value) {
@@ -3926,7 +4023,21 @@
 				this.generatedResponseImageViewportHeight =
 					positiveFiniteNumber(viewportHeight) ?? currentWindowHeight()
 			},
-			previewImage(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('image/') && attachment.contentType !== 'image/svg+xml' && attachment.url },
+			inputAttachmentLocalSrc(message, attachment) {
+				const localId = String(message?.localId || '')
+				const attachmentId = String(attachment?.attachmentId || '')
+				return String(this.localPreviewUrls.get(localId)?.[attachmentId] || '')
+			},
+			inputAttachmentDisplaySrc(message, attachment) {
+				return this.inputAttachmentLocalSrc(message, attachment)
+					|| String(attachment?.url || '')
+			},
+			previewImage(attachment, message = null) {
+				return Boolean(attachment.state === 'AVAILABLE'
+					&& attachment.contentType?.startsWith('image/')
+					&& attachment.contentType !== 'image/svg+xml'
+					&& this.inputAttachmentDisplaySrc(message, attachment))
+			},
 			previewVideo(attachment) { return attachment.state === 'AVAILABLE' && attachment.contentType?.startsWith('video/') && attachment.url },
 			videoDownloading(attachment) {
 				const attachmentId = String(attachment?.attachmentId || '')
@@ -4332,6 +4443,10 @@
 	.voice-transcript-row { min-width: 0; min-height: 48px; display: flex; align-items: center; gap: 12px; overflow: visible; }
 	.voice-transcript-row .user-thinking-orb { width: 40px; min-width: 40px; height: 40px; min-height: 40px; margin: 0; flex: 0 0 40px; }
 	.voice-transcript-row .composer-input { width: auto; min-width: 0; flex: 1; }
+	.voice-live-transcript { width: 0; min-width: 0; height: 40px; flex: 1; overflow: hidden; white-space: nowrap; color: #aeb9b3; box-sizing: border-box; }
+	.voice-live-transcript-line { min-width: 100%; height: 40px; display: inline-flex; align-items: center; white-space: nowrap; }
+	.voice-live-transcript-text { flex: 0 0 auto; white-space: nowrap; font-size: 14px; line-height: 20px; }
+	.voice-live-transcript-tail { width: 1px; min-width: 1px; height: 20px; flex: 0 0 1px; overflow: hidden; color: transparent; }
 	.composer-input { width: 100%; min-height: 46px; max-height: 160px; padding: 11px 6px; color: #f3f5f4; font-size: 16px; line-height: 1.5; box-sizing: border-box; }
 	.chat-main:not(.is-android-client) .composer-input { overflow-y: auto; }
 	.composer-input:disabled { opacity: 1; -webkit-text-fill-color: #f3f5f4; }
@@ -4479,6 +4594,8 @@
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status .user-voice-waveform { height: 18px; min-height: 18px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row { min-height: 30px; gap: 8px; overflow: hidden; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row .user-thinking-orb { width: 26px; min-width: 26px; height: 26px; min-height: 26px; flex-basis: 26px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-live-transcript,
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-live-transcript-line { height: 26px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button { order: -1; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-glyph { font-size: 23px; line-height: 34px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-stack { width: 38px; min-width: 38px; flex-basis: 38px; align-self: center; }
