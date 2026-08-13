@@ -8,7 +8,16 @@
 					<text class="chat-header-title">{{ activeConversationTitle }}</text>
 					<text class="chat-header-subtitle">{{ selectedModel?.modelName || '请选择模型' }}</text>
 				</view>
-				<view class="chat-header-balance mobile-only" aria-hidden="true"></view>
+				<button
+					v-if="androidClient"
+					class="chat-header-new-chat icon-button"
+					type="button"
+					aria-label="新建会话"
+					@click="$emit('new-chat')"
+				>
+					<uni-icons type="compose" size="18" color="#dce5e0" aria-hidden="true" />
+				</button>
+				<view v-else class="chat-header-balance mobile-only" aria-hidden="true"></view>
 			</view>
 
 			<view class="message-stage">
@@ -475,8 +484,37 @@
 							<uni-icons type="arrow-up" size="22" color="#07110d" aria-hidden="true" />
 						</button>
 					</template>
+					<view v-if="androidClient && !voiceInteractionActive" class="android-composer-tools">
+						<button
+							ref="androidSettingsTrigger"
+							class="android-settings-trigger"
+							type="button"
+							:disabled="generating || !models.length"
+							aria-haspopup="dialog"
+							@click="openAndroidSettings"
+						>
+							<text>{{ androidSettingsSummary }}</text>
+							<uni-icons type="down" size="13" color="#9da9a3" aria-hidden="true" />
+						</button>
 					</view>
-				<view class="composer-meta">
+					</view>
+				<user-android-chat-settings-sheet
+					v-if="androidClient"
+					ref="androidSettingsSheet"
+					:models="models"
+					:selected-model-index="selectedModelIndex"
+					:summary="androidSettingsSummary"
+					:mode="androidSettingsMode"
+					:sections="androidSettingsSections"
+					:disabled="generating || !models.length"
+					:loading="modelsLoading"
+					title="模型与能力"
+					:max-visible-items="6"
+					platform-mode="native"
+					@change="handleAndroidSettingsChange"
+					@close="restoreAndroidSettingsFocus"
+				/>
+				<view v-if="!androidClient" class="composer-meta">
 					<view class="composer-controls">
 						<user-model-selector
 							class="model-picker-control"
@@ -484,7 +522,7 @@
 							:selected-index="selectedModelIndex"
 							:disabled="generating || !models.length"
 							:loading="modelsLoading"
-							:platform-mode="androidClient ? 'native' : 'web'"
+							platform-mode="web"
 							@change="selectModel"
 						/>
 							<view
@@ -517,17 +555,7 @@
 							</view>
 							</view>
 						<button
-							v-if="androidClient && (videoGenerationAvailable || imageGenerationAvailable)"
-							class="android-generation-settings-toggle"
-							type="button"
-							:aria-expanded="String(androidGenerationSettingsExpanded)"
-							@click="toggleAndroidGenerationSettings"
-						>
-							<text>{{ androidGenerationSettingsExpanded ? '收起参数' : androidGenerationSettingsSummary }}</text>
-							<uni-icons :type="androidGenerationSettingsExpanded ? 'up' : 'down'" size="14" color="#9bc8ec" />
-						</button>
-						<button
-							v-if="multipleImageOutputsAvailable && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="multipleImageOutputsAvailable"
 							ref="imageOutputCountTrigger"
 							class="image-count-picker"
 							type="button"
@@ -538,7 +566,7 @@
 							<text>数量 · {{ selectedImageOutputCount }}</text>
 						</button>
 						<picker
-							v-if="videoGenerationAvailable && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="videoGenerationAvailable"
 							:range="videoModeOptions"
 							range-key="label"
 							:value="selectedVideoModeIndex"
@@ -548,7 +576,7 @@
 							<view class="video-option-picker"><text>模式 · {{ selectedVideoModeLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoDurationOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="videoGenerationAvailable && videoDurationOptions.length"
 							:range="videoDurationOptions"
 							range-key="label"
 							:value="selectedVideoDurationIndex"
@@ -558,7 +586,7 @@
 							<view class="video-option-picker"><text>时长 · {{ selectedVideoDuration }} 秒</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoResolutionOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="videoGenerationAvailable && videoResolutionOptions.length"
 							:range="videoResolutionOptions"
 							range-key="label"
 							:value="selectedVideoResolutionIndex"
@@ -568,7 +596,7 @@
 							<view class="video-option-picker"><text>清晰度 · {{ selectedVideoResolutionLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="videoGenerationAvailable && videoAspectOptions.length && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="videoGenerationAvailable && videoAspectOptions.length"
 							:range="videoAspectOptions"
 							range-key="label"
 							:value="selectedVideoAspectIndex"
@@ -578,7 +606,7 @@
 							<view class="video-option-picker"><text>画幅 · {{ selectedVideoAspectLabel }}</text><uni-icons type="down" size="14" color="#9bc8ec" /></view>
 						</picker>
 						<picker
-							v-if="!videoGenerationAvailable && (!androidClient || !imageGenerationAvailable || androidGenerationSettingsExpanded)"
+							v-if="!videoGenerationAvailable"
 							:range="reasoningEffortOptions"
 							range-key="label"
 							:value="selectedReasoningEffortIndex"
@@ -591,7 +619,7 @@
 							</view>
 						</picker>
 						<picker
-							v-if="imageGenerationAvailable && (!androidClient || androidGenerationSettingsExpanded)"
+							v-if="imageGenerationAvailable"
 							:range="imageAspectOptions"
 							range-key="label"
 							:value="selectedImageAspectIndex"
@@ -620,6 +648,7 @@
 							</view>
 						</picker>
 						<button
+							v-if="!androidClient"
 							class="motion-toggle"
 							type="button"
 							:aria-pressed="String(manualMotionReduced)"
@@ -780,6 +809,7 @@
 		validateAttachmentSelection
 	} from '@/common/aichat/ai-conversation-upload-state.js'
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
+	import UserAndroidChatSettingsSheet from './user-android-chat-settings-sheet.vue'
 	import UserConversationTurnRail from './user-conversation-turn-rail.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
@@ -963,6 +993,7 @@
 
 	export default {
 		components: {
+			UserAndroidChatSettingsSheet,
 			UserChatAttachmentList,
 			UserConversationTurnRail,
 			UserImageOutputCountDialog,
@@ -1054,7 +1085,6 @@
 				androidScrollScheduled: false,
 				androidScrollTimer: null,
 				androidScrollReason: '',
-				androidGenerationSettingsExpanded: false,
 				historyResyncing: false,
 				modelsLoading: false,
 				turnNavigationDesktop: false,
@@ -1176,12 +1206,64 @@
 				return this.videoAspectOptions.find(option =>
 					option.value === this.selectedVideoAspect)?.label || '请选择'
 			},
-			androidGenerationSettingsSummary() {
+			androidSettingsMode() {
+				if (this.videoGenerationAvailable) return 'VIDEO'
+				if (this.imageGenerationAvailable) return 'IMAGE'
+				return 'TEXT'
+			},
+			androidSettingsSummary() {
+				const modelName = this.selectedModel?.modelName || '选择模型'
 				if (this.videoGenerationAvailable) {
-					return `${this.selectedVideoDuration}秒 · ${this.selectedVideoResolutionLabel} · ${this.selectedVideoAspectLabel}`
+					return `${modelName} · ${this.selectedVideoDuration}秒`
 				}
-				if (this.imageGenerationAvailable) return `图片 · ${this.selectedImageAspectLabel}`
-				return '参数'
+				if (this.imageGenerationAvailable) {
+					return `${modelName} · ${this.selectedReasoningEffortLabel}`
+				}
+				return this.reasoningEffortOptions.length
+					? `${modelName} · ${this.selectedReasoningEffortLabel}`
+					: modelName
+			},
+			imageOutputCountOptions() {
+				return Array.from({ length: 10 }, (_, index) => Object.freeze({
+					value: index + 1,
+					label: `${index + 1} 张`
+				}))
+			},
+			selectedImageOutputCountIndex() {
+				return Math.max(0, this.imageOutputCountOptions.findIndex(option =>
+					option.value === this.selectedImageOutputCount))
+			},
+			androidSettingsSections() {
+				if (this.videoGenerationAvailable) {
+					return [
+						this.androidSettingsSection('videoMode', '模式', this.videoModeOptions,
+							this.selectedVideoModeIndex),
+						this.androidSettingsSection('videoResolution', '清晰度', this.videoResolutionOptions,
+							this.selectedVideoResolutionIndex),
+						this.androidSettingsSection('videoAspect', '比例', this.videoAspectOptions,
+							this.selectedVideoAspectIndex),
+						this.androidSettingsSection('videoDuration', '时长', this.videoDurationOptions,
+							this.selectedVideoDurationIndex)
+					].filter(Boolean)
+				}
+				if (this.imageGenerationAvailable) {
+					return [
+						this.androidSettingsSection('imageQuality', '画质', this.reasoningEffortOptions,
+							this.selectedReasoningEffortIndex),
+						this.androidSettingsSection('imageAspect', '比例', this.imageAspectOptions,
+							this.selectedImageAspectIndex),
+						this.multipleImageOutputsAvailable
+							? this.androidSettingsSection('imageCount', '张数', this.imageOutputCountOptions,
+								this.selectedImageOutputCountIndex, 'rows')
+							: null
+					].filter(Boolean)
+				}
+				return [
+					this.androidSettingsSection('reasoning', '推理强度', this.reasoningEffortOptions,
+						this.selectedReasoningEffortIndex),
+					this.androidSettingsSection('webSearch', '联网搜索', this.webSearchOptions,
+						this.selectedWebSearchModeIndex, '', !this.webSearchAvailable)
+				].filter(Boolean)
 			},
 			multipleImageOutputsAvailable() {
 				return modelSupportsMultipleImageOutputs(this.selectedModel)
@@ -1345,6 +1427,52 @@
 			}
 		},
 		methods: {
+			androidSettingsSection(key, label, options, selectedIndex,
+				presentation = '', disabled = false) {
+				if (!Array.isArray(options) || !options.length) return null
+				return Object.freeze({
+					key,
+					label,
+					options,
+					selectedIndex,
+					disabled: this.generating || disabled,
+					presentation: presentation || (options.length <= 4 ? 'segmented' : 'rows')
+				})
+			},
+			openAndroidSettings() {
+				if (!this.androidClient || this.generating || !this.models.length) return
+				this.$refs.androidSettingsSheet?.open?.()
+			},
+			restoreAndroidSettingsFocus() {
+				this.$nextTick(() => {
+					const trigger = this.$refs.androidSettingsTrigger
+					trigger?.focus?.()
+					trigger?.$el?.focus?.()
+				})
+			},
+			handleAndroidSettingsChange(event) {
+				if (!event?.key || !event?.detail) return
+				const handlers = {
+					model: this.selectModel,
+					reasoning: this.selectReasoningEffort,
+					imageQuality: this.selectReasoningEffort,
+					webSearch: this.selectWebSearchMode,
+					imageAspect: this.selectImageAspect,
+					imageCount: selection => {
+						const option = this.imageOutputCountOptions[Number(selection.detail.value)]
+						if (option) this.selectImageOutputCount(option.value)
+					},
+					videoMode: this.selectVideoMode,
+					videoDuration: this.selectVideoDuration,
+					videoResolution: this.selectVideoResolution,
+					videoAspect: this.selectVideoAspect
+				}
+				const handler = handlers[event.key]
+				if (typeof handler === 'function') handler.call(this, event)
+			},
+			closeIfOpen() {
+				return this.$refs.androidSettingsSheet?.closeIfOpen?.() === true
+			},
 			normalizeAndroidVoiceErrorCode(value) {
 				const code = String(value || '')
 				return /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'UNKNOWN'
@@ -3333,11 +3461,6 @@
 				if (!/^https:\/\//i.test(url)) return
 				uni.previewImage({ current: url, urls: [url] })
 			},
-			toggleAndroidGenerationSettings() {
-				if (!this.androidClient) return
-				this.androidGenerationSettingsExpanded = !this.androidGenerationSettingsExpanded
-				this.$nextTick(() => this.requestAndroidScrollBottom('generation-settings', true))
-			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
 			},
@@ -3903,7 +4026,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker, .android-generation-settings-toggle { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; background: #0b0d0c; box-sizing: border-box; }
@@ -4005,8 +4128,6 @@
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
 	.composer-meta { justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; padding: 0 2px; }
 	.composer-controls { min-width: 0; flex-wrap: wrap; gap: 6px; }
-	.android-generation-settings-toggle { min-height: 36px; margin: 0; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border-radius: 10px; color: #9bc8ec; font-size: 11px; line-height: 34px; }
-	.android-generation-settings-toggle::after { border: 0; }
 	.model-picker-control { min-width: 0; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4044,19 +4165,44 @@
 	.is-android-client .attachment-grid { grid-template-columns: minmax(0, 1fr); }
 	.is-android-client .attachment-card.is-android-media { width: 100% !important; max-width: 100%; overflow: visible; border: 0; border-radius: 0; background: transparent; }
 	.is-android-client .attachment-media-frame.is-video { width: 100% !important; max-width: 100%; max-height: none; aspect-ratio: auto !important; overflow: visible; border: 0; border-radius: 0; background: transparent; }
-	.is-android-client .composer-meta { align-items: stretch; gap: 4px; }
-	.is-android-client .composer-controls { width: 100%; gap: 6px; }
+	.is-android-client { padding-bottom: 0; }
+	.is-android-client .chat-header { min-height: 52px; padding: max(4px, env(safe-area-inset-top)) 12px 4px; gap: 6px; }
+	.is-android-client .chat-header-title { font-size: 16px; }
+	.is-android-client .chat-header-subtitle { margin-top: 0; font-size: 11px; }
+	.is-android-client .icon-button { width: 44px; height: 44px; min-height: 44px; position: relative; flex: 0 0 44px; border: 0; background: transparent; }
+	.is-android-client .icon-button::before { width: 32px; height: 32px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(151, 170, 160, .22); border-radius: 10px; background: rgba(243, 245, 244, .045); content: ''; }
+	.is-android-client .icon-button > * { position: relative; z-index: 1; }
+	.is-android-client .composer-wrap { padding: 6px 12px calc(8px + env(safe-area-inset-bottom)); }
+	.is-android-client .composer:not(.is-voice-active) { min-height: 76px; padding: 4px 5px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: minmax(28px, auto) 44px; align-items: center; column-gap: 3px; row-gap: 0; border-radius: 16px; }
+	.is-android-client .composer:not(.is-voice-active) .composer-entry { grid-column: 1 / -1; grid-row: 1; align-self: stretch; }
+	.is-android-client .composer:not(.is-voice-active) .voice-transcript-row { min-height: 28px; }
+	.is-android-client .composer:not(.is-voice-active) .composer-input { min-height: 28px; max-height: 140px; padding: 3px 7px 4px; overflow-y: auto; font-size: 15px; line-height: 1.42; }
+	.is-android-client .composer:not(.is-voice-active) .composer-icon { grid-column: 1; grid-row: 2; }
+	.is-android-client .composer:not(.is-voice-active) .android-composer-tools { min-width: 0; grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 4px; overflow: hidden; }
+	.is-android-client .composer:not(.is-voice-active) .voice-button { grid-column: 3; grid-row: 2; }
+	.is-android-client .composer:not(.is-voice-active) .send-button { grid-column: 4; grid-row: 2; }
 	.is-android-client .composer-icon,
 	.is-android-client .voice-button,
+	.is-android-client .send-button { width: 44px; height: 44px; min-height: 44px; position: relative; margin: 0; padding: 0; border: 0; border-radius: 12px; background: transparent; }
 	.is-android-client .voice-cancel-button,
-	.is-android-client .voice-commit-button,
-	.is-android-client .send-button { width: 48px; height: 48px; min-height: 48px; }
-	.is-android-client .model-picker-control { min-width: 0; flex: 1 1 145px; }
-	.is-android-client .model-picker { width: 100%; box-sizing: border-box; }
-	.is-android-client .composer-note { width: 100%; padding-top: 2px; text-align: left; }
+	.is-android-client .voice-commit-button { width: 48px; height: 48px; min-height: 48px; }
+	.is-android-client .composer:not(.is-voice-active) .composer-icon::before,
+	.is-android-client .composer:not(.is-voice-active) .voice-button::before,
+	.is-android-client .composer:not(.is-voice-active) .send-button::before { width: 34px; height: 34px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(111, 133, 122, .5); border-radius: 11px; background: rgba(25, 31, 28, .92); content: ''; box-sizing: border-box; }
+	.is-android-client .composer:not(.is-voice-active) .send-button::before { border-color: #37d39a; background: #37d39a; }
+	.is-android-client .composer:not(.is-voice-active) .stop-button::before { border-color: rgba(55, 211, 154, .46); background: rgba(55, 211, 154, .16); }
+	.is-android-client .composer:not(.is-voice-active) .composer-icon > *,
+	.is-android-client .composer:not(.is-voice-active) .voice-button > *,
+	.is-android-client .composer:not(.is-voice-active) .send-button > * { position: relative; z-index: 1; }
+	.android-settings-trigger { min-width: 0; min-height: 44px; margin: 0; padding: 0 8px; position: relative; display: flex; flex: 1; align-items: center; justify-content: flex-start; gap: 4px; overflow: hidden; border: 0; border-radius: 11px; background: transparent; color: #b9c5bf; font-size: 11px; line-height: 1.2; box-sizing: border-box; }
+	.android-settings-trigger::before { height: 34px; position: absolute; inset: 0; margin: auto 0; border: 1px solid rgba(113, 151, 134, .3); border-radius: 10px; background: rgba(20, 29, 25, .72); content: ''; }
+	.android-settings-trigger::after { border: 0; }
+	.android-settings-trigger > * { position: relative; z-index: 1; }
+	.android-settings-trigger text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.android-settings-trigger:disabled { opacity: .48; }
 	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
-		.mobile-only { display: none !important; }
+		.chat-main:not(.is-android-client) .mobile-only { display: none !important; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active { min-height: 58px; padding: 7px; align-items: center; gap: 7px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .composer-icon,
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button,
