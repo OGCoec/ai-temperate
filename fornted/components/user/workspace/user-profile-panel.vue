@@ -461,6 +461,11 @@
 		padding: 32px 16px calc(108px + env(safe-area-inset-bottom));
 	}
 	.profile-page.is-android-client .profile-shell { padding: max(14px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom)); }
+	.profile-page.is-android-client .profile-heading-row { align-items: center; gap: 8px; margin-bottom: 18px; }
+	.profile-page.is-android-client .profile-kicker { font-size: 11px; letter-spacing: 1.5px; }
+	.profile-page.is-android-client .profile-title { margin-top: 5px; font-size: 26px; }
+	.profile-page.is-android-client .profile-subtitle { margin-top: 5px; font-size: 14px; line-height: 1.5; }
+	.profile-page.is-android-client .profile-refresh { min-width: 64px; min-height: 44px; }
 
 	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }

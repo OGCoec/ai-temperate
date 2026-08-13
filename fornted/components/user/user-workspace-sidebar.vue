@@ -295,6 +295,9 @@
 		width: min(70vw, 288px);
 		padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
 	}
+	.is-android-drawer .workspace-icon-button { width: 44px; height: 44px; min-height: 44px; position: relative; border: 0; background: transparent; }
+	.is-android-drawer .workspace-icon-button::before { width: 32px; height: 32px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(151, 170, 160, .22); border-radius: 10px; background: rgba(243, 245, 244, .045); content: ''; }
+	.is-android-drawer .workspace-icon-button > * { position: relative; z-index: 1; }
 
 	.workspace-history-drawer.is-open {
 		transform: translateX(0);

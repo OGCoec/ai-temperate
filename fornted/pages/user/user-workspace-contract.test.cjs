@@ -231,6 +231,17 @@ test('Android uses the compact two-row composer and keeps H5 picker controls', (
 	assert.match(chatPanel, /\.is-android-client\s*\{[\s\S]*padding-bottom:\s*0/)
 })
 
+test('Android context entry requires a real conversation usage snapshot', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const contextSheet = read('components/user/workspace/user-context-usage-sheet.vue')
+
+	assert.match(chatPanel,
+		/<user-context-usage-sheet[\s\S]*v-if="currentConversationPublicId && contextUsage"/)
+	assert.match(contextSheet, /Math\.round\(Math\.max\(0, Number\(this\.usage\?\.usagePercent \|\| 0\)\)\)/)
+	assert.match(contextSheet, /:size="20"/)
+	assert.match(contextSheet, /closeIfOpen\(\)/)
+})
+
 test('desktop voice composer keeps live recognition compact until the final transcript is ready', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 

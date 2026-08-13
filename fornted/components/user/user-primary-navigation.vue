@@ -19,7 +19,7 @@
 				:aria-current="activeDestination === 'chat' ? 'page' : undefined"
 				@click="navigate('chat')"
 			>
-				<uni-icons type="chat" size="22" :color="iconColor('chat')" aria-hidden="true" />
+				<uni-icons type="chat" :size="variant === 'drawer' ? 19 : 22" :color="iconColor('chat')" aria-hidden="true" />
 				<text>聊天</text>
 			</button>
 			<button
@@ -29,7 +29,7 @@
 				:aria-current="activeDestination === 'models' ? 'page' : undefined"
 				@click="navigate('models')"
 			>
-				<uni-icons type="list" size="22" :color="iconColor('models')" aria-hidden="true" />
+				<uni-icons type="list" :size="variant === 'drawer' ? 19 : 22" :color="iconColor('models')" aria-hidden="true" />
 				<text>模型</text>
 			</button>
 			<button
@@ -39,7 +39,7 @@
 				:aria-current="activeDestination === 'profile' ? 'page' : undefined"
 				@click="navigate('profile')"
 			>
-				<uni-icons type="person" size="22" :color="iconColor('profile')" aria-hidden="true" />
+				<uni-icons type="person" :size="variant === 'drawer' ? 19 : 22" :color="iconColor('profile')" aria-hidden="true" />
 				<text>个人</text>
 			</button>
 		</view>

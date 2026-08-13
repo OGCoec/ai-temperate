@@ -63,27 +63,27 @@
 					>
 						<button
 							v-for="(option, index) in section.options"
-							:key="`${section.key}-${option.value ?? index}`"
+							:key="`${section.key}-${optionIdentity(option, index)}`"
 							class="android-chat-settings-segment"
 							:class="{ 'is-selected': index === normalizedSectionIndex(section) }"
 							type="button"
 							:disabled="disabled || loading || section.disabled || option.disabled"
 							@click="select(section.key, index)"
 						>
-							{{ option.label ?? option.value }}
+							{{ optionLabel(option) }}
 						</button>
 					</view>
 					<view v-else class="android-chat-settings-option-list">
 						<button
 							v-for="(option, index) in section.options"
-							:key="`${section.key}-${option.value ?? index}`"
+							:key="`${section.key}-${optionIdentity(option, index)}`"
 							class="android-chat-settings-row"
 							:class="{ 'is-selected': index === normalizedSectionIndex(section) }"
 							type="button"
 							:disabled="disabled || loading || section.disabled || option.disabled"
 							@click="select(section.key, index)"
 						>
-							<text class="android-chat-settings-row-title">{{ option.label ?? option.value }}</text>
+							<text class="android-chat-settings-row-title">{{ optionLabel(option) }}</text>
 							<uni-icons v-if="index === normalizedSectionIndex(section)" type="checkmarkempty" size="20" color="#37d39a" aria-hidden="true" />
 						</button>
 					</view>
@@ -175,6 +175,12 @@
 			}
 		},
 		methods: {
+			optionIdentity(option, index) {
+				return option?.value == null ? index : option.value
+			},
+			optionLabel(option) {
+				return option?.label == null ? option?.value : option.label
+			},
 			normalizedSectionIndex(section) {
 				const index = Number(section?.selectedIndex)
 				return Number.isInteger(index) && index >= 0 && index < section.options.length

@@ -2,7 +2,7 @@
 	<view class="chat-main" :class="{ 'is-android-client': androidClient }" role="main">
 			<view class="chat-header">
 				<button class="icon-button mobile-only" type="button" aria-label="打开会话列表" @click="$emit('open-conversation-drawer')">
-					<uni-icons type="bars" size="22" color="#dce5e0" aria-hidden="true" />
+					<uni-icons type="bars" :size="androidClient ? 18 : 22" color="#dce5e0" aria-hidden="true" />
 				</button>
 				<view class="chat-header-copy">
 					<text class="chat-header-title">{{ activeConversationTitle }}</text>
@@ -404,7 +404,7 @@
 					:class="{ 'is-voice-active': voiceInteractionActive }"
 				>
 					<button v-if="!voiceInteractionActive" class="composer-icon" type="button" aria-label="添加附件" :disabled="generating || attachmentPickerBusy || pendingAttachments.length >= 8" @click="chooseAttachments">
-						<uni-icons type="plusempty" size="24" color="#dce5e0" aria-hidden="true" />
+						<uni-icons type="plusempty" :size="androidClient ? 19 : 24" color="#dce5e0" aria-hidden="true" />
 					</button>
 					<view class="composer-entry">
 						<view
@@ -478,13 +478,13 @@
 							:disabled="voiceButtonDisabled"
 							@click="toggleVoiceInput"
 						>
-							<uni-icons type="mic-filled" size="21" color="#dce5e0" aria-hidden="true" />
+							<uni-icons type="mic-filled" :size="androidClient ? 19 : 21" color="#dce5e0" aria-hidden="true" />
 						</button>
 						<button v-if="generating" class="send-button stop-button" type="button" aria-label="停止生成" @click="stop">
 							<view class="stop-square"></view>
 						</button>
 						<button v-else class="send-button" type="button" aria-label="发送消息" :disabled="!canSend" @click="send">
-							<uni-icons type="arrow-up" size="22" color="#07110d" aria-hidden="true" />
+							<uni-icons type="arrow-up" :size="androidClient ? 19 : 22" color="#07110d" aria-hidden="true" />
 						</button>
 					</template>
 					<view v-if="androidClient && !voiceInteractionActive" class="android-composer-tools">

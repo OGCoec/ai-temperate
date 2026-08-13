@@ -292,6 +292,11 @@
 	.catalog-scroll { height: 100%; min-height: 0; min-width: 0; flex: 1; }
 	.catalog-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 32px 16px calc(108px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.catalog-page.is-android-client .catalog-shell { padding: max(14px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom)); }
+	.catalog-page.is-android-client .catalog-heading-row { align-items: center; gap: 8px; margin-bottom: 18px; }
+	.catalog-page.is-android-client .catalog-kicker { font-size: 11px; letter-spacing: 1.5px; }
+	.catalog-page.is-android-client .catalog-title { margin-top: 5px; font-size: 26px; }
+	.catalog-page.is-android-client .catalog-subtitle { margin-top: 5px; font-size: 14px; line-height: 1.5; }
+	.catalog-page.is-android-client .catalog-refresh { min-width: 64px; min-height: 44px; }
 	.catalog-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
 	.workspace-panel-menu::after { border: 0; }
