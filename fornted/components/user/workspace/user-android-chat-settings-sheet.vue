@@ -39,13 +39,14 @@
 							:aria-current="index === normalizedSelectedModelIndex ? 'true' : undefined"
 							@click="select('model', index)"
 						>
+							<user-model-provider-mark :model="model" :size="18" />
 							<view class="android-chat-settings-row-copy">
 								<text class="android-chat-settings-row-title">{{ model.modelName || '未命名模型' }}</text>
 								<text v-if="model.providerName || model.provider || model.vendor" class="android-chat-settings-row-detail">
 									{{ model.providerName || model.provider || model.vendor }}
 								</text>
 							</view>
-							<uni-icons v-if="index === normalizedSelectedModelIndex" type="checkmarkempty" size="20" color="#37d39a" aria-hidden="true" />
+							<uni-icons v-if="index === normalizedSelectedModelIndex" class="android-chat-settings-check" type="checkmarkempty" size="20" color="#37d39a" aria-hidden="true" />
 						</button>
 					</scroll-view>
 				</view>
@@ -94,8 +95,11 @@
 </template>
 
 <script>
+	import UserModelProviderMark from './user-model-provider-mark.vue'
+
 	export default {
 		name: 'UserAndroidChatSettingsSheet',
+		components: { UserModelProviderMark },
 		props: {
 			models: {
 				type: Array,
@@ -240,7 +244,7 @@
 	.android-chat-settings-heading-copy { min-width: 0; flex: 1; }
 	.android-chat-settings-title { display: block; color: #f3f5f4; font-size: 16px; font-weight: 760; line-height: 1.25; }
 	.android-chat-settings-summary { display: block; margin-top: 2px; overflow: hidden; color: #8e9a94; font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-	.android-chat-settings-close { @include user-frosted-control; width: 42px; height: 42px; min-height: 42px; margin: 0; padding: 0; flex: 0 0 42px; border-radius: 13px; }
+	.android-chat-settings-close { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; }
 	.android-chat-settings-close::after,
 	.android-chat-settings-row::after,
 	.android-chat-settings-segment::after { border: 0; }
@@ -256,6 +260,7 @@
 	.android-chat-settings-row:active { background: rgba(55, 211, 154, .13); }
 	.android-chat-settings-row:disabled { opacity: .45; }
 	.android-chat-settings-row-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; }
+	.android-chat-settings-check { flex: 0 0 auto; }
 	.android-chat-settings-row-title { overflow: hidden; font-size: 13px; font-weight: 670; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 	.android-chat-settings-row-detail { margin-top: 1px; overflow: hidden; color: #88948e; font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 	.android-chat-settings-segments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
@@ -263,7 +268,6 @@
 	.android-chat-settings-segment { min-height: 42px; margin: 0; padding: 5px 8px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(151, 177, 163, .18); border-radius: 11px; background: rgba(243, 245, 244, .035); color: #aeb9b3; font-size: 12px; font-weight: 650; line-height: 1.25; text-align: center; box-sizing: border-box; }
 	.android-chat-settings-segment.is-selected { border-color: rgba(55, 211, 154, .5); background: rgba(55, 211, 154, .12); color: #c9f4e2; }
 	.android-chat-settings-segment:disabled { opacity: .45; }
-	.android-chat-settings-close:focus-visible,
 	.android-chat-settings-row:focus-visible,
 	.android-chat-settings-segment:focus-visible { outline: 2px solid rgba(55, 211, 154, .76); outline-offset: -2px; }
 	@media screen and (orientation: landscape) and (max-height: 520px) {

@@ -196,7 +196,7 @@
 	.model-detail-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 20px 16px calc(40px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.model-detail-page.is-android-client .model-detail-shell { padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom)); }
 	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
-	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
+	.workspace-panel-menu { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; }
 	.workspace-panel-menu::after { border: 0; }
 	.model-detail-back { @include user-frosted-control; min-width: 84px; min-height: 48px; margin: 0; padding: 0 10px; justify-content: flex-start; gap: 6px; border-radius: 12px; color: #dce5e0; font-size: 14px; font-weight: 650; line-height: 1.2; }
 	.model-detail-back::after, .model-detail-retry::after { border: 0; }

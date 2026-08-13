@@ -98,52 +98,52 @@ test('generated response images use a completion-ordered mosaic without changing
 	assert.match(page, /@keyframes generated-image-gallery-exit/)
 })
 
-test('desktop chat uses one primary sidebar with new chat before navigation and recent after it', () => {
+test('H5 chat uses one collapsible conversation sidebar and a progressive settings surface', () => {
 	const workspace = read('components/user/user-workspace.vue')
-	const sidebar = read('components/user/user-workspace-sidebar.vue')
-	const navigation = read('components/user/user-primary-navigation.vue')
-	const recent = read('components/user/user-recent-conversations.vue')
+	const sidebar = read('components/user/user-h5-workspace-sidebar.vue')
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.equal((workspace.match(/<user-workspace-sidebar\b/g) || []).length, 1)
-	assert.match(sidebar, /<template #before-items>[\s\S]*workspace-new-chat/)
-	assert.match(sidebar, /<template #after-items>[\s\S]*<user-recent-conversations/)
-	assert.ok(
-		navigation.indexOf('<slot name="before-items"') <
-			navigation.indexOf('class="user-primary-navigation-inner"')
-	)
-	assert.ok(
-		navigation.indexOf('<slot name="after-items"') >
-			navigation.indexOf('class="user-primary-navigation-inner"')
-	)
-	assert.match(navigation, /this\.\$emit\('destination-click', destination\)/)
-	assert.doesNotMatch(navigation, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
-	assert.match(navigation, /--sidebar-inline-padding:\s*12px/)
-	assert.match(navigation, /--sidebar-inline-padding:\s*16px/)
-	assert.match(navigation,
-		/margin-right:\s*calc\(-1\s*\*\s*var\(--sidebar-inline-padding\)\)/)
-	assert.match(recent,
-		/padding-right:\s*calc\(12px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
-	assert.match(recent,
-		/margin-right:\s*calc\(6px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
+	assert.match(sidebar, /workspace-sidebar-header/)
+	assert.match(sidebar, /workspace-sidebar-footer/)
 	assert.match(chatPanel,
 		/\.chat-main\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
-	assert.match(chatPanel, /\.composer-controls\s*\{[^}]*flex-wrap:\s*wrap/)
+	assert.match(chatPanel, /class="generation-settings-trigger"/)
+	assert.match(chatPanel, /:aria-expanded="String\(generationSettingsOpen\)"/)
+	assert.match(chatPanel, /class="generation-settings-panel"/)
+	assert.match(chatPanel, /generationSettingsPresentation/)
+	assert.match(chatPanel, /@keydown\.esc\.stop\.prevent="closeGenerationSettings"/)
+	assert.match(chatPanel, /@keydown\.tab="trapGenerationSettingsFocus"/)
+	assert.match(chatPanel, /generation-settings-surface-motion-enter-active/)
+	assert.match(chatPanel, /generation-settings-surface-motion-leave-active/)
+	assert.match(chatPanel, /this\.\$refs\.generationSettingsTrigger/)
 })
 
-test('recent conversations are collapsed by default, lazy loaded, and shared with the mobile drawer', () => {
+test('H5 workspace restructuring leaves the Android navigation and generation state isolated', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(workspace, /let recentExpanded = false[\s\S]*#ifdef H5[\s\S]*recentExpanded = true/)
+	assert.match(workspace, /#ifndef H5[\s\S]*<user-workspace-sidebar/)
+	assert.match(panel, /#ifndef H5[\s\S]*class="icon-button mobile-only"/)
+	assert.match(panel, /<user-android-chat-settings-sheet[\s\S]*v-if="androidClient"/)
+	assert.doesNotMatch(panel, /androidGenerationSettingsExpanded|toggleAndroidGenerationSettings/)
+	assert.match(panel, /#ifdef H5[\s\S]*class="generation-settings-trigger"[\s\S]*#endif[\s\S]*<user-model-selector/)
+})
+
+test('recent conversations are expanded in the focused sidebar and loaded on demand', () => {
 	const page = read('components/user/user-workspace.vue')
-	const sidebar = read('components/user/user-workspace-sidebar.vue')
+	const sidebar = read('components/user/user-h5-workspace-sidebar.vue')
 	const recent = read('components/user/user-recent-conversations.vue')
 	const recentUsages = sidebar.match(/<user-recent-conversations\b/g) || []
 
-	assert.match(page, /recentExpanded:\s*false/)
+	assert.match(page, /let recentExpanded = false[\s\S]*#ifdef H5[\s\S]*recentExpanded = true/)
 	assert.doesNotMatch(page, /onAuthenticatedPageReady\(\)[\s\S]{0,180}refreshConversations\(\)/)
 	assert.match(page, /ensureRecentConversations\(\)[\s\S]*this\.conversationsLoaded/)
 	assert.match(page, /toggleRecentConversations\(\)[\s\S]*this\.recentExpanded = !this\.recentExpanded[\s\S]*ensureRecentConversations\(\)/)
-	assert.match(page, /DESKTOP_SIDEBAR_MIN_WIDTH\s*=\s*768/)
-	assert.match(page, /selectDestination\(destination\)[\s\S]*destination === this\.activeDestination[\s\S]*windowWidth < DESKTOP_SIDEBAR_MIN_WIDTH[\s\S]*openConversationDrawer\(\)[\s\S]*toggleRecentConversations\(\)/)
-	assert.equal(recentUsages.length, 2)
+	assert.match(page, /sidebarPreferenceTouched:\s*false/)
+	assert.match(page, /handleWorkspaceResize/)
+	assert.equal(recentUsages.length, 1)
 	assert.match(recent, /:aria-expanded="String\(expanded\)"/)
 	assert.match(recent, /:aria-controls="contentId"/)
 	assert.match(recent, /:id="contentId"/)
@@ -400,6 +400,31 @@ test('stream diagnostics connect browser reads, parsed SSE and rendered text wit
 	assert.match(diagnostics, /ai_stream_client_timing_summary/)
 	assert.doesNotMatch(diagnostics, /event\.data\.text/)
 	assert.doesNotMatch(diagnostics, /console\.log/)
+})
+
+test('H5 streaming follows only near the bottom and exposes a return-to-latest action', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(panel, /H5_TURN_FOLLOW_LATEST_PX\s*=\s*H5_FOLLOW_LATEST_MAX_DISTANCE/)
+	assert.match(panel, /TURN_FOLLOW_LATEST_PX\s*=\s*320/)
+	assert.match(panel, /class="return-latest"/)
+	assert.match(panel, /v-if="!turnFollowLatest && messages\.length"/)
+	assert.match(panel, /resumeFollowingLatest\(\)/)
+	assert.match(panel, /resolveH5FollowLatest\(\{[\s\S]*previousScrollTop[\s\S]*nextScrollTop/)
+	assert.match(panel, /clientPlatform\(\) === 'H5' && !force && !this\.turnFollowLatest/)
+})
+
+test('H5 content, toolbar, and composer share a bounded remaining-workspace axis', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(panel, /\.chat-main\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/)
+	assert.match(panel, /\.message-shell\s*\{[^}]*width:\s*min\(100%,\s*880px\)/)
+	assert.match(panel, /\.composer-wrap\s*\{[^}]*width:\s*min\(100%,\s*960px\)/)
+	assert.match(panel, /padding:\s*32px clamp\(16px,\s*3vw,\s*32px\) 32px/)
+	assert.match(panel, /\.message-block\s*\{[^}]*max-width:\s*78%/)
+	assert.match(panel, /\.message-text\s*\{[^}]*font-size:\s*16px[^}]*line-height:\s*1\.68/)
+	assert.match(panel, /\.composer-input\s*\{[^}]*max-height:\s*160px/)
+	assert.match(panel, /\.chat-main:not\(\.is-android-client\) \.composer-input\s*\{[^}]*overflow-y:\s*auto/)
 })
 
 test('desktop chat renders a bounded Codex turn rail instead of every cached message', () => {

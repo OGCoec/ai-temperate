@@ -1,5 +1,8 @@
 <template>
-	<view class="recent-conversations">
+	<view
+		class="recent-conversations"
+		:class="{ 'is-compact': compact }"
+	>
 		<button
 			class="recent-toggle"
 			type="button"
@@ -73,6 +76,10 @@
 				required: true
 			},
 			expanded: {
+				type: Boolean,
+				default: false
+			},
+			compact: {
 				type: Boolean,
 				default: false
 			},
@@ -204,6 +211,34 @@
 		justify-content: center;
 		border-radius: 8px;
 		opacity: .55;
+	}
+
+	.recent-conversations.is-compact .recent-toggle {
+		min-height: 40px;
+		padding: 6px;
+		font-size: 12px;
+	}
+
+	.recent-conversations.is-compact .conversation-row {
+		height: 40px;
+		min-height: 40px;
+		margin: 0;
+		border-radius: 8px;
+	}
+
+	.recent-conversations.is-compact .conversation-open {
+		height: 40px;
+		min-height: 40px;
+		padding: 6px;
+		font-size: 12px;
+	}
+
+	.recent-conversations.is-compact .conversation-copy {
+		width: 40px;
+		height: 40px;
+		min-height: 40px;
+		flex-basis: 40px;
+		border-radius: 8px;
 	}
 
 	.recent-status,

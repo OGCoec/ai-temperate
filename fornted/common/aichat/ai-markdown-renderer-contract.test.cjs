@@ -333,6 +333,31 @@ test('research summaries render through compact safe Markdown and preserve exact
 	assert.equal(panel.includes('openResearchSource'), false)
 })
 
+test('ordinary comparison tables default to cards only in compact H5 layouts', async () => {
+	const {
+		AI_MARKDOWN_TABLE_VIEW_MODES,
+		resolveAiMarkdownTableViewMode
+	} = await loadTableLayout()
+	const table = readComponent('user-markdown-table.vue')
+
+	assert.deepEqual(AI_MARKDOWN_TABLE_VIEW_MODES, ['auto', 'cards', 'table'])
+	assert.equal(resolveAiMarkdownTableViewMode('auto', 2, 767), 'cards')
+	assert.equal(resolveAiMarkdownTableViewMode('auto', 4, 767), 'cards')
+	assert.equal(resolveAiMarkdownTableViewMode('auto', 5, 767), 'table')
+	assert.equal(resolveAiMarkdownTableViewMode('auto', 4, 768), 'table')
+	assert.equal(resolveAiMarkdownTableViewMode('cards', 8, 1440), 'cards')
+	assert.match(table, /tableViewMode:\s*'auto'/)
+	assert.match(table, /let h5TableLayout = false[\s\S]*#ifdef H5[\s\S]*h5TableLayout = true/)
+	assert.match(table, /if \(!this\.h5TableLayout\) return 'table'/)
+	assert.match(table, /class="ai-markdown-table-cards"/)
+	assert.match(table, /class="ai-markdown-table-view-toggle"/)
+	assert.match(table, /:aria-pressed="String\(resolvedViewMode === 'cards'\)"/)
+	assert.match(table, /:aria-pressed="String\(resolvedViewMode === 'table'\)"/)
+	assert.doesNotMatch(table, /(?:localStorage|setStorageSync)\(/)
+	assert.match(table, /\.ai-markdown-table-region\s*\{[^}]*overflow:\s*hidden/)
+	assert.match(table, /\.ai-markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/)
+})
+
 test('H5 and Android code blocks share one Shiki token and presentation contract', () => {
 	const block = readComponent('user-markdown-code-block.vue')
 	const lines = readComponent('user-markdown-code-lines.vue')

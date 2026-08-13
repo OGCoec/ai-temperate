@@ -30,6 +30,7 @@ function aiHtmlPreviewOrigin() {
 
 export default defineConfig(() => {
 	const plugins = [uni()]
+	const publicDir = fileURLToPath(new URL('public', import.meta.url))
 	const resolve = {
 		alias: {
 			'@shared-auth': fileURLToPath(new URL('../shared-frontend/auth', import.meta.url)),
@@ -55,7 +56,7 @@ export default defineConfig(() => {
 	const platform = process.env.UNI_PLATFORM
 	const isH5Development = ['h5', 'web'].includes(platform) && process.env.NODE_ENV !== 'production'
 	if (!isH5Development) {
-		return { plugins, resolve, define }
+		return { plugins, publicDir, resolve, define }
 	}
 
 	if (process.env.LOCAL_HTTPS_ENABLED !== 'true') {
@@ -73,6 +74,7 @@ export default defineConfig(() => {
 
 	return {
 		plugins,
+		publicDir,
 		resolve,
 		define,
 		server: {

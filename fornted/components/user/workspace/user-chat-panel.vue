@@ -1,13 +1,24 @@
 <template>
 	<view class="chat-main" :class="{ 'is-android-client': androidClient }" role="main">
 			<view class="chat-header">
+				<!-- #ifdef H5 -->
+				<view class="chat-header-leading" aria-hidden="true"></view>
+				<!-- #endif -->
+				<!-- #ifndef H5 -->
 				<button class="icon-button mobile-only" type="button" aria-label="打开会话列表" @click="$emit('open-conversation-drawer')">
 					<uni-icons type="bars" :size="androidClient ? 18 : 22" color="#dce5e0" aria-hidden="true" />
 				</button>
+				<!-- #endif -->
 				<view class="chat-header-copy">
-					<text class="chat-header-title">{{ activeConversationTitle }}</text>
+					<text class="chat-header-title" :title="activeConversationTitle">{{ activeConversationTitle }}</text>
 					<text class="chat-header-subtitle">{{ selectedModel?.modelName || '请选择模型' }}</text>
 				</view>
+				<!-- #ifdef H5 -->
+				<button class="chat-header-action" type="button" aria-label="打开账户与设置" @click="$emit('open-account')">
+					<uni-icons type="person" size="20" color="#aeb9b3" aria-hidden="true" />
+				</button>
+				<!-- #endif -->
+				<!-- #ifndef H5 -->
 				<button
 					v-if="androidClient"
 					class="chat-header-new-chat icon-button"
@@ -18,6 +29,7 @@
 					<uni-icons type="compose" size="18" color="#dce5e0" aria-hidden="true" />
 				</button>
 				<view v-else class="chat-header-balance mobile-only" aria-hidden="true"></view>
+				<!-- #endif -->
 			</view>
 
 			<view class="message-stage">
@@ -386,6 +398,18 @@
 					<view id="message-bottom" class="message-bottom"></view>
 					</view>
 				</scroll-view>
+				<!-- #ifdef H5 -->
+				<button
+					v-if="!turnFollowLatest && messages.length"
+					class="return-latest"
+					type="button"
+					aria-label="回到最新消息"
+					@click="resumeFollowingLatest"
+				>
+					<uni-icons type="down" size="17" color="#dff8ed" aria-hidden="true" />
+					<text>回到最新</text>
+				</button>
+				<!-- #endif -->
 			</view>
 
 			<view class="composer-wrap">
@@ -415,12 +439,22 @@
 							:aria-busy="String(voiceInteractionActive)"
 						>
 							<text class="visually-hidden">{{ voiceStatusLabel }}</text>
+							<!-- #ifndef APP-PLUS -->
 							<user-voice-waveform
 								:state="voiceState"
 								:session-epoch="voiceSessionEpoch"
 								:packet="voiceWaveformPacket"
 								:reduced="motionReduced"
 							/>
+							<!-- #endif -->
+							<!-- #ifdef APP-PLUS -->
+							<user-voice-waveform-android
+								:state="voiceState"
+								:session-epoch="voiceSessionEpoch"
+								:packet="voiceWaveformPacket"
+								:reduced="motionReduced"
+							/>
+							<!-- #endif -->
 						</view>
 						<view class="voice-transcript-row">
 							<user-thinking-orb
@@ -470,7 +504,7 @@
 							</button>
 						</view>
 					</template>
-					<template v-else>
+					<template v-if="!voiceInteractionActive">
 						<button
 							class="voice-button"
 							type="button"
@@ -484,7 +518,7 @@
 							<view class="stop-square"></view>
 						</button>
 						<button v-else class="send-button" type="button" aria-label="发送消息" :disabled="!canSend" @click="send">
-							<uni-icons type="arrow-up" :size="androidClient ? 19 : 22" color="#07110d" aria-hidden="true" />
+							<uni-icons type="arrow-up" :size="androidClient ? 19 : 22" :color="androidClient ? '#75dfb7' : '#07110d'" aria-hidden="true" />
 						</button>
 					</template>
 					<view v-if="androidClient && !voiceInteractionActive" class="android-composer-tools">
@@ -496,6 +530,7 @@
 							aria-haspopup="dialog"
 							@click="openAndroidSettings"
 						>
+							<user-model-provider-mark v-if="selectedModel" :model="selectedModel" :size="16" />
 							<text>{{ androidSettingsSummary }}</text>
 							<uni-icons type="down" size="13" color="#9da9a3" aria-hidden="true" />
 						</button>
@@ -526,6 +561,54 @@
 				/>
 				<view v-if="!androidClient" class="composer-meta">
 					<view class="composer-controls">
+						<!-- #ifdef H5 -->
+						<button
+							ref="generationSettingsTrigger"
+							class="generation-settings-trigger"
+							type="button"
+							aria-haspopup="dialog"
+							aria-controls="h5-generation-settings"
+							:aria-expanded="String(generationSettingsOpen)"
+							@click="toggleGenerationSettings"
+						>
+							<uni-icons type="list" size="16" color="#8fdcbe" aria-hidden="true" />
+							<text>{{ generationSettingsSummary }}</text>
+							<uni-icons :type="generationSettingsOpen ? 'up' : 'down'" size="13" color="#9ba6a0" aria-hidden="true" />
+						</button>
+						<transition name="generation-settings-backdrop-motion">
+							<view
+								v-if="generationSettingsOpen"
+								class="generation-settings-backdrop"
+								aria-hidden="true"
+								@click="closeGenerationSettings"
+							></view>
+						</transition>
+						<transition name="generation-settings-surface-motion">
+							<view
+								v-if="generationSettingsOpen"
+								id="h5-generation-settings"
+								ref="generationSettingsPanel"
+								class="generation-settings-panel"
+								:class="`is-${generationSettingsPresentation}`"
+								role="dialog"
+								aria-modal="true"
+								aria-label="生成设置"
+								tabindex="-1"
+								@keydown.esc.stop.prevent="closeGenerationSettings"
+								@keydown.tab="trapGenerationSettingsFocus"
+							>
+							<view class="generation-settings-heading">
+								<view>
+									<text class="generation-settings-title">生成设置</text>
+									<text class="generation-settings-caption">模型、推理、联网与媒体参数</text>
+								</view>
+								<button class="generation-settings-close" type="button" aria-label="关闭生成设置" @click="closeGenerationSettings">
+									<uni-icons type="closeempty" size="21" color="#dce5e0" aria-hidden="true" />
+								</button>
+							</view>
+							<scroll-view class="generation-settings-scroll" scroll-y>
+								<view class="generation-settings-fields">
+						<!-- #endif -->
 						<user-model-selector
 							class="model-picker-control"
 							:options="models"
@@ -533,6 +616,7 @@
 							:disabled="generating || !models.length"
 							:loading="modelsLoading"
 							platform-mode="web"
+							presentation="embedded"
 							@change="selectModel"
 						/>
 							<view
@@ -667,6 +751,12 @@
 						>
 							<text>{{ motionPreferenceLabel }}</text>
 						</button>
+						<!-- #ifdef H5 -->
+								</view>
+							</scroll-view>
+							</view>
+						</transition>
+						<!-- #endif -->
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
 				</view>
@@ -785,6 +875,11 @@
 		createAiMotionPreferenceController
 	} from '@/common/ui/ai-motion-preference.js'
 	import {
+		H5_FOLLOW_LATEST_MAX_DISTANCE,
+		resolveH5FollowLatest,
+		resolveH5GenerationSettingsPresentation
+	} from '@/common/ui/h5-workspace-layout.js'
+	import {
 		AI_CONVERSATION_WEB_SEARCH_MODES,
 		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
 		aiConversationWebSearchEnabled,
@@ -827,14 +922,18 @@
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
+	import UserModelProviderMark from './user-model-provider-mark.vue'
 	import UserModelSelector from './user-model-selector.vue'
 	import UserSourceChip from './user-source-chip.vue'
 	import UserThinkingOrb from './user-thinking-orb.vue'
+	// #ifndef APP-PLUS
 	import UserVoiceWaveform from './user-voice-waveform.vue'
+	// #endif
 	// #ifdef APP-PLUS
 	import UserAndroidChatImage from './user-android-chat-image.vue'
 	import UserAndroidChatVideo from './user-android-chat-video.vue'
 	import UserAndroidFileCard from './user-android-file-card.vue'
+	import UserVoiceWaveformAndroid from './user-voice-waveform-android.vue'
 	// #endif
 	import {
 		appendLocalMessage,
@@ -878,10 +977,8 @@
 	const TURN_WINDOW_SHIFT = 25
 	const TURN_WINDOW_EDGE_ENTER_PX = 96
 	const TURN_WINDOW_EDGE_RELEASE_PX = 180
+	const H5_TURN_FOLLOW_LATEST_PX = H5_FOLLOW_LATEST_MAX_DISTANCE
 	const TURN_FOLLOW_LATEST_PX = 320
-	// #ifdef APP-PLUS
-	const ANDROID_VOICE_WAVEFORM_VISUAL_GAIN = 1 / 3
-	// #endif
 	const VOICE_ACTIVE_STATES = Object.freeze([
 		'REQUESTING_PERMISSION',
 		'ISSUING_TICKET',
@@ -1013,19 +1110,24 @@
 			UserImageOutputCountDialog,
 			UserMarkdownMessage,
 			UserMediaUploadProgress,
+			UserModelProviderMark,
 			UserModelSelector,
 			UserSourceChip,
 			UserThinkingOrb,
+			// #ifndef APP-PLUS
 			UserVoiceWaveform,
+			// #endif
 			// #ifdef APP-PLUS
 			UserAndroidChatImage,
 			UserAndroidChatVideo,
-			UserAndroidFileCard
+			UserAndroidFileCard,
+			UserVoiceWaveformAndroid
 			// #endif
 		},
 		data() {
 			const initialWebSearchPreference =
 				defaultAiConversationWebSearchPreference(clientPlatform())
+			const initialWindowWidth = Number(uni.getSystemInfoSync().windowWidth || 0)
 			return {
 				...readAiConversationStore(),
 				draft: '',
@@ -1102,6 +1204,8 @@
 				androidScrollScheduled: false,
 				androidScrollTimer: null,
 				androidScrollReason: '',
+				generationSettingsOpen: false,
+				h5WindowWidth: initialWindowWidth,
 				historyResyncing: false,
 				modelsLoading: false,
 				turnNavigationDesktop: false,
@@ -1286,6 +1390,16 @@
 					this.androidSettingsSection('webSearch', '联网搜索', this.webSearchOptions,
 						this.selectedWebSearchModeIndex, '', !this.webSearchAvailable)
 				].filter(Boolean)
+			},
+			generationSettingsPresentation() {
+				return resolveH5GenerationSettingsPresentation(this.h5WindowWidth)
+			},
+			generationSettingsSummary() {
+				const model = this.selectedModel?.modelName || '选择模型'
+				if (this.videoGenerationAvailable) return `${model} · 视频设置`
+				if (this.imageGenerationAvailable) return `${model} · 图片设置`
+				const web = this.webSearchActive ? '联网' : '离线'
+				return `${model} · ${this.selectedReasoningEffortLabel} · ${web}`
 			},
 			multipleImageOutputsAvailable() {
 				return modelSupportsMultipleImageOutputs(this.selectedModel)
@@ -1559,13 +1673,8 @@
 					return
 				}
 				if (!Array.isArray(levels) || levels.length === 0) return
-				let visualLevels = levels.slice(0, 5)
-				// #ifdef APP-PLUS
-				visualLevels = visualLevels.map(level => (
-					Math.max(0, Math.min(1, Number(level) || 0))
-					* ANDROID_VOICE_WAVEFORM_VISUAL_GAIN
-				))
-				// #endif
+				const visualLevels = levels.slice(0, 5).map(level =>
+					Math.max(0, Math.min(1, Number(level) || 0)))
 				this.voiceWaveformSequence += 1
 				this.voiceWaveformPacket = Object.freeze({
 					epoch: voiceEpoch,
@@ -2051,6 +2160,7 @@
 			},
 			refreshTurnNavigationViewport(viewportWidth) {
 				const width = Number(viewportWidth ?? (uni.getSystemInfoSync().windowWidth || 0))
+				this.h5WindowWidth = width
 				const enabled = clientPlatform() === 'H5' && width >= 768
 				if (enabled === this.turnNavigationDesktop && (this.renderWindow.end || !this.messages.length)) return
 				this.turnNavigationDesktop = enabled
@@ -2221,7 +2331,9 @@
 			handleMessageScroll(event) {
 				const detail = event?.detail || {}
 				const root = this.turnScrollElement()
-				this.turnScrollTop = Number(detail.scrollTop ?? root?.scrollTop ?? 0)
+				const previousScrollTop = this.turnScrollTop
+				const nextScrollTop = Number(detail.scrollTop ?? root?.scrollTop ?? 0)
+				this.turnScrollTop = nextScrollTop
 				const androidViewportEstimate = this.androidClient
 					? (currentWindowHeight() || 0) * 0.55 : 0
 				this.turnViewportHeight = Number(
@@ -2234,8 +2346,18 @@
 				)
 				const scrollHeight = Number(detail.scrollHeight || root?.scrollHeight || 0)
 				const distanceToBottom = Math.max(0, scrollHeight - this.turnScrollTop - this.turnViewportHeight)
-				this.turnFollowLatest = !this.hasHiddenTurnsAfter
-					&& distanceToBottom <= TURN_FOLLOW_LATEST_PX
+				const followLatestThreshold = clientPlatform() === 'H5'
+					? H5_TURN_FOLLOW_LATEST_PX
+					: TURN_FOLLOW_LATEST_PX
+				this.turnFollowLatest = clientPlatform() === 'H5'
+					? resolveH5FollowLatest({
+						previousScrollTop,
+						nextScrollTop,
+						distanceToBottom,
+						hasHiddenTurnsAfter: this.hasHiddenTurnsAfter,
+						turnWindowMoving: this.turnWindowMoving
+					})
+					: !this.hasHiddenTurnsAfter && distanceToBottom <= followLatestThreshold
 				if (!this.turnNavigationDesktop || this.turnScrollFrame != null) return
 				// #ifdef H5
 				this.turnScrollFrame = requestAnimationFrame(() => {
@@ -2260,6 +2382,10 @@
 					}
 				})
 				// #endif
+			},
+			resumeFollowingLatest() {
+				this.turnFollowLatest = true
+				this.scrollBottom({ force: true, immediate: true, reason: 'return-latest' })
 			},
 			updateActiveTurnFromScroll() {
 				// #ifdef H5
@@ -2700,6 +2826,10 @@
 			},
 			async send() {
 				if (!this.canSend || this.generating) return
+				// #ifdef H5
+				this.turnFollowLatest = true
+				this.generationSettingsOpen = false
+				// #endif
 				this.composerError = ''
 				const selectedAttachments = [...this.pendingAttachments]
 				const attachmentRefs = selectedAttachments.map(file => file.uploaded)
@@ -3441,7 +3571,7 @@
 					this.lifecycleDiagnostics?.finish?.('CANCEL'))
 			},
 			scrollBottom({ force = false, immediate = force, reason = 'content' } = {}) {
-				if (this.turnNavigationDesktop && !force && !this.turnFollowLatest) return
+				if (clientPlatform() === 'H5' && !force && !this.turnFollowLatest) return
 				if (this.turnNavigationDesktop) {
 					this.renderWindow = createInitialTurnWindow(this.messages.length, TURN_WINDOW_SIZE)
 				}
@@ -3501,6 +3631,51 @@
 				const url = String(attachment?.url || '')
 				if (!/^https:\/\//i.test(url)) return
 				uni.previewImage({ current: url, urls: [url] })
+			},
+			toggleGenerationSettings() {
+				if (this.androidClient) return
+				if (this.generationSettingsOpen) {
+					this.closeGenerationSettings()
+					return
+				}
+				this.generationSettingsOpen = true
+				this.$nextTick(() => {
+					const panel = this.$refs.generationSettingsPanel
+					const element = panel?.$el || panel
+					element?.focus?.({ preventScroll: true })
+				})
+			},
+			closeGenerationSettings() {
+				if (!this.generationSettingsOpen) return
+				this.generationSettingsOpen = false
+				this.$nextTick(() => {
+					const trigger = this.$refs.generationSettingsTrigger
+					const element = trigger?.$el || trigger
+					element?.focus?.({ preventScroll: true })
+				})
+			},
+			trapGenerationSettingsFocus(event) {
+				// #ifdef H5
+				const panel = this.$refs.generationSettingsPanel?.$el
+					|| this.$refs.generationSettingsPanel
+				const focusable = Array.from(panel?.querySelectorAll?.(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				) || [])
+				if (!focusable.length) {
+					event.preventDefault()
+					panel?.focus?.()
+					return
+				}
+				const first = focusable[0]
+				const last = focusable[focusable.length - 1]
+				if (event.shiftKey && document.activeElement === first) {
+					event.preventDefault()
+					last.focus()
+				} else if (!event.shiftKey && document.activeElement === last) {
+					event.preventDefault()
+					first.focus()
+				}
+				// #endif
 			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
@@ -4067,24 +4242,29 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker, .generation-settings-trigger, .generation-settings-close, .return-latest, .chat-header-action { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; background: #0b0d0c; box-sizing: border-box; }
+	.chat-main:not(.is-android-client) { padding-bottom: 0; }
 	.chat-header { max-width: 100%; min-width: 0; min-height: 64px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; gap: 12px; border-bottom: 1px solid rgba(151, 170, 160, .18); background: rgba(11, 13, 12, .9); backdrop-filter: blur(14px) saturate(112%); box-sizing: border-box; }
+	.chat-header-leading { width: 44px; height: 44px; flex: 0 0 44px; }
+	.chat-header-action { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border-radius: 12px; }
+	.chat-header-action:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
+	.chat-header-action:active { transform: scale(.97); }
 	.chat-header-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: center; }
 	.chat-header-balance { width: 48px; height: 48px; flex: 0 0 48px; }
 	.chat-header-title { max-width: 100%; overflow: hidden; font-size: 15px; font-weight: 720; letter-spacing: -.1px; text-overflow: ellipsis; white-space: nowrap; }
 	.chat-header-subtitle { margin-top: 2px; color: #a0aaa5; font-size: 12px; }
 	.message-stage { min-width: 0; min-height: 0; position: relative; overflow: hidden; }
 	.message-scroll { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; overflow-x: hidden; }
-	.message-shell { width: min(100%, 800px); min-height: 100%; margin: 0 auto; padding: 32px 16px 24px; box-sizing: border-box; }
+	.message-shell { width: min(100%, 880px); min-height: 100%; margin: 0 auto; padding: 32px clamp(16px, 3vw, 32px) 32px; box-sizing: border-box; }
 	.chat-empty { min-height: min(52vh, 520px); padding-bottom: 5vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 	.chat-empty-mark { width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(55, 211, 154, .34); border-radius: 16px; background: rgba(55, 211, 154, .1); color: #72e1b8; font-weight: 800; }
 	.chat-empty-title { margin-top: 20px; font-size: 26px; font-weight: 760; letter-spacing: -.45px; }
 	.chat-empty-copy { max-width: 440px; margin-top: 10px; color: #a0aaa5; font-size: 15px; line-height: 1.65; }
 	.message-turn { margin-bottom: 32px; }
-	.message-block { max-width: 76%; padding: 12px 14px; border-radius: 14px; box-sizing: border-box; }
+	.message-block { max-width: 78%; padding: 12px 14px; border-radius: 14px; box-sizing: border-box; }
 	.user-message { margin-left: auto; background: #1a1e1b; border: 1px solid rgba(151, 170, 160, .2); }
 	.assistant-message { width: 100%; max-width: 100%; min-width: 0; margin-top: 14px; padding-left: 0; background: transparent; }
 	.assistant-label { gap: 8px; margin-bottom: 10px; color: #37d39a; font-size: 12px; font-weight: 800; letter-spacing: .55px; }
@@ -4142,14 +4322,18 @@
 	.video-download-button:disabled { cursor: wait; opacity: .62; }
 	.video-download-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
 	.message-bottom { height: 1px; }
-	.composer-wrap { width: min(100%, 800px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px 16px calc(12px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+	.return-latest { min-height: 44px; position: absolute; right: clamp(16px, 3vw, 32px); bottom: 12px; z-index: 8; margin: 0; padding: 0 13px; display: flex; align-items: center; gap: 7px; border-radius: 999px; color: #dff8ed; font-size: 12px; font-weight: 680; box-shadow: 0 10px 30px rgba(0, 0, 0, .28); }
+	.return-latest:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
+	.return-latest:active { transform: scale(.97); }
+	.composer-wrap { width: min(100%, 960px); max-width: 100%; min-width: 0; margin: 0 auto; padding: 8px clamp(16px, 3vw, 32px) calc(12px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.composer { min-height: 64px; padding: 8px; display: flex; align-items: flex-end; gap: 8px; border: 1px solid rgba(151, 170, 160, .28); border-radius: 16px; background: rgba(26, 30, 27, .9); box-shadow: inset 0 1px rgba(255, 255, 255, .04); backdrop-filter: blur(16px) saturate(112%); }
 	.composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button { width: 46px; height: 46px; min-height: 46px; margin: 0; padding: 0; flex-shrink: 0; border-radius: 14px; }
-	.composer-entry { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
+	.composer-entry { min-width: 0; position: relative; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
 	.voice-transcript-row { min-width: 0; min-height: 48px; display: flex; align-items: center; gap: 12px; overflow: visible; }
 	.voice-transcript-row .user-thinking-orb { width: 40px; min-width: 40px; height: 40px; min-height: 40px; margin: 0; flex: 0 0 40px; }
 	.voice-transcript-row .composer-input { width: auto; min-width: 0; flex: 1; }
 	.composer-input { width: 100%; min-height: 46px; max-height: 160px; padding: 11px 6px; color: #f3f5f4; font-size: 16px; line-height: 1.5; box-sizing: border-box; }
+	.chat-main:not(.is-android-client) .composer-input { overflow-y: auto; }
 	.composer-input:disabled { opacity: 1; -webkit-text-fill-color: #f3f5f4; }
 	.voice-button { border-color: rgba(111, 133, 122, .62); background: rgba(25, 31, 28, .9); }
 	.voice-button:focus-visible, .voice-cancel-button:focus-visible, .voice-commit-button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
@@ -4169,7 +4353,37 @@
 	.stop-button { background: rgba(55, 211, 154, .18); }
 	.stop-square { width: 14px; height: 14px; border-radius: 3px; background: #75dfb7; }
 	.composer-meta { justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; padding: 0 2px; }
-	.composer-controls { min-width: 0; flex-wrap: wrap; gap: 6px; }
+	.composer-controls { min-width: 0; position: relative; flex-wrap: wrap; gap: 6px; }
+	.generation-settings-trigger { min-width: 0; min-height: 44px; margin: 0; padding: 0 11px; display: flex; align-items: center; gap: 7px; border-radius: 12px; color: #c7d2cc; font-size: 12px; line-height: 1.2; }
+	.generation-settings-trigger text { max-width: min(58vw, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.generation-settings-trigger:focus-visible, .generation-settings-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
+	.generation-settings-trigger:active, .generation-settings-close:active { transform: scale(.97); }
+	.generation-settings-backdrop { position: fixed; inset: 0; z-index: 79; background: transparent; }
+	.generation-settings-panel { width: min(420px, calc(100vw - 32px)); max-height: min(72dvh, 620px); position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 80; overflow: hidden; border: 1px solid rgba(151, 177, 163, .24); border-radius: 18px; background: rgba(20, 25, 22, .97); box-shadow: 0 24px 70px rgba(0, 0, 0, .42); transform-origin: left bottom; }
+	.generation-settings-heading { min-height: 68px; padding: 12px 12px 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(151, 177, 163, .16); }
+	.generation-settings-title, .generation-settings-caption { display: block; }
+	.generation-settings-title { color: #f3f5f4; font-size: 16px; font-weight: 740; line-height: 1.3; }
+	.generation-settings-caption { margin-top: 3px; color: #98a39d; font-size: 11px; line-height: 1.4; }
+	.generation-settings-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border-radius: 12px; }
+	.generation-settings-scroll { max-height: calc(min(72dvh, 620px) - 68px); }
+	.generation-settings-fields { min-width: 0; padding: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; }
+	.generation-settings-fields .model-picker-control, .generation-settings-fields .context-usage { width: 100%; }
+	.generation-settings-fields .image-count-picker,
+	.generation-settings-fields .reasoning-effort-picker,
+	.generation-settings-fields .image-aspect-picker,
+	.generation-settings-fields .video-option-picker,
+	.generation-settings-fields .web-search-toggle,
+	.generation-settings-fields .motion-toggle { min-height: 44px; }
+	.generation-settings-backdrop-motion-enter-active { transition: opacity 220ms ease-out; }
+	.generation-settings-backdrop-motion-leave-active { transition: opacity 180ms ease-in; }
+	.generation-settings-backdrop-motion-enter,
+	.generation-settings-backdrop-motion-enter-from,
+	.generation-settings-backdrop-motion-leave-to { opacity: 0; }
+	.generation-settings-surface-motion-enter-active { transition: opacity 230ms ease-out, transform 230ms cubic-bezier(.2, .8, .2, 1); }
+	.generation-settings-surface-motion-leave-active { transition: opacity 190ms ease-in, transform 190ms cubic-bezier(.4, 0, 1, 1); }
+	.generation-settings-surface-motion-enter,
+	.generation-settings-surface-motion-enter-from,
+	.generation-settings-surface-motion-leave-to { opacity: 0; transform: translateY(8px) scale(.985); }
 	.model-picker-control { min-width: 0; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4221,9 +4435,7 @@
 	.is-android-client .chat-header { min-height: 52px; padding: max(4px, env(safe-area-inset-top)) 12px 4px; gap: 6px; }
 	.is-android-client .chat-header-title { font-size: 16px; }
 	.is-android-client .chat-header-subtitle { margin-top: 0; font-size: 11px; }
-	.is-android-client .icon-button { width: 44px; height: 44px; min-height: 44px; position: relative; flex: 0 0 44px; border: 0; background: transparent; }
-	.is-android-client .icon-button::before { width: 32px; height: 32px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(151, 170, 160, .22); border-radius: 10px; background: rgba(243, 245, 244, .045); content: ''; }
-	.is-android-client .icon-button > * { position: relative; z-index: 1; }
+	.is-android-client .icon-button { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; }
 	.is-android-client .composer-wrap { padding: 6px 12px calc(8px + env(safe-area-inset-bottom)); }
 	.is-android-client .composer:not(.is-voice-active) { min-height: 76px; padding: 4px 5px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: minmax(28px, auto) 44px; align-items: center; column-gap: 3px; row-gap: 0; border-radius: 16px; }
 	.is-android-client .composer:not(.is-voice-active) .composer-entry { grid-column: 1 / -1; grid-row: 1; align-self: stretch; }
@@ -4235,23 +4447,15 @@
 	.is-android-client .composer:not(.is-voice-active) .send-button { grid-column: 4; grid-row: 2; }
 	.is-android-client .composer-icon,
 	.is-android-client .voice-button,
-	.is-android-client .send-button { width: 44px; height: 44px; min-height: 44px; position: relative; margin: 0; padding: 0; border: 0; border-radius: 12px; background: transparent; }
+	.is-android-client .send-button { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; }
 	.is-android-client .voice-cancel-button,
-	.is-android-client .voice-commit-button { width: 48px; height: 48px; min-height: 48px; }
-	.is-android-client .composer:not(.is-voice-active) .composer-icon::before,
-	.is-android-client .composer:not(.is-voice-active) .voice-button::before,
-	.is-android-client .composer:not(.is-voice-active) .send-button::before { width: 34px; height: 34px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(111, 133, 122, .5); border-radius: 11px; background: rgba(25, 31, 28, .92); content: ''; box-sizing: border-box; }
-	.is-android-client .composer:not(.is-voice-active) .send-button::before { border-color: #37d39a; background: #37d39a; }
-	.is-android-client .composer:not(.is-voice-active) .stop-button::before { border-color: rgba(55, 211, 154, .46); background: rgba(55, 211, 154, .16); }
-	.is-android-client .composer:not(.is-voice-active) .composer-icon > *,
-	.is-android-client .composer:not(.is-voice-active) .voice-button > *,
-	.is-android-client .composer:not(.is-voice-active) .send-button > * { position: relative; z-index: 1; }
-	.android-settings-trigger { min-width: 0; min-height: 44px; margin: 0; padding: 0 8px; position: relative; display: flex; flex: 1; align-items: center; justify-content: flex-start; gap: 4px; overflow: hidden; border: 0; border-radius: 11px; background: transparent; color: #b9c5bf; font-size: 11px; line-height: 1.2; box-sizing: border-box; }
-	.android-settings-trigger::before { height: 34px; position: absolute; inset: 0; margin: auto 0; border: 1px solid rgba(113, 151, 134, .3); border-radius: 10px; background: rgba(20, 29, 25, .72); content: ''; }
-	.android-settings-trigger::after { border: 0; }
-	.android-settings-trigger > * { position: relative; z-index: 1; }
+	.is-android-client .voice-commit-button { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; }
+	.is-android-client .voice-cancel-button:not(:disabled):active,
+	.is-android-client .voice-commit-button:not(:disabled):active { transform: none; }
+	.is-android-client .voice-cancel-button:disabled,
+	.is-android-client .voice-commit-button:disabled { opacity: .42; }
+	.android-settings-trigger { @include user-android-compact-control(100%, 34px, 10px); min-width: 0; min-height: 44px; margin: 0; padding: 0 8px; flex: 1; justify-content: flex-start; gap: 5px; overflow: hidden; color: #b9c5bf; font-size: 11px; line-height: 1.2; }
 	.android-settings-trigger text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.android-settings-trigger:disabled { opacity: .48; }
 	@media screen and (orientation: landscape) and (max-height: 520px) {
 		.is-android-client .chat-header-subtitle { display: none; }
 		.is-android-client .chat-header { min-height: 48px; }
@@ -4285,6 +4489,15 @@
 		.generated-image-gallery.is-hero-two .generated-image-gallery-tile, .generated-image-gallery.is-hero-three .generated-image-gallery-tile { aspect-ratio: auto; }
 		.generated-image-gallery.is-hero-two .generated-image-gallery-tile.is-hero, .generated-image-gallery.is-hero-three .generated-image-gallery-tile.is-hero { grid-column: 1; grid-row: 1 / -1; }
 	}
+	@media screen and (max-width: 767px) {
+		.generation-settings-backdrop { background: rgba(0, 0, 0, .58); }
+		.generation-settings-panel.is-sheet { width: 100%; max-height: min(82dvh, 680px); position: fixed; right: 0; bottom: 0; left: 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 22px 22px 0 0; transform-origin: center bottom; }
+		.generation-settings-panel.is-sheet .generation-settings-scroll { max-height: calc(min(82dvh, 680px) - 68px - env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
+		.generation-settings-surface-motion-enter.is-sheet,
+		.generation-settings-surface-motion-enter-from.is-sheet,
+		.generation-settings-surface-motion-leave-to.is-sheet { transform: translateY(24px); }
+		.chat-main:not(.is-android-client) .composer-note { display: none; }
+	}
 	@media screen and (min-width: 1024px) {
 		.message-shell { padding: 38px 28px 28px; }
 		.composer-wrap { padding-bottom: 18px; }
@@ -4301,7 +4514,15 @@
 		.composer-note { padding-left: 10px; text-align: left; }
 	}
 	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-		.chat-header { background: #0b0d0c; backdrop-filter: none; -webkit-backdrop-filter: none; }
-		.composer { background: #1a1e1b; backdrop-filter: none; -webkit-backdrop-filter: none; }
+		.chat-main:not(.is-android-client) .chat-header { background: #0b0d0c; backdrop-filter: none; -webkit-backdrop-filter: none; }
+		.chat-main:not(.is-android-client) .composer { background: #1a1e1b; backdrop-filter: none; -webkit-backdrop-filter: none; }
+		.generation-settings-panel { background: #141916; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.generation-settings-backdrop-motion-enter-active,
+		.generation-settings-backdrop-motion-leave-active,
+		.generation-settings-surface-motion-enter-active,
+		.generation-settings-surface-motion-leave-active { transition: none; }
+		.return-latest:active, .generation-settings-trigger:active, .generation-settings-close:active { transform: none; }
 	}
 </style>

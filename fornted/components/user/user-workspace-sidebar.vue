@@ -81,7 +81,7 @@
 				<uni-icons type="right" size="16" color="#718078" aria-hidden="true" />
 			</button>
 			<button class="workspace-new-chat" type="button" @click="startDrawerNewChat">
-				<uni-icons type="compose" size="20" color="#37d39a" aria-hidden="true" />
+				<uni-icons type="compose" size="18" color="#37d39a" aria-hidden="true" />
 				<text>新聊天</text>
 			</button>
 			<user-primary-navigation
@@ -92,6 +92,7 @@
 			/>
 			<user-recent-conversations
 				content-id="workspace-mobile-recent"
+				:compact="androidClient"
 				:expanded="recentExpanded"
 				:conversations="conversations"
 				:current-conversation-public-id="currentConversationPublicId"
@@ -230,14 +231,14 @@
 
 	.workspace-drawer-account {
 		width: 100%;
-		min-height: 58px;
-		margin: 2px 0 10px;
-		padding: 8px;
+		min-height: 50px;
+		margin: 0 0 6px;
+		padding: 6px;
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		gap: 8px;
 		border: 0;
-		border-radius: 12px;
+		border-radius: 10px;
 		background: rgba(243, 245, 244, .035);
 		color: #eef4f1;
 		text-align: left;
@@ -246,29 +247,30 @@
 
 	.workspace-drawer-account::after { border: 0; }
 	.workspace-drawer-avatar {
-		width: 36px;
-		height: 36px;
-		flex: 0 0 36px;
+		width: 32px;
+		height: 32px;
+		flex: 0 0 32px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		overflow: hidden;
-		border-radius: 12px;
+		border-radius: 10px;
 		background: #37d39a;
 		color: #08130e;
-		font-size: 15px;
+		font-size: 13px;
 		font-weight: 800;
 	}
 	.workspace-drawer-avatar.is-image { display: block; background: #202520; }
 	.workspace-drawer-account-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-	.workspace-drawer-account-name { overflow: hidden; font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
-	.workspace-drawer-account-hint { margin-top: 2px; color: #89948e; font-size: 11px; }
+	.workspace-drawer-account-name { overflow: hidden; font-size: 13px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+	.workspace-drawer-account-hint { margin-top: 1px; color: #89948e; font-size: 10px; }
 
 	.workspace-new-chat::after,
 	.workspace-icon-button::after {
 		border: 0;
 	}
 
+	.workspace-drawer-account:focus-visible,
 	.workspace-new-chat:focus-visible,
 	.workspace-icon-button:focus-visible {
 		outline: 2px solid rgba(55, 211, 154, .42);
@@ -293,11 +295,22 @@
 
 	.workspace-history-drawer.is-android-drawer {
 		width: min(70vw, 288px);
-		padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+		padding: max(8px, env(safe-area-inset-top)) 8px calc(12px + env(safe-area-inset-bottom));
 	}
-	.is-android-drawer .workspace-icon-button { width: 44px; height: 44px; min-height: 44px; position: relative; border: 0; background: transparent; }
-	.is-android-drawer .workspace-icon-button::before { width: 32px; height: 32px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(151, 170, 160, .22); border-radius: 10px; background: rgba(243, 245, 244, .045); content: ''; }
-	.is-android-drawer .workspace-icon-button > * { position: relative; z-index: 1; }
+	.is-android-drawer .workspace-icon-button { @include user-android-compact-control(30px, 30px, 9px); width: 44px; height: 44px; min-height: 44px; }
+	.is-android-drawer .workspace-drawer-heading { min-height: 44px; padding: 0 2px; }
+	.is-android-drawer .workspace-drawer-title { font-size: 15px; }
+	.is-android-drawer .workspace-drawer-account:active,
+	.is-android-drawer .workspace-new-chat:active { background: rgba(243, 245, 244, .075); }
+	.is-android-drawer .workspace-new-chat {
+		width: 100%;
+		min-height: 44px;
+		margin: 0 0 4px;
+		padding: 6px 8px;
+		gap: 7px;
+		border-radius: 10px;
+		font-size: 13px;
+	}
 
 	.workspace-history-drawer.is-open {
 		transform: translateX(0);

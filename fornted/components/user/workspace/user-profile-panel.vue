@@ -468,7 +468,7 @@
 	.profile-page.is-android-client .profile-refresh { min-width: 64px; min-height: 44px; }
 
 	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
+	.workspace-panel-menu { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; }
 	.workspace-panel-menu::after { border: 0; }
 	.profile-heading { min-width: 0; display: flex; flex-direction: column; }
 	.profile-kicker { color: #37d39a; font-size: 13px; font-weight: 700; letter-spacing: 2px; }

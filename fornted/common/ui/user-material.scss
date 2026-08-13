@@ -66,6 +66,74 @@ $user-frosted-nav: rgba(14, 18, 16, .92);
 	}
 }
 
+@mixin user-android-compact-control($surface-width, $surface-height: $surface-width, $surface-radius: 11px) {
+	box-sizing: border-box;
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	text-align: center;
+	touch-action: manipulation;
+	transition: opacity 160ms ease-out;
+
+	&::before {
+		width: $surface-width;
+		height: $surface-height;
+		box-sizing: border-box;
+		position: absolute;
+		inset: 0;
+		margin: auto;
+		border: 1px solid $user-glass-border;
+		border-radius: $surface-radius;
+		background: $user-frosted-control;
+		box-shadow: inset 0 1px 0 $user-glass-highlight;
+		content: '';
+		pointer-events: none;
+		transition: transform 120ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out;
+	}
+
+	&::after {
+		border: 0;
+	}
+
+	& > * {
+		position: relative;
+		z-index: 1;
+	}
+
+	&:active:not([disabled])::before {
+		transform: scale(.96);
+	}
+
+	&[disabled] {
+		opacity: .58;
+	}
+
+	&:focus-visible {
+		outline: none;
+	}
+
+	&:focus-visible::before {
+		outline: 2px solid rgba(55, 211, 154, .72);
+		outline-offset: 1px;
+	}
+
+	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+		&::before {
+			background: #1c221e;
+			box-shadow: none;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		&::before { transition: background-color 120ms ease-out, border-color 120ms ease-out; }
+		&:active:not([disabled])::before { transform: none; }
+	}
+}
+
 @mixin user-frosted-navigation {
 	border-color: rgba(220, 245, 232, .13);
 	background: $user-frosted-nav;

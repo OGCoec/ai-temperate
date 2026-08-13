@@ -11,7 +11,10 @@ const FORBIDDEN_FILE_PATTERNS = [
 const FORBIDDEN_TEXT_PATTERNS = [
 	{ re: /\/@vite\/client|@vite\/client|__vite_ping|import\.meta\.hot/, label: 'Vite development module' },
 	{ re: /\/@fs\//, label: 'Vite file-system module' },
-	{ re: /\.vue(?:\?|['"])/, label: 'Vue source module' },
+	{
+		re: /(?:\.vue\?(?:vue&type=|[^'"\s]*)|['"`](?:\/|\.{1,2}\/|@\/|[A-Za-z]:[\\/])[^'"`\r\n]*\.vue(?:\?[^'"`\r\n]*)?['"`])/,
+		label: 'Vue source module'
+	},
 	{ re: /pages-json-js/, label: 'uni-app development route module' },
 	{
 		re: /https:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]):4174/i,

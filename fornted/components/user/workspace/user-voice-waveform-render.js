@@ -1,28 +1,32 @@
-const WAVEFORM_HEIGHT = 24
-const BAR_WIDTH = 2
-const BAR_GAP = 3
-const BAR_PITCH = BAR_WIDTH + BAR_GAP
-const MINIMUM_BAR_HEIGHT = 2
-const MAXIMUM_BAR_HEIGHT = 20
-const VISUAL_INTERVAL_MS = 300
-const MAXIMUM_QUEUE_LEVELS = 15
-const REDUCED_INTERVAL_MS = VISUAL_INTERVAL_MS
+import {
+	VOICE_WAVEFORM_INTERVAL_MS,
+	createVoiceWaveformTimeline
+} from '../../../common/voice/voice-waveform-timeline.js'
+import {
+	VOICE_WAVEFORM_BAR_PITCH,
+	VOICE_WAVEFORM_BAR_WIDTH,
+	VOICE_WAVEFORM_HEIGHT,
+	presentVoiceWaveformBar,
+	resolveVoiceWaveformCapacity
+} from '../../../common/voice/voice-waveform-presentation.js'
+
+const REDUCED_INTERVAL_MS = VOICE_WAVEFORM_INTERVAL_MS
 
 function clamp01(value) {
 	return Math.max(0, Math.min(1, Number(value) || 0))
 }
 
 function currentTimeMillis() {
-	return typeof performance !== 'undefined' && performance.now
+	return typeof performance !== 'undefined' && typeof performance.now === 'function'
 		? performance.now() : Date.now()
 }
 
 function isNativeCanvasCandidate(candidate) {
 	return Boolean(
 		candidate
+		&& String(candidate.tagName || '').toUpperCase() === 'CANVAS'
 		&& typeof candidate.getContext === 'function'
-		&& typeof candidate.width === 'number'
-		&& typeof candidate.height === 'number')
+		&& candidate.isConnected !== false)
 }
 
 function resolveNativeCanvas(root) {
@@ -32,11 +36,12 @@ function resolveNativeCanvas(root) {
 		canvasHost?.querySelector?.('canvas.uni-canvas-canvas'),
 		canvasHost?.querySelector?.('canvas'),
 		canvasHost,
-		root?.querySelector?.('canvas'),
-		root
+		root?.querySelector?.('canvas')
 	]
 	const canvas = candidates.find(isNativeCanvasCandidate) || null
-	return { canvasHost: canvasHost || canvas, canvas }
+	return isNativeCanvasCandidate(canvas)
+		? { canvasHost: canvasHost || canvas, canvas }
+		: { canvasHost: null, canvas: null }
 }
 
 function measuredWidth(root, canvasHost, canvas) {
@@ -45,7 +50,9 @@ function measuredWidth(root, canvasHost, canvas) {
 		Number(root?.getBoundingClientRect?.()?.width),
 		Number(canvasHost?.clientWidth),
 		Number(canvasHost?.getBoundingClientRect?.()?.width),
-		Number(canvas?.clientWidth)
+		Number(canvas?.offsetWidth),
+		Number(canvas?.clientWidth),
+		Number(canvas?.getBoundingClientRect?.()?.width)
 	]
 	return Math.max(0, candidates.find(value => Number.isFinite(value) && value > 0) || 0)
 }
@@ -54,152 +61,55 @@ export function resolveVoiceWaveformCanvasMetrics(width, dpr = 1) {
 	const cssWidth = Math.max(0, Math.floor(Number(width) || 0))
 	const numericDpr = Number(dpr)
 	const resolvedDpr = Number.isFinite(numericDpr)
-		? Math.max(1, Math.min(2, numericDpr)) : 1
+		? Math.max(1, numericDpr) : 1
 	return {
 		cssWidth,
-		cssHeight: WAVEFORM_HEIGHT,
+		cssHeight: VOICE_WAVEFORM_HEIGHT,
 		dpr: resolvedDpr,
-		pixelWidth: Math.round(cssWidth * resolvedDpr),
-		pixelHeight: Math.round(WAVEFORM_HEIGHT * resolvedDpr),
-		visibleBars: Math.max(1, Math.floor(cssWidth / BAR_PITCH))
+		pixelWidth: Math.floor(cssWidth * resolvedDpr),
+		pixelHeight: Math.floor(VOICE_WAVEFORM_HEIGHT * resolvedDpr),
+		visibleBars: resolveVoiceWaveformCapacity(cssWidth)
 	}
-}
-
-export function createVoiceWaveformRenderState(capacity = 1, sessionEpoch = -1) {
-	const normalizedCapacity = Math.max(1, Math.floor(Number(capacity) || 1))
-	return {
-		sessionEpoch: Number(sessionEpoch),
-		packetSequence: -1,
-		queue: [],
-		history: new Float32Array(normalizedCapacity),
-		historyStart: 0,
-		historyLength: 0,
-		currentLevel: 0,
-		nextAdvanceAt: null
-	}
-}
-
-export function voiceWaveformHistory(state) {
-	const values = []
-	for (let index = 0; index < state.historyLength; index += 1) {
-		values.push(state.history[(state.historyStart + index) % state.history.length])
-	}
-	return values
-}
-
-function setHistoryCapacity(state, capacity) {
-	const normalizedCapacity = Math.max(1, Math.floor(Number(capacity) || 1))
-	if (state.history.length === normalizedCapacity) return
-	const preserved = voiceWaveformHistory(state).slice(-normalizedCapacity)
-	state.history = new Float32Array(normalizedCapacity)
-	state.historyStart = 0
-	state.historyLength = preserved.length
-	state.history.set(preserved)
-}
-
-function appendHistory(state, level) {
-	const value = clamp01(level)
-	if (state.historyLength < state.history.length) {
-		state.history[(state.historyStart + state.historyLength) % state.history.length] = value
-		state.historyLength += 1
-	} else {
-		state.history[state.historyStart] = value
-		state.historyStart = (state.historyStart + 1) % state.history.length
-	}
-	state.currentLevel = value
-}
-
-export function resetVoiceWaveformRenderState(state, sessionEpoch, capacity = state.history.length) {
-	state.sessionEpoch = Number(sessionEpoch)
-	state.packetSequence = -1
-	state.queue.length = 0
-	state.history = new Float32Array(Math.max(1, Math.floor(Number(capacity) || 1)))
-	state.historyStart = 0
-	state.historyLength = 0
-	state.currentLevel = 0
-	state.nextAdvanceAt = null
-}
-
-export function acceptVoiceWaveformPacket(state, packet, sessionEpoch, nowMillis) {
-	if (!packet || Number(packet.epoch) !== Number(sessionEpoch)
-		|| Number(packet.epoch) !== Number(state.sessionEpoch)) return false
-	const sequence = Number(packet.sequence)
-	if (!Number.isSafeInteger(sequence) || sequence <= state.packetSequence
-		|| !Array.isArray(packet.levels)) return false
-	const levels = packet.levels.slice(0, 5).map(clamp01)
-	if (levels.length === 0) return false
-
-	state.packetSequence = sequence
-	state.queue.push(...levels)
-	if (state.queue.length > MAXIMUM_QUEUE_LEVELS) {
-		state.queue.splice(0, state.queue.length - MAXIMUM_QUEUE_LEVELS)
-	}
-	return true
-}
-
-export function aggregateVoiceWaveformLevels(levels) {
-	if (!Array.isArray(levels) || levels.length === 0) return 0
-	let squareSum = 0
-	for (const level of levels) {
-		const value = clamp01(level)
-		squareSum += value * value
-	}
-	return clamp01(Math.sqrt(squareSum / levels.length))
-}
-
-export function advanceVoiceWaveformState(state, voiceState, nowMillis, reduced = false) {
-	if (String(voiceState || '').toUpperCase() !== 'RECORDING') return false
-	const now = Number(nowMillis) || 0
-	if (state.nextAdvanceAt == null) {
-		state.nextAdvanceAt = now + VISUAL_INTERVAL_MS
-		return false
-	}
-	if (now < state.nextAdvanceAt) return false
-
-	// 每个可视柱只汇总最近 300ms 的 20ms 包络；页面卡顿后从当前时刻重新计时，禁止追赶绘制旧柱。
-	appendHistory(state, aggregateVoiceWaveformLevels(state.queue))
-	state.queue.length = 0
-	state.nextAdvanceAt = now + VISUAL_INTERVAL_MS
-	return true
-}
-
-function interpolatedColor(level) {
-	const value = clamp01(level)
-	if (value <= 0) return 'rgba(174,185,179,0.35)'
-	const stops = value < 0.62
-		? [[174, 185, 179], [117, 223, 183], value / 0.62]
-		: [[117, 223, 183], [55, 211, 154], (value - 0.62) / 0.38]
-	const factor = clamp01(stops[2])
-	const rgb = stops[0].map((channel, index) =>
-		Math.round(channel + (stops[1][index] - channel) * factor))
-	return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.45 + value * 0.55})`
 }
 
 export function drawVoiceWaveformFrame(context, {
 	width,
-	height = WAVEFORM_HEIGHT,
-	levels = []
+	height = VOICE_WAVEFORM_HEIGHT,
+	bars = [],
+	progress = 0,
+	pendingBarId = null
 }) {
 	if (!context) return
-	const visibleBars = Math.max(1, Math.floor((Number(width) || 0) / BAR_PITCH))
-	const centerY = (Number(height) || WAVEFORM_HEIGHT) / 2
-	const source = Array.isArray(levels) ? levels.slice(-visibleBars) : []
-	const firstSourceIndex = visibleBars - source.length
+	const cssWidth = Math.max(0, Number(width) || 0)
+	const cssHeight = Math.max(0, Number(height) || VOICE_WAVEFORM_HEIGHT)
+	const clipWidth = resolveVoiceWaveformCapacity(cssWidth) * VOICE_WAVEFORM_BAR_PITCH
+	const shift = clamp01(progress) * VOICE_WAVEFORM_BAR_PITCH
+	const centerY = cssHeight / 2
+	const source = Array.isArray(bars) ? bars : []
 
-	context.lineWidth = BAR_WIDTH
-	context.lineCap = 'round'
-	for (let index = 0; index < visibleBars; index += 1) {
-		const sourceIndex = index - firstSourceIndex
-		const level = sourceIndex >= 0 ? clamp01(source[sourceIndex]) : 0
-		const barHeight = MINIMUM_BAR_HEIGHT
-			+ (MAXIMUM_BAR_HEIGHT - MINIMUM_BAR_HEIGHT) * level
-		const x = index * BAR_PITCH + BAR_WIDTH / 2
-		context.strokeStyle = interpolatedColor(level)
+	context.save?.()
+	if (typeof context.rect === 'function' && typeof context.clip === 'function') {
 		context.beginPath()
-		context.moveTo(x, centerY - barHeight / 2)
-		context.lineTo(x, centerY + barHeight / 2)
+		context.rect(0, 0, clipWidth, cssHeight)
+		context.clip()
+	}
+	context.lineWidth = VOICE_WAVEFORM_BAR_WIDTH
+	context.lineCap = 'round'
+	for (let index = 0; index < source.length; index += 1) {
+		if (pendingBarId != null && source[index]?.id === pendingBarId) continue
+		const x = index * VOICE_WAVEFORM_BAR_PITCH
+			- shift
+			+ VOICE_WAVEFORM_BAR_WIDTH / 2
+		if (x + VOICE_WAVEFORM_BAR_WIDTH / 2 <= 0
+			|| x - VOICE_WAVEFORM_BAR_WIDTH / 2 >= clipWidth) continue
+		const presentation = presentVoiceWaveformBar(source[index])
+		context.strokeStyle = presentation.color
+		context.beginPath()
+		context.moveTo(x, centerY - presentation.height / 2)
+		context.lineTo(x, centerY + presentation.height / 2)
 		context.stroke()
 	}
+	context.restore?.()
 }
 
 export default {
@@ -211,7 +121,8 @@ export default {
 			context: null,
 			config: null,
 			dpr: 1,
-			renderState: createVoiceWaveformRenderState(),
+			timeline: createVoiceWaveformTimeline({ now: currentTimeMillis }),
+			timelineEpoch: -1,
 			raf: 0,
 			reducedTimer: 0,
 			running: false,
@@ -224,7 +135,7 @@ export default {
 	},
 	mounted(event, instance, ownerInstance) {
 		this.root = ownerInstance?.$el || instance?.$el || this.$el || null
-		this.connectCanvas()
+		if (this.connectCanvas() && this.config) this.restart()
 	},
 	beforeUnmount() {
 		this.teardown()
@@ -238,50 +149,39 @@ export default {
 			const previous = this.config
 			this.config = value || null
 			const epoch = Number(this.config?.sessionEpoch)
-			const epochChanged = epoch !== Number(this.renderState.sessionEpoch)
+			const recording = this.config?.state === 'RECORDING'
+			const epochChanged = epoch !== Number(this.timelineEpoch)
 			const stateChanged = this.config?.state !== previous?.state
 			const reducedChanged = Boolean(this.config?.reduced) !== Boolean(previous?.reduced)
-			if (epochChanged) {
-				resetVoiceWaveformRenderState(
-					this.renderState,
-					epoch,
-					this.renderState.history.length)
+
+			if (recording && (epochChanged || previous?.state !== 'RECORDING')) {
+				this.timelineEpoch = epoch
+				this.timeline.start(epoch)
+			} else if (['FINALIZING', 'IDLE', 'ERROR'].includes(this.config?.state)) {
+				this.timelineEpoch = epoch
+				this.timeline.reset(epoch)
 			}
-			if (stateChanged && this.config?.state === 'RECORDING') {
-				this.renderState.nextAdvanceAt = currentTimeMillis() + VISUAL_INTERVAL_MS
-			}
-			if (['FINALIZING', 'IDLE', 'ERROR'].includes(this.config?.state)) {
-				resetVoiceWaveformRenderState(
-					this.renderState,
-					epoch,
-					this.renderState.history.length)
-			}
-			if (this.config?.state === 'RECORDING') {
-				acceptVoiceWaveformPacket(
-					this.renderState,
-					this.config?.packet,
-					epoch,
-					currentTimeMillis())
-			}
+			if (recording) this.timeline.accept(this.config?.packet)
+
 			this.connectCanvas()
 			if (epochChanged || stateChanged || reducedChanged
 				|| (!this.running && !this.reducedTimer)) this.restart()
 		},
+
 		connectCanvas() {
-			if (!this.root) return
+			if (!this.root) return false
 			const { canvasHost, canvas } = resolveNativeCanvas(this.root)
-			if (!canvas) return
+			if (!canvas) return false
 			this.canvasHost = canvasHost || canvas
-			if (canvas === this.canvas && this.context) {
-				this.context.__hidpi__ = false
-				return
-			}
+			if (canvas === this.canvas && this.context) return true
+
+			this.stop()
+			this.observer?.disconnect?.()
 			this.canvas = canvas
 			this.context = canvas.getContext?.('2d') || null
-			if (this.context) this.context.__hidpi__ = false
-			this.dpr = Math.max(1, Math.min(2, Number(globalThis.devicePixelRatio) || 1))
+			this.dpr = Math.max(1, Number(globalThis.devicePixelRatio) || 1)
+			if (!this.context) return false
 
-			this.observer?.disconnect?.()
 			if (typeof IntersectionObserver !== 'undefined') {
 				this.observer = new IntersectionObserver(entries => {
 					this.visible = Boolean(entries[0]?.isIntersecting)
@@ -303,10 +203,12 @@ export default {
 				}
 				document.addEventListener('visibilitychange', this.onVisibilityChange)
 			}
+			return Boolean(this.context)
 		},
+
 		configureCanvas() {
 			if (!isNativeCanvasCandidate(this.canvas) || !this.context) return null
-			// 先完成所有尺寸读取，再统一写入 Canvas，避免动画帧内读写交错触发同步布局。
+			// 先完成尺寸读取再统一写入，避免动画帧内交错读取和写入布局。
 			const width = measuredWidth(this.root, this.canvasHost, this.canvas)
 			if (!(width > 0)) return null
 			const metrics = resolveVoiceWaveformCanvasMetrics(
@@ -316,45 +218,59 @@ export default {
 			if (this.canvas.width !== metrics.pixelWidth) this.canvas.width = metrics.pixelWidth
 			if (this.canvas.height !== metrics.pixelHeight) this.canvas.height = metrics.pixelHeight
 			if (this.canvas.style) {
-				this.canvas.style.width = `${metrics.cssWidth}px`
-				this.canvas.style.height = `${metrics.cssHeight}px`
-				this.canvas.style.display = 'block'
+				const cssWidth = `${metrics.cssWidth}px`
+				const cssHeight = `${metrics.cssHeight}px`
+				if (this.canvas.style.width !== cssWidth) this.canvas.style.width = cssWidth
+				if (this.canvas.style.height !== cssHeight) this.canvas.style.height = cssHeight
+				if (this.canvas.style.display !== 'block') this.canvas.style.display = 'block'
 			}
 			if (this.canvasHost?.style) {
-				this.canvasHost.style.height = `${metrics.cssHeight}px`
-				this.canvasHost.style.minHeight = `${metrics.cssHeight}px`
+				const cssHeight = `${metrics.cssHeight}px`
+				if (this.canvasHost.style.height !== cssHeight) {
+					this.canvasHost.style.height = cssHeight
+				}
+				if (this.canvasHost.style.minHeight !== cssHeight) {
+					this.canvasHost.style.minHeight = cssHeight
+				}
 			}
 			this.context = this.canvas.getContext?.('2d') || this.context
 			if (!this.context) return null
-			this.context.__hidpi__ = false
-			setHistoryCapacity(this.renderState, metrics.visibleBars)
+			this.timeline.setCapacity(metrics.visibleBars)
 			return metrics
 		},
+
 		draw(nowMillis = currentTimeMillis()) {
 			try {
-				if (!this.config) return
+				if (!this.config) return false
 				if (!isNativeCanvasCandidate(this.canvas) || !this.context
 					|| this.canvas?.isConnected === false) this.connectCanvas()
 				const metrics = this.configureCanvas()
-				if (!metrics || !this.context) return
-				advanceVoiceWaveformState(
-					this.renderState,
-					this.config.state,
-					nowMillis,
-					Boolean(this.config.reduced))
+				if (!metrics || !this.context) return false
+				if (this.config.state === 'RECORDING') this.timeline.advance(nowMillis)
+				const snapshot = this.timeline.snapshot(nowMillis)
+				const pendingBarId = this.config.reduced
+					? null
+					: snapshot.movingBars[snapshot.movingBars.length - 1]?.id
+
 				this.context.setTransform(1, 0, 0, 1, 0, 0)
 				this.context.clearRect(0, 0, metrics.pixelWidth, metrics.pixelHeight)
 				this.context.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0)
 				drawVoiceWaveformFrame(this.context, {
 					width: metrics.cssWidth,
 					height: metrics.cssHeight,
-					levels: voiceWaveformHistory(this.renderState)
+					bars: this.config.reduced
+						? snapshot.settledBars : snapshot.movingBars,
+					progress: this.config.reduced ? 0 : snapshot.progress,
+					pendingBarId
 				})
+				return true
 			} catch (_) {
-				// Canvas 只是反馈层，绘制失败时保留录音、传输和转写主流程。
+				// 可视反馈失败时仅停止自身调度，录音、发送和转写主链路继续运行。
 				this.stop()
+				return false
 			}
 		},
+
 		restart() {
 			this.stop()
 			if (!this.config || this.hidden || !this.visible) return
@@ -376,17 +292,16 @@ export default {
 			}
 			this.raf = requestAnimationFrame(loop)
 		},
+
 		scheduleReduced() {
 			if (this.reducedTimer || this.hidden || !this.visible) return
 			this.reducedTimer = setTimeout(() => {
 				this.reducedTimer = 0
-				const now = currentTimeMillis()
-				this.draw(now)
-				if (this.config?.state === 'RECORDING') {
-					this.scheduleReduced()
-				}
+				this.draw(currentTimeMillis())
+				if (this.config?.state === 'RECORDING') this.scheduleReduced()
 			}, REDUCED_INTERVAL_MS)
 		},
+
 		stop() {
 			this.running = false
 			if (this.raf) cancelAnimationFrame(this.raf)
@@ -394,8 +309,10 @@ export default {
 			this.raf = 0
 			this.reducedTimer = 0
 		},
+
 		teardown() {
 			this.stop()
+			this.timeline.dispose()
 			this.observer?.disconnect?.()
 			this.resizeObserver?.disconnect?.()
 			if (this.onVisibilityChange && typeof document !== 'undefined') {

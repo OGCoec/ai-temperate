@@ -1,5 +1,40 @@
 <template>
-	<view class="user-workspace">
+	<view class="user-workspace" :class="workspaceClass" :style="workspaceStyle">
+		<!-- #ifdef H5 -->
+		<user-h5-workspace-sidebar
+			:active-destination="activeDestination"
+			:recent-expanded="recentExpanded"
+			:open="sidebarOpen"
+			:mode="sidebarMode"
+			:conversations="conversations"
+			:current-conversation-public-id="currentConversationPublicId || ''"
+			:conversations-loaded="conversationsLoaded"
+			:conversation-loading="conversationLoading"
+			:conversation-error="conversationError"
+			:has-more-conversations="hasMoreConversations"
+			@destination-click="selectDestination"
+			@new-chat="startNewChat"
+			@toggle-recent="toggleRecentConversations"
+			@open-conversation="openConversation"
+			@copy-conversation="copyConversationId"
+			@retry-conversations="refreshConversations"
+			@load-more-conversations="loadMoreConversations"
+			@close="closeSidebar"
+		/>
+		<button
+			v-if="!sidebarOpen"
+			ref="sidebarToggle"
+			class="workspace-sidebar-toggle"
+			type="button"
+			aria-label="打开会话边栏"
+			aria-controls="workspace-conversation-sidebar"
+			:aria-expanded="String(sidebarOpen)"
+			@click="toggleSidebar"
+		>
+			<uni-icons type="bars" size="21" color="#dce5e0" aria-hidden="true" />
+		</button>
+		<!-- #endif -->
+		<!-- #ifndef H5 -->
 		<user-workspace-sidebar
 			:active-destination="activeDestination"
 			:recent-expanded="recentExpanded"
@@ -19,6 +54,7 @@
 			@load-more-conversations="loadMoreConversations"
 			@close-drawer="drawerOpen = false"
 		/>
+		<!-- #endif -->
 
 		<view class="user-workspace-content">
 			<user-chat-panel
@@ -27,6 +63,7 @@
 				v-show="activeDestination === 'chat'"
 				@open-conversation-drawer="openConversationDrawer"
 				@new-chat="startNewChat"
+				@open-account="selectDestination('profile')"
 				@conversation-state-change="applyConversationState"
 				@conversation-completed="refreshConversations"
 			/>
@@ -59,16 +96,22 @@
 		setConversationLoading,
 		setConversationPage
 	} from '@/common/aichat/ai-conversation-store.js'
+	import {
+		defaultH5SidebarOpen,
+		resolveH5SidebarOpen,
+		resolveH5SidebarMode,
+		resolveH5SidebarWidth
+	} from '@/common/ui/h5-workspace-layout.js'
+	import UserH5WorkspaceSidebar from './user-h5-workspace-sidebar.vue'
 	import UserWorkspaceSidebar from './user-workspace-sidebar.vue'
 	import UserChatPanel from './workspace/user-chat-panel.vue'
 	import UserModelPanel from './workspace/user-model-panel.vue'
 	import UserProfilePanel from './workspace/user-profile-panel.vue'
 
 	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile'])
-	const DESKTOP_SIDEBAR_MIN_WIDTH = 768
-
 	export default {
 		components: {
+			UserH5WorkspaceSidebar,
 			UserWorkspaceSidebar,
 			UserChatPanel,
 			UserModelPanel,
@@ -93,6 +136,11 @@
 			const activeDestination = DESTINATIONS.includes(this.initialDestination)
 				? this.initialDestination
 				: 'chat'
+			const initialWindowWidth = Number(uni.getSystemInfoSync().windowWidth || 0)
+			let recentExpanded = false
+			// #ifdef H5
+			recentExpanded = true
+			// #endif
 			return {
 				...readAiConversationStore(),
 				activeDestination,
@@ -101,9 +149,33 @@
 					models: activeDestination === 'models',
 					profile: activeDestination === 'profile'
 				},
-				recentExpanded: false,
+				recentExpanded,
 				drawerOpen: false,
+				sidebarOpen: defaultH5SidebarOpen(initialWindowWidth),
+				sidebarMode: resolveH5SidebarMode(initialWindowWidth),
+				sidebarWidth: resolveH5SidebarWidth(initialWindowWidth),
+				sidebarPreferenceTouched: false,
+				workspaceResizeListener: null,
 				activeModelPublicId: String(this.initialModelPublicId || '').trim()
+			}
+		},
+		computed: {
+			workspaceClass() {
+				// #ifdef H5
+				return {
+					'is-h5-workspace': true,
+					'is-sidebar-open': this.sidebarOpen,
+					'is-sidebar-overlay': this.sidebarMode === 'overlay',
+					'is-sidebar-push': this.sidebarMode === 'push'
+				}
+				// #endif
+				return {}
+			},
+			workspaceStyle() {
+				// #ifdef H5
+				return { '--workspace-sidebar-width': `${this.sidebarWidth}px` }
+				// #endif
+				return null
 			}
 		},
 		watch: {
@@ -118,6 +190,13 @@
 		mounted() {
 			// #ifdef H5
 			document.body?.classList?.add('ait-workspace-active')
+			this.workspaceResizeListener = event => this.handleWorkspaceResize(
+				event?.size?.windowWidth
+			)
+			if (typeof uni.onWindowResize === 'function') {
+				uni.onWindowResize(this.workspaceResizeListener)
+			}
+			if (this.sidebarOpen) this.ensureRecentConversations()
 			// #endif
 			if (this.authenticated) {
 				this.handleAuthenticated()
@@ -133,7 +212,42 @@
 			releaseWorkspaceBody() {
 				// #ifdef H5
 				document.body?.classList?.remove('ait-workspace-active')
+				if (this.workspaceResizeListener && typeof uni.offWindowResize === 'function') {
+					uni.offWindowResize(this.workspaceResizeListener)
+				}
+				this.workspaceResizeListener = null
 				// #endif
+			},
+			handleWorkspaceResize(value) {
+				const width = Number(value ?? (uni.getSystemInfoSync().windowWidth || 0))
+				this.sidebarMode = resolveH5SidebarMode(width)
+				this.sidebarWidth = resolveH5SidebarWidth(width)
+				this.sidebarOpen = resolveH5SidebarOpen(
+					this.sidebarOpen,
+					this.sidebarPreferenceTouched,
+					width
+				)
+				if (!this.sidebarPreferenceTouched) {
+					if (this.sidebarOpen) this.ensureRecentConversations()
+				}
+			},
+			toggleSidebar() {
+				this.sidebarPreferenceTouched = true
+				if (this.sidebarOpen) {
+					this.closeSidebar()
+					return
+				}
+				this.sidebarOpen = true
+				this.ensureRecentConversations()
+			},
+			closeSidebar() {
+				this.sidebarPreferenceTouched = true
+				this.sidebarOpen = false
+				this.$nextTick(() => {
+					const toggle = this.$refs.sidebarToggle
+					const element = toggle?.$el || toggle
+					element?.focus?.({ preventScroll: true })
+				})
 			},
 			applyConversationState(value) {
 				Object.assign(this, value)
@@ -147,19 +261,27 @@
 				if (!DESTINATIONS.includes(destination)) return
 				if (destination === this.activeDestination) {
 					if (destination === 'chat') {
+						// #ifdef H5
+						this.toggleSidebar()
+						// #endif
+						// #ifndef H5
 						const windowWidth = Number(
 							uni.getSystemInfoSync().windowWidth || 0)
-						if (windowWidth < DESKTOP_SIDEBAR_MIN_WIDTH) {
+						if (windowWidth < 768) {
 							this.openConversationDrawer()
 						} else {
 							this.toggleRecentConversations()
 						}
+						// #endif
 					}
 					return
 				}
 				this.visitedDestinations[destination] = true
 				this.activeDestination = destination
 				this.drawerOpen = false
+				// #ifdef H5
+				if (this.sidebarMode === 'overlay') this.sidebarOpen = false
+				// #endif
 				if (destination === 'chat' && this.authenticated) {
 					this.handleAuthenticated()
 				}
@@ -168,6 +290,9 @@
 				this.visitedDestinations.chat = true
 				this.activeDestination = 'chat'
 				this.drawerOpen = false
+				// #ifdef H5
+				if (this.sidebarMode === 'overlay') this.sidebarOpen = false
+				// #endif
 				this.$nextTick(() => {
 					const chatPanel = this.$refs.chatPanel
 					if (this.authenticated) {
@@ -180,6 +305,9 @@
 				this.visitedDestinations.chat = true
 				this.activeDestination = 'chat'
 				this.drawerOpen = false
+				// #ifdef H5
+				if (this.sidebarMode === 'overlay') this.sidebarOpen = false
+				// #endif
 				this.$nextTick(() => {
 					const chatPanel = this.$refs.chatPanel
 					if (this.authenticated) {
@@ -189,6 +317,12 @@
 				})
 			},
 			openConversationDrawer() {
+				// #ifdef H5
+				this.sidebarPreferenceTouched = true
+				this.sidebarOpen = true
+				this.ensureRecentConversations()
+				return
+				// #endif
 				this.recentExpanded = true
 				this.drawerOpen = true
 				this.ensureRecentConversations()
@@ -320,5 +454,57 @@
 		flex: 1 1 0%;
 		overflow: hidden;
 		background: #0b0d0c;
+	}
+
+	.user-workspace.is-h5-workspace {
+		--workspace-sidebar-track: 0px;
+		--ait-h5-canvas: #0b0d0c;
+		--ait-h5-sidebar: #101310;
+		--ait-h5-surface: #151916;
+		--ait-h5-border: rgba(151, 170, 160, .18);
+		--ait-h5-accent: #37d39a;
+		--ait-h5-text: #eef3f0;
+		--ait-h5-muted: #98a39d;
+		display: grid;
+		grid-template-columns: var(--workspace-sidebar-track) minmax(0, 1fr);
+		background: var(--ait-h5-canvas);
+		transition: grid-template-columns 190ms cubic-bezier(.4, 0, 1, 1);
+	}
+
+	.user-workspace.is-h5-workspace.is-sidebar-open.is-sidebar-push {
+		--workspace-sidebar-track: var(--workspace-sidebar-width);
+		transition-duration: 230ms;
+		transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+	}
+
+	.is-h5-workspace .user-workspace-content {
+		width: auto;
+		grid-column: 2;
+	}
+
+	.workspace-sidebar-toggle {
+		@include user-frosted-control;
+		width: 44px;
+		height: 44px;
+		min-height: 44px;
+		position: fixed;
+		top: max(10px, env(safe-area-inset-top));
+		left: 12px;
+		z-index: 32;
+		margin: 0;
+		padding: 0;
+		border-radius: 12px;
+		box-sizing: border-box;
+		transition: transform 100ms ease-out, background-color 160ms ease-out;
+	}
+
+	.workspace-sidebar-toggle::after { border: 0; }
+	.workspace-sidebar-toggle:active { transform: scale(.96); }
+	.workspace-sidebar-toggle:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
+
+	@media (prefers-reduced-motion: reduce) {
+		.user-workspace.is-h5-workspace { transition: none; }
+		.workspace-sidebar-toggle { transition: background-color 100ms ease-out; }
+		.workspace-sidebar-toggle:active { transform: none; }
 	}
 </style>

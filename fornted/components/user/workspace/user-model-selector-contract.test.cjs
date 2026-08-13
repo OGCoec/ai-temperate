@@ -30,3 +30,15 @@ test('custom model selector keeps clear close paths and platform-specific presen
 	assert.match(selector, /position: fixed/)
 	assert.match(selector, /bottom: calc\(100% \+ 10px\)/)
 })
+
+test('generation settings embeds the model list without relying on parent scoped styles', () => {
+	const selector = read(selectorPath)
+	const chatPanel = read(chatPanelPath)
+
+	assert.match(chatPanel, /<user-model-selector[\s\S]*presentation="embedded"/)
+	assert.match(selector, /presentation:\s*\{[\s\S]*default:\s*'overlay'/)
+	assert.match(selector, /embedded\(\)\s*\{[\s\S]*this\.presentation === 'embedded'/)
+	assert.match(selector, /v-if="open && !embedded"/)
+	assert.match(selector, /user-model-selector\.is-embedded \.user-model-selector-panel/)
+	assert.doesNotMatch(chatPanel, /generation-settings-fields \.user-model-selector-panel/)
+})

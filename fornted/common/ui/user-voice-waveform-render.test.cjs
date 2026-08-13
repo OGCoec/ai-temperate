@@ -6,176 +6,239 @@ const test = require('node:test')
 const renderModulePath = path.resolve(
 	__dirname,
 	'../../components/user/workspace/user-voice-waveform-render.js')
+const timelineModulePath = path.resolve(
+	__dirname,
+	'../voice/voice-waveform-timeline.js')
+const presentationModulePath = path.resolve(
+	__dirname,
+	'../voice/voice-waveform-presentation.js')
 
 function sourceUrl(source) {
 	return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 }
 
 async function loadRenderer() {
+	const timelineUrl = sourceUrl(fs.readFileSync(timelineModulePath, 'utf8'))
+	const presentationUrl = sourceUrl(fs.readFileSync(presentationModulePath, 'utf8')
+		.replace('./voice-waveform-timeline.js', timelineUrl))
 	const source = fs.readFileSync(renderModulePath, 'utf8')
+		.replace('../../../common/voice/voice-waveform-timeline.js', timelineUrl)
+		.replace('../../../common/voice/voice-waveform-presentation.js', presentationUrl)
 	return import(`${sourceUrl(source)}#${Date.now()}-${Math.random()}`)
 }
 
 function recordingContext() {
 	const lines = []
+	const setTransformCalls = []
+	const clearRectCalls = []
 	let start = null
 	return {
 		lines,
-		__hidpi__: true,
+		setTransformCalls,
+		clearRectCalls,
 		lineWidth: 0,
 		lineCap: '',
 		strokeStyle: '',
-		setTransform() {},
-		clearRect() {},
+		setTransform(...values) { setTransformCalls.push(values) },
+		clearRect(...values) { clearRectCalls.push(values) },
 		beginPath() { start = null },
 		moveTo(x, y) { start = { x, y } },
 		lineTo(x, y) {
 			lines.push({ ...start, x2: x, y2: y, width: this.lineWidth })
 		},
-		stroke() {}
+		stroke() { lines.at(-1).color = this.strokeStyle }
 	}
 }
 
-test('canvas metrics cap DPR and derive a bounded visible bar capacity', async () => {
-	const { resolveVoiceWaveformCanvasMetrics } = await loadRenderer()
-	const metrics = resolveVoiceWaveformCanvasMetrics(103, 3)
+function createCanvasFixture(renderer, state = 'IDLE') {
+	const context = recordingContext()
+	const canvas = {
+		tagName: 'CANVAS',
+		width: 80,
+		height: 24,
+		clientWidth: 80,
+		isConnected: true,
+		style: {},
+		getContext: () => context
+	}
+	const root = {
+		clientWidth: 80,
+		querySelector: selector => selector === '.user-voice-waveform-canvas'
+			? canvas : null
+	}
+	return {
+		context,
+		canvas,
+		instance: {
+			...renderer.data(),
+			...renderer.methods,
+			root,
+			config: {
+				state,
+				sessionEpoch: 1,
+				packet: null,
+				reduced: false
+			}
+		}
+	}
+}
 
-	assert.deepEqual(metrics, {
+test('canvas metrics use full DPR storage and the shared 5.5px pitch', async () => {
+	const { resolveVoiceWaveformCanvasMetrics } = await loadRenderer()
+	assert.deepEqual(resolveVoiceWaveformCanvasMetrics(103, 3), {
 		cssWidth: 103,
 		cssHeight: 24,
-		dpr: 2,
-		pixelWidth: 206,
-		pixelHeight: 48,
-		visibleBars: 20
+		dpr: 3,
+		pixelWidth: 309,
+		pixelHeight: 72,
+		visibleBars: 18
 	})
 })
 
-test('packets are epoch and sequence guarded, clamped, and limited to five levels', async () => {
-	const {
-		acceptVoiceWaveformPacket,
-		createVoiceWaveformRenderState
-	} = await loadRenderer()
-	const state = createVoiceWaveformRenderState(4, 7)
+test('H5 native Canvas keeps its DPR-owned first draw', async () => {
+	const { default: renderer } = await loadRenderer()
+	const previousDpr = globalThis.devicePixelRatio
+	globalThis.devicePixelRatio = 2
+	const { canvas, context, instance } = createCanvasFixture(renderer)
 
-	assert.equal(acceptVoiceWaveformPacket(state, {
-		epoch: 7,
-		sequence: 1,
-		levels: [-1, 0.25, 2, 0.5, 0.75, 0.9]
-	}, 7, 100), true)
-	assert.deepEqual(state.queue, [0, 0.25, 1, 0.5, 0.75])
-	assert.equal(acceptVoiceWaveformPacket(state, {
-		epoch: 6,
-		sequence: 2,
-		levels: [1]
-	}, 7, 110), false)
-	assert.equal(acceptVoiceWaveformPacket(state, {
-		epoch: 7,
-		sequence: 1,
-		levels: [1]
-	}, 7, 120), false)
+	try {
+		assert.equal(instance.connectCanvas(), true)
+		assert.equal(instance.draw(0), true)
+		assert.equal(canvas.width, 160)
+		assert.equal(canvas.height, 48)
+		assert.deepEqual(context.setTransformCalls.slice(0, 2), [
+			[1, 0, 0, 1, 0, 0],
+			[2, 0, 0, 2, 0, 0]
+		])
+		assert.deepEqual(context.clearRectCalls[0], [0, 0, 160, 48])
+	} finally {
+		if (previousDpr == null) delete globalThis.devicePixelRatio
+		else globalThis.devicePixelRatio = previousDpr
+	}
 })
 
-test('first and later bars advance only on strict three hundred millisecond boundaries', async () => {
-	const {
-		acceptVoiceWaveformPacket,
-		advanceVoiceWaveformState,
-		createVoiceWaveformRenderState,
-		voiceWaveformHistory
-	} = await loadRenderer()
-	const state = createVoiceWaveformRenderState(4, 2)
-
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 0), false)
-	for (let sequence = 1; sequence <= 3; sequence += 1) {
-		acceptVoiceWaveformPacket(state, {
-			epoch: 2,
-			sequence,
-			levels: [0.4, 0.4, 0.4, 0.4, 0.4]
-		}, 2, sequence * 100)
+test('H5 discovery keeps only the inner native Canvas', async () => {
+	const { default: renderer } = await loadRenderer()
+	const context = recordingContext()
+	const nativeCanvas = {
+		tagName: 'CANVAS',
+		clientWidth: 80,
+		isConnected: true,
+		style: {},
+		getContext: () => context
+	}
+	const host = {
+		tagName: 'DIV',
+		clientWidth: 80,
+		style: {},
+		getContext: () => context,
+		querySelector: selector => selector.includes('canvas') ? nativeCanvas : null
+	}
+	const instance = {
+		...renderer.data(),
+		...renderer.methods,
+		root: {
+			clientWidth: 80,
+			querySelector: selector => selector === '.user-voice-waveform-canvas'
+				? host : null
+		},
+		config: { state: 'IDLE', sessionEpoch: 1, packet: null, reduced: false }
 	}
 
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 299), false)
-	assert.deepEqual(voiceWaveformHistory(state), [])
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 300), true)
-	assert.deepEqual(voiceWaveformHistory(state), [Math.fround(0.4)])
-
-	acceptVoiceWaveformPacket(state, {
-		epoch: 2,
-		sequence: 4,
-		levels: [0.8, 0.8, 0.8, 0.8, 0.8]
-	}, 2, 400)
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 599), false)
-	assert.equal(voiceWaveformHistory(state).length, 1)
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 600), true)
-	assert.deepEqual(voiceWaveformHistory(state), [Math.fround(0.4), Math.fround(0.8)])
+	assert.equal(instance.connectCanvas(), true)
+	assert.equal(instance.canvas, nativeCanvas)
+	assert.notEqual(instance.canvas, host)
 })
 
-test('fifteen twenty millisecond values collapse into one RMS bar', async () => {
-	const {
-		acceptVoiceWaveformPacket,
-		advanceVoiceWaveformState,
-		createVoiceWaveformRenderState,
-		voiceWaveformHistory
-	} = await loadRenderer()
-	const state = createVoiceWaveformRenderState(3, 4)
-	const values = [
-		0.1, 0.2, 0.3, 0.4, 0.5,
-		0.6, 0.7, 0.8, 0.9, 1,
-		0.9, 0.8, 0.7, 0.6, 0.5
-	]
-	const expected = Math.sqrt(
-		values.reduce((sum, value) => sum + value * value, 0) / values.length)
+test('the integrated Canvas loop draws a full gray baseline', async () => {
+	const { drawVoiceWaveformFrame } = await loadRenderer()
+	const context = recordingContext()
+	const bars = Array.from({ length: 10 }, (_, index) => ({
+		id: index + 1,
+		level: 0,
+		recorded: false
+	}))
 
-	advanceVoiceWaveformState(state, 'RECORDING', 1000)
-	for (let index = 0; index < 3; index += 1) {
-		acceptVoiceWaveformPacket(state, {
-			epoch: 4,
-			sequence: index + 1,
-			levels: values.slice(index * 5, index * 5 + 5)
-		}, 4, 1100 + index * 100)
-	}
-	advanceVoiceWaveformState(state, 'RECORDING', 1300)
+	drawVoiceWaveformFrame(context, {
+		width: 50,
+		height: 24,
+		bars,
+		progress: 0
+	})
 
-	assert.equal(state.queue.length, 0)
-	assert.ok(Math.abs(voiceWaveformHistory(state)[0] - expected) < 1e-6)
+	assert.equal(context.lines.length, 9)
+	assert.ok(context.lines.every(line => line.y2 - line.y === 2))
+	assert.ok(context.lines.every(line => line.color === 'rgba(174,185,179,0.24)'))
+	assert.ok(context.lines.every(line => line.width === 2.5))
 })
 
-test('visual backlog and history stay bounded without catch-up bursts', async () => {
-	const {
-		acceptVoiceWaveformPacket,
-		advanceVoiceWaveformState,
-		createVoiceWaveformRenderState,
-		voiceWaveformHistory
-	} = await loadRenderer()
-	const state = createVoiceWaveformRenderState(3, 2)
-	advanceVoiceWaveformState(state, 'RECORDING', 0)
+test('the first recorded bar appears at the right edge and moves left with progress', async () => {
+	const { drawVoiceWaveformFrame } = await loadRenderer()
+	const bars = Array.from({ length: 10 }, (_, index) => ({
+		id: index + 1,
+		level: index === 8 ? 1 : 0,
+		recorded: index === 8
+	}))
+	const atBoundary = recordingContext()
+	const halfCycle = recordingContext()
 
-	for (let sequence = 1; sequence <= 4; sequence += 1) {
-		acceptVoiceWaveformPacket(state, {
-			epoch: 2,
-			sequence,
-			levels: [sequence / 10, sequence / 10, sequence / 10, sequence / 10, sequence / 10]
-		}, 2, sequence * 100)
-	}
-	assert.equal(state.queue.length, 15)
+	drawVoiceWaveformFrame(atBoundary, {
+		width: 50,
+		height: 24,
+		bars,
+		progress: 0
+	})
+	drawVoiceWaveformFrame(halfCycle, {
+		width: 50,
+		height: 24,
+		bars,
+		progress: 0.5
+	})
 
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 950), true)
-	assert.equal(voiceWaveformHistory(state).length, 1)
-	assert.equal(advanceVoiceWaveformState(state, 'RECORDING', 951), false)
-	assert.equal(voiceWaveformHistory(state).length, 1)
-	for (let cycle = 0; cycle < 5; cycle += 1) {
-		acceptVoiceWaveformPacket(state, {
-			epoch: 2,
-			sequence: 5 + cycle,
-			levels: [0.5, 0.5, 0.5, 0.5, 0.5]
-		}, 2, 1000 + cycle * 300)
-		advanceVoiceWaveformState(state, 'RECORDING', 1250 + cycle * 300)
-	}
-	assert.ok(voiceWaveformHistory(state).length <= 3)
-	assert.equal(state.queue.length, 0)
+	const firstSound = atBoundary.lines.find(line => line.y2 - line.y === 20)
+	const movedSound = halfCycle.lines.find(line => line.y2 - line.y === 20)
+	assert.equal(firstSound.x, 45.25)
+	assert.equal(movedSound.x, 42.5)
+	assert.equal(firstSound.color, 'rgba(205,211,208,0.88)')
+	assert.equal(halfCycle.lines.at(-1).x, 48)
 })
 
-test('finalizing clears visual history, rejects late packets, and stays on a static baseline', async () => {
-	const { default: renderer, voiceWaveformHistory } = await loadRenderer()
+test('the unsettled trailing slot keeps movement geometry but never draws a zero-level bar', async () => {
+	const { drawVoiceWaveformFrame } = await loadRenderer()
+	const context = recordingContext()
+	const bars = Array.from({ length: 10 }, (_, index) => ({
+		id: index + 1,
+		level: index === 8 ? 0.7 : 0,
+		recorded: index === 8
+	}))
+
+	drawVoiceWaveformFrame(context, {
+		width: 50,
+		height: 24,
+		bars,
+		progress: 0.5,
+		pendingBarId: bars.at(-1).id
+	})
+
+	assert.equal(context.lines.length, 8)
+	assert.doesNotMatch(
+		context.lines.map(line => String(line.x)).join(','),
+		/(?:^|,)48(?:,|$)/)
+	assert.equal(context.lines.filter(line => line.y2 - line.y > 2).length, 1)
+})
+
+test('H5 renderer consumes the shared timeline instead of owning a second 300ms state machine', () => {
+	const source = fs.readFileSync(renderModulePath, 'utf8')
+
+	assert.match(source, /createVoiceWaveformTimeline/)
+	assert.match(source, /voice-waveform-presentation\.js/)
+	assert.doesNotMatch(source, /VISUAL_INTERVAL_MS|MAXIMUM_QUEUE_LEVELS/)
+	assert.doesNotMatch(source, /aggregateVoiceWaveformLevels|createVoiceWaveformRenderState/)
+	assert.doesNotMatch(source, /117,\s*223,\s*183|55,\s*211,\s*154/)
+})
+
+test('finalizing clears the timeline and never starts another RAF', async () => {
+	const { default: renderer } = await loadRenderer()
 	const originalRaf = globalThis.requestAnimationFrame
 	const originalCancelRaf = globalThis.cancelAnimationFrame
 	let rafCount = 0
@@ -194,13 +257,10 @@ test('finalizing clears visual history, rejects late packets, and stays on a sta
 			},
 			visible: true,
 			hidden: false,
-			connectCanvas() {},
-			draw() {}
+			connectCanvas() { return false },
+			draw() { return false }
 		}
-		instance.renderState.sessionEpoch = 3
-		instance.renderState.queue.push(0.8)
-		instance.renderState.history[0] = 0.8
-		instance.renderState.historyLength = 1
+		instance.timeline.start(3, 0)
 
 		instance.update({
 			state: 'FINALIZING',
@@ -209,9 +269,7 @@ test('finalizing clears visual history, rejects late packets, and stays on a sta
 			reduced: false
 		})
 
-		assert.deepEqual(instance.renderState.queue, [])
-		assert.deepEqual(voiceWaveformHistory(instance.renderState), [])
-		assert.equal(instance.renderState.currentLevel, 0)
+		assert.deepEqual(instance.timeline.snapshot(0).movingBars, [])
 		assert.equal(rafCount, 0)
 		assert.equal(instance.running, false)
 	} finally {
@@ -220,26 +278,7 @@ test('finalizing clears visual history, rejects late packets, and stays on a sta
 	}
 })
 
-test('waveform bars remain centered and between the two and twenty pixel limits', async () => {
-	const { drawVoiceWaveformFrame } = await loadRenderer()
-	const context = recordingContext()
-
-	drawVoiceWaveformFrame(context, {
-		width: 50,
-		height: 24,
-		levels: [0, 0.5, 1]
-	})
-
-	assert.equal(context.lines.length, 10)
-	for (const line of context.lines) {
-		const height = line.y2 - line.y
-		assert.ok(height >= 2 && height <= 20)
-		assert.equal((line.y + line.y2) / 2, 12)
-		assert.equal(line.width, 2)
-	}
-})
-
-test('reduced motion uses the same three hundred millisecond cadence without continuous RAF', async () => {
+test('reduced motion keeps the 300ms cadence without continuous RAF', async () => {
 	const { default: renderer } = await loadRenderer()
 	const originalRaf = globalThis.requestAnimationFrame
 	const originalCancelRaf = globalThis.cancelAnimationFrame
@@ -268,8 +307,9 @@ test('reduced motion uses the same three hundred millisecond cadence without con
 			},
 			visible: true,
 			hidden: false,
-			draw() {}
+			draw() { return true }
 		}
+		instance.timeline.start(1, 0)
 		instance.restart()
 		assert.equal(rafCount, 0)
 		assert.equal(timeoutCount, 1)
@@ -283,13 +323,32 @@ test('reduced motion uses the same three hundred millisecond cadence without con
 	}
 })
 
-test('component passes only visual levels and keeps PCM out of the view layer', () => {
+test('a Canvas exception fails open without entering the voice business path', async () => {
+	const { default: renderer } = await loadRenderer()
+	const { canvas, context, instance } = createCanvasFixture(renderer, 'RECORDING')
+	context.clearRect = () => { throw new Error('synthetic canvas failure') }
+	instance.canvasHost = canvas
+	instance.canvas = canvas
+	instance.context = context
+	instance.timeline.start(1, 0)
+
+	assert.equal(instance.draw(0), false)
+	assert.equal(instance.running, false)
+})
+
+test('component input stays visual-only and H5 Canvas lifecycle stays native', () => {
 	const component = fs.readFileSync(path.resolve(
 		__dirname,
 		'../../components/user/workspace/user-voice-waveform.vue'), 'utf8')
+	const renderer = fs.readFileSync(renderModulePath, 'utf8')
 
 	assert.match(component, /aria-hidden="true"/)
 	assert.match(component, /levels\.slice\(0, 5\)/)
 	assert.match(component, /:hidpi="false"/)
 	assert.doesNotMatch(component, /ArrayBuffer|DataView|PCM|sendAudio|WebSocket/)
+	assert.doesNotMatch(renderer, /handleVoiceFailure|sendAudio|WebSocket/)
+	assert.match(renderer, /IntersectionObserver/)
+	assert.match(renderer, /ResizeObserver/)
+	assert.match(renderer, /this\.canvas\.width\s*=\s*metrics\.pixelWidth/)
+	assert.match(renderer, /setTransform\(metrics\.dpr/)
 })

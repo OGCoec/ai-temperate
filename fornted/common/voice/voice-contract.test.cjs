@@ -163,7 +163,7 @@ test('chat composer previews partial and final transcripts from the pre-recordin
 	assert.match(panel, /abortVoiceInput\('USER_DISCARD'\)/)
 })
 
-test('voice status row stays compact across the H5 and Android composer shells', () => {
+test('H5 voice status row keeps its existing compact Canvas presentation', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const statusStart = panel.indexOf('class="voice-inline-status"')
 	const statusEnd = panel.indexOf('</view>', statusStart)
@@ -182,7 +182,6 @@ test('voice status row stays compact across the H5 and Android composer shells',
 	assert.match(panel, /\.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 56px\)/s)
 	assert.match(panel, /\.composer\s*\{[^}]*gap:\s*8px/s)
 	assert.match(panel, /\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active\s*\{[^}]*gap:\s*7px/s)
-	assert.match(panel, /\.is-android-client \.voice-cancel-button,\s*\.is-android-client \.voice-commit-button\s*\{[^}]*width:\s*48px/s)
 	assert.match(panel, /\.voice-inline-status \.user-voice-waveform\s*\{[^}]*width:\s*100%/s)
 	assert.doesNotMatch(panel, /class="voice-status"/)
 })
@@ -362,21 +361,39 @@ test('voice waveform analyzes only after audio enqueue and fails open inside the
 	assert.match(panel, /this\.voiceWaveformPacket = null/)
 })
 
-test('Android reduces only the waveform presentation amplitude to one third', () => {
+test('H5 and Android publish the same normalized waveform presentation levels', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const publishMethod = panel.slice(
 		panel.indexOf('publishVoiceWaveform(frame, voiceEpoch)'),
 		panel.indexOf('async toggleVoiceInput()', panel.indexOf('publishVoiceWaveform(frame, voiceEpoch)')))
 
-	assert.match(
-		panel,
-		/\/\/ #ifdef APP-PLUS[\s\S]*ANDROID_VOICE_WAVEFORM_VISUAL_GAIN\s*=\s*1\s*\/\s*3[\s\S]*\/\/ #endif/)
-	assert.match(publishMethod, /let visualLevels = levels\.slice\(0, 5\)/)
-	assert.match(
-		publishMethod,
-		/\/\/ #ifdef APP-PLUS[\s\S]*visualLevels = visualLevels\.map\([\s\S]*ANDROID_VOICE_WAVEFORM_VISUAL_GAIN[\s\S]*\/\/ #endif/)
+	assert.doesNotMatch(panel, /ANDROID_VOICE_WAVEFORM_VISUAL_GAIN/)
+	assert.match(publishMethod, /const visualLevels = levels\.slice\(0, 5\)\.map\(/)
+	assert.doesNotMatch(publishMethod, /#ifdef APP-PLUS|#ifndef APP-PLUS/)
 	assert.match(publishMethod, /levels:\s*Object\.freeze\(visualLevels\)/)
 	assert.doesNotMatch(publishMethod, /sendAudio|session\.|handleVoiceFailure/)
+})
+
+test('H5 and Android share one waveform timeline while keeping platform renderers isolated', () => {
+	const timeline = read('common/voice/voice-waveform-timeline.js')
+	const presentation = read('common/voice/voice-waveform-presentation.js')
+	const h5Renderer = read('components/user/workspace/user-voice-waveform-render.js')
+	const androidController = read('common/voice/voice-waveform-android-controller.js')
+	const androidView = read('components/user/workspace/user-voice-waveform-android.vue')
+
+	assert.match(timeline, /VOICE_WAVEFORM_INTERVAL_MS\s*=\s*300/)
+	assert.match(timeline, /VOICE_WAVEFORM_QUEUE_LIMIT\s*=\s*15/)
+	assert.match(timeline, /VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*192/)
+	assert.match(h5Renderer, /createVoiceWaveformTimeline/)
+	assert.match(androidController, /createVoiceWaveformTimeline/)
+	assert.match(presentation, /VOICE_WAVEFORM_BAR_WIDTH\s*=\s*2\.5/)
+	assert.match(presentation, /VOICE_WAVEFORM_BAR_GAP\s*=\s*3/)
+	assert.match(presentation, /VOICE_WAVEFORM_BAR_PITCH\s*=\s*5\.5/)
+	assert.match(presentation, /rgba\(174,185,179,0\.24\)/)
+	assert.doesNotMatch(`${h5Renderer}\n${androidController}\n${androidView}`,
+		/117,\s*223,\s*183|55,\s*211,\s*154/)
+	assert.doesNotMatch(`${timeline}\n${presentation}`,
+		/Vue|Canvas|UniApp|WebSocket|sendAudio|PCM/)
 })
 
 test('stop remains disabled until recorder startup really resolves', () => {
@@ -400,7 +417,7 @@ test('voice control availability matches connecting, recording, and finalizing s
 	assert.match(panel, /:disabled="voiceCancelDisabled"/)
 	assert.match(panel, /:disabled="voiceCommitDisabled"/)
 	assert.match(panel, /v-if="voiceInteractionActive"[\s\S]*class="voice-cancel-button"[\s\S]*class="voice-commit-button"/)
-	assert.match(panel, /v-else[\s\S]*class="voice-button"[\s\S]*class="send-button"/)
+	assert.match(panel, /v-if="!voiceInteractionActive"[\s\S]*class="voice-button"[\s\S]*class="send-button"/)
 })
 
 test('Android diagnostics stay inside the client bridge and never enter the wire protocol', () => {

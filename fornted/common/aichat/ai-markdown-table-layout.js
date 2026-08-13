@@ -1,4 +1,15 @@
 export const AI_MARKDOWN_TABLE_COLUMN_WIDTH_STEPS = Object.freeze([112, 160, 224, 320])
+export const AI_MARKDOWN_TABLE_VIEW_MODES = Object.freeze(['auto', 'cards', 'table'])
+
+export function resolveAiMarkdownTableViewMode(viewMode, columnCount, viewportWidth) {
+	const normalizedMode = AI_MARKDOWN_TABLE_VIEW_MODES.includes(viewMode)
+		? viewMode
+		: 'auto'
+	if (normalizedMode !== 'auto') return normalizedMode
+	const columns = Math.max(0, Number(columnCount) || 0)
+	const width = Math.max(0, Number(viewportWidth) || 0)
+	return width < 768 && columns >= 2 && columns <= 4 ? 'cards' : 'table'
+}
 
 function cellChildren(cell) {
 	return Array.isArray(cell?.children) ? cell.children : []

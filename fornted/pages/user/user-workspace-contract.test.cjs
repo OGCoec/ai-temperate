@@ -9,6 +9,15 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8')
 }
 
+function sourceUrl(source) {
+	return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
+}
+
+async function loadH5WorkspaceLayout() {
+	const source = read('common/ui/h5-workspace-layout.js')
+	return import(sourceUrl(source) + '#' + Date.now() + '-' + Math.random())
+}
+
 test('all protected user entry pages render the same persistent workspace', () => {
 	const entries = [
 		['pages/ai-chat/index.vue', 'chat', false],
@@ -35,7 +44,10 @@ test('all protected user entry pages render the same persistent workspace', () =
 test('workspace owns one sidebar and switches already-mounted content panels without routing', () => {
 	const workspace = read('components/user/user-workspace.vue')
 
+	assert.equal((workspace.match(/<user-h5-workspace-sidebar\b/g) || []).length, 1)
 	assert.equal((workspace.match(/<user-workspace-sidebar\b/g) || []).length, 1)
+	assert.match(workspace, /#ifdef H5[\s\S]*<user-h5-workspace-sidebar/)
+	assert.match(workspace, /#ifndef H5[\s\S]*<user-workspace-sidebar/)
 	assert.match(workspace, /activeDestination/)
 	assert.match(workspace, /visitedDestinations/)
 	assert.match(workspace, /v-show="activeDestination === 'chat'"/)
@@ -46,15 +58,56 @@ test('workspace owns one sidebar and switches already-mounted content panels wit
 	assert.doesNotMatch(workspace, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
 })
 
-test('workspace reserves only the remaining flex width for protected page content', () => {
+test('workspace reserves the remaining grid width and exposes one accessible sidebar toggle', () => {
 	const workspace = read('components/user/user-workspace.vue')
 
-	assert.match(workspace, /DESKTOP_SIDEBAR_MIN_WIDTH\s*=\s*768/)
-	assert.match(workspace, /windowWidth\s*<\s*DESKTOP_SIDEBAR_MIN_WIDTH/)
+	assert.match(workspace, /:class="workspaceClass"/)
+	assert.match(workspace, /:open="sidebarOpen"/)
+	assert.match(workspace, /:mode="sidebarMode"/)
+	assert.match(workspace, /aria-controls="workspace-conversation-sidebar"/)
+	assert.match(workspace, /:aria-expanded="String\(sidebarOpen\)"/)
+	assert.match(workspace, /@click="toggleSidebar"/)
+	assert.match(workspace, /this\.\$refs\.sidebarToggle/)
+	assert.doesNotMatch(workspace, /(?:localStorage|setStorageSync)\([^)]*sidebar/i)
 	assert.match(workspace,
-		/\.user-workspace\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%[^}]*flex-direction:\s*row/)
+		/\.user-workspace\.is-h5-workspace\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*var\(--workspace-sidebar-track\)/)
 	assert.match(workspace,
-		/\.user-workspace-content\s*\{[^}]*width:\s*0[^}]*max-width:\s*100%[^}]*min-width:\s*0[^}]*flex:\s*1 1 0%/)
+		/\.user-workspace-content\s*\{[^}]*max-width:\s*100%[^}]*min-width:\s*0/)
+	assert.match(workspace, /\.user-workspace\s*\{[^}]*overflow:\s*hidden/)
+})
+
+test('H5 sidebar breakpoints use overlay below 768 and push tracks at 240 or 272 pixels', async () => {
+	const {
+		defaultH5SidebarOpen,
+		resolveH5FollowLatest,
+		resolveH5GenerationSettingsPresentation,
+		resolveH5SidebarOpen,
+		resolveH5SidebarMode,
+		resolveH5SidebarWidth
+	} = await loadH5WorkspaceLayout()
+
+	assert.equal(resolveH5SidebarMode(767), 'overlay')
+	assert.equal(resolveH5SidebarMode(768), 'push')
+	assert.equal(resolveH5SidebarWidth(1099), 240)
+	assert.equal(resolveH5SidebarWidth(1100), 272)
+	assert.equal(defaultH5SidebarOpen(767), false)
+	assert.equal(defaultH5SidebarOpen(768), true)
+	assert.equal(resolveH5SidebarOpen(false, true, 1440), false)
+	assert.equal(resolveH5SidebarOpen(true, true, 375), true)
+	assert.equal(resolveH5GenerationSettingsPresentation(767), 'sheet')
+	assert.equal(resolveH5GenerationSettingsPresentation(768), 'popover')
+	assert.equal(resolveH5FollowLatest({
+		previousScrollTop: 120,
+		nextScrollTop: 80,
+		distanceToBottom: 20
+	}), false)
+	assert.equal(resolveH5FollowLatest({
+		previousScrollTop: 80,
+		nextScrollTop: 100,
+		distanceToBottom: 96
+	}), true)
+	assert.equal(resolveH5FollowLatest({ distanceToBottom: 97 }), false)
+	assert.equal(resolveH5FollowLatest({ distanceToBottom: 20, hasHiddenTurnsAfter: true }), false)
 })
 
 test('workspace keeps navigation visible while authentication and panel data are pending', () => {
@@ -71,29 +124,25 @@ test('workspace keeps navigation visible while authentication and panel data are
 	assert.doesNotMatch(profilePanel, /<view[^>]+v-if="authReady"/)
 })
 
-test('workspace sidebar exposes new chat, primary destinations, and shared recent conversations', () => {
-	const sidebar = read('components/user/user-workspace-sidebar.vue')
-	const navigation = read('components/user/user-primary-navigation.vue')
+test('workspace sidebar is a focused conversation surface with close and account actions', () => {
+	const sidebar = read('components/user/user-h5-workspace-sidebar.vue')
 
 	assert.match(sidebar, /class="workspace-new-chat"/)
-	assert.match(sidebar, /<user-primary-navigation/)
 	assert.match(sidebar, /<user-recent-conversations/)
-	assert.match(sidebar, /<template #before-items>[\s\S]*workspace-new-chat/)
-	assert.match(sidebar, /<template #after-items>[\s\S]*user-recent-conversations/)
-	assert.match(sidebar, /ref="mobileDrawer"/)
+	assert.equal((sidebar.match(/<user-recent-conversations\b/g) || []).length, 1)
+	assert.doesNotMatch(sidebar, /<user-primary-navigation/)
+	assert.match(sidebar, /id="workspace-conversation-sidebar"/)
+	assert.match(sidebar, /:aria-hidden="String\(!open\)"/)
+	assert.match(sidebar, /aria-label="关闭会话边栏"/)
+	assert.match(sidebar, /@click="requestClose"/)
+	assert.match(sidebar, /@click="\$emit\('destination-click', 'profile'\)"/)
+	assert.match(sidebar, /ref="sidebar"/)
 	assert.match(sidebar, /tabindex="-1"/)
-	assert.match(sidebar, /@keydown\.esc\.stop="\$emit\('close-drawer'\)"/)
-	assert.ok(
-		navigation.indexOf('<slot name="before-items"') <
-			navigation.indexOf('class="user-primary-navigation-inner"')
-	)
-	assert.ok(
-		navigation.indexOf('<slot name="after-items"') >
-			navigation.indexOf('class="user-primary-navigation-inner"')
-	)
-	assert.doesNotMatch(navigation, /getCurrentPages\(\)/)
-	assert.doesNotMatch(navigation, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
-	assert.match(navigation, /this\.\$emit\('destination-click', destination\)/)
+	assert.match(sidebar, /@keydown\.esc\.stop="requestClose"/)
+	assert.match(sidebar, /@keydown\.tab="trapSidebarFocus"/)
+	assert.match(sidebar, /document\.body\.style\.overflow = 'hidden'/)
+	assert.match(sidebar, /if \(this\.mode !== 'overlay'\) return/)
+	assert.match(sidebar, /min\(88vw, 360px\)/)
 })
 
 test('Android moves primary navigation into the drawer while H5 keeps the existing navigation shell', () => {
@@ -109,6 +158,51 @@ test('Android moves primary navigation into the drawer while H5 keeps the existi
 	assert.match(navigation, /\.user-primary-navigation\.is-drawer[\s\S]*position:\s*static/)
 	assert.match(sidebar, /width:\s*min\(70vw,\s*288px\)/)
 	assert.doesNotMatch(sidebar, />\s*(?:搜索|设置)\s*</)
+})
+
+test('Android drawer uses compact density without changing H5 navigation or conversation behavior', () => {
+	const sidebar = read('components/user/user-workspace-sidebar.vue')
+	const navigation = read('components/user/user-primary-navigation.vue')
+	const recent = read('components/user/user-recent-conversations.vue')
+
+	assert.equal((sidebar.match(/:compact="androidClient"/g) || []).length, 1)
+	assert.match(sidebar, /content-id="workspace-mobile-recent"\s+:compact="androidClient"/)
+	assert.doesNotMatch(sidebar, /content-id="workspace-desktop-recent"\s+:compact=/)
+	assert.match(recent, /class="recent-conversations"[\s\S]*'is-compact': compact/)
+	assert.match(recent, /compact:\s*\{[\s\S]*type:\s*Boolean[\s\S]*default:\s*false/)
+	assert.match(navigation, /\.is-drawer \.user-primary-navigation-inner\s*\{[^}]*gap:\s*0/)
+	assert.match(navigation, /\.is-drawer \.user-primary-navigation-item\s*\{[^}]*min-height:\s*44px[^}]*font-size:\s*13px/)
+	assert.equal((navigation.match(/@click="navigate\('(chat|models|profile)'\)"/g) || []).length, 3)
+	assert.match(recent, /\.recent-conversations\.is-compact \.recent-toggle\s*\{[^}]*min-height:\s*40px/)
+	assert.match(recent, /\.recent-conversations\.is-compact \.conversation-row\s*\{[^}]*height:\s*40px[^}]*margin:\s*0/)
+	assert.match(recent, /\.recent-conversations\.is-compact \.conversation-open\s*\{[^}]*min-height:\s*40px[^}]*font-size:\s*12px/)
+	assert.match(recent, /\.recent-conversations\.is-compact \.conversation-copy\s*\{[^}]*width:\s*40px[^}]*height:\s*40px/)
+	assert.match(sidebar, /startDrawerNewChat\(\)[\s\S]*\$emit\('new-chat'\)[\s\S]*\$emit\('close-drawer'\)/)
+	assert.match(sidebar, /openDrawerConversation\(conversationPublicId\)[\s\S]*\$emit\('open-conversation', conversationPublicId\)[\s\S]*\$emit\('close-drawer'\)/)
+})
+
+test('Android small controls use one compact frosted surface inside unchanged touch targets', () => {
+	const material = read('common/ui/user-material.scss')
+	const sidebar = read('components/user/user-workspace-sidebar.vue')
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const settingsSheet = read('components/user/workspace/user-android-chat-settings-sheet.vue')
+	const contextSheet = read('components/user/workspace/user-context-usage-sheet.vue')
+	const modelCatalog = read('components/user/workspace/user-model-catalog.vue')
+	const modelDetail = read('components/user/workspace/user-model-detail.vue')
+	const profilePanel = read('components/user/workspace/user-profile-panel.vue')
+
+	assert.match(material, /@mixin user-android-compact-control\([\s\S]*border:\s*0[\s\S]*background:\s*transparent[\s\S]*box-shadow:\s*none/)
+	assert.match(material, /@mixin user-android-compact-control\([\s\S]*&::before\s*\{[\s\S]*border:\s*1px solid \$user-glass-border[\s\S]*background:\s*\$user-frosted-control/)
+	assert.match(sidebar, /\.is-android-drawer \.workspace-icon-button\s*\{[^}]*@include user-android-compact-control\(30px/)
+	assert.match(chatPanel, /\.is-android-client \.icon-button\s*\{[^}]*@include user-android-compact-control\(32px/)
+	assert.match(chatPanel, /\.is-android-client \.composer-icon,[\s\S]*?\.is-android-client \.send-button\s*\{[^}]*@include user-android-compact-control\(34px/)
+	assert.match(chatPanel, /\.android-settings-trigger\s*\{[^}]*@include user-android-compact-control\(100%,\s*34px/)
+	assert.match(settingsSheet, /\.android-chat-settings-close\s*\{[^}]*@include user-android-compact-control\(34px/)
+	assert.match(contextSheet, /\.context-usage-trigger\s*\{[^}]*@include user-android-compact-control\(36px,\s*34px/)
+	for (const panel of [modelCatalog, modelDetail, profilePanel]) {
+		assert.match(panel, /\.workspace-panel-menu\s*\{[^}]*@include user-android-compact-control\(32px/)
+		assert.match(panel, /@click="\$emit\('open-conversation-drawer'\)"/)
+	}
 })
 
 test('Android workspace panels retain a drawer entry and delegate system back handling', () => {
@@ -225,9 +319,11 @@ test('Android uses the compact two-row composer and keeps H5 picker controls', (
 
 	assert.match(androidComposer, /user-android-chat-settings-sheet/)
 	assert.match(androidComposer, /user-context-usage-sheet/)
+	assert.match(androidComposer, /user-model-provider-mark/)
 	assert.doesNotMatch(androidComposer, /<picker\b/)
 	assert.match(h5Controls, /<picker\b/)
 	assert.match(h5Controls, /class="composer-note"/)
+	assert.doesNotMatch(h5Controls, /user-model-provider-mark/)
 	assert.match(chatPanel, /\.is-android-client\s*\{[\s\S]*padding-bottom:\s*0/)
 })
 
@@ -258,5 +354,58 @@ test('desktop voice composer keeps live recognition compact until the final tran
 	assert.match(chatPanel,
 		/\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active \.voice-cancel-button\s*\{\s*order:\s*-1/)
 	assert.match(chatPanel,
-		/\.is-android-client \.voice-cancel-button,[\s\S]*?width:\s*48px/)
+		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?width:\s*48px/)
+})
+
+test('Android voice actions keep large touch targets around compact visual controls', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(chatPanel,
+		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?width:\s*48px[\s\S]*?height:\s*48px/)
+	assert.match(chatPanel,
+		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?@include user-android-compact-control\(34px/)
+	assert.doesNotMatch(chatPanel,
+		/\.is-android-client \.composer\.is-voice-active \.voice-commit-button::before\s*\{[^}]*background:\s*rgba\(55,\s*211,\s*154/)
+	assert.match(chatPanel,
+		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-glyph\s*\{[^}]*font-size:\s*20px/)
+	assert.match(chatPanel,
+		/\.is-android-client \.composer\.is-voice-active \.voice-commit-square\s*\{[^}]*width:\s*11px[^}]*height:\s*11px/)
+})
+
+test('Android send and stop retain their events while sharing the neutral frosted button surface', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(chatPanel, /class="send-button stop-button"[\s\S]*@click="stop"/)
+	assert.match(chatPanel, /class="send-button"[\s\S]*@click="send"/)
+	assert.match(chatPanel, /:color="androidClient \? '#75dfb7' : '#07110d'"/)
+	assert.doesNotMatch(chatPanel, /\.is-android-client[^}]*\.send-button::before\s*\{[^}]*background:\s*#37d39a/)
+	assert.doesNotMatch(chatPanel, /\.is-android-client[^}]*\.stop-button::before\s*\{[^}]*background:\s*rgba\(55,\s*211,\s*154/)
+})
+
+test('Android keeps the voice canvas mounted without an overlay or changing H5 mounting', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const waveform = read('components/user/workspace/user-voice-waveform.vue')
+
+	assert.match(chatPanel,
+		/<view\s+v-if="androidClient \|\| voiceInteractionActive"\s+class="voice-inline-status"/)
+	assert.match(chatPanel, /:class="\{ 'is-active': voiceInteractionActive \}"/)
+	assert.match(chatPanel, /:aria-hidden="String\(!voiceInteractionActive\)"/)
+	assert.doesNotMatch(chatPanel, /:stabilize-mount=/)
+	assert.match(chatPanel,
+		/\.is-android-client \.voice-inline-status:not\(\.is-active\)\s*\{[^}]*position:\s*absolute[^}]*visibility:\s*hidden[^}]*opacity:\s*0[^}]*pointer-events:\s*none/)
+	assert.doesNotMatch(chatPanel,
+		/\.is-android-client \.voice-inline-status:not\(\.is-active\)\s*\{[^}]*display:\s*none/)
+	assert.doesNotMatch(waveform,
+		/stabilizeMount|user-voice-waveform-placeholder|uses-stable-fallback|is-canvas-ready|opacity:\s*0/)
+})
+
+test('voice canvas overlay removal leaves recorder, PCM, cancel, commit, and transcript bindings intact', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+
+	assert.match(chatPanel, /@click="abortVoiceInput\('USER_DISCARD'\)"/)
+	assert.match(chatPanel, /@click="finalizeVoiceInput\(false, 'USER_TAP'\)"/)
+	assert.match(chatPanel, /await recorder\.start\(frame =>/)
+	assert.match(chatPanel, /this\.publishVoiceWaveform\(frame, voiceEpoch\)/)
+	assert.match(chatPanel, /session\.sendAudio\(frame\)/)
+	assert.match(chatPanel, /this\.voicePartialText =/)
 })

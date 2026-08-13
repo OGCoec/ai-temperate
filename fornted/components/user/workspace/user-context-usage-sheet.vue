@@ -130,17 +130,14 @@
 	@import '@/common/ui/user-material.scss';
 
 	.user-context-usage-sheet { flex: 0 0 auto; }
-	.context-usage-trigger { min-width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0 6px; position: relative; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 11px; background: transparent; color: #8fdcbe; font-size: 11px; font-weight: 760; font-variant-numeric: tabular-nums; box-sizing: border-box; }
-	.context-usage-trigger::before { width: 36px; height: 34px; position: absolute; inset: 0; margin: auto; border: 1px solid rgba(55, 211, 154, .26); border-radius: 10px; background: rgba(15, 22, 19, .76); content: ''; }
-	.context-usage-trigger::after { border: 0; }
-	.context-usage-trigger > * { position: relative; z-index: 1; }
+	.context-usage-trigger { @include user-android-compact-control(36px, 34px, 10px); min-width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0 6px; color: #8fdcbe; font-size: 11px; font-weight: 760; font-variant-numeric: tabular-nums; }
 	.context-usage-layer { position: fixed; inset: 0; z-index: 97; }
 	.context-usage-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .6); }
 	.context-usage-sheet { width: 100%; max-height: min(58dvh, 420px); padding-bottom: env(safe-area-inset-bottom); position: absolute; right: 0; bottom: 0; left: 0; overflow: hidden; border: 1px solid rgba(151, 177, 163, .24); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 22px 22px 0 0; background: rgba(20, 25, 22, .98); box-shadow: 0 -14px 36px rgba(0, 0, 0, .34); box-sizing: border-box; }
 	.context-usage-heading { min-height: 62px; padding: 10px 10px 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(151, 177, 163, .15); }
 	.context-usage-title { display: block; color: #f3f5f4; font-size: 16px; font-weight: 760; }
 	.context-usage-summary { display: block; margin-top: 2px; color: #8fdcbe; font-size: 11px; }
-	.context-usage-close { @include user-frosted-control; width: 42px; height: 42px; min-height: 42px; margin: 0; padding: 0; border-radius: 13px; }
+	.context-usage-close { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; }
 	.context-usage-close::after { border: 0; }
 	.context-usage-details { padding: 8px 16px 16px; }
 	.context-usage-row { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid rgba(151, 177, 163, .1); color: #98a49e; font-size: 13px; }

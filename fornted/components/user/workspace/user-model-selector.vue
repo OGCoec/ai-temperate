@@ -1,12 +1,12 @@
 <template>
-	<view class="user-model-selector" :class="{ 'is-open': open, 'is-native': platformMode === 'native' }">
+	<view class="user-model-selector" :class="{ 'is-open': open, 'is-native': platformMode === 'native', 'is-embedded': embedded }">
 		<button
 			ref="trigger"
 			class="user-model-selector-trigger"
 			type="button"
 			:disabled="disabled || !options.length"
 			:aria-expanded="String(open)"
-			aria-haspopup="dialog"
+			:aria-haspopup="embedded ? 'listbox' : 'dialog'"
 			@click="toggle"
 		>
 			<text class="user-model-selector-trigger-label">{{ selectedOption?.modelName || '选择模型' }}</text>
@@ -14,12 +14,12 @@
 		</button>
 
 		<template v-if="open">
-			<view class="user-model-selector-backdrop" aria-hidden="true" @click="close"></view>
+			<view v-if="open && !embedded" class="user-model-selector-backdrop" aria-hidden="true" @click="close"></view>
 			<view
 				ref="panel"
 				class="user-model-selector-panel"
-				role="dialog"
-				aria-modal="true"
+				:role="embedded ? 'region' : 'dialog'"
+				:aria-modal="embedded ? undefined : 'true'"
 				aria-label="选择模型"
 				tabindex="-1"
 				@keydown.esc.stop.prevent="close"
@@ -78,12 +78,20 @@
 			platformMode: {
 				type: String,
 				default: 'web'
+			},
+			presentation: {
+				type: String,
+				default: 'overlay',
+				validator: value => ['overlay', 'embedded'].includes(value)
 			}
 		},
 		data() {
 			return { open: false }
 		},
 		computed: {
+			embedded() {
+				return this.presentation === 'embedded'
+			},
 			normalizedSelectedIndex() {
 				const index = Number(this.selectedIndex)
 				return Number.isInteger(index) && index >= 0 && index < this.options.length ? index : 0
@@ -130,6 +138,8 @@
 
 	.user-model-selector { min-width: 0; position: relative; z-index: 4; }
 	.user-model-selector.is-open { z-index: 90; }
+	.user-model-selector.is-embedded,
+	.user-model-selector.is-embedded.is-open { width: 100%; z-index: auto; }
 	.user-model-selector-trigger {
 		@include user-frosted-control;
 		min-width: 0;
@@ -172,6 +182,22 @@
 	.user-model-selector-caption { display: block; margin-top: 3px; color: #a0aaa5; font-size: 11px; line-height: 1.35; }
 	.user-model-selector-close { @include user-frosted-control; width: 38px; height: 38px; min-height: 38px; margin: 0; padding: 0; border-radius: 11px; }
 	.user-model-selector-list { max-height: calc(min(60dvh, 560px) - 68px); }
+	.user-model-selector.is-embedded .user-model-selector-trigger,
+	.user-model-selector.is-embedded .user-model-selector-close { min-height: 44px; }
+	.user-model-selector.is-embedded .user-model-selector-close { width: 44px; height: 44px; }
+	.user-model-selector.is-embedded .user-model-selector-panel {
+		width: 100%;
+		max-height: min(48dvh, 420px);
+		position: relative;
+		z-index: auto;
+		right: auto;
+		bottom: auto;
+		left: auto;
+		margin-top: 8px;
+		border-radius: 14px;
+		box-shadow: none;
+	}
+	.user-model-selector.is-embedded .user-model-selector-list { max-height: calc(min(48dvh, 420px) - 68px); }
 	.user-model-selector-option { width: 100%; min-height: 58px; margin: 0; padding: 10px 14px 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-bottom: 1px solid rgba(151, 177, 163, .12); border-radius: 0; background: transparent; color: #e7ece9; text-align: left; box-sizing: border-box; transition: background-color 140ms ease-out, transform 100ms ease-out; }
 	.user-model-selector-option:last-child { border-bottom: 0; }
 	.user-model-selector-option:active { background: rgba(55, 211, 154, .10); transform: scale(.99); }
