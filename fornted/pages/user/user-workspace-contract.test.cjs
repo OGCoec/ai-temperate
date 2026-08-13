@@ -96,6 +96,45 @@ test('workspace sidebar exposes new chat, primary destinations, and shared recen
 	assert.match(navigation, /this\.\$emit\('destination-click', destination\)/)
 })
 
+test('Android moves primary navigation into the drawer while H5 keeps the existing navigation shell', () => {
+	const sidebar = read('components/user/user-workspace-sidebar.vue')
+	const navigation = read('components/user/user-primary-navigation.vue')
+
+	assert.match(sidebar, /v-if="!androidClient"[\s\S]*<user-primary-navigation/)
+	assert.match(sidebar, /v-if="androidClient"[\s\S]*variant="drawer"/)
+	assert.match(sidebar, /getCurrentUserProfile\(\)/)
+	assert.match(sidebar, /class="workspace-drawer-account"[\s\S]*@click="selectDrawerDestination\('profile'\)"/)
+	assert.match(sidebar, /selectDrawerDestination\(destination\)[\s\S]*\$emit\('destination-click', destination\)[\s\S]*\$emit\('close-drawer'\)/)
+	assert.match(navigation, /variant === 'drawer'/)
+	assert.match(navigation, /\.user-primary-navigation\.is-drawer[\s\S]*position:\s*static/)
+	assert.match(sidebar, /width:\s*min\(70vw,\s*288px\)/)
+	assert.doesNotMatch(sidebar, />\s*(?:搜索|设置)\s*</)
+})
+
+test('Android workspace panels retain a drawer entry and delegate system back handling', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const modelCatalog = read('components/user/workspace/user-model-catalog.vue')
+	const modelDetail = read('components/user/workspace/user-model-detail.vue')
+	const profilePanel = read('components/user/workspace/user-profile-panel.vue')
+	const entries = [
+		read('pages/ai-chat/index.vue'),
+		read('pages/ai-models/catalog.vue'),
+		read('pages/ai-models/detail.vue'),
+		read('pages/account/profile.vue')
+	]
+
+	assert.match(workspace, /@new-chat="startNewChat"/)
+	assert.match(chatPanel, /class="chat-header-new-chat[^"]*"[\s\S]*@click="\$emit\('new-chat'\)"/)
+	assert.match(modelCatalog, /@click="\$emit\('open-conversation-drawer'\)"/)
+	assert.match(modelDetail, /@click="\$emit\('open-conversation-drawer'\)"/)
+	assert.match(profilePanel, /@click="\$emit\('open-conversation-drawer'\)"/)
+	assert.match(workspace, /handleBackPress\(\)[\s\S]*closeIfOpen\(\)[\s\S]*drawerOpen[\s\S]*return false/)
+	for (const page of entries) {
+		assert.match(page, /onBackPress\(\)[\s\S]*handleBackPress\(\)/)
+	}
+})
+
 test('workspace forwards explicit chat actions and page lifecycle without persisting conversation IDs', () => {
 	const workspace = read('components/user/user-workspace.vue')
 
@@ -132,6 +171,7 @@ test('all ordinary user pages use a custom navigation bar and one viewport shell
 		if (!expected.has(page.path)) continue
 		assert.equal(page.style?.navigationStyle, 'custom')
 		assert.equal(page.style?.backgroundColor, '#0b0d0c')
+		assert.equal(page.style?.appPlus?.softinputMode, 'adjustResize')
 	}
 })
 
@@ -161,14 +201,34 @@ test('chat video previews preserve their aspect ratio and stay within the availa
 		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
 })
 
-test('chat composer always keeps the motion preference control available', () => {
+test('chat composer keeps the motion control for H5 and fixes Android to system preference', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.doesNotMatch(chatPanel,
 		/<button\s+v-if="!manualMotionReduced"\s+class="motion-toggle"/)
 	assert.match(chatPanel,
-		/<button[\s\S]*?class="motion-toggle"[\s\S]*?@click="toggleMotionPreference"/)
+		/<button[\s\S]*?v-if="!androidClient"[\s\S]*?class="motion-toggle"[\s\S]*?@click="toggleMotionPreference"/)
 	assert.match(chatPanel, /\{\{ motionPreferenceLabel \}\}/)
+	assert.match(chatPanel, /if \(this\.androidClient\)[\s\S]*snapshot\.systemReduced[\s\S]*AI_MOTION_PREFERENCES\.SYSTEM/)
+})
+
+test('Android uses the compact two-row composer and keeps H5 picker controls', () => {
+	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const androidComposer = chatPanel.slice(
+		chatPanel.indexOf('class="android-composer-tools"'),
+		chatPanel.indexOf('<view v-if="!androidClient" class="composer-meta"')
+	)
+	const h5Controls = chatPanel.slice(
+		chatPanel.indexOf('<view v-if="!androidClient" class="composer-meta"'),
+		chatPanel.indexOf('<text v-if="pendingAttachments.length')
+	)
+
+	assert.match(androidComposer, /user-android-chat-settings-sheet/)
+	assert.match(androidComposer, /user-context-usage-sheet/)
+	assert.doesNotMatch(androidComposer, /<picker\b/)
+	assert.match(h5Controls, /<picker\b/)
+	assert.match(h5Controls, /class="composer-note"/)
+	assert.match(chatPanel, /\.is-android-client\s*\{[\s\S]*padding-bottom:\s*0/)
 })
 
 test('desktop voice composer keeps live recognition compact until the final transcript is ready', () => {

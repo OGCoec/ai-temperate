@@ -11,7 +11,8 @@ function loadModule(enabled) {
 	const factory = new Function('__AI_CONVERSATION_WEB_SEARCH_ENABLED__',
 		`${source}; return { aiConversationWebSearchEnabled,
 		modelSupportsAiConversationWebSearch,
-		normalizeAiConversationWebSearchMode }`)
+		normalizeAiConversationWebSearchMode,
+		defaultAiConversationWebSearchPreference }`)
 	return factory(enabled)
 }
 
@@ -36,6 +37,18 @@ test('web search requires the feature flag plus RESPONSES and WEB_SEARCH', () =>
 	assert.equal(enabled.normalizeAiConversationWebSearchMode('REQUIRED', {
 		capabilities: ['RESPONSES', 'WEB_SEARCH', 'IMAGE_GENERATION']
 	}), 'OFF')
+})
+
+test('Android defaults to AUTO while unsupported media models only force the effective mode off', () => {
+	const enabled = loadModule(true)
+	const capable = { capabilities: ['CHAT_COMPLETIONS', 'RESPONSES', 'WEB_SEARCH'] }
+	const media = { capabilities: ['RESPONSES', 'WEB_SEARCH', 'IMAGE_GENERATION'] }
+
+	const preference = enabled.defaultAiConversationWebSearchPreference('ANDROID')
+	assert.equal(preference, 'AUTO')
+	assert.equal(enabled.defaultAiConversationWebSearchPreference('H5'), 'OFF')
+	assert.equal(enabled.normalizeAiConversationWebSearchMode(preference, media), 'OFF')
+	assert.equal(enabled.normalizeAiConversationWebSearchMode(preference, capable), 'AUTO')
 })
 
 test('ordinary frontend builds expose web search unless explicitly disabled', () => {
