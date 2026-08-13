@@ -161,13 +161,14 @@ test('chat video previews preserve their aspect ratio and stay within the availa
 		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
 })
 
-test('chat composer removes the motion preference control after motion is manually reduced', () => {
+test('chat composer always keeps the motion preference control available', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 
-	assert.match(chatPanel,
+	assert.doesNotMatch(chatPanel,
 		/<button\s+v-if="!manualMotionReduced"\s+class="motion-toggle"/)
 	assert.match(chatPanel,
 		/<button[\s\S]*?class="motion-toggle"[\s\S]*?@click="toggleMotionPreference"/)
+	assert.match(chatPanel, /\{\{ motionPreferenceLabel \}\}/)
 })
 
 test('desktop voice composer keeps live recognition compact until the final transcript is ready', () => {
