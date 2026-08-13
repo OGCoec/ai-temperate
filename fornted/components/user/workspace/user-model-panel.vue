@@ -4,12 +4,14 @@
 			v-show="!modelPublicId"
 			:authenticated="authenticated"
 			@open-model="$emit('open-model', $event)"
+			@open-conversation-drawer="$emit('open-conversation-drawer')"
 		/>
 		<user-model-detail
 			v-if="modelPublicId"
 			:authenticated="authenticated"
 			:model-public-id="modelPublicId"
 			@back="$emit('close-model')"
+			@open-conversation-drawer="$emit('open-conversation-drawer')"
 		/>
 	</view>
 </template>
@@ -31,6 +33,11 @@
 			modelPublicId: {
 				type: String,
 				default: ''
+			}
+		},
+		methods: {
+			closeIfOpen() {
+				return false
 			}
 		}
 	}

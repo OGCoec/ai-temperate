@@ -37,6 +37,9 @@
 		},
 		onUnload() {
 			this.$refs.workspace?.handlePageUnload()
+		},
+		onBackPress() {
+			return this.$refs.workspace?.handleBackPress() === true
 		}
 	}
 </script>

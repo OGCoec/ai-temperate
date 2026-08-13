@@ -3,6 +3,15 @@
 		<scroll-view class="model-detail-scroll" scroll-y>
 			<view class="model-detail-shell" :aria-busy="loading">
 				<view class="model-detail-topbar">
+					<button
+						v-if="androidClient"
+						class="workspace-panel-menu"
+						type="button"
+						aria-label="打开导航"
+						@click="$emit('open-conversation-drawer')"
+					>
+						<uni-icons type="bars" size="18" color="#dce5e0" aria-hidden="true" />
+					</button>
 					<button class="model-detail-back" type="button" aria-label="返回模型目录" @click="goBack">
 						<uni-icons type="left" size="22" color="#dce5e0" aria-hidden="true" />
 						<text>模型</text>
@@ -101,6 +110,7 @@
 
 <script>
 	import { aiModelApi } from '@/common/aimodel/ai-model-api.js'
+	import { clientPlatform } from '@/common/auth/config.js'
 
 	export default {
 		props: {
@@ -134,6 +144,9 @@
 			}
 		},
 		computed: {
+			androidClient() {
+				return clientPlatform() === 'ANDROID'
+			},
 			hasModelIcon() {
 				return Boolean(this.model?.icon) && !this.iconFailed
 			}
@@ -181,7 +194,9 @@
 	.model-detail-page { min-width: 0; min-height: 0; height: 100%; background: #0b0d0c; color: #f3f5f4; }
 	.model-detail-scroll { height: 100%; min-height: 0; }
 	.model-detail-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 20px 16px calc(40px + env(safe-area-inset-bottom)); box-sizing: border-box; }
-	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; margin-bottom: 20px; }
+	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
+	.workspace-panel-menu::after { border: 0; }
 	.model-detail-back { @include user-frosted-control; min-width: 84px; min-height: 48px; margin: 0; padding: 0 10px; justify-content: flex-start; gap: 6px; border-radius: 12px; color: #dce5e0; font-size: 14px; font-weight: 650; line-height: 1.2; }
 	.model-detail-back::after, .model-detail-retry::after { border: 0; }
 	.model-detail-back:active, .model-detail-retry:active { transform: scale(.985); }

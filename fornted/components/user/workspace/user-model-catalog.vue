@@ -3,6 +3,15 @@
 		<scroll-view class="catalog-scroll" scroll-y>
 			<view class="catalog-shell" :aria-busy="!authenticated || initialLoading || refreshing || appending">
 				<view class="catalog-heading-row">
+					<button
+						v-if="androidClient"
+						class="workspace-panel-menu"
+						type="button"
+						aria-label="打开导航"
+						@click="$emit('open-conversation-drawer')"
+					>
+						<uni-icons type="bars" size="18" color="#dce5e0" aria-hidden="true" />
+					</button>
 					<view class="catalog-heading">
 						<text class="catalog-kicker">MODEL LIBRARY</text>
 						<text class="catalog-title">模型</text>
@@ -169,6 +178,7 @@
 
 <script>
 	import { aiModelApi } from '@/common/aimodel/ai-model-api.js'
+	import { clientPlatform } from '@/common/auth/config.js'
 	import { buildTextHighlightSegments } from '@/common/aimodel/description-highlight.js'
 	import {
 		loadNextAiModelCatalog,
@@ -198,6 +208,11 @@
 		},
 		mounted() {
 			if (this.authenticated) this.onAuthenticatedPageReady()
+		},
+		computed: {
+			androidClient() {
+				return clientPlatform() === 'ANDROID'
+			}
 		},
 		methods: {
 			onAuthenticatedPageReady() {
@@ -277,6 +292,8 @@
 	.catalog-scroll { height: 100%; min-height: 0; min-width: 0; flex: 1; }
 	.catalog-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 32px 16px calc(108px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.catalog-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
+	.workspace-panel-menu::after { border: 0; }
 	.catalog-heading { min-width: 0; display: flex; flex-direction: column; }
 	.catalog-kicker { color: #37d39a; font-size: 13px; font-weight: 700; letter-spacing: 2px; }
 	.catalog-title { margin-top: 8px; color: #f3f5f4; font-size: 32px; font-weight: 760; line-height: 1.2; letter-spacing: -.45px; }

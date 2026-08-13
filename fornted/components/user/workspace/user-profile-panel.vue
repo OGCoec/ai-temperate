@@ -3,6 +3,15 @@
 		<scroll-view class="profile-scroll" scroll-y>
 			<view class="profile-shell" :aria-busy="loading">
 				<view class="profile-heading-row">
+					<button
+						v-if="androidClient"
+						class="workspace-panel-menu"
+						type="button"
+						aria-label="打开导航"
+						@click="$emit('open-conversation-drawer')"
+					>
+						<uni-icons type="bars" size="18" color="#dce5e0" aria-hidden="true" />
+					</button>
 					<view class="profile-heading">
 						<text class="profile-kicker">YOUR ACCOUNT</text>
 						<text class="profile-title">个人</text>
@@ -164,7 +173,7 @@
 </template>
 
 <script>
-	import { AUTH_ROUTES } from '@/common/auth/config.js'
+	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import { logoutAllSessions, logoutSession } from '@/common/auth/http-client.js'
 	import { clearAiConversationStoppedDrafts } from '@/common/aichat/ai-conversation-stopped-draft.js'
 	import { clearAiConversationResearchSessions } from '@/common/aichat/ai-conversation-research-session.js'
@@ -209,6 +218,7 @@
 			if (this.authenticated) this.onAuthenticatedPageReady()
 		},
 		computed: {
+			androidClient() { return clientPlatform() === 'ANDROID' },
 			phone() { return derivePhonePresentation(this.profile?.phone) },
 			phoneDetail() {
 				const parts = []
@@ -263,6 +273,9 @@
 			}
 		},
 		methods: {
+			closeIfOpen() {
+				return false
+			},
 			openTotpSecurity() {
 				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.totpSecurity })
 			},
@@ -449,6 +462,8 @@
 	}
 
 	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
+	.workspace-panel-menu::after { border: 0; }
 	.profile-heading { min-width: 0; display: flex; flex-direction: column; }
 	.profile-kicker { color: #37d39a; font-size: 13px; font-weight: 700; letter-spacing: 2px; }
 	.profile-title { color: #f3f5f4; font-size: 32px; line-height: 1.2; font-weight: 760; margin-top: 8px; letter-spacing: -.45px; }

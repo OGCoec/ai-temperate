@@ -1,7 +1,10 @@
 <template>
 	<view
 		class="user-primary-navigation"
-		:class="{ 'is-chat-sidebar': variant === 'chat-sidebar' }"
+		:class="{
+			'is-chat-sidebar': variant === 'chat-sidebar',
+			'is-drawer': variant === 'drawer'
+		}"
 		role="navigation"
 		aria-label="主要导航"
 	>
@@ -59,7 +62,7 @@
 			variant: {
 				type: String,
 				default: 'default',
-				validator: value => ['default', 'chat-sidebar'].includes(value)
+				validator: value => ['default', 'chat-sidebar', 'drawer'].includes(value)
 			}
 		},
 		methods: {
@@ -130,6 +133,51 @@
 	.user-primary-navigation-item:focus-visible {
 		outline: 3px solid rgba(55, 211, 154, .32);
 		outline-offset: 2px;
+	}
+
+	.user-primary-navigation.is-drawer {
+		position: static;
+		width: 100%;
+		height: auto;
+		min-height: 0;
+		padding: 0;
+		flex-shrink: 1;
+		border: 0;
+		background: transparent;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
+	}
+
+	.is-drawer .user-primary-navigation-inner {
+		max-width: none;
+		margin: 0;
+		grid-template-columns: 1fr;
+		gap: 2px;
+	}
+
+	.is-drawer .user-primary-navigation-item {
+		min-height: 44px;
+		padding: 6px 10px 6px 14px;
+		position: relative;
+		justify-content: flex-start;
+		border-radius: 10px;
+		font-size: 14px;
+		text-align: left;
+	}
+
+	.is-drawer .user-primary-navigation-item.is-active {
+		background: rgba(243, 245, 244, .055);
+		color: #e5ece8;
+	}
+
+	.is-drawer .user-primary-navigation-item.is-active::before {
+		width: 3px;
+		height: 20px;
+		position: absolute;
+		left: 0;
+		border-radius: 0 3px 3px 0;
+		background: #37d39a;
+		content: '';
 	}
 
 	@media (hover: hover) and (pointer: fine) {

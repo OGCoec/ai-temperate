@@ -26,21 +26,26 @@
 				v-if="visitedDestinations.chat"
 				v-show="activeDestination === 'chat'"
 				@open-conversation-drawer="openConversationDrawer"
+				@new-chat="startNewChat"
 				@conversation-state-change="applyConversationState"
 				@conversation-completed="refreshConversations"
 			/>
 			<user-model-panel
+				ref="modelPanel"
 				v-if="visitedDestinations.models"
 				v-show="activeDestination === 'models'"
 				:authenticated="authenticated"
 				:model-public-id="activeModelPublicId"
 				@open-model="openModelDetail"
 				@close-model="closeModelDetail"
+				@open-conversation-drawer="openConversationDrawer"
 			/>
 			<user-profile-panel
+				ref="profilePanel"
 				v-if="visitedDestinations.profile"
 				v-show="activeDestination === 'profile'"
 				:authenticated="authenticated"
+				@open-conversation-drawer="openConversationDrawer"
 			/>
 		</view>
 	</view>
@@ -271,6 +276,20 @@
 			handlePageUnload() {
 				this.$refs.chatPanel?.handlePageUnload()
 				this.releaseWorkspaceBody()
+			},
+			handleBackPress() {
+				const activePanel = this.activeDestination === 'chat'
+					? this.$refs.chatPanel
+					: this.activeDestination === 'models'
+						? this.$refs.modelPanel
+						: this.$refs.profilePanel
+				if (typeof activePanel?.closeIfOpen === 'function'
+					&& activePanel.closeIfOpen()) return true
+				if (this.drawerOpen) {
+					this.drawerOpen = false
+					return true
+				}
+				return false
 			}
 		}
 	}

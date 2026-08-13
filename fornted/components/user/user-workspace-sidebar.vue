@@ -1,6 +1,7 @@
 <template>
 	<view class="workspace-navigation-layer">
 		<user-primary-navigation
+			v-if="!androidClient"
 			:active-destination="activeDestination"
 			variant="chat-sidebar"
 			@destination-click="$emit('destination-click', $event)"
@@ -33,6 +34,7 @@
 		<view
 			v-if="drawerOpen"
 			class="workspace-drawer-backdrop"
+			:class="{ 'is-android-drawer': androidClient }"
 			aria-hidden="true"
 			@click="$emit('close-drawer')"
 		></view>
@@ -40,13 +42,14 @@
 			v-if="drawerOpen"
 			ref="mobileDrawer"
 			class="workspace-history-drawer is-open"
+			:class="{ 'is-android-drawer': androidClient }"
 			role="complementary"
 			aria-label="聊天会话"
 			tabindex="-1"
 			@keydown.esc.stop="$emit('close-drawer')"
 		>
 			<view class="workspace-drawer-heading">
-				<text class="workspace-drawer-title">聊天</text>
+				<text class="workspace-drawer-title">{{ androidClient ? 'AI Temperate' : '聊天' }}</text>
 				<button
 					class="workspace-icon-button"
 					type="button"
@@ -56,10 +59,37 @@
 					<uni-icons type="closeempty" size="22" color="#dce5e0" aria-hidden="true" />
 				</button>
 			</view>
-			<button class="workspace-new-chat" type="button" @click="$emit('new-chat')">
+			<button
+				v-if="androidClient"
+				class="workspace-drawer-account"
+				type="button"
+				@click="selectDrawerDestination('profile')"
+			>
+				<image
+					v-if="drawerProfile?.avatarUrl"
+					class="workspace-drawer-avatar is-image"
+					:src="drawerProfile.avatarUrl"
+					mode="aspectFill"
+				/>
+				<view v-else class="workspace-drawer-avatar" aria-hidden="true">
+					<text>{{ drawerAvatarText }}</text>
+				</view>
+				<view class="workspace-drawer-account-copy">
+					<text class="workspace-drawer-account-name">{{ drawerDisplayName }}</text>
+					<text class="workspace-drawer-account-hint">查看个人资料</text>
+				</view>
+				<uni-icons type="right" size="16" color="#718078" aria-hidden="true" />
+			</button>
+			<button class="workspace-new-chat" type="button" @click="startDrawerNewChat">
 				<uni-icons type="compose" size="20" color="#37d39a" aria-hidden="true" />
 				<text>新聊天</text>
 			</button>
+			<user-primary-navigation
+				v-if="androidClient"
+				:active-destination="activeDestination"
+				variant="drawer"
+				@destination-click="selectDrawerDestination"
+			/>
 			<user-recent-conversations
 				content-id="workspace-mobile-recent"
 				:expanded="recentExpanded"
@@ -70,7 +100,7 @@
 				:error="conversationError"
 				:has-more="hasMoreConversations"
 				@toggle="$emit('toggle-recent')"
-				@open="$emit('open-conversation', $event)"
+				@open="openDrawerConversation"
 				@copy="$emit('copy-conversation', $event)"
 				@retry="$emit('retry-conversations')"
 				@load-more="$emit('load-more-conversations')"
@@ -80,6 +110,8 @@
 </template>
 
 <script>
+	import { clientPlatform } from '@/common/auth/config.js'
+	import { getCurrentUserProfile } from '@/common/user/current-user-profile.js'
 	import UserPrimaryNavigation from './user-primary-navigation.vue'
 	import UserRecentConversations from './user-recent-conversations.vue'
 
@@ -126,14 +158,45 @@
 				default: false
 			}
 		},
+		data() {
+			return {
+				drawerProfile: getCurrentUserProfile()
+			}
+		},
+		computed: {
+			androidClient() {
+				return clientPlatform() === 'ANDROID'
+			},
+			drawerDisplayName() {
+				return String(this.drawerProfile?.displayName || '当前用户').trim()
+			},
+			drawerAvatarText() {
+				return this.drawerDisplayName.slice(0, 1).toUpperCase() || 'U'
+			}
+		},
 		watch: {
 			drawerOpen(value) {
 				if (!value) return
+				this.drawerProfile = getCurrentUserProfile()
 				this.$nextTick(() => {
 					const drawer = this.$refs.mobileDrawer
 					const element = drawer?.$el || drawer
 					element?.focus?.()
 				})
+			}
+		},
+		methods: {
+			selectDrawerDestination(destination) {
+				this.$emit('destination-click', destination)
+				this.$emit('close-drawer')
+			},
+			startDrawerNewChat() {
+				this.$emit('new-chat')
+				this.$emit('close-drawer')
+			},
+			openDrawerConversation(conversationPublicId) {
+				this.$emit('open-conversation', conversationPublicId)
+				this.$emit('close-drawer')
 			}
 		}
 	}
@@ -165,6 +228,42 @@
 		box-sizing: border-box;
 	}
 
+	.workspace-drawer-account {
+		width: 100%;
+		min-height: 58px;
+		margin: 2px 0 10px;
+		padding: 8px;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		border: 0;
+		border-radius: 12px;
+		background: rgba(243, 245, 244, .035);
+		color: #eef4f1;
+		text-align: left;
+		box-sizing: border-box;
+	}
+
+	.workspace-drawer-account::after { border: 0; }
+	.workspace-drawer-avatar {
+		width: 36px;
+		height: 36px;
+		flex: 0 0 36px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: hidden;
+		border-radius: 12px;
+		background: #37d39a;
+		color: #08130e;
+		font-size: 15px;
+		font-weight: 800;
+	}
+	.workspace-drawer-avatar.is-image { display: block; background: #202520; }
+	.workspace-drawer-account-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+	.workspace-drawer-account-name { overflow: hidden; font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+	.workspace-drawer-account-hint { margin-top: 2px; color: #89948e; font-size: 11px; }
+
 	.workspace-new-chat::after,
 	.workspace-icon-button::after {
 		border: 0;
@@ -190,6 +289,11 @@
 		backdrop-filter: blur(16px) saturate(112%);
 		transform: translateX(-105%);
 		transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
+	}
+
+	.workspace-history-drawer.is-android-drawer {
+		width: min(70vw, 288px);
+		padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
 	}
 
 	.workspace-history-drawer.is-open {
@@ -228,8 +332,8 @@
 	}
 
 	@media screen and (min-width: 768px) {
-		.workspace-history-drawer,
-		.workspace-drawer-backdrop {
+		.workspace-history-drawer:not(.is-android-drawer),
+		.workspace-drawer-backdrop:not(.is-android-drawer) {
 			display: none !important;
 		}
 	}
