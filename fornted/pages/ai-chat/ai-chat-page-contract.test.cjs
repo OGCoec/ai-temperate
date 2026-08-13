@@ -125,7 +125,7 @@ test('desktop chat uses one primary sidebar with new chat before navigation and 
 	assert.match(recent,
 		/padding-right:\s*calc\(12px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
 	assert.match(recent,
-		/margin-right:\s*calc\(4px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
+		/margin-right:\s*calc\(6px\s*\+\s*var\(--sidebar-inline-padding,\s*0px\)\)/)
 	assert.match(chatPanel,
 		/\.chat-main\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
 	assert.match(chatPanel, /\.composer-controls\s*\{[^}]*flex-wrap:\s*wrap/)
@@ -286,7 +286,8 @@ test('web search is capability gated and research events remain in session stora
 	assert.match(page, /AI_CONVERSATION_WEB_SEARCH_MODES\.OFF/)
 	assert.match(page, /<picker[\s\S]{0,300}:range="webSearchOptions"/)
 	assert.match(page, /webSearchActive\(\)[\s\S]*selectedWebSearchMode !== AI_CONVERSATION_WEB_SEARCH_MODES\.OFF/)
-	assert.match(page, /const option = this\.webSearchOptions\[Number\(event\.detail\.value\)\][\s\S]*selectedWebSearchMode = option\.value/)
+	assert.match(page,
+		/const option = this\.webSearchOptions\[Number\(event\.detail\.value\)\][\s\S]*if \(this\.androidClient\) this\.preferredWebSearchMode = option\.value[\s\S]*selectedWebSearchMode = normalizeAiConversationWebSearchMode/)
 	assert.match(page, /event\.type === 'activity'/)
 	assert.match(page, /event\.type === 'source'/)
 	assert.match(page, /event\.type === 'reasoning_summary'/)
