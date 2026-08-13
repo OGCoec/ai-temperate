@@ -71,7 +71,10 @@
 			"path": "pages/account/profile",
 			"style": {
 				"navigationStyle": "custom",
-				"backgroundColor": "#0b0d0c"
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
 			}
 		},
 		{
@@ -90,14 +93,20 @@
 			"path": "pages/ai-models/catalog",
 			"style": {
 				"navigationStyle": "custom",
-				"backgroundColor": "#0b0d0c"
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
 			}
 		},
 		{
 			"path": "pages/ai-models/detail",
 			"style": {
 				"navigationStyle": "custom",
-				"backgroundColor": "#0b0d0c"
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
 			}
 		},
 		{

@@ -24,8 +24,9 @@
 			<scroll-view class="android-chat-settings-scroll" scroll-y>
 				<view class="android-chat-settings-section">
 					<text class="android-chat-settings-section-label">当前模型</text>
-					<view
+					<scroll-view
 						class="android-chat-settings-model-list"
+						scroll-y
 						:style="{ '--visible-model-items': String(normalizedMaxVisibleItems) }"
 					>
 						<button
@@ -46,7 +47,7 @@
 							</view>
 							<uni-icons v-if="index === normalizedSelectedModelIndex" type="checkmarkempty" size="20" color="#37d39a" aria-hidden="true" />
 						</button>
-					</view>
+					</scroll-view>
 				</view>
 
 				<view

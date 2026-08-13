@@ -377,6 +377,9 @@
 							>
 								部分附件未能保存，模型用量仍已按实际结果结算。
 							</text>
+							<text v-if="showAndroidResultDisclaimer(message)" class="android-result-disclaimer">
+								模型可能会出错，请核查重要信息。
+							</text>
 							<text v-if="message.error" class="message-error" role="alert">{{ message.error }}</text>
 						</view>
 					</view>
@@ -496,6 +499,13 @@
 							<text>{{ androidSettingsSummary }}</text>
 							<uni-icons type="down" size="13" color="#9da9a3" aria-hidden="true" />
 						</button>
+						<user-context-usage-sheet
+							v-if="currentConversationPublicId && contextUsage"
+							ref="contextUsageSheet"
+							:usage="contextUsage"
+							:compaction-presentation="contextCompactionPresentation"
+							:reduced="motionReduced"
+						/>
 					</view>
 					</view>
 				<user-android-chat-settings-sheet
@@ -687,6 +697,7 @@
 		recalculateAiConversationContextUsage
 	} from '@/common/aichat/ai-conversation-context-usage.js'
 	import { aiConversationErrorMessage } from '@/common/aichat/ai-conversation-error-presentation.js'
+	import { shouldShowAiResultDisclaimer } from '@/common/aichat/ai-conversation-result-presentation.js'
 	import { chooseConversationFiles } from '@/common/aichat/ai-conversation-file-picker.js'
 	import {
 		openAiConversationGenerationStream,
@@ -777,6 +788,7 @@
 		AI_CONVERSATION_WEB_SEARCH_MODES,
 		AI_CONVERSATION_WEB_SEARCH_OPTIONS,
 		aiConversationWebSearchEnabled,
+		defaultAiConversationWebSearchPreference,
 		modelSupportsAiConversationWebSearch,
 		normalizeAiConversationWebSearchMode
 	} from '@/common/aichat/ai-conversation-web-search.js'
@@ -811,6 +823,7 @@
 	import UserChatAttachmentList from './user-chat-attachment-list.vue'
 	import UserAndroidChatSettingsSheet from './user-android-chat-settings-sheet.vue'
 	import UserConversationTurnRail from './user-conversation-turn-rail.vue'
+	import UserContextUsageSheet from './user-context-usage-sheet.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
@@ -996,6 +1009,7 @@
 			UserAndroidChatSettingsSheet,
 			UserChatAttachmentList,
 			UserConversationTurnRail,
+			UserContextUsageSheet,
 			UserImageOutputCountDialog,
 			UserMarkdownMessage,
 			UserMediaUploadProgress,
@@ -1010,6 +1024,8 @@
 			// #endif
 		},
 		data() {
+			const initialWebSearchPreference =
+				defaultAiConversationWebSearchPreference(clientPlatform())
 			return {
 				...readAiConversationStore(),
 				draft: '',
@@ -1028,7 +1044,8 @@
 				selectedVideoDuration: 5,
 				selectedVideoResolution: 'P720',
 				selectedVideoAspect: 'RATIO_16_9',
-				selectedWebSearchMode: AI_CONVERSATION_WEB_SEARCH_MODES.OFF,
+				preferredWebSearchMode: initialWebSearchPreference,
+				selectedWebSearchMode: initialWebSearchPreference,
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
@@ -1102,6 +1119,11 @@
 		},
 		mounted() {
 			this.motionController = createAiMotionPreferenceController(snapshot => {
+				if (this.androidClient) {
+					this.motionReduced = snapshot.systemReduced
+					this.motionPreference = AI_MOTION_PREFERENCES.SYSTEM
+					return
+				}
 				this.motionReduced = snapshot.reduced
 				this.motionPreference = snapshot.preference
 			})
@@ -1471,7 +1493,11 @@
 				if (typeof handler === 'function') handler.call(this, event)
 			},
 			closeIfOpen() {
-				return this.$refs.androidSettingsSheet?.closeIfOpen?.() === true
+				if (this.$refs.androidSettingsSheet?.closeIfOpen?.()) return true
+				return this.$refs.contextUsageSheet?.closeIfOpen?.() === true
+			},
+			showAndroidResultDisclaimer(message) {
+				return this.androidClient && shouldShowAiResultDisclaimer(message)
 			},
 			normalizeAndroidVoiceErrorCode(value) {
 				const code = String(value || '')
@@ -2308,7 +2334,10 @@
 					this.normalizeVideoSelections(this.selectedModel)
 					uni.setStorageSync(REASONING_EFFORT_STORAGE_KEY, level)
 					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
-						this.selectedWebSearchMode, this.selectedModel)
+						this.androidClient
+							? this.preferredWebSearchMode
+							: this.selectedWebSearchMode,
+						this.selectedModel)
 					if (this.currentConversationPublicId) {
 						await this.refreshContextUsage()
 					}
@@ -2348,6 +2377,11 @@
 				this.draft = ''
 				this.pendingAttachments = []
 				this.composerError = ''
+				if (this.androidClient) {
+					this.preferredWebSearchMode = AI_CONVERSATION_WEB_SEARCH_MODES.AUTO
+					this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
+						this.preferredWebSearchMode, this.selectedModel)
+				}
 			},
 			async openConversation(publicId) {
 				if (publicId === this.currentConversationPublicId) return
@@ -2453,7 +2487,10 @@
 						this.selectedImageOutputCount)
 				}
 				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
-					this.selectedWebSearchMode, model)
+					this.androidClient
+						? this.preferredWebSearchMode
+						: this.selectedWebSearchMode,
+					model)
 				this.normalizeVideoSelections(model)
 				if (this.currentConversationPublicId) {
 					await this.refreshContextUsage({ requestCompaction: true })
@@ -2549,7 +2586,10 @@
 			selectWebSearchMode(event) {
 				if (this.generating || !this.webSearchAvailable) return
 				const option = this.webSearchOptions[Number(event.detail.value)]
-				if (option) this.selectedWebSearchMode = option.value
+				if (!option) return
+				if (this.androidClient) this.preferredWebSearchMode = option.value
+				this.selectedWebSearchMode = normalizeAiConversationWebSearchMode(
+					option.value, this.selectedModel)
 			},
 			async chooseAttachments() {
 				if (this.attachmentPickerBusy || this.voiceInteractionActive) return
@@ -3205,6 +3245,7 @@
 					this.researchSources(message))
 			},
 			toggleMotionPreference() {
+				if (this.androidClient) return
 				this.motionController?.toggleManualReduce?.()
 			},
 			researchDetailsAvailable(message) {
@@ -4089,6 +4130,7 @@
 	.image-output-slot { min-height: 148px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #8fdcbe; font-size: 12px; text-align: center; }
 	.image-output-slot.is-failed { color: #ff9b94; background: rgba(125, 43, 39, .12); }
 	.image-output-summary { display: block; margin-top: 9px; color: #a9b5af; font-size: 12px; }
+	.android-result-disclaimer { display: block; margin-top: 10px; color: #748079; font-size: 11px; line-height: 1.45; }
 	.attachment-image { width: 100%; height: 180px; display: block; }
 	.attachment-video { width: 100%; height: 100%; max-height: min(68vh, 1080px); margin: 0 auto; display: block; object-fit: contain; background: #000; }
 	.attachment-image.generated-response-image { width: auto; max-width: 100%; height: auto; margin: 0 auto; display: block; }
@@ -4163,6 +4205,16 @@
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #a0aaa5; font-size: 12px; }
 	.composer-error { display: block; padding: 5px 6px 0; }
 	.is-android-client .attachment-grid { grid-template-columns: minmax(0, 1fr); }
+	.is-android-client .message-shell { padding: 20px 12px 18px; }
+	.is-android-client .message-turn { margin-bottom: 22px; }
+	.is-android-client .message-block { max-width: 82%; padding: 10px 12px; }
+	.is-android-client .user-message .message-text { font-size: 15px; line-height: 1.55; }
+	.is-android-client .assistant-message { max-width: 100%; margin-top: 10px; padding-right: 0; padding-left: 0; font-size: 16px; line-height: 1.62; }
+	.is-android-client .assistant-label { margin-bottom: 8px; }
+	.is-android-client .chat-empty { min-height: min(52vh, 420px); padding-bottom: 2vh; }
+	.is-android-client .chat-empty-mark { width: 52px; height: 52px; border-radius: 15px; }
+	.is-android-client .chat-empty-title { margin-top: 16px; font-size: 27px; }
+	.is-android-client .chat-empty-copy { max-width: 310px; margin-top: 8px; font-size: 14px; line-height: 1.55; }
 	.is-android-client .attachment-card.is-android-media { width: 100% !important; max-width: 100%; overflow: visible; border: 0; border-radius: 0; background: transparent; }
 	.is-android-client .attachment-media-frame.is-video { width: 100% !important; max-width: 100%; max-height: none; aspect-ratio: auto !important; overflow: visible; border: 0; border-radius: 0; background: transparent; }
 	.is-android-client { padding-bottom: 0; }
@@ -4200,6 +4252,16 @@
 	.android-settings-trigger > * { position: relative; z-index: 1; }
 	.android-settings-trigger text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.android-settings-trigger:disabled { opacity: .48; }
+	@media screen and (orientation: landscape) and (max-height: 520px) {
+		.is-android-client .chat-header-subtitle { display: none; }
+		.is-android-client .chat-header { min-height: 48px; }
+		.is-android-client .composer-wrap { padding-top: 4px; }
+		.is-android-client .composer:not(.is-voice-active) { min-height: 70px; grid-template-rows: minmax(24px, auto) 42px; }
+		.is-android-client .composer:not(.is-voice-active) .composer-icon,
+		.is-android-client .composer:not(.is-voice-active) .voice-button,
+		.is-android-client .composer:not(.is-voice-active) .send-button,
+		.is-android-client .android-settings-trigger { height: 42px; min-height: 42px; }
+	}
 	@media screen and (min-width: 768px) {
 		.chat-main { padding-bottom: 0; }
 		.chat-main:not(.is-android-client) .mobile-only { display: none !important; }

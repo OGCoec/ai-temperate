@@ -35,3 +35,9 @@ export function normalizeAiConversationWebSearchMode(mode, model) {
 		? normalized
 		: 'OFF'
 }
+
+export function defaultAiConversationWebSearchPreference(platform) {
+	return String(platform || '').toUpperCase() === 'ANDROID'
+		? AI_CONVERSATION_WEB_SEARCH_MODES.AUTO
+		: AI_CONVERSATION_WEB_SEARCH_MODES.OFF
+}

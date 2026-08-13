@@ -171,7 +171,7 @@ test('all ordinary user pages use a custom navigation bar and one viewport shell
 		if (!expected.has(page.path)) continue
 		assert.equal(page.style?.navigationStyle, 'custom')
 		assert.equal(page.style?.backgroundColor, '#0b0d0c')
-		assert.equal(page.style?.appPlus?.softinputMode, 'adjustResize')
+		assert.equal(page.style?.['app-plus']?.softinputMode, 'adjustResize')
 	}
 })
 

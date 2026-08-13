@@ -1,5 +1,5 @@
 <template>
-	<view class="profile-page">
+	<view class="profile-page" :class="{ 'is-android-client': androidClient }">
 		<scroll-view class="profile-scroll" scroll-y>
 			<view class="profile-shell" :aria-busy="loading">
 				<view class="profile-heading-row">
@@ -460,6 +460,7 @@
 		margin: 0 auto;
 		padding: 32px 16px calc(108px + env(safe-area-inset-bottom));
 	}
+	.profile-page.is-android-client .profile-shell { padding: max(14px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom)); }
 
 	.profile-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }

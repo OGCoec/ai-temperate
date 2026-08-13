@@ -1,5 +1,5 @@
 <template>
-	<view class="model-detail-page">
+	<view class="model-detail-page" :class="{ 'is-android-client': androidClient }">
 		<scroll-view class="model-detail-scroll" scroll-y>
 			<view class="model-detail-shell" :aria-busy="loading">
 				<view class="model-detail-topbar">
@@ -194,6 +194,7 @@
 	.model-detail-page { min-width: 0; min-height: 0; height: 100%; background: #0b0d0c; color: #f3f5f4; }
 	.model-detail-scroll { height: 100%; min-height: 0; }
 	.model-detail-shell { max-width: 800px; min-height: 100%; margin: 0 auto; padding: 20px 16px calc(40px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+	.model-detail-page.is-android-client .model-detail-shell { padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom)); }
 	.model-detail-topbar { min-height: 48px; display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
 	.workspace-panel-menu { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border: 0; border-radius: 13px; background: rgba(243, 245, 244, .055); }
 	.workspace-panel-menu::after { border: 0; }
