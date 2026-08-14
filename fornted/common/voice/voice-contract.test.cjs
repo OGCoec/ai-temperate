@@ -212,7 +212,7 @@ test('voice transcript presenter is session owned and cleared on every terminal 
 	assert.doesNotMatch(panel, /console\.(?:log|warn|error)\([^)]*voice(?:Partial|DisplayedPartial)Text/)
 })
 
-test('H5 voice status row keeps its existing compact Canvas presentation', () => {
+test('voice status row uses a single unified Canvas waveform on all platforms', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 	const statusStart = panel.indexOf('class="voice-inline-status"')
 	const statusEnd = panel.indexOf('</view>', statusStart)
@@ -228,6 +228,9 @@ test('H5 voice status row keeps its existing compact Canvas presentation', () =>
 	assert.match(statusTemplate, /:reduced="motionReduced"/)
 	assert.doesNotMatch(statusTemplate, /class="voice-duration"/)
 	assert.doesNotMatch(statusTemplate, /<user-thinking-orb/)
+	// APP-PLUS 与 H5 统一使用 <user-voice-waveform>，不再条件编译独立 Android 组件。
+	assert.doesNotMatch(statusTemplate, /<user-voice-waveform-android/)
+	assert.doesNotMatch(statusTemplate, /#ifdef APP-PLUS/)
 	assert.match(panel, /\.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 56px\)/s)
 	assert.match(panel, /\.composer\s*\{[^}]*gap:\s*8px/s)
 	assert.match(panel, /\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active\s*\{[^}]*gap:\s*7px/s)
@@ -407,6 +410,7 @@ test('voice waveform analyzes only after audio enqueue and fails open inside the
 	assert.match(publishMethod, /this\.voiceSessionEpoch !== voiceEpoch/)
 	assert.match(publishMethod, /this\.voiceState !== 'RECORDING'/)
 	assert.match(publishMethod, /try\s*\{[\s\S]*\.analyze\(frame\)[\s\S]*catch\s*\(_\)\s*\{\s*return\s*\}/)
+	assert.match(publishMethod, /publishedAtMs:\s*Date\.now\(\)/)
 	assert.doesNotMatch(publishMethod, /handleVoiceFailure|sendAudio|console\./)
 	assert.match(panel, /resetVoiceWaveform\(this\.voiceSessionEpoch\)/)
 	assert.match(panel, /this\.voiceWaveformPacket = null/)
@@ -425,25 +429,21 @@ test('H5 and Android publish the same normalized waveform presentation levels', 
 	assert.doesNotMatch(publishMethod, /sendAudio|session\.|handleVoiceFailure/)
 })
 
-test('H5 and Android share one waveform timeline while keeping platform renderers isolated', () => {
+test('H5 and Android share one waveform timeline and a single Canvas renderer with platform profiles', () => {
 	const timeline = read('common/voice/voice-waveform-timeline.js')
 	const presentation = read('common/voice/voice-waveform-presentation.js')
-	const h5Renderer = read('components/user/workspace/user-voice-waveform-render.js')
-	const androidController = read('common/voice/voice-waveform-android-controller.js')
-	const androidView = read('components/user/workspace/user-voice-waveform-android.vue')
+	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
 
 	assert.match(timeline, /VOICE_WAVEFORM_INTERVAL_MS\s*=\s*300/)
 	assert.match(timeline, /VOICE_WAVEFORM_QUEUE_LIMIT\s*=\s*15/)
 	assert.match(timeline, /VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*192/)
-	assert.match(h5Renderer, /createVoiceWaveformTimeline/)
-	assert.match(h5Renderer, /H5_VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*512/)
-	assert.match(androidController, /createVoiceWaveformTimeline/)
-	assert.doesNotMatch(androidController, /H5_VOICE_WAVEFORM_MAX_CAPACITY|maxCapacity/)
+	assert.match(renderer, /createVoiceWaveformTimeline/)
+	assert.match(renderer, /CANVAS_VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*512/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_WIDTH\s*=\s*2\.5/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_GAP\s*=\s*3/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_PITCH\s*=\s*5\.5/)
 	assert.match(presentation, /rgba\(174,185,179,0\.24\)/)
-	assert.doesNotMatch(`${h5Renderer}\n${androidController}\n${androidView}`,
+	assert.doesNotMatch(renderer,
 		/117,\s*223,\s*183|55,\s*211,\s*154/)
 	assert.doesNotMatch(`${timeline}\n${presentation}`,
 		/Vue|Canvas|UniApp|WebSocket|sendAudio|PCM/)

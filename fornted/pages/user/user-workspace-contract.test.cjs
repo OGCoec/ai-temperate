@@ -419,6 +419,10 @@ test('Android mounts the voice canvas only while voice interaction is active and
 		/\.is-android-client \.voice-inline-status:not\(\.is-active\)\s*\{[^}]*display:\s*none/)
 	assert.doesNotMatch(waveform,
 		/stabilizeMount|user-voice-waveform-placeholder|uses-stable-fallback|is-canvas-ready|opacity:\s*0/)
+	assert.match(waveform,
+		/#ifdef H5[\s\S]*class="user-voice-waveform-native-host"[\s\S]*#endif/)
+	assert.match(waveform,
+		/#ifdef APP-PLUS[\s\S]*<canvas[\s\S]*:hidpi="false"[\s\S]*#endif/)
 })
 
 test('voice canvas overlay removal leaves recorder, PCM, cancel, commit, and transcript bindings intact', () => {

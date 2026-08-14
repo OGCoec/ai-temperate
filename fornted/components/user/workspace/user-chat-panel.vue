@@ -392,22 +392,12 @@
 							:aria-busy="String(voiceInteractionActive)"
 						>
 							<text class="visually-hidden">{{ voiceStatusLabel }}</text>
-							<!-- #ifndef APP-PLUS -->
 							<user-voice-waveform
 								:state="voiceState"
 								:session-epoch="voiceSessionEpoch"
 								:packet="voiceWaveformPacket"
 								:reduced="motionReduced"
 							/>
-							<!-- #endif -->
-							<!-- #ifdef APP-PLUS -->
-							<user-voice-waveform-android
-								:state="voiceState"
-								:session-epoch="voiceSessionEpoch"
-								:packet="voiceWaveformPacket"
-								:reduced="motionReduced"
-							/>
-							<!-- #endif -->
 						</view>
 						<view class="voice-transcript-row">
 							<user-thinking-orb
@@ -917,9 +907,7 @@
 	import UserModelSelector from './user-model-selector.vue'
 	import UserSourceChip from './user-source-chip.vue'
 	import UserThinkingOrb from './user-thinking-orb.vue'
-	// #ifndef APP-PLUS
 	import UserVoiceWaveform from './user-voice-waveform.vue'
-	// #endif
 	// #ifdef APP-PLUS
 	import {
 		androidGeneratedImageOwnerKey,
@@ -934,7 +922,6 @@
 	import UserAndroidChatImage from './user-android-chat-image.vue'
 	import UserAndroidChatVideo from './user-android-chat-video.vue'
 	import UserAndroidFileCard from './user-android-file-card.vue'
-	import UserVoiceWaveformAndroid from './user-voice-waveform-android.vue'
 	// #endif
 	import {
 		appendLocalMessage,
@@ -1147,14 +1134,11 @@
 			UserModelSelector,
 			UserSourceChip,
 			UserThinkingOrb,
-			// #ifndef APP-PLUS
 			UserVoiceWaveform,
-			// #endif
 			// #ifdef APP-PLUS
 			UserAndroidChatImage,
 			UserAndroidChatVideo,
-			UserAndroidFileCard,
-			UserVoiceWaveformAndroid
+			UserAndroidFileCard
 			// #endif
 		},
 		data() {
@@ -1797,6 +1781,7 @@
 				this.voiceWaveformPacket = Object.freeze({
 					epoch: voiceEpoch,
 					sequence: this.voiceWaveformSequence,
+					publishedAtMs: Date.now(),
 					levels: Object.freeze(visualLevels)
 				})
 			},
@@ -4985,6 +4970,10 @@
 	.is-android-client .chat-header-subtitle { margin-top: 0; font-size: 11px; }
 	.is-android-client .icon-button { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; }
 	.is-android-client .composer-wrap { padding: 6px 12px calc(8px + env(safe-area-inset-bottom)); }
+	// 波形占用取消按钮上方的空白列，并在计时器左侧保留 4px；真实宽度仍交给 Canvas 重新计算容量。
+	.is-android-client .voice-inline-status { width: calc(100% + 56px); max-width: none; min-width: 0; height: 28px; min-height: 28px; padding: 2px 0; overflow: hidden; }
+	// 与 28px 波形行共享同一垂直中心，避免计时文字相对中轴线上下漂移。
+	.is-android-client .voice-duration { height: 28px; min-height: 28px; flex: 0 0 28px; }
 	.is-android-client .composer:not(.is-voice-active) { min-height: 76px; padding: 4px 5px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: minmax(28px, auto) 44px; align-items: center; column-gap: 3px; row-gap: 0; border-radius: 16px; }
 	.is-android-client .composer:not(.is-voice-active) .composer-entry { grid-column: 1 / -1; grid-row: 1; align-self: stretch; }
 	.is-android-client .composer:not(.is-voice-active) .voice-transcript-row { min-height: 28px; }
@@ -5023,14 +5012,13 @@
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-button { width: 38px; height: 38px; min-height: 38px; border-radius: 12px; }
 		.chat-main:not(.is-android-client) .composer-input { font-size: 14px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .composer-entry { align-self: stretch; justify-content: center; }
-		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status { width: calc(100% + 45px); min-height: 18px; margin-left: -45px; padding-top: 0; }
-		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status .user-voice-waveform { height: 18px; min-height: 18px; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status { width: calc(100% + 45px); min-height: 24px; margin-left: -45px; padding-top: 0; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button { order: -1; align-self: flex-end; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row { min-height: 30px; gap: 8px; overflow: hidden; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row .user-thinking-orb { width: 26px; min-width: 26px; height: 26px; min-height: 26px; flex-basis: 26px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-live-transcript,
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-live-transcript-line { height: 26px; }
-		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-button { order: -1; }
-		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-glyph { font-size: 23px; line-height: 34px; }
+				.chat-main:not(.is-android-client) .composer.is-voice-active .voice-cancel-glyph { font-size: 23px; line-height: 34px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-stack { width: 38px; min-width: 38px; flex-basis: 38px; align-self: center; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-duration { width: 38px; min-height: 18px; font-size: 10px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-square { width: 12px; height: 12px; }

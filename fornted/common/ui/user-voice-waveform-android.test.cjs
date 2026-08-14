@@ -7,54 +7,101 @@ function read(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, '..', '..', relativePath), 'utf8')
 }
 
-test('Android waveform is a plain UniApp view keyed by stable bar ids', () => {
-	const component = read('components/user/workspace/user-voice-waveform-android.vue')
+test('Android waveform is now a unified Canvas component, not a Vue v-for list', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
 
-	assert.match(component, /createAndroidVoiceWaveformController/)
-	assert.match(component, /v-for="bar in renderedBars"/)
-	assert.match(component, /:key="bar\.id"/)
-	assert.match(component, /class="user-voice-waveform-android-bar"/)
-	assert.match(component, /class="user-voice-waveform-android-viewport"/)
-	assert.match(component, /VOICE_WAVEFORM_HEIGHT/)
-	assert.match(component, /overflow:\s*hidden/)
-	assert.doesNotMatch(component, /<canvas|renderjs|getContext|createCanvasContext|MutationObserver|ResizeObserver/)
-	assert.doesNotMatch(component, /ArrayBuffer|DataView|PCM|sendAudio|WebSocket/)
+	// APP-PLUS 与 H5 统一使用 <user-voice-waveform>，不再条件编译独立 Android 组件。
+	assert.match(panel, /<user-voice-waveform/)
+	assert.doesNotMatch(panel, /<user-voice-waveform-android/)
+	assert.doesNotMatch(panel, /import UserVoiceWaveformAndroid/)
+	assert.doesNotMatch(panel, /user-android-voice-composer|UserAndroidVoiceComposer/)
+	assert.doesNotMatch(renderer, /visibleCapacity:\s*192|transition-duration:\s*300ms/)
 })
 
-test('Android animates only one track transform with the shared 300ms pitch', () => {
-	const component = read('components/user/workspace/user-voice-waveform-android.vue')
+test('the unified waveform component passes a platform profile to the renderer', () => {
+	const component = read('components/user/workspace/user-voice-waveform.vue')
 
-	assert.match(component, /'--voice-waveform-bar-width':\s*`\$\{VOICE_WAVEFORM_BAR_WIDTH\}px`/)
-	assert.match(component, /'--voice-waveform-bar-gap':\s*`\$\{VOICE_WAVEFORM_BAR_GAP\}px`/)
-	assert.match(component, /'--voice-waveform-bar-pitch':\s*`\$\{VOICE_WAVEFORM_BAR_PITCH\}px`/)
-	assert.match(component, /'--voice-waveform-visible-width':\s*`\$\{this\.visibleCapacity \* VOICE_WAVEFORM_BAR_PITCH\}px`/)
-	assert.match(component, /transition-property:\s*transform/)
-	assert.match(component, /transition-duration:\s*300ms/)
-	assert.match(component, /transition-timing-function:\s*linear/)
-	assert.match(component, /translate3d\(calc\(-1 \* var\(--voice-waveform-bar-pitch\)\),\s*0,\s*0\)/)
-	assert.doesNotMatch(component, /transition:\s*(?:height|width|left|margin)/)
-	assert.doesNotMatch(component, /transition-property:\s*(?:height|width|left|margin)/)
-	assert.doesNotMatch(component, /117,\s*223,\s*183|55,\s*211,\s*154/)
+	// 内部条件编译决定 profile，不暴露为公共 Prop。
+	assert.match(component, /profile/)
+	assert.match(component, /#ifdef APP-PLUS/)
+	assert.match(component, /'android'/)
+	assert.match(component, /'h5'/)
+	assert.match(component, /publishedAtMs:\s*Number\(this\.packet\.publishedAtMs\)/)
+	assert.doesNotMatch(component, /props:.*profile/)
 })
 
-test('Android applies a fresh shared snapshot before starting the next transform cycle', () => {
-	const component = read('components/user/workspace/user-voice-waveform-android.vue')
+test('Android Canvas renderer uses smaller symmetric bars without a midline', () => {
+	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
 
-	assert.match(component, /onSnapshot:\s*snapshot\s*=>\s*this\.applySnapshot\(snapshot\)/)
-	assert.match(component, /this\.trackAdvancing\s*=\s*false[\s\S]*this\.renderedBars\s*=/)
-	assert.match(component, /this\.\$nextTick\(\(\)\s*=>\s*\{[\s\S]*this\.trackAdvancing\s*=\s*true/)
-	assert.match(component, /this\.reduced\s*\?\s*snapshot\.settledBars\s*:\s*snapshot\.movingBars/)
-	assert.match(component, /'is-advancing':\s*trackAdvancing\s*&&\s*!reduced/)
+	// Android 保留 2px～14px 名义范围，再由指数与 0.82 上限得到 11.84px 实际最大柱长。
+	assert.match(renderer, /ANDROID_BAR_WIDTH\s*=\s*2/)
+	assert.match(renderer, /ANDROID_MAX_HEIGHT\s*=\s*14/)
+	assert.match(renderer, /ANDROID_LEVEL_EXPONENT\s*=\s*1\.3/)
+	assert.match(renderer, /ANDROID_LEVEL_CEILING\s*=\s*0\.82/)
+	assert.match(renderer, /resolveVoiceWaveformDisplayLevel/)
+	assert.match(renderer, /profile === 'android' \? 1 : resolvedDpr/)
+	assert.doesNotMatch(renderer, /ANDROID_MIDLINE|drawAndroidMidline/)
 })
 
-test('Android keeps the unsettled trailing slot for transform geometry but hides its zero-level node', () => {
-	const component = read('components/user/workspace/user-voice-waveform-android.vue')
+test('Android visible width must come from Canvas display area, not a wider ancestor', () => {
+	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
 
-	assert.match(component, /:class="\{ 'is-pending': bar\.pending \}"/)
-	assert.match(component, /const pendingBarId = this\.reduced[\s\S]*snapshot\.movingBars\[snapshot\.movingBars\.length - 1\]\?\.id/)
-	assert.match(component, /pending:\s*bar\.id === pendingBarId/)
-	assert.match(component, /\.user-voice-waveform-android-bar\.is-pending\s*\{[^}]*visibility:\s*hidden/s)
-	assert.doesNotMatch(component, /transition-property:\s*visibility|transition:\s*visibility/)
+	// 宽度测量优先使用 .user-voice-waveform 实际渲染框和 Canvas Host。
+	assert.match(renderer, /measureWidth/)
+	// 宽度为 0 时不缓存为有效 metrics。
+	assert.match(renderer, /metricsDirty/)
+	// 不使用 Canvas 的固有 width 属性作为 CSS 可视宽度。
+	assert.doesNotMatch(renderer, /canvas\.width\s*\/\s*dpr/)
+})
+
+test('zero-width canvas does not cache as valid metrics', () => {
+	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
+
+	// 宽度为 0 时 configureCanvas 返回 null 且保持 metricsDirty = true。
+	assert.match(renderer, /!\(width > 0\)\) return null/)
+	assert.match(renderer, /this\.metricsDirty = false/)
+})
+
+test('Android waveform extends across the empty cancel column and aligns with duration', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	// 波形只延伸到时间左侧，Canvas 仍按扩展后的真实渲染框计算容量。
+	assert.match(panel,
+		/\.is-android-client\s+\.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 56px\)[^}]*max-width:\s*none/s)
+	assert.match(panel,
+		/\.is-android-client\s+\.voice-inline-status\s*\{[^}]*height:\s*28px[^}]*min-height:\s*28px[^}]*padding:\s*2px 0[^}]*overflow:\s*hidden/s)
+	assert.match(panel,
+		/\.is-android-client\s+\.voice-duration\s*\{[^}]*height:\s*28px[^}]*min-height:\s*28px[^}]*flex:\s*0 0 28px/s)
+	assert.doesNotMatch(panel,
+		/\.is-android-client\s+\.voice-inline-status\s*\{[^}]*(?:transform|margin-left):/s)
+})
+
+test('H5 desktop waveform display area is 24px, not 18px', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	// H5 桌面波形显示区固定为 24px。
+	assert.doesNotMatch(panel,
+		/\.voice-inline-status\s+\.user-voice-waveform\s*\{[^}]*height:\s*18px/)
+	// 波形组件固有 24px 不再被外部压缩。
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\)\s+\.composer\.is-voice-active\s+\.voice-inline-status\s*\{[^}]*min-height:\s*24px/s)
+})
+
+test('H5 desktop horizontal waveform span is preserved', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	// 横向规则保持不变。
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\)\s+\.composer\.is-voice-active\s+\.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 45px\)[^}]*margin-left:\s*-45px/s)
+})
+
+test('H5 desktop cancel button and stop button align vertically', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	// 取消键使用 align-self: flex-end 贴底。
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\)\s+\.composer\.is-voice-active\s+\.voice-cancel-button\s*\{[^}]*align-self:\s*flex-end/s)
 })
 
 test('Android keeps the original orb, cancel, and stop layout unchanged', () => {
@@ -75,22 +122,9 @@ test('Android keeps the original orb, cancel, and stop layout unchanged', () => 
 	assert.doesNotMatch(panel, /user-android-voice-composer|UserAndroidVoiceComposer/)
 })
 
-test('App-Plus replaces only the waveform node while H5 keeps its Canvas component', () => {
+test('unified waveform receives only visual data and retains existing voice actions', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
-	const renderer = read('components/user/workspace/user-voice-waveform-render.js')
-
-	assert.match(panel, /#ifdef APP-PLUS[\s\S]*<user-voice-waveform-android/)
-	assert.match(panel, /#ifndef APP-PLUS[\s\S]*<user-voice-waveform/)
-	assert.match(panel, /#ifndef APP-PLUS[\s\S]*import UserVoiceWaveform/)
-	assert.match(panel, /#ifdef APP-PLUS[\s\S]*import UserVoiceWaveformAndroid/)
-	assert.doesNotMatch(panel, /v-if="androidClient \|\| voiceInteractionActive"/)
-	assert.doesNotMatch(panel, /user-android-voice-composer|UserAndroidVoiceComposer/)
-	assert.doesNotMatch(renderer, /App-Plus|CANVAS_CANDIDATE_MISSING|scheduleCanvasProbe|observeCanvasMount/)
-})
-
-test('Android waveform receives only visual data and retains existing voice actions', () => {
-	const panel = read('components/user/workspace/user-chat-panel.vue')
-	const start = panel.indexOf('<user-voice-waveform-android')
+	const start = panel.indexOf('<user-voice-waveform')
 	const end = panel.indexOf('/>', start)
 	const binding = panel.slice(start, end)
 
@@ -104,10 +138,24 @@ test('Android waveform receives only visual data and retains existing voice acti
 	assert.doesNotMatch(binding, /sendAudio|WebSocket|handleVoiceFailure/)
 })
 
-test('Android component failures stop only visualization and never report a voice error', () => {
-	const component = read('components/user/workspace/user-voice-waveform-android.vue')
+test('component input stays visual-only and Canvas lifecycle stays native', () => {
+	const component = fs.readFileSync(path.resolve(
+		__dirname,
+		'../../components/user/workspace/user-voice-waveform.vue'), 'utf8')
+	const renderer = fs.readFileSync(path.resolve(
+		__dirname,
+		'../../components/user/workspace/user-voice-waveform-render.js'), 'utf8')
 
-	assert.match(component, /try\s*\{[\s\S]*controller\?\.accept\?\.\(packet\)[\s\S]*catch\s*\(_\)/)
-	assert.match(component, /this\.stopVisualization\(\)/)
-	assert.doesNotMatch(component, /handleVoiceFailure|finalizeVoiceInput|abortVoiceInput|sendAudio/)
+	assert.match(component, /aria-hidden="true"/)
+	assert.match(component, /levels\.slice\(0, 5\)/)
+	assert.match(component,
+		/#ifdef APP-PLUS[\s\S]*<canvas[\s\S]*:hidpi="false"[\s\S]*#endif/)
+	assert.match(component,
+		/#ifdef H5[\s\S]*class="user-voice-waveform-native-host"[\s\S]*#endif/)
+	assert.doesNotMatch(component, /ArrayBuffer|DataView|PCM|sendAudio|WebSocket/)
+	assert.doesNotMatch(renderer, /handleVoiceFailure|sendAudio|WebSocket/)
+	assert.match(renderer, /IntersectionObserver/)
+	assert.match(renderer, /ResizeObserver/)
+	assert.match(renderer, /this\.canvas\.width\s*=\s*metrics\.pixelWidth/)
+	assert.match(renderer, /resolveVoiceWaveformContextScale\(profile, metrics\.dpr\)/)
 })
