@@ -406,4 +406,16 @@ final class RedisKeyFactoryTest {
         assertThrows(IllegalArgumentException.class,
                 () -> factory.idKey("auth", "a".repeat(300), "v1", 1L));
     }
+
+    @Test
+    void createsFixedApiKeyBloomLeaseAndMonotonicFenceKeys() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+
+        assertEquals("ait:prod:bloom:uak:v1:meta", factory.apiKeyBloomMetaKey());
+        assertEquals("ait:prod:bloom:uak:v1:leader", factory.apiKeyBloomLeaderKey());
+        assertEquals("ait:prod:bloom:uak:v1:fence", factory.apiKeyBloomFenceKey());
+        assertEquals(
+                "ait:prod:bloom:uak:v1:positive-mutation",
+                factory.apiKeyBloomPositiveMutationKey());
+    }
 }

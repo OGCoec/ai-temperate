@@ -1,0 +1,58 @@
+export type AitAndroidImageCacheFailure = {
+  code: string
+  stage: string
+  exceptionType: string
+  statusCode: number
+  message: string
+}
+
+export type AitAndroidManagedImage = {
+  filePath: string
+  displayUri: string
+  contentType: string
+  sizeBytes: number
+}
+
+export type AitAndroidImageCacheOperation = {
+  close: () => void
+}
+
+export type AitAndroidMaterializeBase64ImageOptions = {
+  base64: string
+  maximumBytes: number
+  diagnosticsEnabled: boolean
+  diagnosticRunId: string
+  outputIndex: number
+  downloadAttempt: number
+  onSuccess: (image: AitAndroidManagedImage) => void
+  onError: (failure: AitAndroidImageCacheFailure) => void
+}
+
+export type AitAndroidFetchHttpsImageOptions = {
+  url: string
+  maximumBytes: number
+  diagnosticsEnabled: boolean
+  diagnosticRunId: string
+  outputIndex: number
+  downloadAttempt: number
+  onSuccess: (image: AitAndroidManagedImage) => void
+  onError: (failure: AitAndroidImageCacheFailure) => void
+}
+
+/**
+ * 将受限 Base64 图片异步解码到应用私有缓存，并按真实文件头返回可显示路径。
+ */
+export type AitAndroidMaterializeBase64ImageApi =
+  (options: AitAndroidMaterializeBase64ImageOptions) => AitAndroidImageCacheOperation
+
+/**
+ * 将 HTTPS 图片流式下载到应用私有缓存，并在确认真实格式及可解码后返回。
+ */
+export type AitAndroidFetchHttpsImageApi =
+  (options: AitAndroidFetchHttpsImageOptions) => AitAndroidImageCacheOperation
+
+/**
+ * 仅删除本模块私有缓存目录内的托管图片；目标不存在时同样视为成功。
+ */
+export type AitAndroidRemoveManagedImageApi =
+  (filePath: string) => boolean

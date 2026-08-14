@@ -10,10 +10,12 @@ function clamp01(value) {
 	}
 }
 
-function normalizeCapacity(value) {
+function normalizeCapacity(value, maximum = VOICE_WAVEFORM_MAX_CAPACITY) {
 	try {
+		const limit = Math.max(1, Math.floor(Number(maximum)
+			|| VOICE_WAVEFORM_MAX_CAPACITY))
 		return Math.max(1, Math.min(
-			VOICE_WAVEFORM_MAX_CAPACITY,
+			limit,
 			Math.floor(Number(value) || 1)))
 	} catch (_) {
 		return 1
@@ -59,9 +61,11 @@ export function aggregateVoiceWaveformLevels(levels) {
 
 export function createVoiceWaveformTimeline({
 	capacity = 1,
+	maxCapacity = VOICE_WAVEFORM_MAX_CAPACITY,
 	now = defaultNow
 } = {}) {
-	let visibleCapacity = normalizeCapacity(capacity)
+	const capacityLimit = normalizeCapacity(maxCapacity, maxCapacity)
+	let visibleCapacity = normalizeCapacity(capacity, capacityLimit)
 	let epoch = -1
 	let cycle = 0
 	let packetSequence = -1
@@ -189,7 +193,7 @@ export function createVoiceWaveformTimeline({
 
 		setCapacity(value) {
 			try {
-				const nextCapacity = normalizeCapacity(value)
+				const nextCapacity = normalizeCapacity(value, capacityLimit)
 				if (nextCapacity === visibleCapacity) return visibleCapacity
 				if (active) {
 					if (settledBars.length > nextCapacity) {

@@ -1,6 +1,7 @@
 const ROOT_HOST = 'niko000o.site'
 const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
+const API_CHAT_COMPLETIONS_PATH = '/v1/chat/completions'
 const VOICE_WEBSOCKET_PATH = '/ws/voice'
 const VOICE_WEBSOCKET_PROTOCOL = 'ait-voice-v2'
 const VOICE_TICKET_PROTOCOL = /^ait-ticket\.[A-Za-z0-9_-]{43}$/
@@ -46,6 +47,7 @@ const CLIENT_PLATFORM_HEADER = 'X-Client-Platform'
 const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
 const ANDROID_WEBVIEW_TRANSPORT = 'ANDROID_WEBVIEW_DOCUMENT'
 const H5_TRANSPORT = 'H5_BROWSER'
+const API_KEY_SDK_TRANSPORT = 'API_KEY_SDK'
 const TURNSTILE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{38}$/
 const PREAUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const DEVICE_INSTALLATION_ID_PATTERN =
@@ -139,7 +141,12 @@ export async function handleRequest(request, env, runtime = {}) {
 	const now = runtime.now || Date.now
 	const url = new URL(request.url)
 	const route = classifyRoute(url)
-	if (!route.allowed) return jsonError(route.status, route.code)
+	if (!route.allowed) {
+		return isApiKeySdkSurface(url)
+			? openAiError(route.status, 'invalid_request',
+				'The requested API route is not available.')
+			: jsonError(route.status, route.code)
+	}
 	if (route.androidClearance) {
 		if (request.method !== 'GET') {
 			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
@@ -179,6 +186,10 @@ export async function handleRequest(request, env, runtime = {}) {
 			})
 			return jsonError(400, 'EDGE_WEBSOCKET_PROTOCOL_INVALID')
 		}
+	} else if (route.apiKeySdk && request.method !== 'POST') {
+		return routeError(route, 405, 'method_not_allowed', {
+			Allow: 'POST'
+		})
 	} else if (route.riskChallenge && request.method !== 'GET') {
 		return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
 	} else if (!API_METHODS.includes(request.method)) {
@@ -196,7 +207,7 @@ export async function handleRequest(request, env, runtime = {}) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
 		})
-		return jsonError(transport.status, transport.code)
+		return routeError(route, transport.status, transport.code)
 	}
 	if (transport.kind === H5_TRANSPORT
 		&& !route.riskChallenge
@@ -210,13 +221,13 @@ export async function handleRequest(request, env, runtime = {}) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_UPSTREAM_CONFIGURATION_INVALID'
 		})
-		return jsonError(503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID')
+		return routeError(route, 503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID')
 	}
 	if (!request.headers.get('CF-Ray')) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_RAY_UNAVAILABLE'
 		})
-		return jsonError(503, 'EDGE_RAY_UNAVAILABLE')
+		return routeError(route, 503, 'EDGE_RAY_UNAVAILABLE')
 	}
 
 	let upstreamResponse
@@ -235,15 +246,18 @@ export async function handleRequest(request, env, runtime = {}) {
 			edgeOutcome: 'EDGE_UPSTREAM_UNAVAILABLE',
 			exceptionType: safeVoiceExceptionType(error)
 		})
-		return jsonError(502, 'EDGE_UPSTREAM_UNAVAILABLE')
+		return routeError(route, route.apiKeySdk ? 503 : 502,
+			'EDGE_UPSTREAM_UNAVAILABLE')
 	}
 
-	if (isCrossHostRedirect(upstreamResponse, route.surface)) {
+	if ((route.apiKeySdk && upstreamResponse.status >= 300
+			&& upstreamResponse.status < 400)
+		|| isCrossHostRedirect(upstreamResponse, route.surface)) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			...voiceUpstreamDiagnostic(upstreamResponse),
 			edgeOutcome: 'EDGE_UPSTREAM_REDIRECT_REJECTED'
 		})
-		return jsonError(502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
+		return routeError(route, 502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
 	}
 	if (route.webSocket) {
 		return guardedWebSocketResponse(
@@ -263,6 +277,16 @@ function classifyRoute(url) {
 		return denied()
 	}
 	if (url.hostname === ROOT_HOST) {
+		if (url.pathname === API_CHAT_COMPLETIONS_PATH) {
+			return {
+				allowed: true,
+				migration: false,
+				surface: 'root',
+				streaming: true,
+				apiKeySdk: true,
+				routeTemplate: API_CHAT_COMPLETIONS_PATH
+			}
+		}
 		if (url.pathname === ANDROID_CLEARANCE_PATH) {
 			return {
 				allowed: true,
@@ -415,6 +439,9 @@ function denied() {
 }
 
 function classifyClientTransport(request, route, url) {
+	if (route.apiKeySdk) {
+		return classifyApiKeySdkTransport(request)
+	}
 	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim()
 		.toUpperCase()
@@ -440,6 +467,44 @@ function classifyClientTransport(request, route, url) {
 		return invalidAndroidTransport()
 	}
 	return { allowed: true, kind: ANDROID_TRANSPORT }
+}
+
+function classifyApiKeySdkTransport(request) {
+	const authorization = headerValue(request.headers, 'Authorization')
+	if (!/^Bearer [^\s,]+$/.test(authorization)) {
+		return {
+			allowed: false,
+			status: 401,
+			code: 'invalid_api_key'
+		}
+	}
+	if (request.headers.has('Cookie')
+		|| request.headers.has('Origin')
+		|| request.headers.has('Referer')
+		|| hasFetchMetadata(request.headers)) {
+		return {
+			allowed: false,
+			status: 403,
+			code: 'browser_request_not_allowed'
+		}
+	}
+	if (!validApiKeySdkAccept(request.headers.get('Accept'))) {
+		return {
+			allowed: false,
+			status: 400,
+			code: 'invalid_accept'
+		}
+	}
+	return { allowed: true, kind: API_KEY_SDK_TRANSPORT }
+}
+
+function validApiKeySdkAccept(value) {
+	if (value === null || value.trim() === '') return true
+	const allowed = new Set(['text/event-stream', 'application/json', '*/*'])
+	return value.split(',').every(part => {
+		const mediaType = part.split(';', 1)[0].trim().toLowerCase()
+		return allowed.has(mediaType)
+	})
 }
 
 function validAndroidVoiceWebSocketTransport(request, route, url) {
@@ -542,6 +607,17 @@ async function signedUpstreamRequest(
 			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
 		}
 		headers.set(CLIENT_PLATFORM_HEADER, 'ANDROID')
+	} else if (transport.kind === API_KEY_SDK_TRANSPORT) {
+		// 长期 API Key 只允许服务端 SDK 运输；保留 Authorization，移除所有浏览器、Cookie 与平台伪装元数据。
+		headers.delete('Cookie')
+		headers.delete('Origin')
+		headers.delete('Referer')
+		headers.delete(CLIENT_PLATFORM_HEADER)
+		// 客户端可以使用 OpenAI SDK 常见 Accept；回源统一声明 SSE，避免 Spring 内容协商把合法流式请求判为 406。
+		headers.set('Accept', 'text/event-stream')
+		for (const name of [...headers.keys()]) {
+			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
+		}
 	} else {
 		if (route.riskChallenge) {
 			// 风险挑战只把当前 Host 所属凭据送往共享源站，防止手工构造请求跨越普通端与管理端 Cookie 边界。
@@ -817,7 +893,24 @@ function androidClearancePage(nonce) {
 function guardedResponse(response, surface, streaming = false, transport = null) {
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null) {
-		return jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
+		return transport?.kind === API_KEY_SDK_TRANSPORT
+			? openAiError(502, 'upstream_protocol_error',
+				'The upstream response could not be validated.')
+			: jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
+	}
+	if (transport?.kind === API_KEY_SDK_TRANSPORT && setCookies.length > 0) {
+		return openAiError(502, 'upstream_protocol_error',
+			'The upstream response violated the API cookie policy.')
+	}
+	if (transport?.kind === API_KEY_SDK_TRANSPORT) {
+		const contentType = headerValue(response.headers, 'Content-Type')
+			.split(';', 1)[0].trim().toLowerCase()
+		const expected = response.status >= 200 && response.status < 300
+			? 'text/event-stream' : 'application/json'
+		if (contentType !== expected) {
+			return openAiError(502, 'upstream_protocol_error',
+				'The upstream response used an invalid content type.')
+		}
 	}
 	if (isAndroidUpstreamTransport(transport) && setCookies.length > 0) {
 		// Android 使用显式 Token 协议；拒绝源站 Cookie，避免与 H5 会话模型发生隐式混用。
@@ -1192,6 +1285,54 @@ function jsonError(status, code, additionalHeaders = {}) {
 		code,
 		message: 'The edge request was rejected.'
 	}), { status, headers })
+}
+
+function routeError(route, status, code, additionalHeaders = {}) {
+	if (!route?.apiKeySdk) return jsonError(status, code, additionalHeaders)
+	const messages = {
+		invalid_api_key: 'Invalid API Key.',
+		browser_request_not_allowed:
+			'Browser requests are not allowed for long-lived API Keys.',
+		invalid_accept: 'Accept must allow text/event-stream or application/json.',
+		method_not_allowed: 'Only POST is allowed for this endpoint.',
+		EDGE_UPSTREAM_CONFIGURATION_INVALID:
+			'The API gateway is temporarily unavailable.',
+		EDGE_RAY_UNAVAILABLE: 'The API gateway is temporarily unavailable.',
+		EDGE_UPSTREAM_UNAVAILABLE: 'The model service is temporarily unavailable.',
+		EDGE_UPSTREAM_REDIRECT_REJECTED:
+			'The model service returned an invalid redirect.'
+	}
+	return openAiError(status, code, messages[code]
+		|| 'The API gateway rejected the request.', additionalHeaders)
+}
+
+function openAiError(status, code, message, additionalHeaders = {}) {
+	const headers = noStoreHeaders()
+	headers.set('Content-Type', 'application/json; charset=utf-8')
+	for (const [name, value] of Object.entries(additionalHeaders)) {
+		headers.set(name, value)
+	}
+	const type = status === 401
+		? 'authentication_error'
+		: status === 403
+			? 'permission_error'
+			: status === 429
+				? 'rate_limit_error'
+				: status >= 500
+					? 'server_error'
+					: 'invalid_request_error'
+	return new Response(JSON.stringify({
+		error: {
+			message,
+			type,
+			param: null,
+			code
+		}
+	}), { status, headers })
+}
+
+function isApiKeySdkSurface(url) {
+	return url.hostname === ROOT_HOST && pathWithin(url.pathname, '/v1')
 }
 
 function noStoreHeaders() {

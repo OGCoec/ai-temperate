@@ -102,6 +102,31 @@ test('rejects unmarked or unsafe local media sources', async () => {
 	}
 })
 
+test('accepts a file URI only through the explicit managed Android image option', async () => {
+	const presentation = await loadPresentation()
+	const attachment = { attachmentId: 'generated-image', url: '', contentType: 'image/png' }
+	const displayUri = 'file:///data/user/0/com.example/cache/ait-conversation-images/image.png'
+
+	assert.throws(
+		() => presentation.createMediaDescriptor(attachment, null, { localSrc: displayUri }),
+		/App local media source/
+	)
+	assert.equal(
+		presentation.createMediaDescriptor(attachment, null, {
+			localSrc: displayUri,
+			allowManagedFileUri: true
+		}).src,
+		displayUri
+	)
+	assert.throws(
+		() => presentation.createMediaDescriptor(attachment, null, {
+			localSrc: 'file:///data/user/0/com.example/cache/../shared/secret.png',
+			allowManagedFileUri: true
+		}),
+		/App local media source/
+	)
+})
+
 test('rejects missing keys and non-HTTPS media sources', async () => {
 	const presentation = await loadPresentation()
 	assert.throws(

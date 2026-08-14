@@ -154,6 +154,27 @@ function attachment(value) {
 	})
 }
 
+function restoreGeneratedResponseAttachment(value, source) {
+	if (value.category !== 'IMAGE') return value
+	const generatedFileName = /^generated-(10|[1-9])\.[^./\\]+$/i.exec(value.fileName)
+	const explicitOutputIndex = Number(source?.outputIndex)
+	const hasExplicitSlot = source?.imageSlot === true
+		&& Number.isSafeInteger(explicitOutputIndex)
+		&& explicitOutputIndex >= 0
+		&& explicitOutputIndex <= 9
+	if (!generatedFileName && !hasExplicitSlot) return value
+	return Object.freeze({
+		...value,
+		outputIndex: hasExplicitSlot
+			? explicitOutputIndex
+			: Number(generatedFileName[1]) - 1,
+		phase: 'FINAL',
+		status: 'COMPLETED',
+		volatilePreview: false,
+		imageSlot: true
+	})
+}
+
 function preuploadFile(value) {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw error('AI_ATTACHMENT_PREUPLOAD_INVALID', '附件预上传响应无效。')
@@ -214,7 +235,8 @@ function historyMessage(value) {
 		throw error('AI_CONVERSATION_RESPONSE_INVALID', '消息历史响应无效。')
 	}
 	const contentAttachments = Object.freeze((value.contentAttachments || []).map(attachment))
-	const responseAttachments = Object.freeze((value.responseAttachments || []).map(attachment))
+	const responseAttachments = Object.freeze((value.responseAttachments || [])
+		.map(source => restoreGeneratedResponseAttachment(attachment(source), source)))
 	const contentText = nullableContent(value.contentText)
 	const responseText = nullableContent(value.responseText)
 	if ((!contentText && !contentAttachments.length) || (!responseText && !responseAttachments.length)) {

@@ -103,6 +103,13 @@ app:
     # 测试环境仅验证 Bean 与配置绑定，不启动后台全量初始化。
     enabled: false
 
+  # 测试公开 API Key 功能保持关闭，但仍显式提供固定非生产 HMAC 材料以验证单 Secret 启动约束。
+  api-key:
+    # 上下文测试不启动公开 API Key 路由及 Bloom 重建。
+    enabled: false
+    # 固定测试 HMAC Secret 恰好解码为三十二字节，不对应任何生产凭证。
+    hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
   # 测试用户资料缓存只验证属性绑定和 Bean 装配，不连接真实 Redis。
   user-profile-cache:
     # 固定测试 AES-256-KWP 密钥恰好解码为三十二字节，不对应生产缓存。

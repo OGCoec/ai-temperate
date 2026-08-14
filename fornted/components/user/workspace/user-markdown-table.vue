@@ -279,7 +279,7 @@
 	.ai-markdown-table-label { color: #b9c7bf; font-size: 12px; font-weight: 700; }
 	.ai-markdown-table-actions, .ai-markdown-table-view-toggle { min-width: 0; display: flex; align-items: center; gap: 8px; }
 	.ai-markdown-table-view-toggle { padding: 3px; border: 1px solid rgba(151, 170, 160, .18); border-radius: 10px; background: rgba(255, 255, 255, .025); }
-	.ai-markdown-table-view-button { min-width: 44px; min-height: 44px; margin: 0; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: #8f9a94; font-size: 11px; cursor: pointer; }
+	.ai-markdown-table-view-button { min-width: 44px; height: 36px; min-height: 36px; margin: 0; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #8f9a94; font-size: 11px; line-height: 1; cursor: pointer; }
 	.ai-markdown-table-view-button.is-active { background: rgba(55, 211, 154, .12); color: #b9f0d5; }
 	.ai-markdown-table-view-button:active { transform: scale(.97); }
 	.ai-markdown-table-view-button:focus-visible { outline: 2px solid #8fe8c4; outline-offset: 2px; }

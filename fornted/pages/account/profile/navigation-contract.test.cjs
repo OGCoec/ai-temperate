@@ -13,6 +13,10 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8')
 }
 
+function parseUniPages(source) {
+	return JSON.parse(source.replace(/^\s*\/\/\s*#(?:ifn?def|endif).*$/gm, ''))
+}
+
 test('login success enters the chat page without a local preview bypass', () => {
 	const login = read('pages/auth/login.vue')
 	const config = read('common/auth/config.js')
@@ -25,6 +29,7 @@ test('login success enters the chat page without a local preview bypass', () => 
 	assert.match(config, /home:\s*'\/pages\/ai-chat\/index'/)
 	assert.match(config, /chat:\s*'\/pages\/ai-chat\/index'/)
 	assert.match(config, /profile:\s*'\/pages\/account\/profile'/)
+	assert.match(config, /apiKeys:\s*'\/pages\/account\/api-keys'/)
 })
 
 test('session gate restores authenticated sessions into the chat page', () => {
@@ -39,7 +44,7 @@ test('session gate restores authenticated sessions into the chat page', () => {
 test('pages config keeps auth, profile, and protected model catalog routes without a native tab bar', () => {
 	const pages = read('pages.json')
 	const config = read('common/auth/config.js')
-	const parsed = JSON.parse(pages)
+	const parsed = parseUniPages(pages)
 	const routes = parsed.pages.map(page => page.path)
 
 	for (const route of [
@@ -49,6 +54,7 @@ test('pages config keeps auth, profile, and protected model catalog routes witho
 		'pages/auth/password-reset',
 		'pages/ai-chat/index',
 		'pages/account/profile',
+		'pages/account/api-keys',
 		'pages/ai-models/catalog',
 		'pages/ai-models/detail'
 	]) {
@@ -100,11 +106,11 @@ test('shared primary navigation switches top-level pages and adapts from bottom 
 	assert.match(navigation, /@include user-frosted-navigation/)
 	assert.match(material, /@mixin user-frosted-navigation[\s\S]*backdrop-filter:\s*blur/)
 	assert.match(navigation, /min-width:\s*768px/)
-	assert.match(navigation, /min-width:\s*1024px/)
+	assert.match(navigation, /min-width:\s*1100px/)
 	assert.match(navigation,
 		/@media screen and \(min-width:\s*768px\)[\s\S]*\.user-primary-navigation\.is-chat-sidebar\s*\{[^}]*width:\s*240px/)
 	assert.match(navigation,
-		/@media screen and \(min-width:\s*1024px\)[\s\S]*\.user-primary-navigation\.is-chat-sidebar\s*\{[^}]*width:\s*280px/)
+		/@media screen and \(min-width:\s*1100px\)[\s\S]*\.user-primary-navigation\.is-chat-sidebar\s*\{[^}]*width:\s*272px/)
 	assert.match(navigation, /prefers-reduced-motion:\s*reduce/)
 })
 

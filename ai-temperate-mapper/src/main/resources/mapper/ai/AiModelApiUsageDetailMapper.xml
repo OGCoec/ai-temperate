@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.AiModelApiUsageDetailMapper">
+
+    <resultMap id="UsageDetailResultMap"
+               type="com.example.temperate.model.ai.entity.AiModelApiUsageDetail">
+        <id property="id" column="id"/>
+        <result property="usageId" column="usage_id"/>
+        <result property="vendorSnapshot" column="vendor_snapshot"/>
+        <result property="stream" column="is_stream"/>
+        <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
+        <result property="settlementDeltaMinor" column="settlement_delta_minor"/>
+    </resultMap>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.AiModelApiUsageDetail"
+            useGeneratedKeys="true"
+            keyProperty="id"
+            keyColumn="id">
+        INSERT INTO ai_model_api_usage_detail (
+            usage_id,
+            vendor_snapshot,
+            is_stream,
+            reserved_quota_minor,
+            settlement_delta_minor
+        )
+        VALUES (
+            #{usageId,jdbcType=BIGINT},
+            #{vendorSnapshot,jdbcType=VARCHAR},
+            #{stream,jdbcType=BOOLEAN},
+            #{reservedQuotaMinor,jdbcType=BIGINT},
+            #{settlementDeltaMinor,jdbcType=BIGINT}
+        )
+    </insert>
+
+    <select id="findByUsageId" resultMap="UsageDetailResultMap">
+        SELECT
+            id,
+            usage_id,
+            vendor_snapshot,
+            is_stream,
+            reserved_quota_minor,
+            settlement_delta_minor
+        FROM ai_model_api_usage_detail
+        WHERE usage_id = #{usageId,jdbcType=BIGINT}
+    </select>
+
+    <update id="finalizeDetail">
+        UPDATE ai_model_api_usage_detail
+        SET settlement_delta_minor = #{settlementDeltaMinor,jdbcType=BIGINT}
+        WHERE usage_id = #{usageId,jdbcType=BIGINT}
+          AND settlement_delta_minor IS NULL
+    </update>
+
+    <update id="finalizeRefundsBatch">
+        WITH candidate(usage_id, reserved_quota_minor) AS (
+            VALUES
+            <foreach collection="candidates" item="candidate" separator=",">
+                (
+                    #{candidate.usageId,jdbcType=BIGINT},
+                    #{candidate.reservedQuotaMinor,jdbcType=BIGINT}
+                )
+            </foreach>
+        )
+        UPDATE ai_model_api_usage_detail detail
+        SET settlement_delta_minor = -candidate.reserved_quota_minor
+        FROM candidate
+        WHERE detail.usage_id = candidate.usage_id
+          AND detail.settlement_delta_minor IS NULL
+    </update>
+</mapper>

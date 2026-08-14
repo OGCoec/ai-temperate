@@ -2,6 +2,7 @@ package com.example.temperate.mapper.user.membership;
 
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.ai.entity.AiModelUsageRefundCandidate;
+import com.example.temperate.model.ai.entity.AiModelApiUsageRefundCandidate;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -27,4 +28,7 @@ public interface UserMembershipQuotaMapper {
 
     int addHistoricalAiRefunds(
             @Param("candidates") List<AiModelUsageRefundCandidate> candidates);
+
+    int addApiRefunds(
+            @Param("candidates") List<AiModelApiUsageRefundCandidate> candidates);
 }

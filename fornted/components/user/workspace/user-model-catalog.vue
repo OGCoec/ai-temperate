@@ -370,4 +370,43 @@
 		.catalog-refresh, .catalog-retry, .catalog-load-more, .catalog-model-row { transition: none; }
 		.catalog-skeleton-icon, .catalog-skeleton-line { animation: none; }
 	}
+
+	/* #ifdef H5 */
+	.catalog-shell {
+		width: 100%;
+		max-width: none;
+		margin: 0;
+		padding-inline: var(--workspace-content-gutter, 16px);
+	}
+	.catalog-list {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--workspace-layout-gap, 16px);
+		overflow: visible;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+		box-shadow: none;
+	}
+	.catalog-model-row,
+	.catalog-model-row:last-child {
+		@include user-frosted-surface;
+		min-width: 0;
+		height: 100%;
+		border-radius: 16px;
+	}
+	.catalog-skeleton,
+	.catalog-error,
+	.catalog-empty,
+	.catalog-footer {
+		width: 100%;
+		grid-column: 1 / -1;
+	}
+	@media screen and (min-width: 1200px) {
+		.catalog-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	}
+	@media screen and (min-width: 1920px) {
+		.catalog-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	}
+	/* #endif */
 </style>

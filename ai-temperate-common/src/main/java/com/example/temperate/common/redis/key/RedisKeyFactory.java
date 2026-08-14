@@ -407,6 +407,68 @@ public final class RedisKeyFactory {
     }
 
     /**
+     * 生成外部 API Key 正向或负向认证快照 Key，标识必须是完整凭证 HMAC 的 Base64URL。
+     */
+    public String apiKeyAuthenticationCacheKey(HmacIdentifier keyIdentifier) {
+        return create(
+                "auth",
+                "uak",
+                "v1",
+                IdentifierType.API_KEY_CREDENTIAL,
+                requireHmacIdentifier(keyIdentifier));
+    }
+
+    /**
+     * 生成单个 API Key 的并发租约集合 Key，并与账号和全局集合在同一 Lua 中原子更新。
+     */
+    public String aiInferenceApiKeyConcurrencyKey(HmacIdentifier keyIdentifier) {
+        return create(
+                "ai",
+                "conversation",
+                "v1",
+                IdentifierType.AI_INFERENCE_API_KEY_CONCURRENCY,
+                requireHmacIdentifier(keyIdentifier));
+    }
+
+    /** 生成固定 v1 API Key Bloom 的元数据 Hash Key。 */
+    public String apiKeyBloomMetaKey() {
+        return fixedKey("bloom", "uak", "v1", "meta");
+    }
+
+    /** 生成固定 v1 API Key Bloom 的单个计数器 Bucket Key。 */
+    public String apiKeyBloomBucketKey(int bucketNumber) {
+        return bucketKey("bloom", "uak", "v1", bucketNumber);
+    }
+
+    /** 生成固定 v1 API Key Bloom 的元素 Receipt Set 分片 Key。 */
+    public String apiKeyBloomReceiptKey(int shardNumber) {
+        if (shardNumber < 0 || shardNumber > 9_999) {
+            throw new IllegalArgumentException("Bloom receipt shard must be between 0 and 9999.");
+        }
+        return create(
+                "bloom",
+                "uak",
+                "v1",
+                IdentifierType.BLOOM_RECEIPT,
+                String.format(Locale.ROOT, "%04d", shardNumber));
+    }
+
+    /** 生成固定 v1 API Key Bloom 的可续租 Leader Lease Key。 */
+    public String apiKeyBloomLeaderKey() {
+        return fixedKey("bloom", "uak", "v1", "leader");
+    }
+
+    /** 生成固定 v1 API Key Bloom 的单调 Leader fencing epoch Key。 */
+    public String apiKeyBloomFenceKey() {
+        return fixedKey("bloom", "uak", "v1", "fence");
+    }
+
+    /** 生成固定 v1 API Key Bloom 的未完成 positive mutation 摘要 Hash Key。 */
+    public String apiKeyBloomPositiveMutationKey() {
+        return fixedKey("bloom", "uak", "v1", "positive-mutation");
+    }
+
+    /**
      * 生成直接 SSE 活动请求的实例所有权 Key，原始幂等 UUID 和用户 ID 均不会进入 Key。
      */
     public String aiConversationDirectResponseOwnerKey(
@@ -902,6 +964,8 @@ public final class RedisKeyFactory {
         AI_CONVERSATION_COMPACTION_STATE("compact-state"),
         AI_CONVERSATION_CONTEXT_EVENT_REVISION("context-event-revision"),
         AI_CONVERSATION_USER_CONCURRENCY("concurrency-user"),
+        AI_INFERENCE_API_KEY_CONCURRENCY("concurrency-key"),
+        API_KEY_CREDENTIAL("credential"),
         AI_DIRECT_RESPONSE_OWNER("owner"),
         AI_DIRECT_RESPONSE_CANCEL("cancel"),
         AI_GENERATION_SNAPSHOT("snapshot"),

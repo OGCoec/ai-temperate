@@ -1,19 +1,30 @@
 package com.example.temperate.web.auth.config;
 
 import com.example.temperate.service.user.voice.config.VoiceProperties;
+import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
+import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
+import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
+import com.example.temperate.web.apikey.ApiChatBodyLimitFilter;
+import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
+import com.example.temperate.web.apikey.OpenAiErrorResponseWriter;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
+import com.example.temperate.web.edgeproxy.TrustedEdgeNetworkContextResolver;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,6 +40,7 @@ import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -36,10 +48,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
 /**
- * 装配认证 Web 安全组件和 H5/Android 两套传输过滤链。
+ * 装配认证 Web 安全组件以及 H5、Android、语音和公开 API Key 的隔离过滤链。
  *
  * <p>该配置类负责提供签名密钥、密码编码器、Cookie CSRF 仓库、CORS 规则，以及按客户端传输协议拆分的
- * Spring Security 过滤链。平台头只用于选择 H5 Cookie 或 Android Header/请求体协议，不能作为认证凭据。</p>
+ * Spring Security 过滤链。平台头只用于选择 H5 Cookie 或 Android Header/请求体协议，不能作为认证凭据；
+ * `/v1` 只接受 Worker 签名和 Bearer API Key。</p>
  */
 @Configuration
 @EnableConfigurationProperties(AuthSecurityProperties.class)
@@ -67,6 +80,57 @@ public class SecurityConfiguration {
         return authentication -> {
             throw new BadCredentialsException("Authentication is not configured");
         };
+    }
+
+    @Bean
+    ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
+            ApiKeyAuthenticationService authenticationService,
+            ApiKeyProperties properties,
+            OpenAiErrorResponseWriter errorWriter) {
+        return new ApiKeyAuthenticationFilter(authenticationService, properties, errorWriter);
+    }
+
+    @Bean
+    ApiKeyIpRiskFilter apiKeyIpRiskFilter(
+            TrustedEdgeNetworkContextResolver edgeContextResolver,
+            IpIntelligenceService ipIntelligenceService,
+            ApiKeyProperties properties,
+            OpenAiErrorResponseWriter errorWriter,
+            MeterRegistry meterRegistry) {
+        return new ApiKeyIpRiskFilter(
+                edgeContextResolver,
+                ipIntelligenceService,
+                properties,
+                errorWriter,
+                meterRegistry);
+    }
+
+    @Bean
+    ApiChatBodyLimitFilter apiChatBodyLimitFilter(
+            ApiKeyProperties properties,
+            OpenAiErrorResponseWriter errorWriter) {
+        return new ApiChatBodyLimitFilter(properties, errorWriter);
+    }
+
+    /**
+     * 三个 `/v1` 过滤器只允许由 Spring Security 按既定顺序执行，禁止 Servlet 容器再次自动注册造成双重认证、风控或请求体读取。
+     */
+    @Bean
+    FilterRegistrationBean<ApiKeyAuthenticationFilter>
+            apiKeyAuthenticationFilterRegistration(ApiKeyAuthenticationFilter filter) {
+        return securityOnlyFilter(filter);
+    }
+
+    @Bean
+    FilterRegistrationBean<ApiKeyIpRiskFilter>
+            apiKeyIpRiskFilterRegistration(ApiKeyIpRiskFilter filter) {
+        return securityOnlyFilter(filter);
+    }
+
+    @Bean
+    FilterRegistrationBean<ApiChatBodyLimitFilter>
+            apiChatBodyLimitFilterRegistration(ApiChatBodyLimitFilter filter) {
+        return securityOnlyFilter(filter);
     }
 
     @Bean
@@ -133,11 +197,53 @@ public class SecurityConfiguration {
     }
 
     /**
-     * 为公开语音 WebSocket 建立不含 CSRF Filter 的精确安全链，避免 101 响应生成浏览器 Cookie。
+     * 为公开 Chat Completions 建立不含 Cookie、Session、CORS 和 CSRF 的精确无状态安全链。
      *
-     * <p>该链仍保留 Edge HMAC 和无状态安全边界；Origin 与一次性 Ticket 继续由握手拦截器验证，
-     * 普通 H5 与管理员请求仍进入各自的 Cookie CSRF 安全链。</p>
+     * <p>该链依次完成 Edge HMAC、Bearer API Key、权威 IP 风险和请求体大小门禁；
+     * 普通 H5、Android 与语音请求仍进入各自既有安全链。</p>
      */
+    @Bean
+    @Order(0)
+    SecurityFilterChain apiKeySecurityFilterChain(
+            HttpSecurity http,
+            EdgeProxySignatureFilter edgeProxySignatureFilter,
+            ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
+            ApiKeyIpRiskFilter apiKeyIpRiskFilter,
+            ApiChatBodyLimitFilter apiChatBodyLimitFilter,
+            OpenAiErrorResponseWriter errorWriter) throws Exception {
+        // 公开 API 不创建 Session、不读取 Cookie、不启用 CORS，所有身份只来自当前 Bearer 和 Worker 签名。
+        return http
+                .securityMatcher(request ->
+                        "/v1/chat/completions".equals(request.getRequestURI()))
+                .cors(AbstractHttpConfigurer::disable)
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(authorize -> authorize
+                        .anyRequest().authenticated())
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, exception) ->
+                                errorWriter.write(
+                                        response,
+                                        HttpServletResponse.SC_UNAUTHORIZED,
+                                        "Invalid API Key.",
+                                        "authentication_error",
+                                        "invalid_api_key")))
+                .addFilterBefore(
+                        edgeProxySignatureFilter,
+                        UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(
+                        apiKeyAuthenticationFilter,
+                        EdgeProxySignatureFilter.class)
+                .addFilterAfter(
+                        apiKeyIpRiskFilter,
+                        ApiKeyAuthenticationFilter.class)
+                .addFilterAfter(
+                        apiChatBodyLimitFilter,
+                        ApiKeyIpRiskFilter.class)
+                .build();
+    }
+
     @Bean
     @Order(2)
     @ConditionalOnProperty(
@@ -254,5 +360,12 @@ public class SecurityConfiguration {
     private static String sameSite(AuthSecurityProperties.SameSite sameSite) {
         String name = sameSite.name().toLowerCase();
         return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+
+    private static <T extends jakarta.servlet.Filter> FilterRegistrationBean<T>
+            securityOnlyFilter(T filter) {
+        FilterRegistrationBean<T> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 }

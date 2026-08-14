@@ -191,6 +191,14 @@
           AND up.account_status = 0
     </select>
 
+    <select id="existsById" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM userloginidentity
+            WHERE id = #{identityId,jdbcType=BIGINT}
+        )
+    </select>
+
     <insert id="insert"
             parameterType="com.example.temperate.model.user.entity.UserLoginIdentity">
         INSERT INTO userloginidentity (

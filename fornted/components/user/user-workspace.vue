@@ -83,7 +83,16 @@
 				v-show="activeDestination === 'profile'"
 				:authenticated="authenticated"
 				@open-conversation-drawer="openConversationDrawer"
+				@open-api-keys="selectDestination('apiKeys')"
 			/>
+			<!-- #ifdef H5 -->
+			<user-api-key-panel
+				ref="apiKeyPanel"
+				v-if="visitedDestinations.apiKeys"
+				v-show="activeDestination === 'apiKeys'"
+				:authenticated="authenticated"
+			/>
+			<!-- #endif -->
 		</view>
 	</view>
 </template>
@@ -107,15 +116,21 @@
 	import UserChatPanel from './workspace/user-chat-panel.vue'
 	import UserModelPanel from './workspace/user-model-panel.vue'
 	import UserProfilePanel from './workspace/user-profile-panel.vue'
+	// #ifdef H5
+	import UserApiKeyPanel from './workspace/user-api-key-panel.vue'
+	// #endif
 
-	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile'])
+	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys'])
 	export default {
 		components: {
 			UserH5WorkspaceSidebar,
 			UserWorkspaceSidebar,
 			UserChatPanel,
 			UserModelPanel,
-			UserProfilePanel
+			UserProfilePanel,
+			// #ifdef H5
+			UserApiKeyPanel
+			// #endif
 		},
 		props: {
 			initialDestination: {
@@ -147,7 +162,8 @@
 				visitedDestinations: {
 					chat: activeDestination === 'chat',
 					models: activeDestination === 'models',
-					profile: activeDestination === 'profile'
+					profile: activeDestination === 'profile',
+					apiKeys: activeDestination === 'apiKeys'
 				},
 				recentExpanded,
 				drawerOpen: false,
@@ -259,6 +275,11 @@
 			},
 			selectDestination(destination) {
 				if (!DESTINATIONS.includes(destination)) return
+				if (this.activeDestination === 'apiKeys'
+					&& destination !== 'apiKeys'
+					&& this.$refs.apiKeyPanel?.closeIfOpen()) {
+					return
+				}
 				if (destination === this.activeDestination) {
 					if (destination === 'chat') {
 						// #ifdef H5
@@ -398,17 +419,23 @@
 				if (!this.authenticated) return
 				this.$nextTick(() => {
 					this.$refs.chatPanel?.onAuthenticatedPageReady()
+					if (this.activeDestination === 'apiKeys') {
+						this.$refs.apiKeyPanel?.onAuthenticatedPageReady()
+					}
 				})
 			},
 			handlePageShow() {
 				if (!this.authenticated) return
-				this.$refs.chatPanel?.handlePageShow()
+				if (this.activeDestination === 'apiKeys') this.$refs.apiKeyPanel?.handlePageShow()
+				else this.$refs.chatPanel?.handlePageShow()
 			},
 			handlePageHide() {
 				this.$refs.chatPanel?.handlePageHide()
+				this.$refs.apiKeyPanel?.handlePageHide()
 			},
 			handlePageUnload() {
 				this.$refs.chatPanel?.handlePageUnload()
+				this.$refs.apiKeyPanel?.handlePageUnload()
 				this.releaseWorkspaceBody()
 			},
 			handleBackPress() {
@@ -416,9 +443,15 @@
 					? this.$refs.chatPanel
 					: this.activeDestination === 'models'
 						? this.$refs.modelPanel
-						: this.$refs.profilePanel
+						: this.activeDestination === 'apiKeys'
+							? this.$refs.apiKeyPanel
+							: this.$refs.profilePanel
 				if (typeof activePanel?.closeIfOpen === 'function'
 					&& activePanel.closeIfOpen()) return true
+				if (this.activeDestination === 'apiKeys') {
+					this.selectDestination('profile')
+					return true
+				}
 				if (this.drawerOpen) {
 					this.drawerOpen = false
 					return true
@@ -457,6 +490,8 @@
 	}
 
 	.user-workspace.is-h5-workspace {
+		--workspace-content-gutter: clamp(16px, 1.5vw, 40px);
+		--workspace-layout-gap: clamp(16px, 1.25vw, 24px);
 		--workspace-sidebar-track: 0px;
 		--ait-h5-canvas: #0b0d0c;
 		--ait-h5-sidebar: #101310;

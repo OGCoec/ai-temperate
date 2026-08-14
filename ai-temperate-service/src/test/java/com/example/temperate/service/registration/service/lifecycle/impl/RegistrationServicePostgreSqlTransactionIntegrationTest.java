@@ -306,6 +306,15 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
         }
 
         @Override
+        public boolean existsById(long identityId) {
+            Boolean exists = jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM userloginidentity WHERE id = ?)",
+                    Boolean.class,
+                    identityId);
+            return Boolean.TRUE.equals(exists);
+        }
+
+        @Override
         public int insert(UserLoginIdentity identity) {
             return jdbc.update(
                     """

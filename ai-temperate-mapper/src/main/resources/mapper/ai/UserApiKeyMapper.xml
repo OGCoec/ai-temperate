@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.UserApiKeyMapper">
+
+    <resultMap id="UserApiKeyResultMap"
+               type="com.example.temperate.model.ai.entity.UserApiKey">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="keyDigest" column="key_digest"/>
+        <result property="keyHint" column="key_hint"/>
+        <result property="status" column="status"/>
+        <result property="expiresAt" column="expires_at"/>
+        <result property="lastUsedAt" column="last_used_at"/>
+        <result property="rowVersion" column="row_version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deletedAt" column="deleted_at"/>
+    </resultMap>
+
+    <resultMap id="ReservationAuthorizationResultMap"
+               type="com.example.temperate.model.ai.entity.ApiKeyReservationAuthorization">
+        <id property="apiKeyId" column="api_key_id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="keyDigest" column="key_digest"/>
+        <result property="keyStatus" column="key_status"/>
+        <result property="expiresAt" column="expires_at"/>
+        <result property="accountStatus" column="account_status"/>
+        <result property="aiModelId" column="ai_model_id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="vendor" column="vendor"/>
+        <result property="modelEnabled" column="model_enabled"/>
+        <result property="mappingStatus" column="mapping_status"/>
+        <result property="inputRatio" column="input_ratio"/>
+        <result property="cachedInputRatio" column="cached_input_ratio"/>
+        <result property="outputRatio" column="output_ratio"/>
+        <result property="contextWindowTokens" column="context_window_tokens"/>
+        <result property="maxOutputTokens" column="max_output_tokens"/>
+    </resultMap>
+
+    <sql id="UserApiKeyColumns">
+        id,
+        login_identity_id,
+        key_digest,
+        key_hint,
+        status,
+        expires_at,
+        last_used_at,
+        row_version,
+        created_at,
+        updated_at,
+        deleted_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.ai.entity.UserApiKey"
+            useGeneratedKeys="true"
+            keyProperty="id"
+            keyColumn="id">
+        INSERT INTO user_api_key (
+            login_identity_id,
+            key_digest,
+            key_hint,
+            status,
+            expires_at
+        )
+        VALUES (
+            #{loginIdentityId,jdbcType=BIGINT},
+            #{keyDigest,jdbcType=BINARY},
+            #{keyHint,jdbcType=VARCHAR},
+            #{status,jdbcType=SMALLINT},
+            #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        )
+    </insert>
+
+    <select id="findByDigest" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE key_digest = #{keyDigest,jdbcType=BINARY}
+    </select>
+
+    <select id="findOwnedById" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="findOwnedByIdForUpdate" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+        FOR UPDATE
+    </select>
+
+    <select id="findOwnedPage" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND status IN (0, 1)
+        <if test="cursorCreatedAt != null and cursorId != null">
+          AND (created_at, id) &lt; (
+              #{cursorCreatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+              #{cursorId,jdbcType=BIGINT}
+          )
+        </if>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <select id="findBloomBuildPage" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE id &gt; #{afterId,jdbcType=BIGINT}
+          AND status = 1
+          AND (expires_at IS NULL OR expires_at &gt; #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE})
+        ORDER BY id
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+
+    <update id="updateLifecycle">
+        UPDATE user_api_key
+        SET status = #{status,jdbcType=SMALLINT},
+            expires_at = #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            row_version = row_version + 1
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
+          AND status IN (0, 1)
+          AND (
+              status IS DISTINCT FROM #{status,jdbcType=SMALLINT}
+              OR expires_at IS DISTINCT FROM #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+          )
+    </update>
+
+    <update id="softDelete">
+        UPDATE user_api_key
+        SET status = 2,
+            deleted_at = #{deletedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            row_version = row_version + 1
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
+          AND status IN (0, 1)
+    </update>
+
+    <update id="touchLastUsed">
+        UPDATE user_api_key
+        SET last_used_at = #{lastUsedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND status = 1
+    </update>
+
+    <update id="incrementRowVersion">
+        UPDATE user_api_key
+        SET row_version = row_version + 1
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
+          AND status IN (0, 1)
+    </update>
+
+    <select id="findReservationAuthorizationForUpdate"
+            resultMap="ReservationAuthorizationResultMap">
+        SELECT
+            key_record.id AS api_key_id,
+            key_record.login_identity_id,
+            key_record.key_digest,
+            key_record.status AS key_status,
+            key_record.expires_at,
+            profile.account_status,
+            model.id AS ai_model_id,
+            model.model_name,
+            model.vendor,
+            model.is_enabled AS model_enabled,
+            grant_record.status AS mapping_status,
+            model.input_ratio,
+            model.cached_input_ratio,
+            model.output_ratio,
+            model.context_window_tokens,
+            model.max_output_tokens
+        FROM user_api_key key_record
+        JOIN user_profile profile
+          ON profile.login_identity_id = key_record.login_identity_id
+        LEFT JOIN user_api_key_model grant_record
+          ON grant_record.user_api_key_id = key_record.id
+         AND grant_record.ai_model_id = #{aiModelId,jdbcType=BIGINT}
+        JOIN ai_model model
+          ON model.id = #{aiModelId,jdbcType=BIGINT}
+        WHERE key_record.id = #{apiKeyId,jdbcType=BIGINT}
+        FOR UPDATE OF key_record, profile, model
+    </select>
+</mapper>

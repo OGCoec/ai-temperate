@@ -60,21 +60,22 @@
 						</view>
 					</view>
 
-					<view class="model-detail-section">
+					<view class="model-detail-content-grid">
+					<view class="model-detail-section model-detail-description-section">
 						<text class="model-detail-section-title">模型说明</text>
 						<view class="model-detail-panel">
 							<text class="model-detail-description">{{ model.description || '暂无模型说明。' }}</text>
 						</view>
 					</view>
 
-					<view v-if="model.tags.length" class="model-detail-section">
+					<view v-if="model.tags.length" class="model-detail-section model-detail-tags-section">
 						<text class="model-detail-section-title">标签</text>
 						<view class="model-detail-tags">
 							<text v-for="tag in model.tags" :key="tag" class="model-detail-tag">{{ tag }}</text>
 						</view>
 					</view>
 
-					<view class="model-detail-section">
+					<view class="model-detail-section model-detail-ratios-section">
 						<text class="model-detail-section-title">计费倍率</text>
 						<view class="model-detail-panel model-detail-ratios">
 							<view class="model-detail-ratio-row">
@@ -96,11 +97,12 @@
 						<text class="model-detail-rate-note">以上为本项目计费倍率，不是模型厂商美元定价；缓存输入与项目 Redis 缓存无关。</text>
 					</view>
 
-					<view v-if="model.capabilities.length" class="model-detail-section">
+					<view v-if="model.capabilities.length" class="model-detail-section model-detail-capabilities-section">
 						<text class="model-detail-section-title">能力</text>
 						<view class="model-detail-capabilities">
 							<text v-for="capability in model.capabilities" :key="capability" class="model-detail-capability">{{ capability }}</text>
 						</view>
+					</view>
 					</view>
 				</template>
 			</view>
@@ -242,4 +244,32 @@
 		.model-detail-back, .model-detail-retry { transition: none; }
 		.model-detail-skeleton-icon, .model-detail-skeleton-line { animation: none; }
 	}
+
+	/* #ifdef H5 */
+	.model-detail-shell {
+		width: 100%;
+		max-width: none;
+		margin: 0;
+		padding-inline: var(--workspace-content-gutter, 16px);
+	}
+	.model-detail-content-grid,
+	.model-detail-section { min-width: 0; }
+	.model-detail-state {
+		width: 100%;
+		grid-column: 1 / -1;
+	}
+	@media screen and (min-width: 1200px) {
+		.model-detail-content-grid {
+			margin-top: 24px;
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: var(--workspace-layout-gap, 16px);
+		}
+		.model-detail-content-grid .model-detail-section { margin-top: 0; }
+		.model-detail-description-section { grid-column: 1 / -1; }
+		.model-detail-tags-section,
+		.model-detail-capabilities-section { grid-column: 1; }
+		.model-detail-ratios-section { grid-column: 2; grid-row: 2 / span 2; }
+	}
+	/* #endif */
 </style>

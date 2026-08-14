@@ -20,6 +20,7 @@ export const AUTH_ROUTES = Object.freeze({
 	home: '/pages/ai-chat/index',
 	chat: '/pages/ai-chat/index',
 	profile: '/pages/account/profile',
+	apiKeys: '/pages/account/api-keys',
 	totpSecurity: '/pages/account/totp-security',
 	models: '/pages/ai-models/catalog'
 })

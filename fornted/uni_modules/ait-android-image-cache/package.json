@@ -1,0 +1,7 @@
+{
+  "id": "ait-android-image-cache",
+  "displayName": "AI Temperate Android Image Cache",
+  "version": "1.0.0",
+  "description": "Private Android cache materialization for generated conversation images"
+}
+

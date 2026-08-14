@@ -226,6 +226,18 @@
         ORDER BY id
     </select>
 
+    <select id="findEnabledIdsForShare" resultType="java.lang.Long">
+        SELECT id
+        FROM ai_model
+        WHERE is_enabled = TRUE
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY id
+        FOR SHARE
+    </select>
+
     <select id="findTokenBackfillPage" resultMap="AiModelResultMap">
         SELECT <include refid="AiModelColumns"/>
         FROM ai_model model

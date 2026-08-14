@@ -49,6 +49,8 @@ public interface AiModelMapper {
 
     List<Long> findEnabledIds(@Param("ids") List<Long> ids);
 
+    List<Long> findEnabledIdsForShare(@Param("ids") List<Long> ids);
+
     List<AiModel> findTokenBackfillPage(
             @Param("afterId") long afterId,
             @Param("limit") int limit);

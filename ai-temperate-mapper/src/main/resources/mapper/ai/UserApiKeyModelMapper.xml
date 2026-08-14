@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.UserApiKeyModelMapper">
+
+    <resultMap id="ApiKeyModelGrantViewResultMap"
+               type="com.example.temperate.model.ai.entity.ApiKeyModelGrantView">
+        <id property="aiModelId" column="ai_model_id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="vendor" column="vendor"/>
+        <result property="enabled" column="enabled"/>
+    </resultMap>
+
+    <select id="findActiveModelIds" resultType="java.lang.Long">
+        SELECT ai_model_id
+        FROM user_api_key_model
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+          AND status = 1
+        ORDER BY ai_model_id
+    </select>
+
+    <select id="findActiveModelDetails"
+            resultMap="ApiKeyModelGrantViewResultMap">
+        SELECT
+            model.id AS ai_model_id,
+            model.model_name,
+            model.vendor,
+            model.is_enabled AS enabled
+        FROM user_api_key_model grant_record
+        JOIN ai_model model ON model.id = grant_record.ai_model_id
+        WHERE grant_record.user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+          AND grant_record.status = 1
+        ORDER BY model.model_name, model.id
+    </select>
+
+    <update id="revokeMissing">
+        UPDATE user_api_key_model
+        SET status = 0,
+            updated_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            deleted_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+          AND status = 1
+          AND ai_model_id NOT IN
+        <foreach collection="retainedModelIds" item="modelId" open="(" separator="," close=")">
+            #{modelId,jdbcType=BIGINT}
+        </foreach>
+    </update>
+
+    <update id="revokeAll">
+        UPDATE user_api_key_model
+        SET status = 0,
+            updated_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            deleted_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+          AND status = 1
+    </update>
+
+    <insert id="upsertActiveBatch">
+        INSERT INTO user_api_key_model (
+            user_api_key_id,
+            ai_model_id,
+            status,
+            created_at,
+            updated_at,
+            deleted_at
+        )
+        VALUES
+        <foreach collection="modelIds" item="modelId" separator=",">
+            (
+                #{userApiKeyId,jdbcType=BIGINT},
+                #{modelId,jdbcType=BIGINT},
+                1,
+                #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                NULL
+            )
+        </foreach>
+        ON CONFLICT (user_api_key_id, ai_model_id)
+        DO UPDATE SET
+            status = 1,
+            updated_at = EXCLUDED.updated_at,
+            deleted_at = NULL
+    </insert>
+</mapper>

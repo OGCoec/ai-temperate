@@ -14,6 +14,7 @@ import {
 	invalidateCookieScopeMigration
 } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
+import { captureEtagPayload } from './http-response-metadata.js'
 import {
 	acceptAndroidRiskChallenge,
 	currentPreAuthToken,
@@ -99,7 +100,11 @@ function rawRequestTask(options) {
 					return
 				}
 				if (response.statusCode >= 200 && response.statusCode < 300) {
-					resolve(response.data)
+					resolve(options.captureEtag === true
+						? captureEtagPayload(
+							response.data,
+							response.header || response.headers || {})
+						: response.data)
 					return
 				}
 				const hasStableClientMessage = typeof response.data?.code === 'string' &&
@@ -356,6 +361,7 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 			method: options.method || 'POST',
 			data: options.data,
 			headers,
+			captureEtag: options.captureEtag === true,
 			timeout: options.timeout,
 			onResponse: options.onResponse
 		})

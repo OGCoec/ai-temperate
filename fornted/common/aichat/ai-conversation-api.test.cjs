@@ -97,6 +97,65 @@ test('reads PostgreSQL conversation history through the authenticated API', asyn
 	delete globalThis.__aiConversationRequest
 })
 
+test('restores generated response image slots from persisted filenames', async () => {
+	const generatedTwo = {
+		...availableAttachment(),
+		attachmentId: 'bcdefghijklmnopqrstuvwxyzABCDEFGHIJKLM',
+		fileName: 'generated-2.webp',
+		contentType: 'image/webp'
+	}
+	const generatedOne = {
+		...availableAttachment(),
+		attachmentId: 'cdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN',
+		fileName: 'generated-1.png'
+	}
+	const regularResponseImage = {
+		...availableAttachment(),
+		attachmentId: 'defghijklmnopqrstuvwxyzABCDEFGHIJKLMNO',
+		fileName: 'diagram.png'
+	}
+	const explicitlyIndexedImage = {
+		...availableAttachment(),
+		attachmentId: 'efghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP',
+		fileName: 'result.webp',
+		contentType: 'image/webp',
+		imageSlot: true,
+		outputIndex: 4
+	}
+	const module = await loadApi(async () => ({
+		messages: [{
+			messagePublicId: messageId,
+			contentText: 'generate images',
+			contentAttachments: [],
+			responseText: 'done',
+			responseAttachments: [
+				generatedTwo,
+				regularResponseImage,
+				generatedOne,
+				explicitlyIndexedImage
+			],
+			createdAt: '2026-07-30T12:00:00Z'
+		}],
+		nextBefore: null,
+		hasMore: false
+	}))
+
+	const page = await module.aiConversationApi.messages(conversationId)
+	const [second, regular, first, explicit] = page.messages[0].responseAttachments
+
+	assert.equal(second.imageSlot, true)
+	assert.equal(second.outputIndex, 1)
+	assert.equal(second.phase, 'FINAL')
+	assert.equal(second.status, 'COMPLETED')
+	assert.equal(first.imageSlot, true)
+	assert.equal(first.outputIndex, 0)
+	assert.equal(regular.imageSlot, undefined)
+	assert.equal(regular.outputIndex, undefined)
+	assert.equal(explicit.imageSlot, true)
+	assert.equal(explicit.outputIndex, 4)
+	delete globalThis.__aiConversationRequest
+})
+
 test('builds conversation and message pagination URLs without URLSearchParams', async () => {
 	await withoutUrlSearchParams(async () => {
 		const calls = []

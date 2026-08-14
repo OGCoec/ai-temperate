@@ -232,6 +232,8 @@ test('H5 voice status row keeps its existing compact Canvas presentation', () =>
 	assert.match(panel, /\.composer\s*\{[^}]*gap:\s*8px/s)
 	assert.match(panel, /\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active\s*\{[^}]*gap:\s*7px/s)
 	assert.match(panel, /\.voice-inline-status \.user-voice-waveform\s*\{[^}]*width:\s*100%/s)
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active \.voice-inline-status\s*\{[^}]*width:\s*calc\(100% \+ 45px\)[^}]*margin-left:\s*-45px/s)
 	assert.doesNotMatch(panel, /class="voice-status"/)
 })
 
@@ -434,7 +436,9 @@ test('H5 and Android share one waveform timeline while keeping platform renderer
 	assert.match(timeline, /VOICE_WAVEFORM_QUEUE_LIMIT\s*=\s*15/)
 	assert.match(timeline, /VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*192/)
 	assert.match(h5Renderer, /createVoiceWaveformTimeline/)
+	assert.match(h5Renderer, /H5_VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*512/)
 	assert.match(androidController, /createVoiceWaveformTimeline/)
+	assert.doesNotMatch(androidController, /H5_VOICE_WAVEFORM_MAX_CAPACITY|maxCapacity/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_WIDTH\s*=\s*2\.5/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_GAP\s*=\s*3/)
 	assert.match(presentation, /VOICE_WAVEFORM_BAR_PITCH\s*=\s*5\.5/)

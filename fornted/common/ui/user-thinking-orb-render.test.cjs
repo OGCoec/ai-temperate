@@ -686,8 +686,13 @@ test('orb renderer stays platform-neutral and shared by activity and voice surfa
 	assert.match(componentSource, /\.user-thinking-orb\s*\{[^}]*overflow:\s*visible[^}]*box-sizing:\s*content-box/s)
 	assert.match(chatSource, /class="model-activity"[\s\S]*?<user-thinking-orb/)
 	assert.match(chatSource, /class="voice-transcript-row"[\s\S]*?<user-thinking-orb/)
+	assert.match(chatSource,
+		/<user-thinking-orb\s+v-if="voiceInteractionActive && voiceActivityPresentation"/)
+	assert.doesNotMatch(chatSource,
+		/<user-thinking-orb\s+v-if="[^"]*motionReduced[^"]*"/)
 	assert.match(chatSource, /class="voice-transcript-row"[\s\S]*?<user-thinking-orb[\s\S]*?class="voice-live-transcript"/)
 	assert.match(chatSource, /class="voice-transcript-row"[\s\S]*?:size="40"/)
+	assert.doesNotMatch(componentSource, /motionPreference|AI_MOTION_PREFERENCES|toggleManualReduce/)
 	assert.match(chatSource, /\.model-activity\s*\{[^}]*overflow:\s*visible/s)
 	assert.match(chatSource, /\.voice-transcript-row\s*\{[^}]*overflow:\s*visible/s)
 	assert.match(chatSource, /\.voice-transcript-row \.user-thinking-orb\s*\{[^}]*flex:\s*0 0 40px/s)

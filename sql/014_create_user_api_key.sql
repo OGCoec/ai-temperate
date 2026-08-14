@@ -7,6 +7,7 @@ CREATE TABLE user_api_key (
     key_hint VARCHAR(4) NOT NULL,
     status SMALLINT NOT NULL DEFAULT 1,
     expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
     row_version BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -37,7 +38,8 @@ CREATE UNIQUE INDEX uk_user_api_key_digest
 CREATE INDEX idx_user_api_key_owner_created
     ON user_api_key (
         login_identity_id,
-        created_at DESC
+        created_at DESC,
+        id DESC
     )
     WHERE status IN (0, 1);
 
@@ -70,6 +72,8 @@ COMMENT ON COLUMN user_api_key.status IS
     '凭证状态：0=DISABLED，1=ENABLED，2=DELETED；DELETED 为不可恢复的软删除状态';
 COMMENT ON COLUMN user_api_key.expires_at IS
     '凭证过期时间；NULL 表示永不过期，不使用负数或特殊时间值表达永久有效';
+COMMENT ON COLUMN user_api_key.last_used_at IS
+    '最近一次成功完成预扣事务的 API 调用时间；该字段更新不改变面向管理接口的行版本';
 COMMENT ON COLUMN user_api_key.row_version IS
     '乐观锁版本号，状态或过期时间修改成功时由应用程序递增';
 COMMENT ON COLUMN user_api_key.created_at IS
@@ -82,6 +86,6 @@ COMMENT ON COLUMN user_api_key.deleted_at IS
 COMMENT ON INDEX uk_user_api_key_digest IS
     '支持通过 HMAC 摘要唯一定位 API Key 认证记录，并阻止历史摘要重新写入';
 COMMENT ON INDEX idx_user_api_key_owner_created IS
-    '支持按用户和创建时间倒序查询启用及禁用的 API Key，不包含软删除记录';
+    '支持按用户、创建时间和主键倒序进行稳定游标分页，不包含软删除记录';
 
 COMMIT;

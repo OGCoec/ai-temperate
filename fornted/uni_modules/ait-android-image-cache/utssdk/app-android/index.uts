@@ -1,0 +1,809 @@
+import Context from 'android.content.Context'
+import BitmapFactory from 'android.graphics.BitmapFactory'
+import BitmapFactoryOptions from 'android.graphics.BitmapFactory.Options'
+import SystemClock from 'android.os.SystemClock'
+import Base64 from 'android.util.Base64'
+import BufferedInputStream from 'java.io.BufferedInputStream'
+import BufferedOutputStream from 'java.io.BufferedOutputStream'
+import File from 'java.io.File'
+import FileInputStream from 'java.io.FileInputStream'
+import FileOutputStream from 'java.io.FileOutputStream'
+import HttpURLConnection from 'java.net.HttpURLConnection'
+import URL from 'java.net.URL'
+import UUID from 'java.util.UUID'
+import AtomicBoolean from 'java.util.concurrent.atomic.AtomicBoolean'
+import Thread from 'java.lang.Thread'
+import { UTSAndroid } from 'io.dcloud.uts'
+
+import {
+  AitAndroidFetchHttpsImageApi,
+  AitAndroidFetchHttpsImageOptions,
+  AitAndroidImageCacheFailure,
+  AitAndroidImageCacheOperation,
+  AitAndroidManagedImage,
+  AitAndroidMaterializeBase64ImageApi,
+  AitAndroidMaterializeBase64ImageOptions,
+  AitAndroidRemoveManagedImageApi
+} from '../interface.uts'
+
+const PREVIEW_MAXIMUM_BYTES = 384000
+const PREVIEW_MAXIMUM_BASE64_CHARACTERS = 512000
+const FINAL_MAXIMUM_BYTES = 100 * 1024 * 1024
+const BUFFER_BYTES: Int = 64 * 1024
+
+type DetectedImageFormat = {
+  contentType: string
+  extension: string
+  formatName: string
+}
+
+type DecodedImageInfo = {
+  width: Int
+  height: Int
+  sampleSize: Int
+}
+
+function failure(
+  code: string,
+  statusCode: number,
+  message: string,
+  stage: string,
+  exceptionType: string
+): AitAndroidImageCacheFailure {
+  return { code, stage, exceptionType, statusCode, message }
+}
+
+function throwableType(error: Throwable): string {
+  try {
+    const name = UTSAndroid.getJavaClass(error).simpleName
+    return name.length > 0 ? name : 'UNKNOWN'
+  } catch (_: Throwable) {
+    return 'UNKNOWN'
+  }
+}
+
+function diagnosticLog(
+  enabled: boolean,
+  diagnosticRunId: string,
+  outputIndex: number,
+  downloadAttempt: number,
+  phase: string,
+  details: string,
+  warning: boolean
+): void {
+  if (!enabled) return
+  const runId = diagnosticRunId.length > 0 && diagnosticRunId.length <= 96
+    ? diagnosticRunId : 'ABSENT'
+  const suffix = details.length > 0 ? ` ${details}` : ''
+  const line = `[ait-android-image] event=image_android_native phase=${phase}`
+    + ` diagnosticRunId=${runId} outputIndex=${outputIndex}`
+    + ` attempt=${downloadAttempt}${suffix}`
+  if (warning) console.warn(line)
+  else console.log(line)
+}
+
+function contentDispositionKind(value: string | null): string {
+  if (value == null || value.length == 0) return 'ABSENT'
+  return value.lowercase().startsWith('attachment') ? 'ATTACHMENT' : 'INLINE'
+}
+
+function boundedLogHeader(value: string | null, maximumLength: number): string {
+  if (value == null || value.length == 0 || value.length > maximumLength
+      || value.contains('\r') || value.contains('\n')) return 'ABSENT'
+  return value
+}
+
+function managedDirectory(): File {
+  const appContext = UTSAndroid.getAppContext()
+  if (appContext == null) throw IllegalStateException('AI_ANDROID_IMAGE_CONTEXT_UNAVAILABLE')
+  const context = appContext as Context
+  const directory = new File(context.getCacheDir(), 'ait-conversation-images')
+  if (!directory.exists() && !directory.mkdirs()) {
+    throw IllegalStateException('AI_ANDROID_IMAGE_CACHE_DIRECTORY_FAILED')
+  }
+  return directory
+}
+
+function unsignedByte(bytes: ByteArray, index: Int): Int {
+  return bytes[index].toInt() & 0xff
+}
+
+/**
+ * 文件格式只由魔数决定，避免错误的 MIME 或无后缀 OSS URL 让 Android 解码器选错格式。
+ */
+function detectImageFormat(bytes: ByteArray, length: Int): DetectedImageFormat | null {
+  if (length >= 8
+    && unsignedByte(bytes, 0) == 0x89
+    && unsignedByte(bytes, 1) == 0x50
+    && unsignedByte(bytes, 2) == 0x4e
+    && unsignedByte(bytes, 3) == 0x47
+    && unsignedByte(bytes, 4) == 0x0d
+    && unsignedByte(bytes, 5) == 0x0a
+    && unsignedByte(bytes, 6) == 0x1a
+    && unsignedByte(bytes, 7) == 0x0a) {
+    return { contentType: 'image/png', extension: 'png', formatName: 'PNG' }
+  }
+  if (length >= 3
+    && unsignedByte(bytes, 0) == 0xff
+    && unsignedByte(bytes, 1) == 0xd8
+    && unsignedByte(bytes, 2) == 0xff) {
+    return { contentType: 'image/jpeg', extension: 'jpg', formatName: 'JPEG' }
+  }
+  if (length >= 12
+    && unsignedByte(bytes, 0) == 0x52
+    && unsignedByte(bytes, 1) == 0x49
+    && unsignedByte(bytes, 2) == 0x46
+    && unsignedByte(bytes, 3) == 0x46
+    && unsignedByte(bytes, 8) == 0x57
+    && unsignedByte(bytes, 9) == 0x45
+    && unsignedByte(bytes, 10) == 0x42
+    && unsignedByte(bytes, 11) == 0x50) {
+    return { contentType: 'image/webp', extension: 'webp', formatName: 'WEBP' }
+  }
+  return null
+}
+
+function detectFileFormat(file: File): DetectedImageFormat | null {
+  const header = ByteArray(12)
+  const input = FileInputStream(file)
+  try {
+    const length = input.read(header)
+    if (length <= 0) return null
+    return detectImageFormat(header, length)
+  } finally {
+    try { input.close() } catch (_: Throwable) {}
+  }
+}
+
+function confirmDecodable(file: File): DecodedImageInfo | null {
+  const bounds = new BitmapFactoryOptions()
+  bounds.inJustDecodeBounds = true
+  BitmapFactory.decodeFile(file.getAbsolutePath(), bounds)
+  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+  let sampleSize: Int = 1
+  while (bounds.outWidth / sampleSize > 1024 || bounds.outHeight / sampleSize > 1024) {
+    sampleSize *= 2
+  }
+  const decodeOptions = new BitmapFactoryOptions()
+  decodeOptions.inSampleSize = sampleSize
+  const bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), decodeOptions)
+  if (bitmap == null) return null
+  bitmap.recycle()
+  return {
+    width: bounds.outWidth,
+    height: bounds.outHeight,
+    sampleSize
+  }
+}
+
+function renameCompletedImage(
+  directory: File,
+  partFile: File,
+  format: DetectedImageFormat
+): File {
+  const completed = new File(
+    directory,
+    `${UUID.randomUUID().toString()}.${format.extension}`
+  )
+  if (!partFile.renameTo(completed)) {
+    throw IllegalStateException('AI_ANDROID_IMAGE_ATOMIC_RENAME_FAILED')
+  }
+  return completed
+}
+
+function result(file: File, format: DetectedImageFormat): AitAndroidManagedImage {
+  return {
+    filePath: file.getAbsolutePath(),
+    displayUri: `file://${file.getAbsolutePath()}`,
+    contentType: format.contentType,
+    sizeBytes: file.length().toInt()
+  }
+}
+
+/**
+ * Base64 解码和磁盘写入始终放到工作线程；先落入 .part，只有完整校验后才公开最终路径。
+ */
+export const materializeBase64Image: AitAndroidMaterializeBase64ImageApi =
+  function(
+    options: AitAndroidMaterializeBase64ImageOptions
+  ): AitAndroidImageCacheOperation {
+  const closed = new AtomicBoolean(false)
+  const completed = new AtomicBoolean(false)
+  const startedAt = SystemClock.elapsedRealtime()
+  let partFile: File | null = null
+
+  diagnosticLog(
+    options.diagnosticsEnabled,
+    options.diagnosticRunId,
+    options.outputIndex,
+    options.downloadAttempt,
+    'MATERIALIZE_ENTERED',
+    `base64Characters=${options.base64.length} maximumBytes=${options.maximumBytes}`,
+    false
+  )
+
+  const notifyFailure = (value: AitAndroidImageCacheFailure) => {
+    if (!closed.get() && completed.compareAndSet(false, true)) {
+      const details = `failureCode=${value.code} failureStage=${value.stage}`
+        + ` statusCode=${value.statusCode} exceptionType=${value.exceptionType}`
+        + ` elapsedMs=${SystemClock.elapsedRealtime() - startedAt}`
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'ERROR_CALLBACK_ATTEMPT',
+        details,
+        true
+      )
+      try {
+        options.onError(value)
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'ERROR_CALLBACK_RETURNED',
+          '',
+          false
+        )
+      } catch (error: Throwable) {
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'ERROR_CALLBACK_FAILED',
+          `exceptionType=${throwableType(error)}`,
+          true
+        )
+      }
+    }
+  }
+
+  const worker = new Thread(() => {
+    let finalFile: File | null = null
+    let stage = 'VALIDATE_BASE64'
+    try {
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_STARTED',
+        'operationKind=PREVIEW',
+        false
+      )
+      const encoded = options.base64.trim()
+      if (encoded.length <= 0) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_EMPTY', 0, '图片预览数据为空。', stage, 'NONE'))
+        return
+      }
+      if (encoded.length > PREVIEW_MAXIMUM_BASE64_CHARACTERS) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_BASE64_TOO_LARGE', 0, '图片预览数据超过限制。', stage, 'NONE'))
+        return
+      }
+      const configuredMaximum = Math.max(1, options.maximumBytes)
+      const maximumBytes = Math.min(PREVIEW_MAXIMUM_BYTES, configuredMaximum).toInt()
+      stage = 'BASE64_DECODE'
+      const bytes = Base64.decode(encoded, Base64.DEFAULT)
+      if (bytes.size <= 0 || bytes.size > maximumBytes) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_PREVIEW_TOO_LARGE', 0, '图片预览大小无效。', stage, 'NONE'))
+        return
+      }
+      stage = 'SNIFF_FORMAT'
+      const format = detectImageFormat(bytes, bytes.size)
+      if (format == null) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_FORMAT_UNSUPPORTED', 0, '仅支持 PNG、JPEG 和 WebP 图片。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'FORMAT_DETECTED',
+        `detectedFormat=${format.formatName} actualBytes=${bytes.size}`,
+        false
+      )
+      stage = 'WRITE_PART'
+      const directory = managedDirectory()
+      partFile = new File(directory, `${UUID.randomUUID().toString()}.part`)
+      const output = BufferedOutputStream(FileOutputStream(partFile!))
+      try {
+        output.write(bytes)
+        output.flush()
+      } finally {
+        try { output.close() } catch (_: Throwable) {}
+      }
+      if (closed.get()) return
+      stage = 'RENAME'
+      finalFile = renameCompletedImage(directory, partFile!, format)
+      partFile = null
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'ATOMIC_RENAME_SUCCEEDED',
+        `detectedFormat=${format.formatName}`,
+        false
+      )
+      stage = 'BITMAP_DECODE'
+      const decodedInfo = confirmDecodable(finalFile!)
+      if (decodedInfo == null) {
+        finalFile?.delete()
+        finalFile = null
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_DECODE_FAILED', 0, 'Android 无法解码图片预览。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'BITMAP_DECODE_SUCCEEDED',
+        `width=${decodedInfo.width} height=${decodedInfo.height}`
+          + ` sampleSize=${decodedInfo.sampleSize}`,
+        false
+      )
+      if (!closed.get() && completed.compareAndSet(false, true)) {
+        const deliveredFile = finalFile!
+        stage = 'SUCCESS_CALLBACK'
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'SUCCESS_CALLBACK_ATTEMPT',
+          `sizeBytes=${deliveredFile.length()}`,
+          false
+        )
+        try {
+          options.onSuccess(result(deliveredFile, format))
+          finalFile = null
+          diagnosticLog(
+            options.diagnosticsEnabled,
+            options.diagnosticRunId,
+            options.outputIndex,
+            options.downloadAttempt,
+            'SUCCESS_CALLBACK_RETURNED',
+            '',
+            false
+          )
+        } catch (error: Throwable) {
+          deliveredFile.delete()
+          finalFile = null
+          diagnosticLog(
+            options.diagnosticsEnabled,
+            options.diagnosticRunId,
+            options.outputIndex,
+            options.downloadAttempt,
+            'SUCCESS_CALLBACK_FAILED',
+            `exceptionType=${throwableType(error)}`,
+            true
+          )
+        }
+      }
+    } catch (error: Throwable) {
+      const exceptionType = throwableType(error)
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_FAILED',
+        `failureStage=${stage} exceptionType=${exceptionType}`,
+        true
+      )
+      notifyFailure(failure(
+        'AI_ANDROID_IMAGE_MATERIALIZE_FAILED', 0, '无法准备图片预览。', stage, exceptionType))
+    } finally {
+      partFile?.delete()
+      finalFile?.delete()
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_FINISHED',
+        `operationKind=PREVIEW elapsedMs=${SystemClock.elapsedRealtime() - startedAt}`,
+        false
+      )
+    }
+  })
+  worker.setName('ait-android-image-base64')
+  worker.start()
+
+  return {
+    close: () => {
+      if (!closed.compareAndSet(false, true)) return
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'CANCEL_REQUESTED',
+        'operationKind=PREVIEW',
+        false
+      )
+      partFile?.delete()
+      worker.interrupt()
+    }
+  }
+}
+
+/**
+ * 高清图片以固定缓冲区流式写盘，下载过程中不创建 JavaScript 字符串或整图内存副本。
+ */
+export const fetchHttpsImage: AitAndroidFetchHttpsImageApi =
+  function(
+    options: AitAndroidFetchHttpsImageOptions
+  ): AitAndroidImageCacheOperation {
+  const closed = new AtomicBoolean(false)
+  const completed = new AtomicBoolean(false)
+  const startedAt = SystemClock.elapsedRealtime()
+  let activeConnection: HttpURLConnection | null = null
+  let activeInput: BufferedInputStream | null = null
+  let activeOutput: BufferedOutputStream | null = null
+  let partFile: File | null = null
+
+  diagnosticLog(
+    options.diagnosticsEnabled,
+    options.diagnosticRunId,
+    options.outputIndex,
+    options.downloadAttempt,
+    'FETCH_ENTERED',
+    `maximumBytes=${options.maximumBytes}`,
+    false
+  )
+
+  const notifyFailure = (value: AitAndroidImageCacheFailure) => {
+    if (!closed.get() && completed.compareAndSet(false, true)) {
+      const details = `failureCode=${value.code} failureStage=${value.stage}`
+        + ` statusCode=${value.statusCode} exceptionType=${value.exceptionType}`
+        + ` elapsedMs=${SystemClock.elapsedRealtime() - startedAt}`
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'ERROR_CALLBACK_ATTEMPT',
+        details,
+        true
+      )
+      try {
+        options.onError(value)
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'ERROR_CALLBACK_RETURNED',
+          '',
+          false
+        )
+      } catch (error: Throwable) {
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'ERROR_CALLBACK_FAILED',
+          `exceptionType=${throwableType(error)}`,
+          true
+        )
+      }
+    }
+  }
+
+  const worker = new Thread(() => {
+    let finalFile: File | null = null
+    let stage = 'VALIDATE_URL'
+    let responseStatus = 0
+    try {
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_STARTED',
+        'operationKind=FINAL',
+        false
+      )
+      const target = new URL(options.url)
+      if (target.getProtocol().lowercase() != 'https') {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_HTTPS_REQUIRED', 0, '高清图片只允许 HTTPS 地址。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'HTTPS_VALIDATED',
+        '',
+        false
+      )
+      const maximumBytes = Math.min(
+        FINAL_MAXIMUM_BYTES,
+        Math.max(1, options.maximumBytes)
+      ).toInt()
+      stage = 'CONNECT'
+      const connection = target.openConnection() as HttpURLConnection
+      activeConnection = connection
+      connection.setRequestMethod('GET')
+      connection.setConnectTimeout(15000)
+      connection.setReadTimeout(30000)
+      connection.setUseCaches(false)
+      connection.setInstanceFollowRedirects(false)
+      connection.setDoInput(true)
+      connection.setRequestProperty('Accept', 'image/png,image/jpeg,image/webp')
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'CONNECTION_STARTED',
+        '',
+        false
+      )
+      const status = connection.getResponseCode()
+      responseStatus = status
+      stage = 'READ_HEADERS'
+      const safeContentType = boundedLogHeader(connection.getContentType(), 64)
+      const declaredLength = connection.getContentLength()
+      const dispositionKind = contentDispositionKind(
+        connection.getHeaderField('Content-Disposition'))
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'HTTP_RESPONSE_RECEIVED',
+        `statusCode=${status} declaredBytes=${declaredLength}`
+          + ` contentType=${safeContentType}`
+          + ` contentDispositionKind=${dispositionKind}`,
+        false
+      )
+      if (status < 200 || status >= 300) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_HTTP_FAILED', status, '高清图片下载失败。', stage, 'NONE'))
+        return
+      }
+      if (declaredLength > maximumBytes) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_FINAL_TOO_LARGE', status, '高清图片超过安全限制。', stage, 'NONE'))
+        return
+      }
+      stage = 'READ_BODY'
+      const directory = managedDirectory()
+      partFile = new File(directory, `${UUID.randomUUID().toString()}.part`)
+      const input = BufferedInputStream(connection.getInputStream())
+      const output = BufferedOutputStream(FileOutputStream(partFile!))
+      activeInput = input
+      activeOutput = output
+      let total = 0
+      const buffer = ByteArray(BUFFER_BYTES)
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'STREAM_STARTED',
+        '',
+        false
+      )
+      while (!closed.get()) {
+        const length = input.read(buffer)
+        if (length < 0) break
+        if (length == 0) continue
+        total += length
+        if (total > maximumBytes) {
+          notifyFailure(failure(
+            'AI_ANDROID_IMAGE_FINAL_TOO_LARGE', status, '高清图片超过安全限制。', stage, 'NONE'))
+          return
+        }
+        output.write(buffer, 0, length)
+      }
+      output.flush()
+      if (closed.get()) return
+      if (total <= 0) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_EMPTY', status, '高清图片内容为空。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'STREAM_COMPLETED',
+        `statusCode=${status} actualBytes=${total}`
+          + ` elapsedMs=${SystemClock.elapsedRealtime() - startedAt}`,
+        false
+      )
+      try { activeInput?.close() } catch (_: Throwable) {}
+      try { activeOutput?.close() } catch (_: Throwable) {}
+      activeInput = null
+      activeOutput = null
+      stage = 'SNIFF_FORMAT'
+      const format = detectFileFormat(partFile!)
+      if (format == null) {
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_FORMAT_UNSUPPORTED', status, '仅支持 PNG、JPEG 和 WebP 图片。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'FORMAT_DETECTED',
+        `detectedFormat=${format.formatName} actualBytes=${total}`,
+        false
+      )
+      stage = 'RENAME'
+      finalFile = renameCompletedImage(directory, partFile!, format)
+      partFile = null
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'ATOMIC_RENAME_SUCCEEDED',
+        `detectedFormat=${format.formatName}`,
+        false
+      )
+      stage = 'BITMAP_DECODE'
+      const decodedInfo = confirmDecodable(finalFile!)
+      if (decodedInfo == null) {
+        finalFile?.delete()
+        finalFile = null
+        notifyFailure(failure(
+          'AI_ANDROID_IMAGE_DECODE_FAILED', status, 'Android 无法解码高清图片。', stage, 'NONE'))
+        return
+      }
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'BITMAP_BOUNDS_DECODED',
+        `width=${decodedInfo.width} height=${decodedInfo.height}`
+          + ` sampleSize=${decodedInfo.sampleSize}`,
+        false
+      )
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'BITMAP_DECODE_SUCCEEDED',
+        `width=${decodedInfo.width} height=${decodedInfo.height}`
+          + ` sampleSize=${decodedInfo.sampleSize}`,
+        false
+      )
+      if (!closed.get() && completed.compareAndSet(false, true)) {
+        const deliveredFile = finalFile!
+        stage = 'SUCCESS_CALLBACK'
+        diagnosticLog(
+          options.diagnosticsEnabled,
+          options.diagnosticRunId,
+          options.outputIndex,
+          options.downloadAttempt,
+          'SUCCESS_CALLBACK_ATTEMPT',
+          `sizeBytes=${deliveredFile.length()}`,
+          false
+        )
+        try {
+          options.onSuccess(result(deliveredFile, format))
+          finalFile = null
+          diagnosticLog(
+            options.diagnosticsEnabled,
+            options.diagnosticRunId,
+            options.outputIndex,
+            options.downloadAttempt,
+            'SUCCESS_CALLBACK_RETURNED',
+            '',
+            false
+          )
+        } catch (error: Throwable) {
+          deliveredFile.delete()
+          finalFile = null
+          diagnosticLog(
+            options.diagnosticsEnabled,
+            options.diagnosticRunId,
+            options.outputIndex,
+            options.downloadAttempt,
+            'SUCCESS_CALLBACK_FAILED',
+            `exceptionType=${throwableType(error)}`,
+            true
+          )
+        }
+      }
+    } catch (error: Throwable) {
+      const exceptionType = throwableType(error)
+      const failureCode = stage == 'CONNECT' || stage == 'READ_HEADERS' || stage == 'READ_BODY'
+        ? 'AI_ANDROID_IMAGE_NETWORK_FAILED' : 'AI_ANDROID_IMAGE_PROCESSING_FAILED'
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_FAILED',
+        `failureStage=${stage} statusCode=${responseStatus}`
+          + ` exceptionType=${exceptionType}`,
+        true
+      )
+      notifyFailure(failure(
+        failureCode, responseStatus, '高清图片处理失败。', stage, exceptionType))
+    } finally {
+      try { activeInput?.close() } catch (_: Throwable) {}
+      try { activeOutput?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+      partFile?.delete()
+      finalFile?.delete()
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'WORKER_FINISHED',
+        `operationKind=FINAL elapsedMs=${SystemClock.elapsedRealtime() - startedAt}`,
+        false
+      )
+    }
+  })
+  worker.setName('ait-android-image-https')
+  worker.start()
+
+  return {
+    close: () => {
+      if (!closed.compareAndSet(false, true)) return
+      diagnosticLog(
+        options.diagnosticsEnabled,
+        options.diagnosticRunId,
+        options.outputIndex,
+        options.downloadAttempt,
+        'CANCEL_REQUESTED',
+        'operationKind=FINAL',
+        false
+      )
+      try { activeInput?.close() } catch (_: Throwable) {}
+      try { activeOutput?.close() } catch (_: Throwable) {}
+      activeConnection?.disconnect()
+      partFile?.delete()
+      worker.interrupt()
+    }
+  }
+}
+
+/**
+ * 删除前同时校验原始路径和规范化父目录，避免 ../、符号链接或任意绝对路径越过模块边界。
+ */
+export const removeManagedImage: AitAndroidRemoveManagedImageApi =
+  function(filePath: string): boolean {
+  try {
+    const requested = filePath.trim()
+    if (requested.length <= 0 || requested.contains('..')) return false
+    const directory = managedDirectory()
+    const managedPath = directory.getCanonicalPath()
+    const candidate = new File(requested)
+    const candidatePath = candidate.getCanonicalPath()
+    const parent = candidate.getCanonicalFile().getParentFile()
+    if (parent == null || parent.getCanonicalPath() != managedPath) return false
+    if (!candidatePath.startsWith(`${managedPath}${File.separator}`)) return false
+    const managedFile = candidate.getCanonicalFile()
+    if (!managedFile.exists()) return true
+    return managedFile.isFile() && managedFile.delete()
+  } catch (_: Throwable) {
+    return false
+  }
+}

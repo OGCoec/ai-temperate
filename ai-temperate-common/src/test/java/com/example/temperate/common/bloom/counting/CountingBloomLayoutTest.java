@@ -41,4 +41,18 @@ class CountingBloomLayoutTest {
         assertThatThrownBy(() -> new CountingBloomLayout(8_000_000, 7, 1, 5_000_000))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void apiKeyV1LayoutUsesFourBucketsAndTenUniquePositions() {
+        CountingBloomLayout layout =
+                new CountingBloomLayout(14_377_588, 10, 1, 3_594_397);
+
+        List<CountingBloomPosition> positions = layout.positions(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+
+        assertThat(layout.bucketCount()).isEqualTo(4);
+        assertThat(layout.bucketByteLength(0)).isEqualTo(3_594_397);
+        assertThat(layout.bucketByteLength(3)).isEqualTo(3_594_397);
+        assertThat(positions).hasSize(10).doesNotHaveDuplicates();
+    }
 }

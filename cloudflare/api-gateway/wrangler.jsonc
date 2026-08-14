@@ -11,6 +11,10 @@
       "zone_name": "niko000o.site"
     },
     {
+      "pattern": "niko000o.site/v1/*",
+      "zone_name": "niko000o.site"
+    },
+    {
       "pattern": "niko000o.site/ws/voice",
       "zone_name": "niko000o.site"
     },

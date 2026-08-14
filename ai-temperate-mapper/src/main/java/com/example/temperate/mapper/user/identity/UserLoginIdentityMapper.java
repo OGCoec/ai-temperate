@@ -62,6 +62,8 @@ public interface UserLoginIdentityMapper {
     CurrentUserProfile findCurrentUserProfileById(
             @Param("identityId") long identityId);
 
+    boolean existsById(@Param("identityId") long identityId);
+
     int insert(UserLoginIdentity identity);
 
     int updatePasswordHash(

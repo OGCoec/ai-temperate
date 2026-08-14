@@ -354,6 +354,8 @@ test('ordinary comparison tables default to cards only in compact H5 layouts', a
 	assert.match(table, /:aria-pressed="String\(resolvedViewMode === 'cards'\)"/)
 	assert.match(table, /:aria-pressed="String\(resolvedViewMode === 'table'\)"/)
 	assert.doesNotMatch(table, /(?:localStorage|setStorageSync)\(/)
+	assert.match(table, /\.ai-markdown-table-view-button\s*\{[^}]*min-width:\s*44px[^}]*height:\s*36px[^}]*min-height:\s*36px[^}]*padding:\s*0 9px/)
+	assert.match(table, /\.ai-markdown-table-view-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/)
 	assert.match(table, /\.ai-markdown-table-region\s*\{[^}]*overflow:\s*hidden/)
 	assert.match(table, /\.ai-markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/)
 })

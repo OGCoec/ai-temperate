@@ -12,6 +12,7 @@ import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecisio
 import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.identity.bloom.IdentityPresenceMutationResult;
 import com.example.temperate.service.auth.identity.bloom.ProtectedIdentityPresenceRecord;
+import com.example.temperate.service.bloom.impl.RedisVersionedCompositeCountingBloomEngineImpl;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -78,7 +79,9 @@ class RedisIdentityPresenceBloomStoreIntegrationTest {
             connection.serverCommands().flushAll();
         }
         store = new RedisIdentityPresenceBloomStore(
-                redisTemplate, KEY_FACTORY, SETTINGS);
+                new RedisVersionedCompositeCountingBloomEngineImpl(redisTemplate),
+                KEY_FACTORY,
+                SETTINGS);
     }
 
     @Test
@@ -208,7 +211,10 @@ class RedisIdentityPresenceBloomStoreIntegrationTest {
                         true, 1_000_000, 7, 1, 1_000_000, 500, 256, 1);
         RedisIdentityPresenceBloomStore boundaryStore =
                 new RedisIdentityPresenceBloomStore(
-                        redisTemplate, KEY_FACTORY, boundarySettings);
+                        new RedisVersionedCompositeCountingBloomEngineImpl(
+                                redisTemplate),
+                        KEY_FACTORY,
+                        boundarySettings);
         HmacIdentifier email = protectedValue("email", "boundary@example.com");
         HmacIdentifier phone = protectedValue("phone", "+8613912345678");
         boundaryStore.tryAcquireBuildLease("lease-boundary", Duration.ofMinutes(5));

@@ -46,6 +46,8 @@
 				</view>
 
 				<template v-else-if="profile">
+					<view class="profile-content-grid">
+					<view class="profile-identity-group">
 					<view class="profile-identity-card">
 						<image
 							v-if="displayAvatarUrl"
@@ -94,6 +96,7 @@
 							正在上传头像…
 						</text>
 					</view>
+					</view>
 
 					<view class="profile-section profile-quota-section">
 						<view class="profile-section-heading">
@@ -131,7 +134,29 @@
 						</view>
 					</view>
 
-					<view class="profile-section">
+					<!-- #ifdef H5 -->
+					<view class="profile-section profile-developer-section">
+						<text class="profile-section-title">开发者工具</text>
+						<button
+							class="profile-api-key-card"
+							type="button"
+							:disabled="logoutBusy"
+							aria-label="进入管理我的 API Key 页面"
+							@click="openApiKeys"
+						>
+							<view class="profile-api-key-icon" aria-hidden="true">
+								<uni-icons type="locked-filled" size="21" color="#75dfb7" />
+							</view>
+							<view class="profile-api-key-copy">
+								<text class="profile-api-key-title">管理我的 API Key</text>
+								<text class="profile-api-key-detail">为 Codex、Claude Code、Apifox 和 OpenAI 兼容客户端创建访问凭证</text>
+							</view>
+							<text class="profile-api-key-chevron" aria-hidden="true">›</text>
+						</button>
+					</view>
+					<!-- #endif -->
+
+					<view class="profile-section profile-contact-section">
 						<text class="profile-section-title">联系方式</text>
 						<view class="profile-card">
 							<view class="profile-row">
@@ -165,6 +190,7 @@
 						<button class="profile-logout-all" type="button" :disabled="logoutBusy" @click="confirmLogoutAll">
 							{{ loggingOutAll ? '正在退出所有设备…' : '退出所有设备' }}
 						</button>
+					</view>
 					</view>
 				</template>
 			</view>
@@ -275,6 +301,9 @@
 		methods: {
 			closeIfOpen() {
 				return false
+			},
+			openApiKeys() {
+				if (!this.logoutBusy) this.$emit('open-api-keys')
 			},
 			openTotpSecurity() {
 				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.totpSecurity })
@@ -614,6 +643,30 @@
 	.profile-quota-divider { height: 1px; margin: 18px 0; background: #303733; }
 	.profile-quota-meta { display: flex; align-items: flex-start; gap: 10px; }
 	.profile-quota-meta-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; }
+	.profile-api-key-card {
+		@include user-frosted-surface;
+		width: 100%;
+		min-height: 92px;
+		margin: 0;
+		padding: 17px 18px;
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		border-radius: 16px;
+		box-sizing: border-box;
+		color: #f3f5f4;
+		text-align: left;
+		transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 100ms ease-out;
+	}
+	.profile-api-key-card::after { border: 0; }
+	.profile-api-key-icon { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; flex: 0 0 42px; border-radius: 13px; background: rgba(55, 211, 154, .09); }
+	.profile-api-key-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; }
+	.profile-api-key-title { color: #eef3f0; font-size: 15px; font-weight: 720; }
+	.profile-api-key-detail { margin-top: 5px; color: #8f9b95; font-size: 12px; line-height: 1.55; }
+	.profile-api-key-chevron { flex: 0 0 auto; color: #79857f; font-size: 26px; font-weight: 300; }
+	.profile-api-key-card:active { transform: scale(.988); }
+	.profile-api-key-card:disabled { opacity: .55; }
+	.profile-api-key-card:focus-visible { outline: 3px solid rgba(55, 211, 154, .28); outline-offset: 3px; }
 
 	.profile-logout {
 		width: 100%;
@@ -664,10 +717,44 @@
 		.profile-scroll { height: 100%; }
 		.profile-shell { max-width: 800px; padding: 48px 24px; }
 	}
+	/* #ifdef H5 */
+	// H5 登录后资料页使用整个工作区；信息分组只在主区域足够宽时并排，窄屏 DOM 顺序保持不变。
+	.profile-shell {
+		width: 100%;
+		max-width: none;
+		margin: 0;
+		padding-right: var(--workspace-content-gutter, 16px);
+		padding-left: var(--workspace-content-gutter, 16px);
+	}
+	.profile-content-grid, .profile-identity-group { min-width: 0; }
+	@media screen and (min-width: 1200px) {
+		.profile-content-grid {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			grid-template-areas:
+				"identity quota"
+				"contact developer"
+				"actions actions";
+			column-gap: var(--workspace-layout-gap, 24px);
+			align-items: start;
+		}
+		.profile-identity-group { grid-area: identity; }
+		.profile-quota-section { grid-area: quota; margin-top: 0; }
+		.profile-contact-section { grid-area: contact; }
+		.profile-developer-section { grid-area: developer; }
+		.profile-action-group {
+			grid-area: actions;
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+	/* #endif */
 	@media (hover: hover) and (pointer: fine) {
 		.profile-refresh:hover { background: #202520; border-color: #4d6258; }
+		.profile-api-key-card:hover { border-color: rgba(55, 211, 154, .34); background: #171b18; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.profile-retry, .profile-security, .profile-logout, .profile-logout-all, .profile-refresh, .profile-quota-progress-fill { transition: none; }
+		.profile-retry, .profile-security, .profile-logout, .profile-logout-all, .profile-refresh, .profile-quota-progress-fill, .profile-api-key-card { transition: none; }
+		.profile-api-key-card:active { transform: none; }
 	}
 </style>

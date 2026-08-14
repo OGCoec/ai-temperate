@@ -18,7 +18,7 @@ API Key 认证成功后，Service 必须先验证凭证处于启用且未过期�
 
 `user_api_key` 使用软删除，历史 API 用量不得随凭证删除。AI 模型禁用或业务删除时同样保留历史用量，展示层可以把无法加载当前模型信息的历史记录标记为模型已停用。
 
-如果依法执行历史用量物理清理，必须按受控时间范围分批处理，并在同一 PostgreSQL 本地事务中先删除 `ai_model_api_usage_detail`，再删除 `ai_model_api_usage`。每批必须校验影响行数，不得通过无边界在线接口清空历史记录。
+阶段 S 明确禁止对 `ai_model_api_usage` 和 `ai_model_api_usage_detail` 执行 `DELETE FROM`。保留期、归档或合规处置需要另行设计不可破坏本阶段账务证据的方案并先经 ADR 批准；现有在线接口、Mapper、恢复任务和运维脚本均不得物理删除这两张表的数据。
 
 ## 孤儿数据检查
 

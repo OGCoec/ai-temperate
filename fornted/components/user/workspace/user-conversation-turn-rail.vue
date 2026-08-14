@@ -264,7 +264,7 @@
 		position: absolute;
 		z-index: 12;
 		top: 50%;
-		left: 16px;
+		left: 0;
 		width: 28px;
 		max-height: min(calc(100% - 32px), 460px);
 		align-items: center;
@@ -420,10 +420,6 @@
 
 	@media screen and (min-width: 768px) {
 		.conversation-turn-rail { display: flex; }
-	}
-
-	@media screen and (min-width: 1200px) {
-		.conversation-turn-rail { left: calc(50% - 454px); }
 	}
 
 	@media screen and (max-width: 767px) {

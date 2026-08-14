@@ -215,69 +215,16 @@
 							/>
 							<text v-else-if="message.streaming && !modelActivityPresentation(message)" class="typing-indicator">正在生成…</text>
 							<text v-if="message.saving" class="saving-indicator">正在保存生成内容…</text>
-							<text
-								v-if="message.streaming && !generatedImageGallery(message).visibleItems.length && generatedImageGallery(message).progressLabel"
-								class="generated-image-progress"
-								role="status"
-								aria-live="polite"
-							>
-								{{ generatedImageGallery(message).progressLabel }}
-							</text>
-							<view v-if="generatedImageGallery(message).visibleItems.length" class="generated-image-gallery-wrap">
-								<view
-									class="generated-image-gallery"
-									:class="`is-${generatedImageGallery(message).layout.toLowerCase()}`"
-									:style="generatedImageGalleryStyle(message)"
-									role="group"
-									aria-label="generated images"
-								>
-									<view
-										v-for="(attachment, galleryIndex) in generatedImageGallery(message).visibleItems"
-										:key="attachment.attachmentId"
-										class="generated-image-gallery-tile"
-										:class="{
-											'is-hero': galleryIndex === 0,
-											'is-exiting': attachment.galleryExiting === true,
-											'is-partial': String(attachment.phase || '').toUpperCase() === 'PARTIAL'
-										}"
-									>
-										<!-- #ifdef APP-PLUS -->
-										<user-android-chat-image
-											v-if="previewImage(attachment)"
-											:attachment="attachment"
-											variant="THUMBNAIL"
-											:aspect-ratio="generatedImageGalleryAspectRatio(message)"
-											@layout-change="handleAndroidMediaLayoutChange"
-											@preview="previewAndroidImage"
-										/>
-										<!-- #endif -->
-										<!-- #ifndef APP-PLUS -->
-										<image
-											v-if="previewImage(attachment)"
-											class="generated-image-gallery-image"
-											:src="attachment.url"
-											mode="aspectFill"
-											@load="handleGeneratedResponseImageLoad(attachment, $event)"
-										/>
-										<!-- #endif -->
-										<view
-											v-if="galleryIndex === 3 && generatedImageGallery(message).hiddenCount > 0"
-											class="generated-image-gallery-overflow"
-											aria-hidden="true"
-										>
-											<text>+{{ generatedImageGallery(message).hiddenCount }}</text>
-										</view>
-									</view>
-								</view>
-								<text
-									v-if="generatedImageGallery(message).progressLabel"
-									class="generated-image-progress"
-									role="status"
-									aria-live="polite"
-								>
-									{{ generatedImageGallery(message).progressLabel }}
-								</text>
-							</view>
+							<user-generated-image-gallery
+								:message="message"
+								:presentation="generatedImageGallery(message)"
+								:aspect-ratio="generatedImageGalleryAspectRatio(message)"
+								:android-sources="generatedImageAndroidSources(message)"
+								@open="openGeneratedImageViewer"
+								@image-load="handleGeneratedGalleryImageLoad"
+								@android-layout-change="handleAndroidMediaLayoutChange"
+								@android-retry="retryGeneratedGalleryImage"
+							/>
 							<view v-if="nonImageResponseAttachments(message).length" class="attachment-grid">
 								<view
 									v-for="attachment in nonImageResponseAttachments(message)"
@@ -304,9 +251,14 @@
 									<user-android-chat-image
 										v-else-if="previewImage(attachment)"
 										:attachment="attachment"
+										:local-src="androidGeneratedImageSrc(message, attachment)"
+										:source-status="androidGeneratedImageStatus(message, attachment)"
+										:diagnostic-run-id="androidGeneratedImageDiagnosticRunId(message, attachment)"
+										:managed-local-source="true"
 										variant="FULL"
 										@layout-change="handleAndroidMediaLayoutChange"
 										@preview="previewAndroidImage"
+										@retry="retryAndroidGeneratedImage(message, attachment)"
 									/>
 									<user-android-chat-video
 										v-else-if="previewVideo(attachment)"
@@ -761,16 +713,6 @@
 								<uni-icons type="down" size="14" color="#9bc8ec" />
 							</view>
 						</picker>
-						<button
-							v-if="!androidClient"
-							class="motion-toggle"
-							type="button"
-							:aria-pressed="String(manualMotionReduced)"
-							:aria-label="motionToggleAriaLabel"
-							@click="toggleMotionPreference"
-						>
-							<text>{{ motionPreferenceLabel }}</text>
-						</button>
 						<!-- #ifdef H5 -->
 								</view>
 							</scroll-view>
@@ -788,6 +730,22 @@
 				ref="imageOutputCountDialog"
 				@confirm="selectImageOutputCount"
 				@close="restoreImageOutputCountFocus"
+			/>
+			<user-generated-image-viewer
+				:open="imageViewerOpen"
+				:items="imageViewerItems"
+				:active-identity="imageViewerActiveIdentity"
+				:source-by-identity="imageViewerSourceByIdentity"
+				:android-client="androidClient"
+				:has-more-before="imageViewerHasMoreBefore"
+				:loading-before="imageViewerLoadingBefore"
+				:download-busy="imageViewerDownloadBusy"
+				:error="imageViewerError"
+				@close="closeGeneratedImageViewer"
+				@select="selectGeneratedImageViewerItem"
+				@request-older="loadOlderViewerImages"
+				@download="downloadGeneratedImage"
+				@retry="retryGeneratedImageViewerItem"
 			/>
 		</view>
 </template>
@@ -859,6 +817,17 @@
 		recordImagePresentationOrder
 	} from '@/common/aichat/ai-conversation-image-gallery.js'
 	import {
+		adjacentGeneratedImageItems,
+		conversationGeneratedImages,
+		generatedImageIdentity,
+		mergeConversationGeneratedImages,
+		reconcileGeneratedImageIdentity
+	} from '@/common/aichat/ai-conversation-image-viewer.js'
+	import {
+		androidGeneratedImageSavePath,
+		downloadGeneratedImageOnH5
+	} from '@/common/aichat/ai-conversation-image-download.js'
+	import {
 		initialVideoUploadProgress,
 		mediaUploadProgressKey,
 		mergeMediaUploadProgress,
@@ -875,7 +844,9 @@
 		videoGenerationRequest,
 		videoSendGate
 	} from '@/common/aichat/ai-conversation-video-generation.js'
+	// #ifndef APP-PLUS
 	import { preloadConversationImage } from '@/common/aichat/ai-conversation-image-preloader.js'
+	// #endif
 	import {
 		createAiConversationResearchSession,
 		findAiConversationResearchSession
@@ -890,10 +861,7 @@
 		presentAiVoiceActivity
 	} from '@/common/aichat/ai-activity-presentation.js'
 	import { mergeAiConversationSources } from '@/common/aichat/ai-conversation-source-presentation.js'
-	import {
-		AI_MOTION_PREFERENCES,
-		createAiMotionPreferenceController
-	} from '@/common/ui/ai-motion-preference.js'
+	import { createAiMotionPreferenceController } from '@/common/ui/ai-motion-preference.js'
 	import {
 		H5_FOLLOW_LATEST_MAX_DISTANCE,
 		resolveH5FollowLatest,
@@ -940,6 +908,8 @@
 	import UserAndroidChatSettingsSheet from './user-android-chat-settings-sheet.vue'
 	import UserConversationTurnRail from './user-conversation-turn-rail.vue'
 	import UserContextUsageSheet from './user-context-usage-sheet.vue'
+	import UserGeneratedImageGallery from './user-generated-image-gallery.vue'
+	import UserGeneratedImageViewer from './user-generated-image-viewer.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
@@ -951,6 +921,16 @@
 	import UserVoiceWaveform from './user-voice-waveform.vue'
 	// #endif
 	// #ifdef APP-PLUS
+	import {
+		androidGeneratedImageOwnerKey,
+		createAndroidGeneratedImageSourceController,
+		normalizeAndroidGeneratedImageAttachments
+	} from '@/common/aichat/ai-conversation-android-image-source.js'
+	import {
+		fetchHttpsImage,
+		materializeBase64Image,
+		removeManagedImage
+	} from '@/uni_modules/ait-android-image-cache'
 	import UserAndroidChatImage from './user-android-chat-image.vue'
 	import UserAndroidChatVideo from './user-android-chat-video.vue'
 	import UserAndroidFileCard from './user-android-file-card.vue'
@@ -989,7 +969,37 @@
 	const GENERATED_RESPONSE_IMAGE_MAX_WIDTH_PX = 720
 	const GENERATED_RESPONSE_IMAGE_MAX_HEIGHT_PX = 1080
 	const GENERATED_RESPONSE_IMAGE_VIEWPORT_HEIGHT_RATIO = 0.7
+	const IMAGE_UPGRADE_REASONS = Object.freeze([
+		'MESSAGE_VISIBLE', 'VIEWER_ACTIVE', 'VIEWER_ADJACENT'
+	])
 	const GENERATED_VIDEO_MAX_WIDTH_PX = 720
+	// #ifdef APP-PLUS
+	const ANDROID_IMAGE_DIAGNOSTICS_ENABLED = process.env.NODE_ENV === 'development'
+	const ANDROID_IMAGE_DIAGNOSTIC_KEYS = Object.freeze([
+		'event', 'phase', 'diagnosticRunId', 'outputIndex', 'ownerKind', 'revision',
+		'attempt', 'status', 'statusBefore', 'statusAfter', 'hasPreview', 'hasFinal',
+		'requiresUpgrade', 'pathKind', 'returnedPathKind', 'sourceKind', 'contentType',
+		'sizeBytes', 'attachmentCount', 'previewKind', 'reason', 'force', 'operationKind',
+		'failureCode', 'failureStage', 'exceptionType', 'statusCode'
+	])
+
+	function logAndroidImageDiagnostic(diagnostic, warning = false) {
+		if (!ANDROID_IMAGE_DIAGNOSTICS_ENABLED || !diagnostic) return
+		const values = {}
+		for (const key of ANDROID_IMAGE_DIAGNOSTIC_KEYS) {
+			if (diagnostic[key] == null || diagnostic[key] === '') continue
+			const value = diagnostic[key]
+			values[key] = typeof value === 'number' || typeof value === 'boolean'
+				? value
+				: String(value).replace(/[\u0000-\u0020\u007f]/g, '_').slice(0, 128)
+		}
+		const line = Object.entries(values)
+			.map(([key, value]) => `${key}=${String(value)}`)
+			.join(' ')
+		if (warning) console.warn(`[ait-android-image] ${line}`)
+		else console.log(`[ait-android-image] ${line}`)
+	}
+	// #endif
 	const GENERATED_VIDEO_MAX_HEIGHT_PX = 1080
 	const GENERATED_VIDEO_VIEWPORT_HEIGHT_RATIO = 0.68
 	const GENERATED_VIDEO_FALLBACK_SIZE = Object.freeze({ width: 1280, height: 720 })
@@ -1128,6 +1138,8 @@
 			UserChatAttachmentList,
 			UserConversationTurnRail,
 			UserContextUsageSheet,
+			UserGeneratedImageGallery,
+			UserGeneratedImageViewer,
 			UserImageOutputCountDialog,
 			UserMarkdownMessage,
 			UserMediaUploadProgress,
@@ -1172,10 +1184,22 @@
 				pendingAttachments: [],
 				attachmentPickerBusy: false,
 				localPreviewUrls: new Map(),
+				// #ifdef APP-PLUS
+				androidGeneratedImageSourceController: null,
+				androidGeneratedImageSourceRevision: 0,
+				// #endif
 				imageUpgradeTokens: markRaw(new Map()),
 				imageGalleryExitTimers: markRaw(new Map()),
 				imageGalleryExiting: markRaw(new Map()),
 				imageGalleryRevision: 0,
+				imageViewerOpen: false,
+				imageViewerItems: Object.freeze([]),
+				imageViewerActiveIdentity: '',
+				imageViewerNextBefore: null,
+				imageViewerHasMoreBefore: false,
+				imageViewerLoadingBefore: false,
+				imageViewerError: '',
+				imageViewerDownloadBusyIdentity: '',
 				generatedResponseImageNaturalSizes: {},
 				generatedVideoNaturalSizes: {},
 				videoDownloadBusyById: {},
@@ -1220,7 +1244,6 @@
 				voiceTimer: null,
 				voiceStartedAt: 0,
 				motionReduced: false,
-				motionPreference: AI_MOTION_PREFERENCES.SYSTEM,
 				motionController: null,
 				scrollTarget: '',
 				pageVisible: true,
@@ -1245,15 +1268,24 @@
 				olderMessagesError: ''
 			}
 		},
+		// #ifdef APP-PLUS
+		created() {
+			this.androidGeneratedImageSourceController = markRaw(
+				createAndroidGeneratedImageSourceController({
+					materializeBase64Image,
+					fetchHttpsImage,
+					removeManagedImage,
+					diagnosticsEnabled: ANDROID_IMAGE_DIAGNOSTICS_ENABLED,
+					onDiagnostic: logAndroidImageDiagnostic,
+					onChange: () => { this.androidGeneratedImageSourceRevision += 1 }
+				})
+			)
+			this.syncAllAndroidGeneratedImageSources()
+		},
+		// #endif
 		mounted() {
 			this.motionController = createAiMotionPreferenceController(snapshot => {
-				if (this.androidClient) {
-					this.motionReduced = snapshot.systemReduced
-					this.motionPreference = AI_MOTION_PREFERENCES.SYSTEM
-					return
-				}
 				this.motionReduced = snapshot.reduced
-				this.motionPreference = snapshot.preference
 			})
 			void prewarmAiCodeHighlighter().catch(error => reportAiCodeHighlightError({
 				code: 'AI_CODE_ENGINE_INIT_FAILED',
@@ -1270,6 +1302,7 @@
 		},
 		beforeUnmount() {
 			this.pageVisible = false
+			this.closeGeneratedImageViewer({ restoreFocus: false })
 			this.invalidateAndroidScroll()
 			this.motionController?.destroy?.()
 			this.motionController = null
@@ -1302,6 +1335,9 @@
 			this.cancelPendingUploads()
 			this.releasePreviewUrls(this.pendingAttachments.map(file => file.path))
 			this.releaseAllLocalPreviews()
+			// #ifdef APP-PLUS
+			this.releaseAllAndroidGeneratedImages()
+			// #endif
 			this.releaseAllVideoDownloadObjectUrls()
 		},
 		computed: {
@@ -1549,18 +1585,6 @@
 			contextCompactionPresentation() {
 				return presentAiCompactionActivity(this.contextUsage?.compactionStatus)
 			},
-			manualMotionReduced() {
-				return this.motionPreference === AI_MOTION_PREFERENCES.REDUCE
-			},
-			motionPreferenceLabel() {
-				if (this.manualMotionReduced) return '动画已手动关闭'
-				return this.motionReduced ? '动画已按系统关闭' : '动画跟随系统'
-			},
-			motionToggleAriaLabel() {
-				return this.manualMotionReduced
-					? '动画已手动关闭，点击改为跟随系统'
-					: '动画跟随系统，点击手动关闭动画'
-			},
 			contextUsagePercent() {
 				return Math.max(0, Number(this.contextUsage?.usagePercent || 0))
 			},
@@ -1593,6 +1617,30 @@
 			hasHiddenTurnsAfter() {
 				return this.turnNavigationDesktop && this.renderWindow.end < this.messages.length
 			},
+			imageViewerDownloadBusy() {
+				return Boolean(this.imageViewerDownloadBusyIdentity)
+			},
+			imageViewerSourceByIdentity() {
+				const sources = {}
+				// #ifdef APP-PLUS
+				void this.androidGeneratedImageSourceRevision
+				for (const item of this.imageViewerItems || []) {
+					const ownerKey = androidGeneratedImageOwnerKey({
+						messagePublicId: item.messagePublicId,
+						localId: item.localId
+					})
+					sources[item.identity] = Object.freeze({
+						src: this.androidGeneratedImageSourceController?.sourceFor(
+							ownerKey, item.outputIndex) || '',
+						status: this.androidGeneratedImageSourceController?.statusFor(
+							ownerKey, item.outputIndex) || 'WAITING_REMOTE',
+						diagnosticRunId: this.androidGeneratedImageSourceController
+							?.diagnosticRunIdFor(ownerKey, item.outputIndex) || ''
+					})
+				}
+				// #endif
+				return Object.freeze(sources)
+			},
 			activeConversationTitle() {
 				if (!this.currentConversationPublicId) return '新聊天'
 				return this.conversations.find(item => item.conversationPublicId === this.currentConversationPublicId)?.title || '未命名对话'
@@ -1602,6 +1650,12 @@
 			motionReduced(value) {
 				if (value !== true || !this.voiceTranscriptPresenter) return
 				this.voiceTranscriptPresenter.setTarget(this.voicePartialText, { reduced: true })
+			},
+			messages: {
+				deep: true,
+				handler() {
+					if (this.imageViewerOpen) this.refreshGeneratedImageViewerItems()
+				}
 			}
 		},
 		methods: {
@@ -2035,7 +2089,30 @@
 				this.restoreResearchForCurrentConversation()
 			},
 			applyStore(value) {
+				// #ifdef APP-PLUS
+				const previousMessageOwnerKeys = new Set((this.messages || [])
+					.map(androidGeneratedImageOwnerKey)
+					.filter(Boolean))
+				// #endif
 				Object.assign(this, value)
+				// #ifdef APP-PLUS
+				if (this.androidGeneratedImageSourceController) {
+					const currentMessageOwnerKeys = new Set((this.messages || [])
+						.map(androidGeneratedImageOwnerKey)
+						.filter(Boolean))
+					previousMessageOwnerKeys.forEach(ownerKey => {
+						if (!currentMessageOwnerKeys.has(ownerKey)) {
+							logAndroidImageDiagnostic({
+								event: 'image_android_page', phase: 'OWNER_RELEASED',
+								diagnosticRunId: 'ABSENT',
+								ownerKind: ownerKey.startsWith('history:') ? 'HISTORY' : 'LOCAL'
+							})
+							this.androidGeneratedImageSourceController.releaseMessage(ownerKey)
+						}
+					})
+					this.syncAllAndroidGeneratedImageSources()
+				}
+				// #endif
 				this.$emit('conversation-state-change', value)
 			},
 			syncStore() {
@@ -2552,7 +2629,11 @@
 				}
 			},
 			newChat() {
+				this.closeGeneratedImageViewer({ restoreFocus: false })
 				this.clearCompletedImageUpgrades()
+				// #ifdef APP-PLUS
+				this.releaseAllAndroidGeneratedImages()
+				// #endif
 				if (this.generating) {
 					if (asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 					else this.stop()
@@ -2576,10 +2657,14 @@
 			},
 			async openConversation(publicId) {
 				if (publicId === this.currentConversationPublicId) return
+				this.closeGeneratedImageViewer({ restoreFocus: false })
 				this.invalidateAndroidScroll()
 				this.clearCompletedImageUpgrades()
 				if (this.generating && asyncGenerationEnabled()) this.releaseCurrentGenerationView()
 				else if (this.generating) return
+				// #ifdef APP-PLUS
+				this.releaseAllAndroidGeneratedImages()
+				// #endif
 				this.activeResearchSession?.close?.()
 				this.activeResearchSession = null
 				this.resetContextUsage()
@@ -3471,10 +3556,6 @@
 					message.modelActivity,
 					this.researchSources(message))
 			},
-			toggleMotionPreference() {
-				if (this.androidClient) return
-				this.motionController?.toggleManualReduce?.()
-			},
 			researchDetailsAvailable(message) {
 				if (!aiConversationWebSearchEnabled() || !message?.research) return false
 				return Boolean(message.research.activities?.length
@@ -3724,10 +3805,130 @@
 				if (!this.turnFollowLatest) return
 				this.requestAndroidScrollBottom('media-layout', false)
 			},
-			previewAndroidImage(attachment) {
-				const url = String(attachment?.url || '')
-				if (!/^https:\/\//i.test(url)) return
-				uni.previewImage({ current: url, urls: [url] })
+			// #ifdef APP-PLUS
+			androidGeneratedImageAttachment(message, attachment) {
+				const attachmentId = String(attachment?.attachmentId || '').trim()
+				const normalized = normalizeAndroidGeneratedImageAttachments(
+					message?.responseAttachments
+				)
+				const matched = attachmentId
+					? normalized.find(item => String(item?.attachmentId || '') === attachmentId)
+					: null
+				return matched || normalizeAndroidGeneratedImageAttachments([attachment])[0] || null
+			},
+			androidGeneratedImageSrc(message, attachment) {
+				void this.androidGeneratedImageSourceRevision
+				const ownerKey = androidGeneratedImageOwnerKey(message)
+				const normalized = this.androidGeneratedImageAttachment(message, attachment)
+				return this.androidGeneratedImageSourceController?.sourceFor(
+					ownerKey,
+					normalized?.outputIndex
+				) || ''
+			},
+			androidGeneratedImageStatus(message, attachment) {
+				void this.androidGeneratedImageSourceRevision
+				const ownerKey = androidGeneratedImageOwnerKey(message)
+				const normalized = this.androidGeneratedImageAttachment(message, attachment)
+				return this.androidGeneratedImageSourceController?.statusFor(
+					ownerKey,
+					normalized?.outputIndex
+				) || 'WAITING_REMOTE'
+			},
+			androidGeneratedImageDiagnosticRunId(message, attachment) {
+				const ownerKey = androidGeneratedImageOwnerKey(message)
+				const normalized = this.androidGeneratedImageAttachment(message, attachment)
+				return this.androidGeneratedImageSourceController?.diagnosticRunIdFor(
+					ownerKey,
+					normalized?.outputIndex
+				) || ''
+			},
+			syncAndroidGeneratedImageSources(message) {
+				const ownerKey = androidGeneratedImageOwnerKey(message)
+				if (!this.androidGeneratedImageSourceController || !ownerKey) return
+				const attachments = normalizeAndroidGeneratedImageAttachments(
+					message?.responseAttachments
+				)
+				logAndroidImageDiagnostic({
+					event: 'image_android_page',
+					phase: 'SYNC_MESSAGE_ENTERED',
+					diagnosticRunId: 'ABSENT',
+					ownerKind: ownerKey.startsWith('history:') ? 'HISTORY' : 'LOCAL',
+					attachmentCount: attachments.length
+				})
+				for (const attachment of attachments) {
+					const url = String(attachment?.url || '').trim()
+					const diagnosticRunId = this.androidGeneratedImageSourceController
+						.diagnosticRunIdFor(ownerKey, attachment.outputIndex)
+					const sourceKind = /^data:image\//i.test(url)
+						? 'DATA' : /^https:\/\//i.test(url) ? 'HTTPS' : 'NONE'
+					logAndroidImageDiagnostic({
+						event: 'image_android_page',
+						phase: 'ATTACHMENT_NORMALIZED',
+						diagnosticRunId,
+						outputIndex: attachment.outputIndex,
+						ownerKind: ownerKey.startsWith('history:') ? 'HISTORY' : 'LOCAL',
+						sourceKind,
+						contentType: String(attachment?.contentType || '').slice(0, 64),
+						requiresUpgrade: attachment?.requiresUpgrade === true
+					})
+					if (/^data:image\/(?:png|jpe?g|webp);base64,/i.test(url)) {
+						this.androidGeneratedImageSourceController.acceptPreview(ownerKey, attachment)
+						logAndroidImageDiagnostic({
+							event: 'image_android_page', phase: 'PREVIEW_DISPATCHED',
+							diagnosticRunId, outputIndex: attachment.outputIndex
+						})
+					}
+					if (/^https:\/\/[^\s]+$/i.test(String(attachment?.persistedUrl || '').trim())
+						|| /^https:\/\/[^\s]+$/i.test(url)) {
+						this.androidGeneratedImageSourceController.acceptPersisted(ownerKey, attachment)
+						logAndroidImageDiagnostic({
+							event: 'image_android_page', phase: 'PERSISTED_DISPATCHED',
+							diagnosticRunId, outputIndex: attachment.outputIndex
+						})
+					}
+				}
+			},
+			syncAllAndroidGeneratedImageSources() {
+				if (!this.androidGeneratedImageSourceController) return
+				for (const message of this.messages || []) {
+					this.syncAndroidGeneratedImageSources(message)
+				}
+			},
+			retryAndroidGeneratedImage(message, attachment) {
+				const ownerKey = androidGeneratedImageOwnerKey(message)
+				const normalized = this.androidGeneratedImageAttachment(message, attachment)
+				logAndroidImageDiagnostic({
+					event: 'image_android_page',
+					phase: 'USER_RETRY_REQUESTED',
+					diagnosticRunId: this.androidGeneratedImageSourceController
+						?.diagnosticRunIdFor(ownerKey, normalized?.outputIndex) || 'ABSENT',
+					outputIndex: normalized?.outputIndex
+				})
+				this.androidGeneratedImageSourceController?.retryFinal(
+					ownerKey,
+					normalized?.outputIndex
+				)
+			},
+			releaseAllAndroidGeneratedImages() {
+				logAndroidImageDiagnostic({
+					event: 'image_android_page', phase: 'OWNER_RELEASED',
+					diagnosticRunId: 'ABSENT', reason: 'RELEASE_ALL'
+				})
+				this.androidGeneratedImageSourceController?.releaseAll()
+			},
+			// #endif
+			previewAndroidImage(payload) {
+				const attachment = payload?.attachment || payload
+				const confirmedSource = String(payload?.src || '').trim()
+				const attachmentUrl = String(attachment?.url || '').trim()
+				const source = confirmedSource || (/^https:\/\/[^\s]+$/i.test(attachmentUrl)
+					? attachmentUrl : '')
+				if (!source || /[\u0000-\u001f\u007f]/.test(source) || source.includes('..')) return
+				const controlledLocal = source.startsWith('/') || source.startsWith('_doc/')
+					|| /^file:\/\/\/[^/\s]/.test(source)
+				if (!controlledLocal && !/^https:\/\/[^\s]+$/i.test(source)) return
+				const urls = Object.freeze([source])
+				uni.previewImage({ current: source, urls })
 			},
 			toggleGenerationSettings() {
 				if (this.androidClient) return
@@ -3782,8 +3983,7 @@
 					message?.requestedImageAspect || this.selectedImageAspect)
 			},
 			generatedImageGallery(message) {
-				// The exit snapshot keeps a failed tile visible for one short transition;
-				// the data source remains authoritative and the snapshot is never persisted.
+				// 退出快照只为失败槽位保留一次短暂过渡；权威附件仍来自消息状态，快照绝不持久化。
 				void this.imageGalleryRevision
 				const localId = String(message?.localId || '')
 				const exiting = [...this.imageGalleryExiting.values()]
@@ -3802,12 +4002,224 @@
 					requestedCount: message?.requestedImageCount
 				})
 			},
-			generatedImageGalleryStyle(message) {
-				const aspect = this.generatedImageGalleryAspectRatio(message)
-				return {
-					'--image-gallery-aspect': String(aspect),
-					'--image-gallery-mosaic-aspect': String(aspect * 1.52)
+			generatedImageAndroidSources(message) {
+				const sources = {}
+				// #ifdef APP-PLUS
+				void this.androidGeneratedImageSourceRevision
+				for (const attachment of this.generatedImageGallery(message).allItems || []) {
+					const identity = generatedImageIdentity(message, attachment)
+					if (!identity) continue
+					sources[identity] = Object.freeze({
+						src: this.androidGeneratedImageSrc(message, attachment),
+						status: this.androidGeneratedImageStatus(message, attachment),
+						diagnosticRunId: this.androidGeneratedImageDiagnosticRunId(
+							message, attachment)
+					})
 				}
+				// #endif
+				return Object.freeze(sources)
+			},
+			handleGeneratedGalleryImageLoad(payload) {
+				if (!payload?.attachment) return
+				this.handleGeneratedResponseImageLoad(payload.attachment, payload.event)
+			},
+			retryGeneratedGalleryImage(payload) {
+				if (!payload?.message || !payload?.attachment) return
+				// #ifdef APP-PLUS
+				this.retryAndroidGeneratedImage(payload.message, payload.attachment)
+				// #endif
+			},
+			openGeneratedImageViewer(payload) {
+				const message = payload?.message
+				const attachment = payload?.attachment
+				const identity = String(payload?.identity
+					|| generatedImageIdentity(message, attachment) || '')
+				const items = conversationGeneratedImages(this.messages)
+				if (!identity || !items.some(item => item.identity === identity)) return
+				// #ifdef APP-PLUS
+				this.syncAllAndroidGeneratedImageSources()
+				// #endif
+				this.imageViewerItems = items
+				this.imageViewerActiveIdentity = identity
+				this.imageViewerNextBefore = this.nextBefore
+				this.imageViewerHasMoreBefore = this.hasMoreMessages
+				this.imageViewerLoadingBefore = false
+				this.imageViewerError = ''
+				this.imageViewerOpen = true
+				this.beginViewerImageUpgrades(identity)
+			},
+			closeGeneratedImageViewer(options = {}) {
+				void options
+				this.imageViewerOpen = false
+				this.imageViewerItems = Object.freeze([])
+				this.imageViewerActiveIdentity = ''
+				this.imageViewerNextBefore = null
+				this.imageViewerHasMoreBefore = false
+				this.imageViewerLoadingBefore = false
+				this.imageViewerError = ''
+				this.imageViewerDownloadBusyIdentity = ''
+			},
+			refreshGeneratedImageViewerItems() {
+				if (!this.imageViewerOpen) return
+				const currentItems = conversationGeneratedImages(this.messages)
+				const currentByIdentity = new Map(currentItems.map(item => [item.identity, item]))
+				const used = new Set()
+				const refreshed = []
+				for (const existing of this.imageViewerItems || []) {
+					let replacement = currentByIdentity.get(existing.identity)
+					if (!replacement && existing.localId) {
+						replacement = currentItems.find(item => item.localId === existing.localId
+							&& item.outputIndex === existing.outputIndex)
+					}
+					const next = replacement || existing
+					if (used.has(next.identity)) continue
+					used.add(next.identity)
+					refreshed.push(next)
+				}
+				for (const item of currentItems) {
+					if (used.has(item.identity)) continue
+					used.add(item.identity)
+					refreshed.push(item)
+				}
+				const previous = this.imageViewerItems.find(item =>
+					item.identity === this.imageViewerActiveIdentity)
+				const activeIdentity = reconcileGeneratedImageIdentity(
+					refreshed,
+					this.imageViewerActiveIdentity,
+					previous
+				)
+				if (!refreshed.length) {
+					this.closeGeneratedImageViewer()
+					return
+				}
+				this.imageViewerItems = Object.freeze(refreshed)
+				this.imageViewerActiveIdentity = activeIdentity
+				this.beginViewerImageUpgrades(activeIdentity)
+			},
+			selectGeneratedImageViewerItem(identity) {
+				if (!this.imageViewerItems.some(item => item.identity === identity)) return
+				this.imageViewerActiveIdentity = identity
+				this.imageViewerError = ''
+				this.beginViewerImageUpgrades(identity)
+			},
+			async loadOlderViewerImages() {
+				if (!this.currentConversationPublicId || !this.imageViewerNextBefore
+					|| this.imageViewerLoadingBefore) return
+				const conversationPublicId = this.currentConversationPublicId
+				this.imageViewerLoadingBefore = true
+				this.imageViewerError = ''
+				try {
+					const page = await aiConversationApi.messages(conversationPublicId, {
+						before: this.imageViewerNextBefore,
+						pageSize: 100
+					})
+					if (conversationPublicId !== this.currentConversationPublicId
+						|| !this.imageViewerOpen) return
+					this.imageViewerItems = mergeConversationGeneratedImages(
+						this.imageViewerItems, page.messages)
+					this.imageViewerNextBefore = page.nextBefore
+					this.imageViewerHasMoreBefore = page.hasMore
+					// #ifdef APP-PLUS
+					for (const message of page.messages) this.syncAndroidGeneratedImageSources(message)
+					// #endif
+				} catch (error) {
+					if (conversationPublicId === this.currentConversationPublicId) {
+						this.imageViewerError = error?.message || '更早图片加载失败，请重试。'
+					}
+				} finally {
+					if (conversationPublicId === this.currentConversationPublicId) {
+						this.imageViewerLoadingBefore = false
+					}
+				}
+			},
+			beginViewerImageUpgrades(identity) {
+				const nearby = adjacentGeneratedImageItems(
+					this.imageViewerItems, identity, 1)
+				for (const item of nearby) {
+					const message = this.messages.find(candidate =>
+						(candidate.messagePublicId && candidate.messagePublicId === item.messagePublicId)
+						|| (candidate.localId && candidate.localId === item.localId))
+					const attachment = (message?.responseAttachments || []).find(candidate =>
+						Number(candidate?.outputIndex) === item.outputIndex)
+					if (!message || !attachment) continue
+					const reason = item.identity === identity
+						? 'VIEWER_ACTIVE' : 'VIEWER_ADJACENT'
+					this.beginImageUpgrade(message.localId, attachment, reason)
+				}
+			},
+			retryGeneratedImageViewerItem(item) {
+				// #ifdef APP-PLUS
+				const ownerKey = androidGeneratedImageOwnerKey({
+					messagePublicId: item?.messagePublicId,
+					localId: item?.localId
+				})
+				this.androidGeneratedImageSourceController?.retryFinal(
+					ownerKey, item?.outputIndex)
+				// #endif
+			},
+			async downloadGeneratedImage(item) {
+				if (!item?.identity || this.imageViewerDownloadBusyIdentity) return
+				if (String(item?.attachment?.phase || '').toUpperCase() !== 'FINAL') {
+					uni.showToast({ title: '高清图片正在准备，请稍后重试', icon: 'none' })
+					return
+				}
+				this.imageViewerDownloadBusyIdentity = item.identity
+				try {
+					// #ifdef H5
+					await downloadGeneratedImageOnH5(item)
+					uni.showToast({ title: '图片下载已开始', icon: 'success' })
+					// #endif
+					// #ifdef APP-PLUS
+					await this.saveGeneratedImageOnAndroid(item)
+					// #endif
+				} catch (error) {
+					const permissionDenied = /auth|permission|deny|denied/i.test(
+						String(error?.errMsg || error?.message || ''))
+					const finalNotReady = error?.message === 'IMAGE_FINAL_NOT_READY'
+					uni.showToast({
+						title: finalNotReady
+							? '高清图片正在准备，请稍后重试'
+							: permissionDenied
+							? '没有相册权限，请在系统设置中允许后重试'
+							: '图片保存失败，请重试',
+						icon: 'none'
+					})
+				} finally {
+					if (this.imageViewerDownloadBusyIdentity === item.identity) {
+						this.imageViewerDownloadBusyIdentity = ''
+					}
+				}
+			},
+			saveGeneratedImageOnAndroid(item) {
+				// #ifdef APP-PLUS
+				const ownerKey = androidGeneratedImageOwnerKey({
+					messagePublicId: item?.messagePublicId,
+					localId: item?.localId
+				})
+				const status = this.androidGeneratedImageSourceController?.statusFor(
+					ownerKey, item?.outputIndex)
+				if (status !== 'FINAL_READY') {
+					this.androidGeneratedImageSourceController?.acceptPersisted(
+						ownerKey, item?.attachment)
+					throw new Error('IMAGE_FINAL_NOT_READY')
+				}
+				const filePath = androidGeneratedImageSavePath(
+					this.androidGeneratedImageSourceController?.filePathFor(
+						ownerKey, item?.outputIndex))
+				return new Promise((resolve, reject) => {
+					uni.saveImageToPhotosAlbum({
+						filePath,
+						success: () => {
+							uni.showToast({ title: '已保存到相册', icon: 'success' })
+							resolve()
+						},
+						fail: reject
+					})
+				})
+				// #endif
+				// #ifndef APP-PLUS
+				return Promise.reject(new Error('ANDROID_IMAGE_SAVE_UNAVAILABLE'))
+				// #endif
 			},
 			nonImageResponseAttachments(message) {
 				return (Array.isArray(message?.responseAttachments)
@@ -3848,7 +4260,11 @@
 			beginVisibleImageUpgrades(localId) {
 				const message = this.messages.find(item => item.localId === localId)
 				const gallery = this.generatedImageGallery(message)
-				for (const attachment of gallery.visibleItems || []) {
+				const visibleAttachments = [
+					...(gallery.primaryItems || []),
+					...(gallery.visibleSecondaryItems || [])
+				]
+				for (const attachment of visibleAttachments) {
 					this.beginImageUpgrade(localId, attachment)
 				}
 			},
@@ -3859,16 +4275,26 @@
 					responseAttachments: attachments,
 					imagePresentationOrder: presentationOrder
 				})
-				for (const attachment of gallery.visibleItems || []) {
+				const visibleAttachments = [
+					...(gallery.primaryItems || []),
+					...(gallery.visibleSecondaryItems || [])
+				]
+				for (const attachment of visibleAttachments) {
 					this.beginImageUpgrade(localId, attachment)
 				}
 			},
-			beginImageUpgrade(localId, attachment) {
+			beginImageUpgrade(localId, attachment, reason = 'MESSAGE_VISIBLE') {
+				if (!IMAGE_UPGRADE_REASONS.includes(reason)) return
 				if (attachment?.requiresUpgrade !== true || !attachment?.persistedUrl
 					|| attachment?.upgradeFailed === true) return
-				const message = this.messages.find(item => item.localId === localId)
-				if (!this.generatedImageGallery(message).visibleOutputIndexes.includes(
-					Number(attachment.outputIndex))) return
+				// #ifdef APP-PLUS
+				if (this.androidClient) {
+					const ownerKey = androidGeneratedImageOwnerKey({ localId })
+					this.androidGeneratedImageSourceController?.acceptPersisted(ownerKey, attachment)
+					return
+				}
+				// #endif
+				// #ifndef APP-PLUS
 				const outputIndex = Number(attachment.outputIndex)
 				const key = `${localId}:${outputIndex}`
 				const activeToken = this.imageUpgradeTokens.get(key)
@@ -3894,7 +4320,9 @@
 						outputIndex,
 						attachment.persistedUrl)
 				})
+				// #endif
 			},
+			// #ifndef APP-PLUS
 			completeImageUpgrade(localId, outputIndex, persistedUrl, result) {
 				const message = this.messages.find(item => item.localId === localId)
 				const current = (message?.responseAttachments || []).find(item =>
@@ -3936,6 +4364,7 @@
 						}))
 				}))
 			},
+			// #endif
 			imageOutputStatusLabel(attachment) {
 				return ({
 					QUEUED: '等待开始',
@@ -4138,6 +4567,7 @@
 			},
 			handlePageHide() {
 				this.pageVisible = false
+				this.closeGeneratedImageViewer({ restoreFocus: false })
 				this.invalidateAndroidScroll()
 				// #ifdef APP-PLUS
 				this.abortVoiceInput('PAGE_HIDE')
@@ -4196,6 +4626,9 @@
 				this.releasePreviewUrls(this.pendingAttachments.map(file => file.path))
 				this.releaseAllLocalPreviews()
 				if (!asyncGenerationEnabled()) this.applyStore(discardTransientMessages())
+				// #ifdef APP-PLUS
+				this.releaseAllAndroidGeneratedImages()
+				// #endif
 			},
 			releaseCurrentGenerationView() {
 				this.activeGenerationSubscription?.()
@@ -4395,22 +4828,6 @@
 	.message-error, .message-warning, .composer-error { color: #f2a24d; font-size: 13px; }
 	.message-warning { display: block; margin-top: 9px; }
 	.attachment-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
-	.generated-image-gallery-wrap { width: min(100%, 720px); margin-top: 10px; }
-	.generated-image-gallery { width: 100%; display: grid; gap: 7px; }
-	.generated-image-gallery.is-single { grid-template-columns: minmax(0, 1fr); }
-	.generated-image-gallery.is-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.generated-image-gallery.is-hero-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.generated-image-gallery.is-hero-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-	.generated-image-gallery-tile { min-width: 0; aspect-ratio: var(--image-gallery-aspect); position: relative; overflow: hidden; border: 1px solid rgba(104, 136, 121, .42); border-radius: 14px; background: #141816; box-shadow: 0 8px 24px rgba(0, 0, 0, .14); }
-	.generated-image-gallery.is-hero-two .generated-image-gallery-tile.is-hero { grid-column: 1 / -1; }
-	.generated-image-gallery.is-hero-three .generated-image-gallery-tile.is-hero { grid-column: 1 / -1; }
-	.generated-image-gallery-image { width: 100%; height: 100%; display: block; transition: filter 160ms ease, opacity 180ms ease; }
-	.generated-image-gallery-tile.is-partial .generated-image-gallery-image { filter: blur(2px) saturate(.9); transform: scale(1.018); }
-	.generated-image-gallery-tile.is-partial::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(135deg, rgba(8, 15, 12, .16), rgba(8, 15, 12, .04)); }
-	.generated-image-gallery-tile.is-exiting { animation: generated-image-gallery-exit 180ms ease-in forwards; }
-	.generated-image-gallery-overflow { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: rgba(5, 10, 8, .58); color: #f3f7f5; font-size: 28px; font-weight: 760; letter-spacing: -.5px; }
-	.generated-image-progress { display: block; margin-top: 8px; color: #8fdcbe; font-size: 12px; font-variant-numeric: tabular-nums; }
-	@keyframes generated-image-gallery-exit { to { opacity: 0; transform: scale(.975); } }
 	.attachment-card { min-width: 0; overflow: hidden; display: flex; flex-direction: column; border: 1px solid #313a35; border-radius: 12px; background: #141816; }
 	.attachment-card.is-video { width: min(100%, 720px); max-width: 100%; overflow: visible; justify-self: center; border: 0; border-radius: 0; background: transparent; }
 	.attachment-media-frame { min-width: 0; overflow: hidden; }
@@ -4487,8 +4904,7 @@
 	.generation-settings-fields .reasoning-effort-picker,
 	.generation-settings-fields .image-aspect-picker,
 	.generation-settings-fields .video-option-picker,
-	.generation-settings-fields .web-search-toggle,
-	.generation-settings-fields .motion-toggle { min-height: 44px; }
+	.generation-settings-fields .web-search-toggle { min-height: 44px; }
 	.generation-settings-backdrop-motion-enter-active { transition: opacity 220ms ease-out; }
 	.generation-settings-backdrop-motion-leave-active { transition: opacity 180ms ease-in; }
 	.generation-settings-backdrop-motion-enter,
@@ -4514,10 +4930,6 @@
 	.context-usage.is-danger { border-color: rgba(255, 112, 104, .38); color: #ff9b94; }
 	.context-usage.is-danger .context-usage-track { background: rgba(255, 112, 104, .16); }
 	.context-usage.is-danger .context-usage-fill { background: #ff7068; }
-	.motion-toggle { min-height: 36px; margin: 0; padding: 0 10px; border: 1px solid rgba(113, 151, 134, .38); border-radius: 10px; background: rgba(20, 29, 25, .72); color: #9eb8aa; font-size: 11px; line-height: 34px; }
-	.motion-toggle::after { border: 0; }
-	.motion-toggle:active { background: rgba(55, 211, 154, .15); color: #c9f4e2; }
-	.motion-toggle:focus-visible { outline: 2px solid rgba(143, 232, 196, .8); outline-offset: 2px; }
 	.reasoning-effort-picker, .image-aspect-picker, .video-option-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #8fdcbe; font-size: 12px; }
 	.image-aspect-picker { color: #9bc8ec; }
 	.video-option-picker { color: #9bc8ec; }
@@ -4533,6 +4945,27 @@
 	.composer-note { color: #8b9690; font-size: 12px; line-height: 1.45; text-align: right; }
 	.composer-blocker { display: block; padding: 6px 6px 0; color: #a0aaa5; font-size: 12px; }
 	.composer-error { display: block; padding: 5px 6px 0; }
+	/* #ifdef H5 */
+	// H5 外壳占满视口后，聊天三条主轴共用同一流体边距，避免宽屏再次被固定像素截断。
+	.chat-main:not(.is-android-client) .chat-header {
+		padding-right: var(--workspace-content-gutter, 16px);
+		padding-left: var(--workspace-content-gutter, 16px);
+	}
+	.chat-main:not(.is-android-client) .message-shell {
+		width: 100%;
+		max-width: none;
+		margin: 0;
+		padding-right: var(--workspace-content-gutter, 16px);
+		padding-left: var(--workspace-content-gutter, 16px);
+	}
+	.chat-main:not(.is-android-client) .composer-wrap {
+		width: 100%;
+		max-width: none;
+		margin: 0;
+		padding-right: var(--workspace-content-gutter, 16px);
+		padding-left: var(--workspace-content-gutter, 16px);
+	}
+	/* #endif */
 	.is-android-client .attachment-grid { grid-template-columns: minmax(0, 1fr); }
 	.is-android-client .message-shell { padding: 20px 12px 18px; }
 	.is-android-client .message-turn { margin-bottom: 22px; }
@@ -4590,7 +5023,7 @@
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-button { width: 38px; height: 38px; min-height: 38px; border-radius: 12px; }
 		.chat-main:not(.is-android-client) .composer-input { font-size: 14px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .composer-entry { align-self: stretch; justify-content: center; }
-		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status { width: 100%; min-height: 18px; padding-top: 0; }
+		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status { width: calc(100% + 45px); min-height: 18px; margin-left: -45px; padding-top: 0; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-inline-status .user-voice-waveform { height: 18px; min-height: 18px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row { min-height: 30px; gap: 8px; overflow: hidden; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-transcript-row .user-thinking-orb { width: 26px; min-width: 26px; height: 26px; min-height: 26px; flex-basis: 26px; }
@@ -4601,10 +5034,6 @@
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-stack { width: 38px; min-width: 38px; flex-basis: 38px; align-self: center; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-duration { width: 38px; min-height: 18px; font-size: 10px; }
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-square { width: 12px; height: 12px; }
-		.generated-image-gallery.is-hero-two { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
-		.generated-image-gallery.is-hero-three { grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr); grid-template-rows: repeat(3, minmax(0, 1fr)); aspect-ratio: var(--image-gallery-mosaic-aspect); }
-		.generated-image-gallery.is-hero-two .generated-image-gallery-tile, .generated-image-gallery.is-hero-three .generated-image-gallery-tile { aspect-ratio: auto; }
-		.generated-image-gallery.is-hero-two .generated-image-gallery-tile.is-hero, .generated-image-gallery.is-hero-three .generated-image-gallery-tile.is-hero { grid-column: 1; grid-row: 1 / -1; }
 	}
 	@media screen and (max-width: 767px) {
 		.generation-settings-backdrop { background: rgba(0, 0, 0, .58); }
@@ -4618,9 +5047,6 @@
 	@media screen and (min-width: 1024px) {
 		.message-shell { padding: 38px 28px 28px; }
 		.composer-wrap { padding-bottom: 18px; }
-	}
-	@media screen and (min-width: 768px) and (max-width: 1199px) {
-		.message-shell { padding-left: 62px; }
 	}
 	@media screen and (max-width: 520px) {
 		.composer-meta { align-items: flex-start; flex-direction: column; gap: 2px; }

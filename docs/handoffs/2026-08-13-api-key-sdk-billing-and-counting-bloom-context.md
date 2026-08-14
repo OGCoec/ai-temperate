@@ -1,5 +1,7 @@
 # API Key、SDK 计费与计数布隆过滤器上下文交接
 
+> 后续决策说明：本文记录的是实施前交接快照。阶段 S 已明确推翻“模型映射允许硬删除”的早期讨论；`user_api_key`、`user_api_key_model`、API Usage 和 Usage Detail 现均禁止 `DELETE FROM`。以 `docs/database/user-api-key-logical-relationship.md`、`docs/database/ai-model-api-usage-logical-relationship.md` 和阶段 S 源码为准。
+
 ## 1. 文档元信息
 
 - 交接日期：2026-08-13。
@@ -177,13 +179,12 @@
 - 禁止逐模型执行 Mapper 查询造成 N+1。
 - 模型授权集合使用多行关系表达，满足第一范式。
 - 映射表不需要独立自增 ID。
-- 映射表不需要状态字段。
-- 映射表不需要软删除字段。
-- 最新用户纠正：该映射表允许硬删除。
-- 取消单个模型授权时直接物理删除对应映射行。
-- API Key 被软删除时可以在同一事务硬删除其全部映射。
-- 这是删除“授权关系”，不是删除 API Key 历史主记录。
-- `user_api_key` 本身仍然禁止硬删除。
+- 映射表包含 `status`、`updated_at` 和 `deleted_at`，用于表达 ACTIVE 与 REVOKED。
+- 最新阶段 S 决策：该映射表禁止硬删除。
+- 取消单个模型授权时批量软撤销对应映射行。
+- API Key 被软删除时必须在同一事务软撤销其全部有效映射。
+- 后续重新授权通过联合主键 UPSERT 恢复，不创建重复关系。
+- `user_api_key` 主记录和映射记录均禁止硬删除。
 
 ## 8. 模型禁用、删除和映射残留
 
@@ -416,8 +417,8 @@ settlementDeltaMinor = actualMinor - reservedMinor
 - 删除 API Key 的 HTTP DELETE 表示业务软删除。
 - 该操作更新 `status=DELETED` 和 `deleted_at`。
 - 该操作不得对 `user_api_key` 执行 SQL DELETE。
-- 同一事务可以硬删除 `user_api_key_model` 映射。
-- 单独取消模型权限允许对映射执行 SQL DELETE。
+- 同一事务只能把 `user_api_key_model` 映射软撤销为 `REVOKED` 并写入 `deleted_at`。
+- 单独取消模型权限同样禁止 SQL DELETE；后续授权可通过联合主键 UPSERT 恢复。
 - 更新和删除应检查 `row_version` 防止覆盖并发修改。
 - 对外 API Key 资源 ID 遵守固定 11 字符 Base64URL PathVariable 规范。
 
@@ -531,7 +532,7 @@ settlementDeltaMinor = actualMinor - reservedMinor
 
 - 第一步，先让用户确认本文中的当前事实和最终边界。
 - 第二步，修正文档中与最新决定冲突的地方。
-- 最新决定包括映射表允许硬删除。
+- 最新决定包括映射表只允许软撤销和 UPSERT 恢复，禁止硬删除。
 - 最新决定包括 API 预扣复用三分之一输出规则。
 - 第三步，为 `014` 和 `015` 增加最小持久化契约测试。
 - 第四步，复核 `016`、`017` 是否满足最新预扣证据需求。
@@ -563,7 +564,7 @@ API Key 目前只有 014-017 SQL、孤儿检查、API Usage 契约测试和文�
 关键决定：
 1. 原始 Key 为 64 随机字节 + Base64URL，完整值只显示一次。
 2. 数据库只存 HMAC-SHA256 key_digest 和末四位 key_hint。
-3. user_api_key 软删除；user_api_key_model 授权关系允许硬删除。
+3. user_api_key 软删除；user_api_key_model 授权关系只允许软撤销，禁止硬删除。
 4. API Usage 与 Detail 分表，不保存内容、会话、幂等键和倍率快照。
 5. API 预扣必须复用 H5/Android：最大输出只取向上取整三分之一，输入照常参与。
 6. 最终结算使用完整真实 Usage，并对同一 user_membership_quota 多退少补。

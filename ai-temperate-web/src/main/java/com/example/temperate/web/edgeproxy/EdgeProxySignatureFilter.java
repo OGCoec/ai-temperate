@@ -27,6 +27,10 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
     private static final String ERROR_BODY =
             "{\"code\":\"EDGE_PROXY_SIGNATURE_INVALID\","
                     + "\"message\":\"Edge proxy signature is invalid.\"}";
+    private static final String OPENAI_ERROR_BODY =
+            "{\"error\":{\"message\":\"Edge proxy signature is invalid.\","
+                    + "\"type\":\"permission_error\",\"param\":null,"
+                    + "\"code\":\"edge_proxy_signature_invalid\"}}";
 
     private final EdgeProxyProperties properties;
     private final EdgeProxySignatureVerifier verifier;
@@ -53,6 +57,8 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         return uri == null
                 || !(uri.equals("/api")
                         || uri.startsWith("/api/")
+                        || uri.equals("/v1")
+                        || uri.startsWith("/v1/")
                         || uri.equals("/ws/voice"));
     }
 
@@ -79,7 +85,7 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             if (properties.mode() == EdgeProxyMode.REQUIRED) {
                 logVoiceDecision(
                         request, voiceRequest, false, false, "MISSING_REQUIRED");
-                reject(response);
+                reject(request, response);
                 return;
             }
             logVoiceDecision(
@@ -100,7 +106,7 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } catch (EdgeProxyVerificationException exception) {
             logVoiceDecision(request, voiceRequest, true, false, "INVALID");
-            reject(response);
+            reject(request, response);
         }
     }
 
@@ -149,11 +155,15 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         }
     }
 
-    private static void reject(HttpServletResponse response) throws IOException {
+    private static void reject(
+            HttpServletRequest request,
+            HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setHeader("Cache-Control", "no-store");
-        response.getWriter().write(ERROR_BODY);
+        response.setHeader("CDN-Cache-Control", "no-store");
+        response.getWriter().write(request.getRequestURI().startsWith("/v1/")
+                ? OPENAI_ERROR_BODY : ERROR_BODY);
     }
 }

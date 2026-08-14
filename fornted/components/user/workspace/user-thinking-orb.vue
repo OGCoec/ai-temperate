@@ -18,10 +18,7 @@
 </template>
 
 <script>
-	import {
-		createAiMotionPreferenceController,
-		AI_MOTION_PREFERENCES
-	} from '@/common/ui/ai-motion-preference.js'
+	import { createAiMotionPreferenceController } from '@/common/ui/ai-motion-preference.js'
 
 	const LABELS = Object.freeze({
 		working: '正在准备回答',
@@ -48,7 +45,6 @@
 		data() {
 			return {
 				localMotionReduced: false,
-				motionPreference: AI_MOTION_PREFERENCES.SYSTEM,
 				motionController: null
 			}
 		},
@@ -87,7 +83,6 @@
 			if (this.reduced !== null) return
 			this.motionController = createAiMotionPreferenceController(snapshot => {
 				this.localMotionReduced = snapshot.reduced
-				this.motionPreference = snapshot.preference
 			})
 		},
 		beforeUnmount() {

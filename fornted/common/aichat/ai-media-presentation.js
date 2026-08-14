@@ -45,14 +45,16 @@ function requireHttpsSource(value) {
 	return source
 }
 
-function requireAppLocalSource(value) {
+function requireAppLocalSource(value, allowManagedFileUri = false) {
 	const rawSource = String(value || '')
 	const source = rawSource.trim()
 	const absoluteAppPath = source.startsWith('/') && !source.startsWith('//')
 	const appDocumentPath = source.startsWith('_doc/')
+	const managedFileUri = allowManagedFileUri === true
+		&& /^file:\/\/\/[^/\s]/.test(source)
 	const hasParentSegment = source.split('/').includes('..')
 	const hasControlCharacter = /[\u0000-\u001f\u007f]/.test(rawSource)
-	if ((!absoluteAppPath && !appDocumentPath)
+	if ((!absoluteAppPath && !appDocumentPath && !managedFileUri)
 		|| hasParentSegment
 		|| hasControlCharacter) {
 		throw new TypeError('App local media source is invalid.')
@@ -64,7 +66,7 @@ function resolveMediaSource(attachment, options) {
 	const localSrc = String(options?.localSrc || '')
 	if (localSrc.trim()) {
 		return Object.freeze({
-			src: requireAppLocalSource(localSrc),
+			src: requireAppLocalSource(localSrc, options?.allowManagedFileUri === true),
 			kind: 'APP_LOCAL'
 		})
 	}

@@ -11,6 +11,7 @@ import {
 } from '../../../common/voice/voice-waveform-presentation.js'
 
 const REDUCED_INTERVAL_MS = VOICE_WAVEFORM_INTERVAL_MS
+const H5_VOICE_WAVEFORM_MAX_CAPACITY = 512
 
 function clamp01(value) {
 	return Math.max(0, Math.min(1, Number(value) || 0))
@@ -68,7 +69,9 @@ export function resolveVoiceWaveformCanvasMetrics(width, dpr = 1) {
 		dpr: resolvedDpr,
 		pixelWidth: Math.floor(cssWidth * resolvedDpr),
 		pixelHeight: Math.floor(VOICE_WAVEFORM_HEIGHT * resolvedDpr),
-		visibleBars: resolveVoiceWaveformCapacity(cssWidth)
+		visibleBars: resolveVoiceWaveformCapacity(
+			cssWidth,
+			H5_VOICE_WAVEFORM_MAX_CAPACITY)
 	}
 }
 
@@ -82,7 +85,9 @@ export function drawVoiceWaveformFrame(context, {
 	if (!context) return
 	const cssWidth = Math.max(0, Number(width) || 0)
 	const cssHeight = Math.max(0, Number(height) || VOICE_WAVEFORM_HEIGHT)
-	const clipWidth = resolveVoiceWaveformCapacity(cssWidth) * VOICE_WAVEFORM_BAR_PITCH
+	const clipWidth = resolveVoiceWaveformCapacity(
+		cssWidth,
+		H5_VOICE_WAVEFORM_MAX_CAPACITY) * VOICE_WAVEFORM_BAR_PITCH
 	const shift = clamp01(progress) * VOICE_WAVEFORM_BAR_PITCH
 	const centerY = cssHeight / 2
 	const source = Array.isArray(bars) ? bars : []
@@ -121,7 +126,10 @@ export default {
 			context: null,
 			config: null,
 			dpr: 1,
-			timeline: createVoiceWaveformTimeline({ now: currentTimeMillis }),
+			timeline: createVoiceWaveformTimeline({
+				now: currentTimeMillis,
+				maxCapacity: H5_VOICE_WAVEFORM_MAX_CAPACITY
+			}),
 			timelineEpoch: -1,
 			raf: 0,
 			reducedTimer: 0,

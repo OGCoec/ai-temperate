@@ -95,6 +95,39 @@ test('canvas metrics use full DPR storage and the shared 5.5px pitch', async () 
 	})
 })
 
+test('wide H5 Canvas uses its full width beyond the shared 192-bar default', async () => {
+	const { resolveVoiceWaveformCanvasMetrics } = await loadRenderer()
+
+	assert.deepEqual(resolveVoiceWaveformCanvasMetrics(1600, 2), {
+		cssWidth: 1600,
+		cssHeight: 24,
+		dpr: 2,
+		pixelWidth: 3200,
+		pixelHeight: 48,
+		visibleBars: 290
+	})
+})
+
+test('wide H5 drawing does not clip after the first 192 bars', async () => {
+	const { drawVoiceWaveformFrame } = await loadRenderer()
+	const context = recordingContext()
+	const bars = Array.from({ length: 290 }, (_, index) => ({
+		id: index + 1,
+		level: 0,
+		recorded: false
+	}))
+
+	drawVoiceWaveformFrame(context, {
+		width: 1600,
+		height: 24,
+		bars,
+		progress: 0
+	})
+
+	assert.equal(context.lines.length, 290)
+	assert.ok(context.lines.at(-1).x > 1500)
+})
+
 test('H5 native Canvas keeps its DPR-owned first draw', async () => {
 	const { default: renderer } = await loadRenderer()
 	const previousDpr = globalThis.devicePixelRatio
@@ -231,6 +264,9 @@ test('H5 renderer consumes the shared timeline instead of owning a second 300ms 
 	const source = fs.readFileSync(renderModulePath, 'utf8')
 
 	assert.match(source, /createVoiceWaveformTimeline/)
+	assert.match(source, /H5_VOICE_WAVEFORM_MAX_CAPACITY\s*=\s*512/)
+	assert.match(source,
+		/createVoiceWaveformTimeline\(\{[\s\S]*maxCapacity:\s*H5_VOICE_WAVEFORM_MAX_CAPACITY/)
 	assert.match(source, /voice-waveform-presentation\.js/)
 	assert.doesNotMatch(source, /VISUAL_INTERVAL_MS|MAXIMUM_QUEUE_LEVELS/)
 	assert.doesNotMatch(source, /aggregateVoiceWaveformLevels|createVoiceWaveformRenderState/)

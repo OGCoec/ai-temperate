@@ -50,6 +50,7 @@ test('protects account and future internal pages by default', async () => {
 	const { isProtectedRoute } = await loadModule()
 
 	assert.equal(isProtectedRoute('/pages/account/profile'), true)
+	assert.equal(isProtectedRoute('/pages/account/api-keys'), true)
 	assert.equal(isProtectedRoute('/pages/account/profile-edit'), true)
 	assert.equal(isProtectedRoute('/pages/internal/dashboard'), true)
 })

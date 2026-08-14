@@ -63,7 +63,7 @@
 				<button
 					class="workspace-account-action"
 					type="button"
-					:aria-current="activeDestination === 'profile' ? 'page' : undefined"
+					:aria-current="['profile', 'apiKeys'].includes(activeDestination) ? 'page' : undefined"
 					@click="$emit('destination-click', 'profile')"
 				>
 					<uni-icons type="person" size="20" color="#aeb9b3" aria-hidden="true" />

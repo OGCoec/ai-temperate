@@ -155,6 +155,25 @@ test('capacity changes preserve newest history, left-pad baselines, and keep one
 	assert.equal(enlarged.movingBars.at(-1).id, pendingId)
 })
 
+test('an explicit H5 capacity limit can exceed the shared Android-safe default', async () => {
+	const {
+		VOICE_WAVEFORM_MAX_CAPACITY,
+		createVoiceWaveformTimeline
+	} = await loadTimeline()
+	const defaultTimeline = createVoiceWaveformTimeline({ capacity: 512, now: () => 0 })
+	const h5Timeline = createVoiceWaveformTimeline({
+		capacity: 512,
+		maxCapacity: 512,
+		now: () => 0
+	})
+
+	assert.equal(VOICE_WAVEFORM_MAX_CAPACITY, 192)
+	assert.equal(defaultTimeline.start(1), true)
+	assert.equal(h5Timeline.start(1), true)
+	assert.equal(defaultTimeline.snapshot(0).capacity, 192)
+	assert.equal(h5Timeline.snapshot(0).capacity, 512)
+})
+
 test('stop, reset, and dispose clear visible timeline state safely', async () => {
 	const { createVoiceWaveformTimeline } = await loadTimeline()
 	const timeline = createVoiceWaveformTimeline({ capacity: 3, now: () => 0 })

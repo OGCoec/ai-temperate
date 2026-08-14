@@ -77,6 +77,15 @@
 				}
 			}
 		},
+		// #ifdef H5
+		{
+			"path": "pages/account/api-keys",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		// #endif
 		{
 			"path": "pages/account/totp-security",
 			"style": {
@@ -147,7 +156,6 @@
 		"backgroundColorTop": "#0b0d0c",
 		"backgroundColorBottom": "#0b0d0c",
 		"h5": {
-			"maxWidth": 1190,
 			"navigationBarTextStyle": "white",
 			"navigationBarBackgroundColor": "#0b0d0c"
 		}

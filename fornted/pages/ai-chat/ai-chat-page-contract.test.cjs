@@ -9,11 +9,15 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8')
 }
 
+function parseUniPages(source) {
+	return JSON.parse(source.replace(/^\s*\/\/\s*#(?:ifn?def|endif).*$/gm, ''))
+}
+
 test('chat page creates a conversation only on first send and refreshes the sidebar only after completed', () => {
 	const entry = read('pages/ai-chat/index.vue')
 	const page = read('components/user/workspace/user-chat-panel.vue')
 	const workspace = read('components/user/user-workspace.vue')
-	const pages = JSON.parse(read('pages.json'))
+	const pages = parseUniPages(read('pages.json'))
 	const route = pages.pages.find(item => item.path === 'pages/ai-chat/index')
 
 	assert.match(entry, /<user-workspace[\s\S]*initial-destination="chat"/)
@@ -81,21 +85,34 @@ test('multi image controls use capability checks, one downstream stream and boun
 	assert.equal((stream.match(/openGenerationOnce\(/g) || []).length >= 1, true)
 })
 
-test('generated response images use a completion-ordered mosaic without changing uploaded media thumbnails', () => {
+test('generated response images use stable two-primary layouts and a conversation viewer without changing uploads', () => {
 	const page = read('components/user/workspace/user-chat-panel.vue')
+	const gallery = read('components/user/workspace/user-generated-image-gallery.vue')
+	const viewer = read('components/user/workspace/user-generated-image-viewer.vue')
 
 	assert.match(page,
 		/message\.contentAttachments\?\.length[\s\S]*?<!-- #ifndef APP-PLUS -->\s*<image[^>]*class="attachment-image"[^>]*mode="aspectFill"/)
-	assert.match(page, /generated-image-gallery-wrap/)
-	assert.match(page, /generatedImageGallery\(message\)\.visibleItems/)
-	assert.match(page, /generatedImageGallery\(message\)\.hiddenCount/)
-	assert.match(page, /generated-image-progress/)
-	assert.match(page, /class="generated-image-gallery-image"/)
+	assert.match(page, /<user-generated-image-gallery/)
+	assert.match(page, /:presentation="generatedImageGallery\(message\)"/)
+	assert.match(page, /@open="openGeneratedImageViewer"/)
+	assert.match(page, /<user-generated-image-viewer/)
+	assert.match(gallery, /generated-image-progress/)
+	assert.match(gallery, /presentation\.allItems/)
+	assert.match(gallery, /presentation\?\.primaryItems/)
+	assert.match(gallery, /presentation\?\.visibleSecondaryItems/)
+	assert.match(gallery, /DUAL_WITH_RAIL:\s*'is-dual-with-rail'/)
+	assert.match(gallery, /class="generated-image-more"/)
+	assert.match(gallery, /openOverflow\(\)[\s\S]*?secondaryItems/)
+	assert.match(gallery, /width:\s*min\(100%,\s*720px\)/)
 	assert.match(page, /\.attachment-image\s*\{[^}]*height:\s*180px/)
-	assert.match(page, /\.generated-image-gallery\.is-hero-two/)
-	assert.match(page, /\.generated-image-gallery\.is-hero-three/)
-	assert.match(page, /\.generated-image-gallery-overflow/)
-	assert.match(page, /@keyframes generated-image-gallery-exit/)
+	assert.match(gallery, /\.generated-image-stage\.is-hero-two/)
+	assert.match(gallery, /\.generated-image-stage\.is-hero-three/)
+	assert.match(gallery, /@keyframes generated-image-gallery-exit/)
+	assert.match(viewer, /role="dialog"/)
+	assert.match(viewer, /mode="aspectFit"/)
+	assert.match(viewer, /\$emit\('request-older'\)/)
+	assert.match(viewer, /\$emit\('download', activeItem\)/)
+	assert.doesNotMatch(page, /urls:\s*\[source\]/)
 })
 
 test('H5 chat uses one collapsible conversation sidebar and a progressive settings surface', () => {
@@ -417,12 +434,14 @@ test('H5 streaming follows only near the bottom and exposes a return-to-latest a
 	assert.match(panel, /clientPlatform\(\) === 'H5' && !force && !this\.turnFollowLatest/)
 })
 
-test('H5 content, toolbar, and composer share a bounded remaining-workspace axis', () => {
+test('H5 content, toolbar, and composer fill the remaining-workspace axis', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(panel, /\.chat-main\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/)
-	assert.match(panel, /\.message-shell\s*\{[^}]*width:\s*min\(100%,\s*880px\)/)
-	assert.match(panel, /\.composer-wrap\s*\{[^}]*width:\s*min\(100%,\s*960px\)/)
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\) \.message-shell\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/)
+	assert.match(panel,
+		/\.chat-main:not\(\.is-android-client\) \.composer-wrap\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/)
 	assert.match(panel, /padding:\s*32px clamp\(16px,\s*3vw,\s*32px\) 32px/)
 	assert.match(panel, /\.message-block\s*\{[^}]*max-width:\s*78%/)
 	assert.match(panel, /\.message-text\s*\{[^}]*font-size:\s*16px[^}]*line-height:\s*1\.68/)
@@ -454,6 +473,10 @@ test('desktop chat renders a bounded Codex turn rail instead of every cached mes
 	assert.match(panel, /scrollBottom\(\{ force: true \}\)/)
 	assert.match(panel, /:positions-known="!hasMoreMessages"/)
 
+	assert.match(rail,
+		/\.conversation-turn-rail\s*\{[^}]*position:\s*absolute[^}]*left:\s*0/)
+	assert.doesNotMatch(rail, /left:\s*calc\(50%\s*-\s*\d+px\)/)
+	assert.doesNotMatch(panel, /padding-left:\s*62px/)
 	assert.match(rail, /role="navigation"/)
 	assert.match(rail, /aria-label="当前会话轮次"/)
 	assert.match(rail, /aria-current/)

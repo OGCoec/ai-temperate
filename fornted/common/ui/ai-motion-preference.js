@@ -1,51 +1,3 @@
-export const AI_MOTION_PREFERENCES = Object.freeze({
-	SYSTEM: 'SYSTEM',
-	REDUCE: 'REDUCE'
-})
-
-export const AI_MOTION_PREFERENCE_STORAGE_KEY = 'ait.ui.motion-preference.v1'
-
-export function normalizeAiMotionPreference(value) {
-	return value === AI_MOTION_PREFERENCES.REDUCE
-		? AI_MOTION_PREFERENCES.REDUCE
-		: AI_MOTION_PREFERENCES.SYSTEM
-}
-
-export function resolveAiMotionReduced({
-	preference = AI_MOTION_PREFERENCES.SYSTEM,
-	systemReduced = false
-} = {}) {
-	return normalizeAiMotionPreference(preference)
-		=== AI_MOTION_PREFERENCES.REDUCE || systemReduced === true
-}
-
-function storage() {
-	try {
-		return globalThis.uni?.getStorageSync && globalThis.uni
-	} catch (_) {
-		return null
-	}
-}
-
-export function readAiMotionPreference() {
-	try {
-		return normalizeAiMotionPreference(
-			storage()?.getStorageSync(AI_MOTION_PREFERENCE_STORAGE_KEY))
-	} catch (_) {
-		return AI_MOTION_PREFERENCES.SYSTEM
-	}
-}
-
-export function writeAiMotionPreference(value) {
-	const preference = normalizeAiMotionPreference(value)
-	try {
-		storage()?.setStorageSync(AI_MOTION_PREFERENCE_STORAGE_KEY, preference)
-	} catch (_) {
-		// 存储不可用时仍返回规范化值，当前页面可以继续遵循用户选择。
-	}
-	return preference
-}
-
 function mediaQuery() {
 	try {
 		return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -83,7 +35,6 @@ export function readAiSystemReducedMotion() {
 }
 
 export function createAiMotionPreferenceController(onChange) {
-	let preference = readAiMotionPreference()
 	let systemReduced = readAiSystemReducedMotion()
 	let destroyed = false
 	const query = mediaQuery()
@@ -91,19 +42,15 @@ export function createAiMotionPreferenceController(onChange) {
 	const emit = () => {
 		if (destroyed) return
 		onChange?.({
-			preference,
 			systemReduced,
-			reduced: resolveAiMotionReduced({ preference, systemReduced })
+			reduced: systemReduced
 		})
 	}
 	const refresh = () => {
 		systemReduced = readAiSystemReducedMotion()
 		emit()
 	}
-	const onMediaChange = event => {
-		systemReduced = Boolean(event?.matches)
-		emit()
-	}
+	const onMediaChange = () => refresh()
 	const onVisibilityChange = () => {
 		if (document.visibilityState !== 'hidden') refresh()
 	}
@@ -116,20 +63,8 @@ export function createAiMotionPreferenceController(onChange) {
 
 	emit()
 	return Object.freeze({
-		getPreference: () => preference,
-		isReduced: () => resolveAiMotionReduced({ preference, systemReduced }),
+		isReduced: () => systemReduced,
 		refresh,
-		setPreference(value) {
-			preference = writeAiMotionPreference(value)
-			emit()
-			return preference
-		},
-		toggleManualReduce() {
-			return this.setPreference(
-				preference === AI_MOTION_PREFERENCES.REDUCE
-					? AI_MOTION_PREFERENCES.SYSTEM
-					: AI_MOTION_PREFERENCES.REDUCE)
-		},
 		destroy() {
 			if (destroyed) return
 			destroyed = true

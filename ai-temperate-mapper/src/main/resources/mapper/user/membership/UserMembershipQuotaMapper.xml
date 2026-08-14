@@ -97,4 +97,25 @@
         FROM refund
         WHERE quota.login_identity_id = refund.login_identity_id
     </update>
+
+    <update id="addApiRefunds">
+        WITH raw_refund(login_identity_id, refund_minor) AS (
+            VALUES
+            <foreach collection="candidates" item="candidate" separator=",">
+                (
+                    #{candidate.loginIdentityId,jdbcType=BIGINT},
+                    #{candidate.reservedQuotaMinor,jdbcType=BIGINT}
+                )
+            </foreach>
+        ),
+        refund AS (
+            SELECT login_identity_id, SUM(refund_minor) AS refund_minor
+            FROM raw_refund
+            GROUP BY login_identity_id
+        )
+        UPDATE user_membership_quota quota
+        SET quota_balance_minor = quota.quota_balance_minor + refund.refund_minor
+        FROM refund
+        WHERE quota.login_identity_id = refund.login_identity_id
+    </update>
 </mapper>

@@ -9,6 +9,10 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(frontendRoot, relativePath), 'utf8')
 }
 
+function parseUniPages(source) {
+	return JSON.parse(source.replace(/^\s*\/\/\s*#(?:ifn?def|endif).*$/gm, ''))
+}
+
 function sourceUrl(source) {
 	return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
 }
@@ -23,7 +27,8 @@ test('all protected user entry pages render the same persistent workspace', () =
 		['pages/ai-chat/index.vue', 'chat', false],
 		['pages/ai-models/catalog.vue', 'models', false],
 		['pages/ai-models/detail.vue', 'models', true],
-		['pages/account/profile.vue', 'profile', false]
+		['pages/account/profile.vue', 'profile', false],
+		['pages/account/api-keys.vue', 'apiKeys', false]
 	]
 
 	for (const [file, destination, expectsModelPublicId] of entries) {
@@ -53,9 +58,25 @@ test('workspace owns one sidebar and switches already-mounted content panels wit
 	assert.match(workspace, /v-show="activeDestination === 'chat'"/)
 	assert.match(workspace, /v-show="activeDestination === 'models'"/)
 	assert.match(workspace, /v-show="activeDestination === 'profile'"/)
+	assert.match(workspace, /v-show="activeDestination === 'apiKeys'"/)
 	assert.match(workspace, /selectDestination\(destination\)/)
 	assert.match(workspace, /this\.visitedDestinations\[destination\] = true/)
-	assert.doesNotMatch(workspace, /uni\.(?:navigateTo|navigateBack|redirectTo|reLaunch)\(/)
+	assert.match(workspace, /@open-api-keys="selectDestination\('apiKeys'\)"/)
+	assert.doesNotMatch(workspace, /returnToProfile/)
+	assert.doesNotMatch(workspace, /uni\.(?:navigateTo|redirectTo|reLaunch|navigateBack)\(/)
+})
+
+test('API Key back handling closes overlays before returning to profile without recursive routing', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const backHandler = workspace.match(
+		/handleBackPress\(\)\s*\{[\s\S]*?\r?\n\s*\}\r?\n\s*\}/
+	)?.[0] || ''
+
+	assert.match(workspace,
+		/selectDestination\(destination\)[\s\S]*activeDestination === 'apiKeys'[\s\S]*apiKeyPanel\?\.closeIfOpen\(\)/)
+	assert.match(backHandler,
+		/closeIfOpen\(\)[\s\S]*activeDestination === 'apiKeys'[\s\S]*selectDestination\('profile'\)[\s\S]*drawerOpen[\s\S]*return false/)
+	assert.doesNotMatch(backHandler, /returnToProfile|uni\.navigateBack|uni\.redirectTo/)
 })
 
 test('workspace reserves the remaining grid width and exposes one accessible sidebar toggle', () => {
@@ -253,7 +274,7 @@ test('workspace exposes stable conversation errors without raw runtime messages'
 })
 
 test('all ordinary user pages use a custom navigation bar and one viewport shell', () => {
-	const pages = JSON.parse(read('pages.json'))
+	const pages = parseUniPages(read('pages.json'))
 	const expected = new Set([
 		'pages/ai-chat/index',
 		'pages/ai-models/catalog',
@@ -295,15 +316,18 @@ test('chat video previews preserve their aspect ratio and stay within the availa
 		/\.attachment-image,\s*\.attachment-video\s*\{[^}]*height:\s*180px/)
 })
 
-test('chat composer keeps the motion control for H5 and fixes Android to system preference', () => {
+test('chat composer removes manual motion controls and follows the system on every platform', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const mounted = chatPanel.slice(
+		chatPanel.indexOf('mounted()'),
+		chatPanel.indexOf('beforeUnmount()'))
 
-	assert.doesNotMatch(chatPanel,
-		/<button\s+v-if="!manualMotionReduced"\s+class="motion-toggle"/)
-	assert.match(chatPanel,
-		/<button[\s\S]*?v-if="!androidClient"[\s\S]*?class="motion-toggle"[\s\S]*?@click="toggleMotionPreference"/)
-	assert.match(chatPanel, /\{\{ motionPreferenceLabel \}\}/)
-	assert.match(chatPanel, /if \(this\.androidClient\)[\s\S]*snapshot\.systemReduced[\s\S]*AI_MOTION_PREFERENCES\.SYSTEM/)
+	assert.doesNotMatch(chatPanel, /class="motion-toggle"/)
+	assert.doesNotMatch(chatPanel, /manualMotionReduced|motionPreferenceLabel|motionToggleAriaLabel/)
+	assert.doesNotMatch(chatPanel, /toggleMotionPreference|AI_MOTION_PREFERENCES/)
+	assert.match(mounted,
+		/createAiMotionPreferenceController\(snapshot => \{\s*this\.motionReduced = snapshot\.reduced\s*\}\)/)
+	assert.doesNotMatch(mounted, /this\.androidClient|snapshot\.preference/)
 })
 
 test('Android uses the compact two-row composer and keeps H5 picker controls', () => {
@@ -354,22 +378,22 @@ test('desktop voice composer keeps live recognition compact until the final tran
 	assert.match(chatPanel,
 		/\.chat-main:not\(\.is-android-client\) \.composer\.is-voice-active \.voice-cancel-button\s*\{\s*order:\s*-1/)
 	assert.match(chatPanel,
-		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?width:\s*48px/)
+		/\.is-android-client \.voice-cancel-button,[\s\S]*?width:\s*44px/)
 })
 
 test('Android voice actions keep large touch targets around compact visual controls', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 
 	assert.match(chatPanel,
-		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?width:\s*48px[\s\S]*?height:\s*48px/)
+		/\.is-android-client \.voice-cancel-button,[\s\S]*?width:\s*44px[\s\S]*?height:\s*44px/)
 	assert.match(chatPanel,
-		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-button,[\s\S]*?@include user-android-compact-control\(34px/)
+		/\.is-android-client \.voice-cancel-button,[\s\S]*?@include user-android-compact-control\(34px/)
 	assert.doesNotMatch(chatPanel,
 		/\.is-android-client \.composer\.is-voice-active \.voice-commit-button::before\s*\{[^}]*background:\s*rgba\(55,\s*211,\s*154/)
 	assert.match(chatPanel,
-		/\.is-android-client \.composer\.is-voice-active \.voice-cancel-glyph\s*\{[^}]*font-size:\s*20px/)
+		/\.voice-cancel-glyph\s*\{[^}]*font-size:\s*28px/)
 	assert.match(chatPanel,
-		/\.is-android-client \.composer\.is-voice-active \.voice-commit-square\s*\{[^}]*width:\s*11px[^}]*height:\s*11px/)
+		/\.voice-commit-square\s*\{[^}]*width:\s*14px[^}]*height:\s*14px/)
 })
 
 test('Android send and stop retain their events while sharing the neutral frosted button surface', () => {
@@ -382,17 +406,15 @@ test('Android send and stop retain their events while sharing the neutral froste
 	assert.doesNotMatch(chatPanel, /\.is-android-client[^}]*\.stop-button::before\s*\{[^}]*background:\s*rgba\(55,\s*211,\s*154/)
 })
 
-test('Android keeps the voice canvas mounted without an overlay or changing H5 mounting', () => {
+test('Android mounts the voice canvas only while voice interaction is active and never overlays it', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
 	const waveform = read('components/user/workspace/user-voice-waveform.vue')
 
 	assert.match(chatPanel,
-		/<view\s+v-if="androidClient \|\| voiceInteractionActive"\s+class="voice-inline-status"/)
-	assert.match(chatPanel, /:class="\{ 'is-active': voiceInteractionActive \}"/)
-	assert.match(chatPanel, /:aria-hidden="String\(!voiceInteractionActive\)"/)
+		/<view\s+v-if="voiceInteractionActive"\s+class="voice-inline-status"/)
+	assert.doesNotMatch(chatPanel, /v-if="androidClient \|\| voiceInteractionActive"/)
+	assert.doesNotMatch(chatPanel, /:aria-hidden="String\(!voiceInteractionActive\)"/)
 	assert.doesNotMatch(chatPanel, /:stabilize-mount=/)
-	assert.match(chatPanel,
-		/\.is-android-client \.voice-inline-status:not\(\.is-active\)\s*\{[^}]*position:\s*absolute[^}]*visibility:\s*hidden[^}]*opacity:\s*0[^}]*pointer-events:\s*none/)
 	assert.doesNotMatch(chatPanel,
 		/\.is-android-client \.voice-inline-status:not\(\.is-active\)\s*\{[^}]*display:\s*none/)
 	assert.doesNotMatch(waveform,

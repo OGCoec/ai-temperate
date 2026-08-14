@@ -117,6 +117,205 @@ test('wrangler exposes only the two exact Android clearance routes', () => {
 	assert.doesNotMatch(config, /niko000o\.site\/__edge\/\*/)
 })
 
+test('wrangler routes the root-domain v1 prefix through the API gateway', () => {
+	const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
+
+	assert.match(config, /"pattern":\s*"niko000o\.site\/v1\/\*"/)
+	assert.doesNotMatch(config, /api\.niko000o\.site\/v1/)
+})
+
+test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, and keeps SSE unbuffered', async () => {
+	const apiKey = `sk-${'A'.repeat(86)}`
+	const body = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(
+				'data: {"id":"chatcmpl-test"}\n\ndata: [DONE]\n\n'))
+			controller.close()
+		}
+	})
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'text/event-stream, application/json;q=0.9',
+				'Content-Type': 'application/json',
+				'X-Forwarded-For': '198.51.100.200',
+				'X-AIT-Edge-Signature': 'forged',
+				'X-Client-Platform': 'ANDROID'
+			},
+			body: '{"model":"gpt-test","messages":[],"stream":true}'
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(body, {
+				headers: { 'Content-Type': 'text/event-stream' }
+			})
+		})
+	)
+
+	assert.equal(captured.url,
+		'https://api.niko000o.site/v1/chat/completions')
+	assert.equal(captured.headers.get('Authorization'), `Bearer ${apiKey}`)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Referer'), null)
+	assert.equal(captured.headers.get('Accept'), 'text/event-stream')
+	assert.equal(captured.headers.get('X-Forwarded-For'), null)
+	assert.equal(captured.headers.get('X-Client-Platform'), null)
+	assert.notEqual(captured.headers.get('X-AIT-Edge-Signature'), 'forged')
+	assert.match(captured.headers.get('X-AIT-Edge-Signature') || '',
+		/^[A-Za-z0-9_-]{43}$/)
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+	assert.equal(response.headers.get('CDN-Cache-Control'), 'no-store')
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+})
+
+test('API Key SDK transport rejects browser credentials and metadata before Origin', async () => {
+	const apiKey = `sk-${'B'.repeat(86)}`
+	const forbiddenHeaders = [
+		{ Cookie: 'access_token=browser' },
+		{ Origin: 'https://niko000o.site' },
+		{ Referer: 'https://niko000o.site/' },
+		{ 'Sec-Fetch-Mode': 'cors' }
+	]
+	let upstreamCalls = 0
+	for (const extra of forbiddenHeaders) {
+		const response = await handleRequest(
+			request('niko000o.site', '/v1/chat/completions', {
+				method: 'POST',
+				migrated: false,
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					...extra
+				}
+			}),
+			ENV,
+			runtime(() => {
+				upstreamCalls += 1
+				return new Response(null)
+			})
+		)
+		assert.equal(response.status, 403)
+		assert.equal((await response.json()).error.code,
+			'browser_request_not_allowed')
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
+test('API Key SDK route rejects missing Bearer, invalid Accept, methods, and other v1 paths with OpenAI errors', async () => {
+	const apiKey = `sk-${'C'.repeat(86)}`
+	const noUpstream = runtime(() => {
+		throw new Error('rejected API requests must not call Origin')
+	})
+	const missingBearer = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST', migrated: false
+		}), ENV, noUpstream)
+	const invalidAccept = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'text/html'
+			}
+		}), ENV, noUpstream)
+	const wrongMethod = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			migrated: false,
+			headers: { Authorization: `Bearer ${apiKey}` }
+		}), ENV, noUpstream)
+	const wrongPath = await handleRequest(
+		request('niko000o.site', '/v1/sdk', {
+			method: 'POST', migrated: false
+		}), ENV, noUpstream)
+
+	assert.equal(missingBearer.status, 401)
+	assert.equal((await missingBearer.json()).error.code, 'invalid_api_key')
+	assert.equal(invalidAccept.status, 400)
+	assert.equal((await invalidAccept.json()).error.code, 'invalid_accept')
+	assert.equal(wrongMethod.status, 405)
+	assert.equal(wrongMethod.headers.get('Allow'), 'POST')
+	assert.equal((await wrongMethod.json()).error.code, 'method_not_allowed')
+	assert.equal(wrongPath.status, 403)
+	assert.equal((await wrongPath.json()).error.code, 'invalid_request')
+})
+
+test('API Key SDK client cancellation aborts the signed Origin request', async () => {
+	const controller = new AbortController()
+	const apiKey = `sk-${'D'.repeat(86)}`
+	let upstreamSignal
+	let releaseFetch
+	let markCaptured
+	const captured = new Promise(resolve => { markCaptured = resolve })
+	const responsePromise = handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			signal: controller.signal,
+			headers: { Authorization: `Bearer ${apiKey}` }
+		}),
+		ENV,
+		runtime(upstream => {
+			upstreamSignal = upstream.signal
+			markCaptured()
+			return new Promise(resolve => { releaseFetch = resolve })
+		})
+	)
+	await captured
+	assert.equal(upstreamSignal.aborted, false)
+	controller.abort()
+	assert.equal(upstreamSignal.aborted, true)
+	releaseFetch(new Response(null, {
+		headers: { 'Content-Type': 'text/event-stream' }
+	}))
+	await responsePromise
+})
+
+test('API Key SDK converts Origin network, redirect, and content-type violations to OpenAI errors', async () => {
+	const apiKey = `sk-${'E'.repeat(86)}`
+	const options = {
+		method: 'POST',
+		migrated: false,
+		headers: { Authorization: `Bearer ${apiKey}` }
+	}
+	const unavailable = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => { throw new Error('test Origin unavailable') })
+	)
+	const redirected = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => new Response(null, {
+			status: 302,
+			headers: { Location: '/v1/chat/completions' }
+		}))
+	)
+	const invalidContent = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => new Response('not sse', {
+			headers: { 'Content-Type': 'text/plain' }
+		}))
+	)
+
+	assert.equal(unavailable.status, 503)
+	assert.equal((await unavailable.json()).error.code,
+		'EDGE_UPSTREAM_UNAVAILABLE')
+	assert.equal(redirected.status, 502)
+	assert.equal((await redirected.json()).error.code,
+		'EDGE_UPSTREAM_REDIRECT_REJECTED')
+	assert.equal(invalidContent.status, 502)
+	assert.equal((await invalidContent.json()).error.code,
+		'upstream_protocol_error')
+})
+
 test('Android clearance page and status never call the API upstream', async () => {
 	let upstreamCalls = 0
 	const fetchImpl = () => {

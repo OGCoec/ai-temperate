@@ -1,4 +1,5 @@
-const MAX_VISIBLE_IMAGE_OUTPUTS = 4
+const MAXIMUM_IMAGE_OUTPUTS = 10
+const DEFAULT_VISIBLE_SECONDARY_OUTPUTS = 3
 const VALID_OUTPUT_INDEX = value => Number.isSafeInteger(value)
 	&& value >= 0 && value <= 9
 
@@ -19,6 +20,15 @@ function renderableImage(value) {
 function finalImageEvidence(value) {
 	return renderableImage(value)
 		&& String(value?.phase || '').toUpperCase() === 'FINAL'
+}
+
+function imageEvidenceScore(value) {
+	let score = 0
+	if (String(value?.phase || '').toUpperCase() === 'FINAL') score += 8
+	if (/^https:\/\/[^\s]+$/i.test(String(value?.persistedUrl || '').trim())) score += 4
+	if (/^https:\/\/[^\s]+$/i.test(String(value?.url || '').trim())) score += 2
+	if (value?.galleryExiting !== true) score += 1
+	return score
 }
 
 function normalizedOrder(order) {
@@ -66,11 +76,13 @@ export function imageGalleryLayout(visibleCount) {
 	if (visibleCount === 1) return 'SINGLE'
 	if (visibleCount === 2) return 'PAIR'
 	if (visibleCount === 3) return 'HERO_TWO'
-	return 'HERO_THREE'
+	if (visibleCount === 4) return 'HERO_THREE'
+	return 'DUAL_WITH_RAIL'
 }
 
 /**
- * 生成渲染层所需的稳定视图模型；后端 outputIndex 只负责身份，presentationOrder 负责排版。
+ * 生成渲染层所需的稳定视图模型；后端 outputIndex 同时负责身份和稳定版位，
+ * presentationOrder 仅保留为流式诊断数据，不能改变已经展示的图片位置。
  */
 export function createImageGalleryPresentation({
 	attachments = [],
@@ -79,39 +91,51 @@ export function createImageGalleryPresentation({
 } = {}) {
 	const candidates = (Array.isArray(attachments) ? attachments : [])
 		.filter(renderableImage)
-	const byOutputIndex = new Map(
-		candidates.map(attachment => [outputIndexOf(attachment), attachment])
-	)
-	const order = normalizedOrder(presentationOrder)
-	const orderedIndexes = order.filter(outputIndex =>
-		byOutputIndex.has(outputIndex))
+	const byOutputIndex = new Map()
 	for (const attachment of candidates) {
 		const outputIndex = outputIndexOf(attachment)
-		if (outputIndex != null && !orderedIndexes.includes(outputIndex)) {
-			orderedIndexes.push(outputIndex)
+		if (outputIndex == null) continue
+		const current = byOutputIndex.get(outputIndex)
+		if (!current || imageEvidenceScore(attachment) >= imageEvidenceScore(current)) {
+			byOutputIndex.set(outputIndex, attachment)
 		}
 	}
-	const visibleIndexes = orderedIndexes.slice(0, MAX_VISIBLE_IMAGE_OUTPUTS)
-	const visibleItems = visibleIndexes.map(outputIndex =>
-		byOutputIndex.get(outputIndex))
+	// 流式事件到达顺序只用于诊断；稳定版位必须由服务端 outputIndex 决定。
+	void normalizedOrder(presentationOrder)
+	const allItems = [...byOutputIndex.entries()]
+		.sort(([left], [right]) => left - right)
+		.slice(0, MAXIMUM_IMAGE_OUTPUTS)
+		.map(([, attachment]) => attachment)
+	const layout = imageGalleryLayout(allItems.length)
+	const primaryCount = allItems.length >= 5
+		? 2
+		: allItems.length >= 3 ? 1 : allItems.length
+	const primaryItems = allItems.slice(0, primaryCount)
+	const secondaryItems = allItems.slice(primaryCount)
+	const visibleSecondaryItems = secondaryItems.slice(
+		0, DEFAULT_VISIBLE_SECONDARY_OUTPUTS)
+	const orderedOutputIndexes = allItems.map(item => outputIndexOf(item))
 	const normalizedRequestedCount = Number.isSafeInteger(Number(requestedCount))
-		? Math.max(0, Math.min(10, Number(requestedCount)))
+		? Math.max(0, Math.min(MAXIMUM_IMAGE_OUTPUTS, Number(requestedCount)))
 		: 0
-	const completedCount = candidates.filter(finalImageEvidence).length
+	const completedCount = allItems.filter(finalImageEvidence).length
 	const pendingCount = Math.max(0, normalizedRequestedCount - completedCount)
-	const hiddenCount = Math.max(0,
-		orderedIndexes.length - visibleItems.length)
-	const layout = imageGalleryLayout(visibleItems.length)
+	const hiddenSecondaryCount = Math.max(0,
+		secondaryItems.length - visibleSecondaryItems.length)
 
 	return Object.freeze({
 		layout,
-		visibleItems: Object.freeze(visibleItems),
-		visibleOutputIndexes: Object.freeze(visibleIndexes),
-		heroOutputIndex: visibleIndexes[0] ?? null,
-		overflowOutputIndex: hiddenCount > 0
-			? visibleIndexes[MAX_VISIBLE_IMAGE_OUTPUTS - 1] ?? null
+		allItems: Object.freeze(allItems),
+		primaryItems: Object.freeze(primaryItems),
+		secondaryItems: Object.freeze(secondaryItems),
+		visibleSecondaryItems: Object.freeze(visibleSecondaryItems),
+		orderedOutputIndexes: Object.freeze(orderedOutputIndexes),
+		heroOutputIndex: orderedOutputIndexes[0] ?? null,
+		overflowOutputIndex: hiddenSecondaryCount > 0
+			? secondaryItems[visibleSecondaryItems.length]?.outputIndex ?? null
 			: null,
-		hiddenCount,
+		hiddenSecondaryCount,
+		hiddenCount: hiddenSecondaryCount,
 		completedCount,
 		pendingCount,
 		requestedCount: normalizedRequestedCount,

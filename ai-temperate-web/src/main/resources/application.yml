@@ -542,6 +542,51 @@ app:
       # 单次上游模型流从订阅开始最多持续十五分钟，期间心跳或模型片段都不会重置总时限。
       max-stream-duration: ${AI_INFERENCE_MAX_STREAM_DURATION:15m}
 
+  # 外部 OpenAI 兼容 API Key 的认证、缓存、请求边界和固定 v1 Bloom 配置。
+  api-key:
+    # 默认启用公开 API Key 管理与认证；启动前必须完成数据库迁移、固定 Secret 和 Bloom 重建准备。
+    enabled: ${API_KEY_ENABLED:true}
+    # HMAC Secret 只能由部署环境提供规范 Base64，任何启动模式下解码长度都不得少于三十二字节。
+    hmac-secret-base64: ${API_KEY_HMAC_SECRET_BASE64}
+    # 单个 API Key 同时最多持有三条未结束的模型流，超限立即拒绝且不排队。
+    max-concurrent-per-key: ${API_KEY_MAX_CONCURRENT_PER_KEY:3}
+    # 权威 IP 可信分低于六十分时拒绝请求，缺少权威网络风险结果按基础设施不可用处理。
+    minimum-ip-trust-score: ${API_KEY_MINIMUM_IP_TRUST_SCORE:60}
+    # 单个 Key 最多授权五百个不重复且当前启用的模型，限制缓存值和批量 SQL 大小。
+    max-model-grants: ${API_KEY_MAX_MODEL_GRANTS:500}
+    # API Key 认证 Cache-Aside 的正向和负向随机 TTL 配置。
+    auth-cache:
+      # 正向缓存最短保存五分钟，实际 TTL 在最小值与最大值之间均匀抖动。
+      minimum-ttl: ${API_KEY_AUTH_CACHE_MINIMUM_TTL:5m}
+      # 正向缓存最长保存十五分钟，数据库强校验仍在预扣事务内执行。
+      maximum-ttl: ${API_KEY_AUTH_CACHE_MAXIMUM_TTL:15m}
+      # 无效摘要负缓存最短保存三十秒，避免暴力枚举持续穿透数据库。
+      negative-minimum-ttl: ${API_KEY_AUTH_CACHE_NEGATIVE_MINIMUM_TTL:30s}
+      # 无效摘要负缓存最长保存六十秒，避免合法 Key 创建后的长时间旧负值窗口。
+      negative-maximum-ttl: ${API_KEY_AUTH_CACHE_NEGATIVE_MAXIMUM_TTL:60s}
+    # 公开 Chat Completions 请求在解析和连接 8317 之前执行的硬边界。
+    request:
+      # Origin 在 JSON 反序列化期间最多读取一 MiB，请求超限在连接 8317 前拒绝。
+      max-body-bytes: ${API_KEY_REQUEST_MAX_BODY_BYTES:1048576}
+      # 一次请求最多包含二百五十六条消息。
+      max-messages: ${API_KEY_REQUEST_MAX_MESSAGES:256}
+      # 一次请求最多声明一百二十八个函数工具。
+      max-tools: ${API_KEY_REQUEST_MAX_TOOLS:128}
+    # 固定 v1 API Key 计数 Bloom 使用四个约三点四三 MiB Bucket 和 Receipt 元素幂等。
+    bloom:
+      # 全部 Bucket 合计包含一千四百三十七万七千五百八十八个单字节计数器。
+      capacity: ${API_KEY_BLOOM_CAPACITY:14377588}
+      # 每个摘要固定计算十个互异计数器位置以达到约千分之一误判率。
+      hash-count: ${API_KEY_BLOOM_HASH_COUNT:10}
+      # 每个计数器固定一个字节，允许值范围为零到二百五十五。
+      counter-bytes: ${API_KEY_BLOOM_COUNTER_BYTES:1}
+      # 每个 Bucket 固定容纳三百五十九万四千三百九十七个计数器。
+      counters-per-bucket: ${API_KEY_BLOOM_COUNTERS_PER_BUCKET:3594397}
+      # Receipt Set 分为一千零二十四片，避免所有元素聚集为单一超大集合。
+      receipt-shards: ${API_KEY_BLOOM_RECEIPT_SHARDS:1024}
+      # Leader 每次从 PostgreSQL 读取五百个有效摘要并用 Pipeline 提交有界 Lua。
+      build-page-size: ${API_KEY_BLOOM_BUILD_PAGE_SIZE:500}
+
   # AI 模型历史搜索词元回填只允许在受控维护启动中显式开启。
   ai-model-token-backfill:
     # 默认关闭回填；开启后按五百条批次执行，任一失败都会阻止应用完成启动。

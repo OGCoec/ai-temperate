@@ -16,10 +16,15 @@ function clamp01(value) {
 	}
 }
 
-export function resolveVoiceWaveformCapacity(width) {
+export function resolveVoiceWaveformCapacity(
+	width,
+	maxCapacity = VOICE_WAVEFORM_MAX_CAPACITY
+) {
 	try {
+		const limit = Math.max(1, Math.floor(Number(maxCapacity)
+			|| VOICE_WAVEFORM_MAX_CAPACITY))
 		return Math.max(1, Math.min(
-			VOICE_WAVEFORM_MAX_CAPACITY,
+			limit,
 			Math.floor(Math.max(0, Number(width) || 0) / VOICE_WAVEFORM_BAR_PITCH)))
 	} catch (_) {
 		return 1
