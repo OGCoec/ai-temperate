@@ -8,6 +8,11 @@
                type="com.example.temperate.model.ai.entity.UserApiKey">
         <id property="id" column="id"/>
         <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="createIdempotencyKey"
+                column="create_idempotency_key"
+                javaType="java.util.UUID"
+                jdbcType="OTHER"
+                typeHandler="com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler"/>
         <result property="keyDigest" column="key_digest"/>
         <result property="keyHint" column="key_hint"/>
         <result property="status" column="status"/>
@@ -42,6 +47,7 @@
     <sql id="UserApiKeyColumns">
         id,
         login_identity_id,
+        create_idempotency_key,
         key_digest,
         key_hint,
         status,
@@ -60,6 +66,7 @@
             keyColumn="id">
         INSERT INTO user_api_key (
             login_identity_id,
+            create_idempotency_key,
             key_digest,
             key_hint,
             status,
@@ -67,12 +74,28 @@
         )
         VALUES (
             #{loginIdentityId,jdbcType=BIGINT},
+            #{createIdempotencyKey,
+              javaType=java.util.UUID,
+              jdbcType=OTHER,
+              typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler},
             #{keyDigest,jdbcType=BINARY},
             #{keyHint,jdbcType=VARCHAR},
             #{status,jdbcType=SMALLINT},
             #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         )
+        ON CONFLICT (create_idempotency_key)
+        WHERE create_idempotency_key IS NOT NULL
+        DO NOTHING
     </insert>
+
+    <select id="findByCreateIdempotencyKey" resultMap="UserApiKeyResultMap">
+        SELECT <include refid="UserApiKeyColumns"/>
+        FROM user_api_key
+        WHERE create_idempotency_key = #{createIdempotencyKey,
+                                         javaType=java.util.UUID,
+                                         jdbcType=OTHER,
+                                         typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler}
+    </select>
 
     <select id="findByDigest" resultMap="UserApiKeyResultMap">
         SELECT <include refid="UserApiKeyColumns"/>

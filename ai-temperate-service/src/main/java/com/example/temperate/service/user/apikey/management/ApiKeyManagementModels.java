@@ -2,6 +2,7 @@ package com.example.temperate.service.user.apikey.management;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 该容器是来集中定义 API Key 管理服务的命令与结果契约，使 Web 层不接触数据库实体、摘要或内部 BIGINT。
@@ -17,8 +18,11 @@ public final class ApiKeyManagementModels {
         DISABLED
     }
 
-    /** 创建命令要求至少一个模型，完整 Key 和摘要均由服务端生成。 */
-    public record CreateCommand(OffsetDateTime expiresAt, List<String> modelPublicIds) {
+    /** 创建命令携带客户端 UUIDv4 创建意图并要求至少一个模型，完整 Key 和摘要仍只由服务端生成。 */
+    public record CreateCommand(
+            UUID idempotencyKey,
+            OffsetDateTime expiresAt,
+            List<String> modelPublicIds) {
     }
 
     /** 生命周期完整替换命令不包含名称、模型授权或任何密钥版本。 */

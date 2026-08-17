@@ -127,6 +127,33 @@ test('profile page exposes a confirmed all-device logout action below current lo
 	assert.match(profile, /catch \(error\) \{[\s\S]*uni\.showToast\(/)
 })
 
+test('profile settings workbench uses accessible tabs and preserves every account destination', () => {
+	const profile = read('components/user/workspace/user-profile-panel.vue')
+
+	assert.match(profile, /activeProfileSection:\s*'account'/)
+	assert.match(profile, /profileSections\(\)[\s\S]*key:\s*'account'[\s\S]*key:\s*'quota'[\s\S]*key:\s*'security'[\s\S]*key:\s*'developer'[\s\S]*key:\s*'sessions'/)
+	assert.match(profile, /class="profile-workbench-navigation"[\s\S]*role="tablist"[\s\S]*aria-label="个人中心分区"/)
+	assert.match(profile, /<button[\s\S]*:id="`profile-tab-\$\{section\.key\}`"[\s\S]*class="profile-workbench-nav-item"[\s\S]*role="tab"[\s\S]*:aria-selected="activeProfileSection === section\.key"[\s\S]*:aria-controls="`profile-panel-\$\{section\.key\}`"/)
+	assert.match(profile, /@click="selectProfileSection\(section\.key\)"/)
+	assert.match(profile, /@keydown="handleProfileSectionKeydown\(\$event, section\.key\)"/)
+	assert.match(profile, /handleProfileSectionKeydown\(event, key\)[\s\S]*ArrowRight[\s\S]*ArrowLeft[\s\S]*Home[\s\S]*End[\s\S]*preventDefault\(\)[\s\S]*selectProfileSection\(nextKey\)[\s\S]*focus/)
+	for (const key of ['account', 'quota', 'security', 'developer', 'sessions']) {
+		assert.match(profile, new RegExp(
+			`v-show="profileSectionVisible\\('${key}'\\)"[\\s\\S]*?`
+			+ `id="profile-panel-${key}"[\\s\\S]*?`
+			+ `:role="androidClient \\? 'region' : 'tabpanel'"[\\s\\S]*?`
+			+ `:aria-labelledby="androidClient \\? undefined : 'profile-tab-${key}'"`
+		))
+	}
+	assert.match(profile, /profileSectionVisible\(key\)[\s\S]*this\.androidClient\s*\|\|\s*this\.activeProfileSection === key/)
+	assert.match(profile, /@click="openTotpSecurity"/)
+	assert.match(profile, /@click="openApiKeys"/)
+	assert.match(profile, /@click="logout"/)
+	assert.match(profile, /@click="confirmLogoutAll"/)
+	assert.match(profile, /<image v-if="phone\.flag" class="profile-phone-flag" :src="phone\.flag"/)
+	assert.doesNotMatch(profile, /parts\.push\(`\$\{this\.phone\.flag/)
+})
+
 test('all-device logout client uses the dedicated endpoint without user or refresh-token payloads', () => {
 	const httpClient = read('common/auth/http-client.js')
 

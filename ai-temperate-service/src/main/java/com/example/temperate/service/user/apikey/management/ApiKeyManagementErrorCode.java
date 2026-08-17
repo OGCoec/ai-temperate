@@ -6,6 +6,10 @@ package com.example.temperate.service.user.apikey.management;
 public enum ApiKeyManagementErrorCode {
     FEATURE_DISABLED,
     INPUT_INVALID,
+    IDEMPOTENCY_KEY_INVALID,
+    API_KEY_CREATE_IN_PROGRESS,
+    API_KEY_CREATE_ALREADY_COMPLETED,
+    API_KEY_CREATE_COORDINATION_UNAVAILABLE,
     PUBLIC_ID_INVALID,
     CURSOR_INVALID,
     MODEL_NOT_FOUND_OR_DISABLED,

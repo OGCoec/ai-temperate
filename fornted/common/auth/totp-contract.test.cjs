@@ -19,6 +19,26 @@ test('first factor stores no session while TOTP is still required', () => {
 	assert.match(login, /status === 'AUTHENTICATED'[\s\S]*completeLogin/)
 })
 
+test('authenticated login publishes runtime state only after the session is saved', () => {
+	const api = read('common/auth/auth-api.js')
+	const totpRequiredStart = api.indexOf("if (response?.status === 'TOTP_REQUIRED')")
+	const authenticatedStart = api.indexOf("if (response?.status === 'AUTHENTICATED')")
+	const authenticatedEnd = api.indexOf('\n\t}', authenticatedStart)
+	const totpRequiredBranch = api.slice(totpRequiredStart, authenticatedStart)
+	const authenticatedBranch = api.slice(authenticatedStart, authenticatedEnd)
+
+	assert.ok(totpRequiredStart >= 0)
+	assert.ok(authenticatedStart > totpRequiredStart)
+	assert.ok(authenticatedEnd > authenticatedStart)
+	assert.doesNotMatch(totpRequiredBranch, /markRuntimeSessionAuthenticated\(\)/)
+	assert.match(authenticatedBranch, /saveSession\(response\)/)
+	assert.match(authenticatedBranch, /markRuntimeSessionAuthenticated\(\)/)
+	assert.ok(
+		authenticatedBranch.indexOf('saveSession(response)')
+			< authenticatedBranch.indexOf('markRuntimeSessionAuthenticated()')
+	)
+})
+
 test('H5 keeps the raw login challenge in HttpOnly cookie while Android uses KeyStore', () => {
 	const flow = read('common/auth/totp-login-flow.js')
 	const android = read('common/auth/android-flow-keystore.js')

@@ -1,5 +1,25 @@
 <template>
-	<view class="api-key-page">
+	<view class="api-key-page" :class="{ 'is-android-client': androidClient }">
+		<view v-if="androidClient" class="api-key-android-toolbar">
+			<button
+				class="api-key-android-menu"
+				type="button"
+				aria-label="打开导航"
+				@click="$emit('open-conversation-drawer')"
+			>
+				<uni-icons type="bars" size="18" color="#dce5e0" aria-hidden="true" />
+			</button>
+			<text class="api-key-android-toolbar-title">管理我的 API Key</text>
+			<button
+				class="api-key-android-refresh"
+				type="button"
+				:disabled="loading"
+				aria-label="刷新 API Key"
+				@click="refreshKeys"
+			>
+				<uni-icons type="refreshempty" size="18" color="#dce5e0" aria-hidden="true" />
+			</button>
+		</view>
 		<scroll-view class="api-key-scroll" scroll-y>
 			<view class="api-key-shell" :aria-busy="loading || appendLoading">
 				<view class="api-key-heading-row">
@@ -9,11 +29,11 @@
 						<text class="api-key-subtitle">为外部 Agent 和 OpenAI 兼容客户端管理访问凭证。</text>
 					</view>
 					<view class="api-key-heading-actions">
-						<button class="api-key-refresh" type="button" :disabled="loading" @click="refreshKeys">
+						<button v-if="!androidClient" class="api-key-refresh" type="button" :disabled="loading" @click="refreshKeys">
 							<uni-icons type="refreshempty" size="18" color="#dce5e0" aria-hidden="true" />
 							<text>刷新</text>
 						</button>
-						<button ref="createButton" class="api-key-create" type="button" @click="openCreateDialog">
+						<button ref="createButton" class="api-key-create" type="button" :disabled="createBusy || !!pendingCreateIntent" @click="openCreateDialog">
 							<uni-icons type="plusempty" size="19" color="#75dfb7" aria-hidden="true" />
 							<text>创建 API Key</text>
 						</button>
@@ -25,6 +45,20 @@
 					<view>
 						<text class="api-key-security-title">请像保护密码一样保护 API Key</text>
 						<text class="api-key-security-copy">完整内容只在创建成功后显示一次。不要把它放入浏览器页面、公开仓库、日志或聊天记录。</text>
+					</view>
+				</view>
+
+				<view v-if="pendingCreateIntent" class="api-key-pending-card" role="status">
+					<uni-icons type="info" size="22" color="#efc18a" aria-hidden="true" />
+					<view class="api-key-pending-content">
+						<text class="api-key-pending-title">上次创建结果未确认</text>
+						<text class="api-key-pending-copy">{{ pendingCreateSummary }}。继续确认会复用原参数和原创建标识，不会自动修改或重新生成请求。</text>
+					</view>
+					<view class="api-key-pending-actions">
+						<button type="button" :disabled="createBusy" @click="continuePendingCreate">
+							{{ createBusy ? '正在确认…' : '继续确认' }}
+						</button>
+						<button class="is-secondary" type="button" :disabled="createBusy" @click="abandonPendingCreate">放弃</button>
 					</view>
 				</view>
 
@@ -116,8 +150,15 @@
 </template>
 
 <script>
+	import { clientPlatform } from '@/common/auth/config.js'
 	import { formatLocalDateTimeZhCn } from '@/common/platform/date-time.js'
 	import { apiKeyApi } from '@/common/user/api-key-api.js'
+	import {
+		beginApiKeyCreateIntent,
+		clearApiKeyCreateIntent,
+		commandFromApiKeyCreateIntent,
+		loadApiKeyCreateIntent
+	} from '@/common/user/api-key-create-intent.js'
 	import {
 		API_KEY_CHAT_ENDPOINT,
 		API_KEY_COMPATIBLE_BASE_URL
@@ -137,6 +178,15 @@
 			return '服务暂时不可用，当前内容已保留，请稍后手动重试。'
 		}
 		return fallback
+	}
+
+	function shouldKeepCreateIntent(error) {
+		const statusCode = Number(error?.statusCode)
+		return error?.code === 'NETWORK_ERROR'
+			|| error?.code === 'API_KEY_RESPONSE_INVALID'
+			|| error?.code === 'API_KEY_CREATE_IN_PROGRESS'
+			|| error?.code === 'API_KEY_CREATE_COORDINATION_UNAVAILABLE'
+			|| statusCode >= 500
 	}
 
 	export default {
@@ -161,32 +211,44 @@
 				createOpen: false,
 				createBusy: false,
 				createError: '',
+				pendingCreateIntent: null,
 				createdSecret: '',
 				editorId: '',
 				editorSummary: null
 			}
 		},
 		computed: {
+			androidClient() { return clientPlatform() === 'ANDROID' },
 			compatibleBaseUrl() { return API_KEY_COMPATIBLE_BASE_URL },
-			chatEndpoint() { return API_KEY_CHAT_ENDPOINT }
+			chatEndpoint() { return API_KEY_CHAT_ENDPOINT },
+			pendingCreateSummary() {
+				if (!this.pendingCreateIntent) return ''
+				const expiry = this.pendingCreateIntent.expiresAt == null
+					? '永久有效'
+					: (formatLocalDateTimeZhCn(this.pendingCreateIntent.expiresAt) || '原过期时间')
+				return `${expiry}，授权 ${this.pendingCreateIntent.modelPublicIds.length} 个模型`
+			}
 		},
 		watch: {
-			authenticated(value) {
-				if (value) this.onAuthenticatedPageReady()
-				else this.releasePageState()
-			}
+				authenticated(value) {
+					if (value) this.onAuthenticatedPageReady()
+					else this.releasePageState(true)
+				}
 		},
 		mounted() {
 			if (this.authenticated) this.onAuthenticatedPageReady()
 		},
 		beforeDestroy() {
-			this.releasePageState()
+			this.releasePageState(false)
 		},
 		beforeUnmount() {
-			this.releasePageState()
+			this.releasePageState(false)
 		},
 		methods: {
 			onAuthenticatedPageReady() {
+				if (!this.pendingCreateIntent) {
+					this.pendingCreateIntent = loadApiKeyCreateIntent()
+				}
 				if (this.authenticated && !this.loading && !this.listLoaded && !this.listError) {
 					this.refreshKeys()
 				}
@@ -195,10 +257,12 @@
 				this.onAuthenticatedPageReady()
 			},
 			handlePageUnload() {
-				this.releasePageState()
+				this.releasePageState(false)
 			},
-			releasePageState() {
+			releasePageState(clearPendingIntent = false) {
 				this.requestGeneration += 1
+				if (clearPendingIntent) clearApiKeyCreateIntent()
+				this.pendingCreateIntent = null
 				this.createdSecret = ''
 				this.items = []
 				this.listLoaded = false
@@ -259,6 +323,10 @@
 				if (this.nextCursor) this.loadPage(true)
 			},
 			openCreateDialog() {
+				if (this.pendingCreateIntent) {
+					uni.showToast({ title: '请先继续确认或放弃上次创建', icon: 'none' })
+					return
+				}
 				this.createError = ''
 				this.createOpen = true
 			},
@@ -266,21 +334,44 @@
 				if (!this.createBusy) {
 					this.createOpen = false
 					this.createError = ''
+					// #ifdef H5
+					if (typeof document === 'undefined') return
 					this.$nextTick(() => {
 						const button = this.$refs.createButton?.$el || this.$refs.createButton
 						button?.focus?.({ preventScroll: true })
 					})
+					// #endif
 				}
 			},
 			async createKey(command) {
+				if (this.createBusy) return
+				let intent
+				try {
+					// UUID 与原命令必须在 HTTP 请求前落盘，网络中断后才能安全恢复同一次创建意图。
+					intent = beginApiKeyCreateIntent(command)
+					this.pendingCreateIntent = intent
+				} catch (error) {
+					this.createError = readableError(error, error?.message || '无法保存创建状态，请稍后重试。')
+					return
+				}
+				await this.submitCreateIntent(intent)
+			},
+			continuePendingCreate() {
+				if (!this.pendingCreateIntent || this.createBusy) return
+				this.submitCreateIntent(this.pendingCreateIntent)
+			},
+			async submitCreateIntent(intent) {
 				if (this.createBusy) return
 				const generation = this.requestGeneration
 				this.createBusy = true
 				this.createError = ''
 				try {
-					const created = await apiKeyApi.create(command)
+					const command = commandFromApiKeyCreateIntent(intent)
+					const created = await apiKeyApi.create(command, intent.idempotencyKey)
 					// 页面已离开时不得把一次性完整 Key 重新挂回组件状态。
 					if (generation !== this.requestGeneration) return
+					clearApiKeyCreateIntent()
+					this.pendingCreateIntent = null
 					this.createdSecret = created.value.apiKey
 					this.items = mergeApiKeyPageItems(
 						[summaryFromCreatedKey(created.value)],
@@ -289,19 +380,57 @@
 					this.createOpen = false
 				} catch (error) {
 					if (generation !== this.requestGeneration) return
-					this.createError = error?.code === 'NETWORK_ERROR'
-						? '创建结果暂时无法确认。请刷新列表；如果出现了一个无法取得完整内容的新 Key，请先撤销它，再重新创建。'
-						: readableError(error, 'API Key 创建失败，请检查表单后重试。')
+					if (error?.code === 'API_KEY_CREATE_ALREADY_COMPLETED') {
+						clearApiKeyCreateIntent()
+						this.pendingCreateIntent = null
+						this.createOpen = false
+						await this.refreshKeys()
+						uni.showModal({
+							title: '创建请求已经完成',
+							content: '完整 API Key 无法再次取得。列表已刷新；需要新凭证时，请先撤销对应 Key 后重新创建。',
+							showCancel: false
+						})
+					} else if (shouldKeepCreateIntent(error)) {
+						this.createOpen = false
+						this.createError = ''
+						uni.showToast({ title: '创建结果未确认，请稍后手动继续', icon: 'none' })
+					} else {
+						clearApiKeyCreateIntent()
+						this.pendingCreateIntent = null
+						const message = readableError(error, 'API Key 创建失败，请检查表单后重试。')
+						this.createError = message
+						if (!this.createOpen) {
+							uni.showModal({ title: '无法继续创建', content: message, showCancel: false })
+						}
+					}
 				} finally {
 					this.createBusy = false
 				}
 			},
+			abandonPendingCreate() {
+				if (!this.pendingCreateIntent || this.createBusy) return
+				uni.showModal({
+					title: '放弃继续确认？',
+					content: '原请求可能已经完成。放弃后将清除本机待确认记录并刷新列表，完整 Key 仍无法重新取得。',
+					confirmText: '放弃并刷新',
+					success: result => {
+						if (!result.confirm) return
+						clearApiKeyCreateIntent()
+						this.pendingCreateIntent = null
+						this.createOpen = false
+						this.refreshKeys()
+					}
+				})
+			},
 			clearCreatedSecret() {
 				this.createdSecret = ''
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				this.$nextTick(() => {
 					const button = this.$refs.createButton?.$el || this.$refs.createButton
 					button?.focus?.({ preventScroll: true })
 				})
+				// #endif
 			},
 			openEditor(item) {
 				this.editorId = item.id
@@ -311,10 +440,13 @@
 				const publicId = this.editorId
 				this.editorId = ''
 				this.editorSummary = null
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				this.$nextTick(() => {
 					const button = this.$el?.querySelector?.(`[data-api-key-id="${publicId}"]`)
 					button?.focus?.({ preventScroll: true })
 				})
+				// #endif
 			},
 			applyEditorUpdate(detail) {
 				const summary = summaryFromCreatedKey(detail)
@@ -368,7 +500,12 @@
 <style lang="scss" scoped>
 	@import '@/common/ui/user-material.scss';
 
-	.api-key-page, .api-key-scroll { width: 100%; min-width: 0; height: 100%; background: #0b0d0c; color: #f3f5f4; }
+	.api-key-page { width: 100%; min-width: 0; height: 100%; display: flex; flex-direction: column; background: #0b0d0c; color: #f3f5f4; }
+	.api-key-scroll { width: 100%; min-width: 0; min-height: 0; flex: 1; background: #0b0d0c; color: #f3f5f4; }
+	.api-key-android-toolbar { min-height: 56px; padding: max(8px, env(safe-area-inset-top)) 12px 8px; display: flex; align-items: center; gap: 8px; box-sizing: border-box; border-bottom: 1px solid rgba(151, 170, 160, .14); background: #0b0d0c; }
+	.api-key-android-menu, .api-key-android-refresh { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; }
+	.api-key-android-menu::after, .api-key-android-refresh::after { border: 0; }
+	.api-key-android-toolbar-title { min-width: 0; flex: 1; overflow: hidden; color: #eef3f0; font-size: 16px; font-weight: 740; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 	.api-key-shell { width: 100%; max-width: 920px; min-height: 100%; margin: 0 auto; padding: 34px 24px calc(54px + env(safe-area-inset-bottom)); box-sizing: border-box; }
 	.api-key-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
 	.api-key-heading { min-width: 0; display: flex; flex-direction: column; }
@@ -384,6 +521,14 @@
 	.api-key-security-title, .api-key-security-copy { display: block; }
 	.api-key-security-title { color: #efc18a; font-size: 13px; font-weight: 720; }
 	.api-key-security-copy { margin-top: 5px; color: #b9aaa0; font-size: 12px; line-height: 1.6; }
+	.api-key-pending-card { display: flex; align-items: flex-start; gap: 12px; margin-top: 14px; padding: 16px 18px; border: 1px solid rgba(221, 157, 83, .3); border-radius: 15px; background: rgba(201, 130, 47, .09); }
+	.api-key-pending-content { min-width: 0; flex: 1; }
+	.api-key-pending-title, .api-key-pending-copy { display: block; }
+	.api-key-pending-title { color: #efc18a; font-size: 14px; font-weight: 740; }
+	.api-key-pending-copy { margin-top: 5px; color: #b9aaa0; font-size: 12px; line-height: 1.6; }
+	.api-key-pending-actions { display: flex; align-items: center; gap: 8px; }
+	.api-key-pending-actions button { min-height: 42px; margin: 0; padding: 0 14px; border: 1px solid rgba(55, 211, 154, .38); border-radius: 10px; background: rgba(55, 211, 154, .1); color: #75dfb7; font-size: 12px; }
+	.api-key-pending-actions button.is-secondary { border-color: rgba(151, 170, 160, .22); background: #171b18; color: #aeb9b3; }
 	.api-key-section { margin-top: 28px; }
 	.api-key-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 10px; }
 	.api-key-section-title { display: block; margin: 0 0 10px 4px; color: #929e98; font-size: 13px; font-weight: 700; }
@@ -431,7 +576,29 @@
 		.api-key-list-topline { flex-wrap: wrap; }
 		.api-key-manage { width: 100%; position: static; margin-top: 16px; transform: none; }
 		.api-key-manage:active { transform: scale(.98); }
+		.api-key-pending-card { flex-wrap: wrap; }
+		.api-key-pending-actions { width: 100%; }
+		.api-key-pending-actions button { min-height: 46px; flex: 1; }
 	}
+	.api-key-page.is-android-client .api-key-shell { max-width: none; padding: 20px 16px calc(32px + env(safe-area-inset-bottom)); }
+	.api-key-page.is-android-client .api-key-heading-row { display: block; }
+	.api-key-page.is-android-client .api-key-heading-actions { width: 100%; margin-top: 18px; }
+	.api-key-page.is-android-client .api-key-create { width: 100%; min-height: 52px; justify-content: center; border-color: rgba(55, 211, 154, .62); background: #37d39a; color: #07130e; font-weight: 760; }
+	.api-key-page.is-android-client .api-key-kicker { font-size: 11px; letter-spacing: 1.5px; }
+	.api-key-page.is-android-client .api-key-title { margin-top: 7px; font-size: 28px; }
+	.api-key-page.is-android-client .api-key-subtitle { margin-top: 7px; font-size: 13px; line-height: 1.55; }
+	.api-key-page.is-android-client .api-key-security-card { margin-top: 18px; padding: 14px; }
+	.api-key-page.is-android-client .api-key-pending-card { flex-wrap: wrap; padding: 14px; }
+	.api-key-page.is-android-client .api-key-pending-actions { width: 100%; }
+	.api-key-page.is-android-client .api-key-pending-actions button { min-height: 48px; flex: 1; }
+	.api-key-page.is-android-client .api-key-section { margin-top: 24px; }
+	.api-key-page.is-android-client .api-key-connection-row { min-height: 64px; padding: 12px 14px; }
+	.api-key-page.is-android-client .api-key-connection-row button { min-width: 64px; min-height: 44px; }
+	.api-key-page.is-android-client .api-key-list { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+	.api-key-page.is-android-client .api-key-list-card { min-width: 0; padding: 16px; }
+	.api-key-page.is-android-client .api-key-list-topline { flex-wrap: wrap; }
+	.api-key-page.is-android-client .api-key-manage { width: 100%; min-height: 48px; position: static; margin-top: 16px; transform: none; }
+	.api-key-page.is-android-client .api-key-manage:active { transform: scale(.98); }
 	/* #ifdef H5 */
 	// H5 管理页占满剩余工作区，列表按 CSS 可视宽度增列，分页与错误反馈始终横跨整行。
 	.api-key-shell {

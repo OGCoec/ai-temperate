@@ -126,7 +126,7 @@ test('Turnstile page returns verified, provider error, expired, and timeout resu
 		assert.ok(widget)
 		assert.equal(widget.retry, 'auto')
 		assert.equal(widget['retry-interval'], 8000)
-		assert.equal(widget.size, 'flexible')
+		assert.equal(widget.size, 'normal')
 		invoke(widget)
 		assert.equal(result.location.href, expectedUrl)
 	}

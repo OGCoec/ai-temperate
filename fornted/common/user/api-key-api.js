@@ -5,6 +5,7 @@ const MASKED_KEY_PATTERN = /^sk-…[A-Za-z0-9_-]{4}$/
 const FULL_KEY_PATTERN = /^sk-[A-Za-z0-9_-]{86}$/
 const ROW_VERSION_PATTERN = /^(0|[1-9][0-9]*)$/
 const STRONG_ETAG_PATTERN = /^"v(0|[1-9][0-9]*)"$/
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const STATUS_VALUES = new Set(['ENABLED', 'DISABLED'])
 
 function inputError(message) {
@@ -146,13 +147,21 @@ function normalizedEtag(value) {
 	return value
 }
 
+function normalizedIdempotencyKey(value) {
+	if (typeof value !== 'string' || !UUID_V4_PATTERN.test(value)) {
+		throw inputError('API Key 创建幂等键必须是规范小写 UUIDv4。')
+	}
+	return value
+}
+
 function normalizedExpiry(value) {
 	if (value == null) return null
 	if (typeof value !== 'string'
-		|| !Number.isFinite(Date.parse(value))
-		|| Date.parse(value) <= Date.now()) {
+		|| !value.trim()
+		|| !Number.isFinite(Date.parse(value))) {
 		throw inputError('API Key 过期时间无效。')
 	}
+	// 重试时原过期时间可能已经到达；必须仍把原命令交给后端先按 UUID 判断是否已完成。
 	return value
 }
 
@@ -179,7 +188,7 @@ export const apiKeyApi = Object.freeze({
 		))
 	},
 
-	async create(command) {
+	async create(command, idempotencyKey) {
 		const source = commandValue(command)
 		const data = {
 			expiresAt: normalizedExpiry(source.expiresAt),
@@ -187,6 +196,7 @@ export const apiKeyApi = Object.freeze({
 		}
 		return normalizedMetadata(await authorizedRequest('/api/users/me/api-keys', {
 			method: 'POST',
+			headers: { 'Idempotency-Key': normalizedIdempotencyKey(idempotencyKey) },
 			data,
 			captureEtag: true
 		}), normalizedCreated)

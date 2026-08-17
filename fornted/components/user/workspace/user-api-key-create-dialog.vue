@@ -82,11 +82,16 @@
 		},
 		methods: {
 			focusDialog() {
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				const dialog = this.$refs.dialog?.$el || this.$refs.dialog
 				const first = dialog?.querySelector?.('button:not([disabled]), input:not([disabled])')
 				;(first || dialog)?.focus?.({ preventScroll: true })
+				// #endif
 			},
 			trapFocus(event) {
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				const dialog = this.$refs.dialog?.$el || this.$refs.dialog
 				const focusable = Array.from(dialog?.querySelectorAll?.('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])
 				if (!focusable.length) return
@@ -97,6 +102,7 @@
 				} else if (!event.shiftKey && document.activeElement === last) {
 					event.preventDefault(); first.focus()
 				}
+				// #endif
 			},
 			requestClose() {
 				if (!this.busy) this.$emit('close')
@@ -141,7 +147,7 @@
 	.api-key-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 16px; }
 	.api-key-dialog-title { display: block; font-size: 24px; font-weight: 760; }
 	.api-key-dialog-subtitle { display: block; margin-top: 6px; color: #8f9b95; font-size: 13px; }
-	.api-key-dialog-close { width: 44px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: 0; padding: 0; box-sizing: border-box; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 0; line-height: 1; }
+	.api-key-dialog-close { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; margin: 0; padding: 0; color: #aeb9b3; }
 	.api-key-dialog-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .72); }
 	.api-key-dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 8px; }
 	.api-key-form-section { margin-top: 20px; }
@@ -152,5 +158,5 @@
 	.api-key-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
 	.api-key-cancel, .api-key-submit { @include user-frosted-control; min-width: 128px; margin: 0; padding: 0 18px; border-radius: 12px; color: #dce5e0; }
 	.api-key-submit { border-color: rgba(55, 211, 154, .46); background: rgba(55, 211, 154, .13); color: #75dfb7; }
-	@media screen and (max-width: 640px) { .api-key-dialog-layer { padding: 0; align-items: stretch; } .api-key-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; border-radius: 0; } .api-key-dialog-heading { padding: 20px 16px 14px; } .api-key-dialog-body { padding: 0 16px 8px; } .api-key-dialog-footer { padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); } .api-key-cancel, .api-key-submit { min-width: 0; flex: 1; } }
+	@media screen and (max-width: 640px) { .api-key-dialog-layer { padding: 0; align-items: stretch; } .api-key-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; border-radius: 0; } .api-key-dialog-heading { padding: calc(12px + env(safe-area-inset-top)) 16px 14px; } .api-key-dialog-body { padding: 0 16px 8px; } .api-key-dialog-footer { padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); } .api-key-cancel, .api-key-submit { min-width: 0; flex: 1; } }
 </style>

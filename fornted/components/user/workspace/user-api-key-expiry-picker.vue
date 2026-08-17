@@ -65,7 +65,9 @@
 						aria-label="上个月"
 						:disabled="disabled || previousMonthDisabled"
 						@click="changeVisibleMonth(-1)"
-					>‹</button>
+					>
+						<uni-icons type="left" size="16" color="#b8c4be" aria-hidden="true" />
+					</button>
 					<text class="expiry-calendar-title">{{ calendarTitle }}</text>
 					<button
 						class="expiry-calendar-nav"
@@ -73,7 +75,9 @@
 						aria-label="下个月"
 						:disabled="disabled"
 						@click="changeVisibleMonth(1)"
-					>›</button>
+					>
+						<uni-icons type="right" size="16" color="#b8c4be" aria-hidden="true" />
+					</button>
 				</view>
 				<view class="expiry-calendar-weekdays" role="row">
 					<text v-for="weekday in weekdays" :key="weekday" role="columnheader">{{ weekday }}</text>
@@ -328,7 +332,7 @@
 					ArrowUp: -7,
 					ArrowDown: 7
 				}
-				if (!Object.hasOwn(offsets, event.key)) return
+				if (!Object.prototype.hasOwnProperty.call(offsets, event.key)) return
 				const localDate = event.target?.dataset?.localDate
 				if (!localDate) return
 				event.preventDefault()
@@ -350,10 +354,13 @@
 				if (targetCells.find(cell => cell.localDate === targetLocalDate)?.disabled) return
 				this.visibleYear = target.getFullYear()
 				this.visibleMonth = target.getMonth()
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				this.$nextTick(() => {
 					const root = this.$el?.querySelector ? this.$el : this.$el?.$el
 					root?.querySelector?.(`[data-local-date="${targetLocalDate}"]`)?.focus?.()
 				})
+				// #endif
 			}
 		}
 	}
@@ -379,9 +386,9 @@
 	.expiry-input-help { color: #7e8b84; }
 	.expiry-input-error { color: #efb0aa; }
 	.expiry-calendar { margin-top: 14px; padding: 12px; border: 1px solid rgba(151, 170, 160, .16); border-radius: 14px; background: #0b0e0c; box-shadow: 0 18px 44px rgba(0, 0, 0, .22); }
-	.expiry-calendar-heading { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 8px; }
+	.expiry-calendar-heading { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; }
 	.expiry-calendar-title { text-align: center; color: #e3ebe7; font-size: 14px; font-weight: 740; }
-	.expiry-calendar-nav { width: 40px; height: 40px; min-height: 40px; margin: 0; padding: 0; border: 1px solid rgba(151, 170, 160, .16); border-radius: 10px; background: rgba(24, 29, 26, .72); color: #b8c4be; font-size: 24px; }
+	.expiry-calendar-nav { @include user-android-compact-control(30px, 30px, 9px); width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; }
 	.expiry-calendar-nav:disabled { opacity: .32; }
 	.expiry-calendar-weekdays, .expiry-calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 	.expiry-calendar-weekdays { margin-top: 8px; color: #65736c; font-size: 10px; font-weight: 720; text-align: center; }

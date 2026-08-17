@@ -31,12 +31,12 @@ import reactor.core.scheduler.Schedulers;
  * 编排 Redis 缓存、IP2Location、iPing 和本地 BIN 的有界 IP 情报降级链。
  *
  * <p>整个链路共享一个绝对八秒上限；只有拿到 single-flight 锁和本机并发许可的请求调用外部供应商，
- * 其他请求短暂等待缓存，超时后立即使用本地数据与默认 60 分。</p>
+ * 其他请求短暂等待缓存，超时后立即使用本地数据与默认 0 分，以触发严格拦截。</p>
  */
 @Service
 public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
 
-    private static final int DEFAULT_TRUST_SCORE = 60;
+    private static final int DEFAULT_TRUST_SCORE = 0;
 
     private final NetworkRiskIdentifier identifier;
     private final IpIntelligenceCache cache;
@@ -290,7 +290,7 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
         if (scoreSource != null && scoreSource.hasTrustScore()) {
             return IpIntelligenceSource.IPING;
         }
-        // 没有任何供应商风险分时，60 分属于降级默认值，必须使用短 TTL，不能伪装成第三方完整结果。
+        // 没有任何供应商风险分时，0 分会触发 BLOCK；仍使用短 TTL，避免把供应商暂时不可用永久缓存。
         return local.isPresent() ? IpIntelligenceSource.LOCAL_BIN : IpIntelligenceSource.DEFAULT;
     }
 

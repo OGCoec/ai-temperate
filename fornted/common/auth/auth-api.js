@@ -1,5 +1,6 @@
 import { publicRequest } from './http-client.js'
 import { saveSession } from './session-vault.js'
+import { markRuntimeSessionAuthenticated } from './authenticated-session-state.js'
 import { clientPlatform } from './config.js'
 import { classifyPassword, passwordError } from './password-policy.js'
 import {
@@ -92,6 +93,7 @@ function handleLoginResponse(response) {
 	if (response?.status === 'AUTHENTICATED') {
 		clearTotpLoginFlow()
 		saveSession(response)
+		markRuntimeSessionAuthenticated()
 		// 登录轮换 PreAuth 后建立新的任务 epoch；H5 在下一次请求前同步校验。
 		invalidateWebRtcVerification()
 		// #ifdef APP-PLUS

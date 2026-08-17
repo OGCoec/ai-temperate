@@ -874,6 +874,85 @@ H5：关闭查看器后恢复 body overflow 与原焦点
 
 ---
 
+### Task 10：精简 Android 生成中占位并明确详情下载入口
+
+**Files:**
+
+- Modify: `fornted/components/user/workspace/user-android-chat-image.vue`
+- Modify: `fornted/components/user/workspace/user-generated-image-gallery.vue`
+- Modify: `fornted/components/user/workspace/user-generated-image-gallery-contract.test.cjs`
+- Modify: `fornted/components/user/workspace/user-generated-image-viewer.vue`
+- Modify: `fornted/components/user/workspace/user-generated-image-viewer-contract.test.cjs`
+- Modify: `fornted/common/aichat/ai-chat-android-media-contract.test.cjs`
+
+**Dependencies:** Tasks 4、6。
+
+**Acceptance criteria:**
+
+- [ ] 两张主图在等待和加载阶段继续显示居中的图标与简短状态文字。
+- [ ] 副图轨道的 56～72px 占位只显示图标，不再渲染会被裁切的状态文字。
+- [ ] 副图加载失败时显示可点击的紧凑错误按钮，并继续复用既有 `retry` 事件。
+- [ ] Android 详情页右上角始终存在“下载图标 + 下载”入口；最终文件未就绪时禁用，`FINAL_READY` 后启用。
+- [ ] 下载入口继续复用 `downloadGeneratedImage()` 与 `uni.saveImageToPhotosAlbum()`，不增加新的 URL 或权限路径。
+- [ ] H5 模板、H5 下载和 H5 图片加载样式不变。
+
+- [ ] **Step 1：先增加 Android 紧凑占位契约**
+
+```js
+assert.match(imageSource, /compactPlaceholder/)
+assert.match(imageSource, /v-if="!compactPlaceholder"/)
+assert.match(gallerySource, /:compact-placeholder="true"/)
+assert.match(imageSource, /android-image-compact-retry/)
+```
+
+- [ ] **Step 2：让副图轨道显式请求紧凑占位**
+
+```html
+<user-android-chat-image
+	:attachment="attachment"
+	:compact-placeholder="true"
+	variant="THUMBNAIL"
+/>
+```
+
+主图区域不传 `compact-placeholder`，继续使用默认完整占位。紧凑模式隐藏等待/加载文字；失败时使用带中文 `aria-label` 的图标按钮触发既有 `retry()`。
+
+- [ ] **Step 3：增加 Android 详情下载入口契约**
+
+```js
+assert.match(androidTemplateSource, /type="download"/)
+assert.match(androidTemplateSource, /downloadBusy \? '下载中' : '下载'/)
+assert.match(androidTemplateSource, /downloadBusy \|\| !activeDownloadReady/)
+```
+
+- [ ] **Step 4：只调整 App-Plus 工具栏内容**
+
+```html
+<button
+	class="viewer-button is-download"
+	type="button"
+	:disabled="downloadBusy || !activeDownloadReady"
+	aria-label="下载当前图片"
+	@click="$emit('download', activeItem)"
+>
+	<uni-icons type="download" size="18" color="#f2fff9" aria-hidden="true" />
+	<text>{{ downloadBusy ? '下载中' : '下载' }}</text>
+</button>
+```
+
+- [ ] **Step 5：用户授权第二阶段后运行定向测试**
+
+```powershell
+Set-Location C:\Users\damn\Desktop\ai-temperate-main\fornted
+node --test components/user/workspace/user-generated-image-gallery-contract.test.cjs components/user/workspace/user-generated-image-viewer-contract.test.cjs common/aichat/ai-chat-android-media-contract.test.cjs
+npm run test:android-chat-presentation
+npm run test:user-ui
+```
+
+这些命令只读取本地源码并运行 Node 契约测试，不连接数据库、Redis、RabbitMQ、Chrome 或其他外部服务。
+
+---
+
 ## 五、实施顺序与停点
 
 1. Task 1～2：先完成纯数据模型和测试源码，确保“排序、两张主图、会话 20 张”语义固定。

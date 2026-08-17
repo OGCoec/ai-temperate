@@ -4,6 +4,7 @@ CREATE TABLE user_api_key (
     id BIGINT GENERATED ALWAYS AS IDENTITY,
     login_identity_id BIGINT NOT NULL,
     key_digest BYTEA NOT NULL,
+    create_idempotency_key UUID,
     key_hint VARCHAR(4) NOT NULL,
     status SMALLINT NOT NULL DEFAULT 1,
     expires_at TIMESTAMPTZ,
@@ -33,6 +34,11 @@ CREATE TABLE user_api_key (
 -- 认证请求只执行摘要等值查询；唯一索引同时禁止已软删除凭证被重新使用。
 CREATE UNIQUE INDEX uk_user_api_key_digest
     ON user_api_key (key_digest);
+
+-- 同一次创建操作的 UUIDv4 只能落为一条 API Key，避免网络重试重复签发凭证。
+CREATE UNIQUE INDEX uk_user_api_key_create_idempotency_key
+    ON user_api_key (create_idempotency_key)
+    WHERE create_idempotency_key IS NOT NULL;
 
 -- 用户列表只展示启用和禁用记录；软删除状态不进入该索引。
 CREATE INDEX idx_user_api_key_owner_created
@@ -66,6 +72,8 @@ COMMENT ON COLUMN user_api_key.login_identity_id IS
     '持有该 API Key 的登录身份 ID，逻辑关联 userloginidentity.id，不建立物理外键';
 COMMENT ON COLUMN user_api_key.key_digest IS
     '完整 API Key 经用途隔离 HMAC-SHA256 计算得到的固定 32 字节摘要，用于认证等值查询，禁止返回客户端';
+COMMENT ON COLUMN user_api_key.create_idempotency_key IS
+    '前端在一次创建 API Key 操作生命周期中生成的 UUIDv4 幂等标识；同一标识重复提交时只能对应同一条 API Key 记录，不属于认证凭证';
 COMMENT ON COLUMN user_api_key.key_hint IS
     '完整 API Key 的末尾四个 Base64URL 字符，只用于拼接不可还原的脱敏展示值';
 COMMENT ON COLUMN user_api_key.status IS
@@ -85,6 +93,8 @@ COMMENT ON COLUMN user_api_key.deleted_at IS
 
 COMMENT ON INDEX uk_user_api_key_digest IS
     '支持通过 HMAC 摘要唯一定位 API Key 认证记录，并阻止历史摘要重新写入';
+COMMENT ON INDEX uk_user_api_key_create_idempotency_key IS
+    '保证同一创建 API Key 幂等标识只生成一条记录，防止网络超时或重复点击导致重复签发';
 COMMENT ON INDEX idx_user_api_key_owner_created IS
     '支持按用户、创建时间和主键倒序进行稳定游标分页，不包含软删除记录';
 

@@ -136,7 +136,7 @@ export function expirySelectionFromExpiresAt(expiresAt) {
 
 export function expiresAtFromExpirySelection(value, now = new Date()) {
 	if (value?.option === API_KEY_EXPIRY_OPTION.PERMANENT) return null
-	if (!value || !Object.hasOwn(PRESET_OFFSETS, value.option)
+	if (!value || !Object.prototype.hasOwnProperty.call(PRESET_OFFSETS, value.option)
 		&& value.option !== API_KEY_EXPIRY_OPTION.CUSTOM) {
 		throw expiryError('API_KEY_EXPIRY_OPTION_INVALID', '请选择有效的过期方式。')
 	}

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -24,6 +25,7 @@ import com.example.temperate.service.user.apikey.cache.ApiKeyAuthenticationCache
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apikey.credential.ApiKeyCredentialService;
 import com.example.temperate.service.user.apikey.credential.GeneratedApiKey;
+import com.example.temperate.service.user.apikey.idempotency.ApiKeyCreateLockService;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementErrorCode;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementException;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementModels.CreateCommand;
@@ -35,12 +37,15 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 该测试是来锁定 API Key 创建只返回一次明文、模型授权全量软替换、乐观锁和 HTTP 删除对应数据库软删除及提交后缓存/Bloom 收敛。
@@ -50,6 +55,8 @@ final class UserApiKeyServiceImplTest {
     private static final byte[] DIGEST = new byte[32];
     private static final String PLAINTEXT = "sk-" + "A".repeat(86);
     private static final String IDENTIFIER = "B".repeat(43);
+    private static final UUID IDEMPOTENCY_KEY =
+            UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
     private static final OffsetDateTime NOW =
             OffsetDateTime.parse("2026-08-13T12:00:00Z");
 
@@ -61,6 +68,8 @@ final class UserApiKeyServiceImplTest {
     private ApiKeyCredentialService credentialService;
     private ApiKeyAuthenticationCache authenticationCache;
     private ApiKeyBloomService bloomService;
+    private ApiKeyCreateLockService createLockService;
+    private TransactionTemplate transactionTemplate;
     private UserApiKeyServiceImpl service;
 
     @BeforeEach
@@ -72,11 +81,20 @@ final class UserApiKeyServiceImplTest {
         credentialService = mock(ApiKeyCredentialService.class);
         authenticationCache = mock(ApiKeyAuthenticationCache.class);
         bloomService = mock(ApiKeyBloomService.class);
+        createLockService = mock(ApiKeyCreateLockService.class);
+        transactionTemplate = mock(TransactionTemplate.class);
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);
         when(credentialService.digestIdentifier(any(byte[].class)))
                 .thenReturn(IDENTIFIER);
         when(credentialService.mask("abcd")).thenReturn("sk-…abcd");
+        doAnswer(invocation -> ((Supplier<?>) invocation.getArgument(2)).get())
+                .when(createLockService)
+                .execute(eq(17L), eq(IDEMPOTENCY_KEY), any());
+        doAnswer(invocation -> invocation.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0)
+                        .doInTransaction(mock(org.springframework.transaction.TransactionStatus.class)))
+                .when(transactionTemplate)
+                .execute(any());
         service = new UserApiKeyServiceImpl(
                 apiKeyMapper,
                 modelMapper,
@@ -85,6 +103,8 @@ final class UserApiKeyServiceImplTest {
                 credentialService,
                 authenticationCache,
                 bloomService,
+                createLockService,
+                transactionTemplate,
                 properties,
                 publicIdCodec,
                 Clock.fixed(NOW.toInstant(), ZoneOffset.UTC));
@@ -125,7 +145,7 @@ final class UserApiKeyServiceImplTest {
 
         var created = service.create(
                 17L,
-                new CreateCommand(null, List.of(modelPublicId)));
+                new CreateCommand(IDEMPOTENCY_KEY, null, List.of(modelPublicId)));
 
         assertThat(created.apiKey()).isEqualTo(PLAINTEXT);
         assertThat(created.detail().key().maskedKey()).isEqualTo("sk-…abcd");
@@ -134,6 +154,8 @@ final class UserApiKeyServiceImplTest {
         assertThat(inserted.getValue().getKeyDigest()).containsExactly(DIGEST);
         assertThat(inserted.getValue().getKeyHint()).isEqualTo("abcd");
         assertThat(inserted.getValue().getStatus()).isEqualTo(1);
+        assertThat(inserted.getValue().getCreateIdempotencyKey())
+                .isEqualTo(IDEMPOTENCY_KEY);
 
         doThrow(new IllegalStateException("redis unavailable"))
                 .when(bloomService).commitPositiveMutation(mutation);
@@ -141,6 +163,89 @@ final class UserApiKeyServiceImplTest {
                 .doesNotThrowAnyException();
         verify(bloomService).commitPositiveMutation(mutation);
         verify(authenticationCache).invalidate(IDENTIFIER);
+    }
+
+    @Test
+    void completedIdempotencyKeyNeverGeneratesOrReplaysAPlaintextKey() {
+        UserApiKey completed = key(11L, 1, 0L);
+        completed.setCreateIdempotencyKey(IDEMPOTENCY_KEY);
+        when(identityMapper.existsById(17L)).thenReturn(true);
+        when(apiKeyMapper.findByCreateIdempotencyKey(IDEMPOTENCY_KEY))
+                .thenReturn(completed);
+
+        assertThatThrownBy(() -> service.create(
+                17L,
+                new CreateCommand(
+                        IDEMPOTENCY_KEY,
+                        null,
+                        List.of(publicIdCodec.encode(23L)))))
+                .isInstanceOf(ApiKeyManagementException.class)
+                .extracting(failure -> ((ApiKeyManagementException) failure).code())
+                .isEqualTo(ApiKeyManagementErrorCode.API_KEY_CREATE_ALREADY_COMPLETED);
+
+        verify(credentialService, never()).generate();
+        verify(apiKeyMapper, never()).insert(any(UserApiKey.class));
+        verify(aiModelMapper, never()).findEnabledIdsForShare(any());
+        verify(bloomService, never()).beginPositiveMutation(any(byte[].class));
+    }
+
+    @Test
+    void insertConflictUsesTheUniqueIndexAsFinalArbiterAndWritesNoGrants() {
+        TransactionSynchronizationManager.initSynchronization();
+        String modelPublicId = publicIdCodec.encode(23L);
+        GeneratedApiKey generated =
+                new GeneratedApiKey(PLAINTEXT, DIGEST, "abcd", "sk-…abcd");
+        UserApiKey completed = key(12L, 1, 0L);
+        completed.setCreateIdempotencyKey(IDEMPOTENCY_KEY);
+        when(identityMapper.existsById(17L)).thenReturn(true);
+        when(apiKeyMapper.findByCreateIdempotencyKey(IDEMPOTENCY_KEY))
+                .thenReturn(null, completed);
+        when(aiModelMapper.findEnabledIdsForShare(List.of(23L)))
+                .thenReturn(List.of(23L));
+        when(credentialService.generate()).thenReturn(generated);
+        when(apiKeyMapper.insert(any(UserApiKey.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> service.create(
+                17L,
+                new CreateCommand(IDEMPOTENCY_KEY, null, List.of(modelPublicId))))
+                .isInstanceOf(ApiKeyManagementException.class)
+                .extracting(failure -> ((ApiKeyManagementException) failure).code())
+                .isEqualTo(ApiKeyManagementErrorCode.API_KEY_CREATE_ALREADY_COMPLETED);
+
+        verify(modelMapper, never()).upsertActiveBatch(anyLong(), any(), any());
+        verify(bloomService, never()).beginPositiveMutation(any(byte[].class));
+    }
+
+    @Test
+    void createTransactionRollbackCancelsThePendingBloomMutation() {
+        TransactionSynchronizationManager.initSynchronization();
+        String modelPublicId = publicIdCodec.encode(23L);
+        GeneratedApiKey generated =
+                new GeneratedApiKey(PLAINTEXT, DIGEST, "abcd", "sk-…abcd");
+        ApiKeyBloomService.PositiveMutation mutation =
+                new ApiKeyBloomService.PositiveMutation("mutation-rollback", DIGEST);
+        when(identityMapper.existsById(17L)).thenReturn(true);
+        when(aiModelMapper.findEnabledIdsForShare(List.of(23L)))
+                .thenReturn(List.of(23L));
+        when(credentialService.generate()).thenReturn(generated);
+        doAnswer(invocation -> {
+            UserApiKey inserted = invocation.getArgument(0);
+            inserted.setId(11L);
+            return 1;
+        }).when(apiKeyMapper).insert(any(UserApiKey.class));
+        when(bloomService.beginPositiveMutation(DIGEST)).thenReturn(mutation);
+        when(modelMapper.upsertActiveBatch(eq(11L), eq(List.of(23L)), any()))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> service.create(
+                17L,
+                new CreateCommand(IDEMPOTENCY_KEY, null, List.of(modelPublicId))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("model grants");
+
+        rollbackSynchronizations();
+        verify(bloomService).rollbackPositiveMutation(mutation);
+        verify(bloomService, never()).commitPositiveMutation(mutation);
     }
 
     @Test
@@ -242,5 +347,11 @@ final class UserApiKeyServiceImplTest {
         synchronizations.forEach(TransactionSynchronization::afterCommit);
         synchronizations.forEach(synchronization -> synchronization.afterCompletion(
                 TransactionSynchronization.STATUS_COMMITTED));
+    }
+
+    private static void rollbackSynchronizations() {
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(synchronization -> synchronization.afterCompletion(
+                        TransactionSynchronization.STATUS_ROLLED_BACK));
     }
 }

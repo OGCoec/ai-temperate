@@ -419,6 +419,18 @@ public final class RedisKeyFactory {
     }
 
     /**
+     * 生成单次 API Key 创建意图的辅助锁 Key，原始用户 ID 与 UUIDv4 只能先组合为用途隔离 HMAC。
+     */
+    public String apiKeyCreateLockKey(HmacIdentifier requestIdentifier) {
+        return create(
+                "auth",
+                "uak",
+                "v1",
+                IdentifierType.API_KEY_CREATE_LOCK,
+                requireHmacIdentifier(requestIdentifier));
+    }
+
+    /**
      * 生成单个 API Key 的并发租约集合 Key，并与账号和全局集合在同一 Lua 中原子更新。
      */
     public String aiInferenceApiKeyConcurrencyKey(HmacIdentifier keyIdentifier) {
@@ -966,6 +978,7 @@ public final class RedisKeyFactory {
         AI_CONVERSATION_USER_CONCURRENCY("concurrency-user"),
         AI_INFERENCE_API_KEY_CONCURRENCY("concurrency-key"),
         API_KEY_CREDENTIAL("credential"),
+        API_KEY_CREATE_LOCK("create-lock"),
         AI_DIRECT_RESPONSE_OWNER("owner"),
         AI_DIRECT_RESPONSE_CANCEL("cancel"),
         AI_GENERATION_SNAPSHOT("snapshot"),

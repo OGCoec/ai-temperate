@@ -74,7 +74,7 @@ test('creates one full key and requires the server ETag to match rowVersion', as
 	const created = await apiKeyApi.create({
 		expiresAt: null,
 		modelPublicIds: ['AAAAAAAAAAI']
-	})
+	}, '550e8400-e29b-41d4-a716-446655440000')
 
 	assert.equal(created.value.apiKey, fullKey)
 	assert.equal(created.value.rowVersion, '3')
@@ -83,10 +83,29 @@ test('creates one full key and requires the server ETag to match rowVersion', as
 		'/api/users/me/api-keys',
 		{
 			method: 'POST',
+			headers: { 'Idempotency-Key': '550e8400-e29b-41d4-a716-446655440000' },
 			data: { expiresAt: null, modelPublicIds: ['AAAAAAAAAAI'] },
 			captureEtag: true
 		}
 	]])
+})
+
+test('replays an original expiry even after it passes so the server can resolve the UUID first', async () => {
+	const calls = []
+	const { apiKeyApi } = await loadApi(async (...args) => {
+		calls.push(args)
+		return {
+			data: { ...detail(), apiKey: `sk-${'A'.repeat(86)}` },
+			etag: '"v3"'
+		}
+	})
+
+	await apiKeyApi.create({
+		expiresAt: '2020-01-01T00:00:00Z',
+		modelPublicIds: ['AAAAAAAAAAI']
+	}, '550e8400-e29b-41d4-a716-446655440000')
+
+	assert.equal(calls[0][1].data.expiresAt, '2020-01-01T00:00:00Z')
 })
 
 test('loads detail with a string rowVersion and matching ETag', async () => {
@@ -194,6 +213,14 @@ test('rejects malformed public IDs duplicate grants and invalid lifecycle input 
 	await assert.rejects(() => apiKeyApi.create({
 		expiresAt: null,
 		modelPublicIds: ['AAAAAAAAAAI', 'AAAAAAAAAAI']
+	}, '550e8400-e29b-41d4-a716-446655440000'), error => error.code === 'API_KEY_INPUT_INVALID')
+	await assert.rejects(() => apiKeyApi.create({
+		expiresAt: null,
+		modelPublicIds: ['AAAAAAAAAAI']
+	}, '018f7777-2d11-7abc-8def-0123456789ab'), error => error.code === 'API_KEY_INPUT_INVALID')
+	await assert.rejects(() => apiKeyApi.create({
+		expiresAt: null,
+		modelPublicIds: ['AAAAAAAAAAI']
 	}), error => error.code === 'API_KEY_INPUT_INVALID')
 	await assert.rejects(() => apiKeyApi.update('AAAAAAAAAAE', 'W/"v3"', {
 		status: 'DELETED',

@@ -643,7 +643,7 @@ app:
     lookup-timeout: ${NETWORK_RISK_LOOKUP_TIMEOUT:8s}
     # 完整第三方结果缓存六小时，并由实现增加正负百分之二十抖动。
     positive-cache-ttl: ${NETWORK_RISK_POSITIVE_CACHE_TTL:6h}
-    # 本地 BIN 或默认六十分只短暂缓存三十秒，避免供应商恢复后新 IP 长时间继续收到不可用响应。
+    # 本地 BIN 或默认零分只短暂缓存三十秒，避免供应商恢复后新 IP 长时间继续被风险拦截。
     fallback-cache-ttl: ${NETWORK_RISK_FALLBACK_CACHE_TTL:30s}
     # 同一 IP 的跨实例 single-flight 锁只覆盖一次外部查询预算。
     single-flight-ttl: ${NETWORK_RISK_SINGLE_FLIGHT_TTL:9s}

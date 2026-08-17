@@ -79,18 +79,30 @@ test('H5 model surfaces expand to the workspace and reflow at 1200 and 1920 pixe
 	assert.match(detail, /\.model-detail-page\.is-android-client \.model-detail-shell/)
 })
 
-test('H5 profile and API Key surfaces use full-width responsive grids', () => {
+test('H5 profile uses a bounded settings workbench while API Key surfaces keep their responsive grid', () => {
 	const profile = read('components/user/workspace/user-profile-panel.vue')
 	const apiKeys = read('components/user/workspace/user-api-key-panel.vue')
 	const profileH5Styles = h5StyleRules(profile)
 	const apiKeysH5Styles = h5StyleRules(apiKeys)
 
-	assert.match(profile, /class="profile-content-grid"/)
+	assert.match(profile, /class="profile-workbench"/)
+	assert.match(profile, /class="profile-workbench-navigation"/)
 	assert.match(profileH5Styles,
-		/\.profile-shell\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none[^}]*margin:\s*0/)
+		/\.profile-shell\s*\{[^}]*width:\s*100%[^}]*max-width:\s*820px[^}]*margin:\s*0 auto/)
 	assert.match(profileH5Styles,
-		/@media screen and \(min-width:\s*1200px\)[\s\S]*\.profile-content-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)
+		/\.profile-workbench\s*\{[^}]*grid-template-columns:\s*124px\s+minmax\(0,\s*1fr\)[^}]*border-radius:\s*16px/)
+	assert.match(profileH5Styles,
+		/@media screen and \(min-width:\s*640px\) and \(max-width:\s*767px\)[\s\S]*\.profile-workbench\s*\{[^}]*grid-template-columns:\s*112px\s+minmax\(0,\s*1fr\)/)
+	assert.match(profileH5Styles,
+		/@media screen and \(max-width:\s*639px\)[\s\S]*\.profile-workbench\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+	assert.match(profileH5Styles,
+		/@media screen and \(max-width:\s*639px\)[\s\S]*\.profile-workbench-navigation\s*\{[^}]*overflow-x:\s*auto/)
+	assert.match(profileH5Styles,
+		/\.profile-workbench-content\s*\{[^}]*max-width:\s*none[^}]*padding:\s*20px 22px 24px/)
+	assert.doesNotMatch(profileH5Styles, /max-width:\s*(?:1400|920)px/)
+	assert.doesNotMatch(profileH5Styles, /minmax\(216px,\s*240px\)/)
 	assert.match(profile, /\.profile-page\.is-android-client \.profile-shell/)
+	assert.match(profile, /\.profile-page\.is-android-client \.profile-workbench-panel/)
 	assert.match(apiKeysH5Styles,
 		/\.api-key-shell\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none[^}]*margin:\s*0/)
 	assert.match(apiKeysH5Styles, /\.api-key-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)

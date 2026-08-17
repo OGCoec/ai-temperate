@@ -202,7 +202,7 @@ class IpIntelligenceServiceImplTest {
     }
 
     @Test
-    void providerFailuresUseLocalGeoAndShortFallbackCacheTtl() {
+    void providerFailuresAssignZeroTrustScoreAndUseShortFallbackCacheTtl() {
         Fixture fixture = fixture(Duration.ofSeconds(8));
         when(fixture.localGeoProvider().findGeo(IP))
                 .thenReturn(Optional.of(new LocalIpGeoResult(
@@ -229,7 +229,7 @@ class IpIntelligenceServiceImplTest {
         IpIntelligenceSnapshot result = lookup.snapshot();
 
         assertThat(lookup.initialCacheHit()).isFalse();
-        assertThat(result.trustScore()).isEqualTo(60);
+        assertThat(result.trustScore()).isZero();
         assertThat(result.countryCode()).isEqualTo("CA");
         assertThat(result.source()).isEqualTo(IpIntelligenceSource.LOCAL_BIN);
         assertStoredTtlBetween(
@@ -253,7 +253,7 @@ class IpIntelligenceServiceImplTest {
 
         IpIntelligenceSnapshot result = lookup.snapshot();
         assertThat(lookup.initialCacheHit()).isFalse();
-        assertThat(result.trustScore()).isEqualTo(60);
+        assertThat(result.trustScore()).isZero();
         assertThat(result.source()).isEqualTo(IpIntelligenceSource.DEFAULT);
         assertStoredTtlBetween(
                 fixture.cache(),
@@ -269,7 +269,7 @@ class IpIntelligenceServiceImplTest {
         IpIntelligenceSnapshot result = lookup.snapshot();
 
         assertThat(lookup.initialCacheHit()).isFalse();
-        assertThat(result.trustScore()).isEqualTo(60);
+        assertThat(result.trustScore()).isZero();
         assertThat(result.source()).isEqualTo(IpIntelligenceSource.DEFAULT);
         verifyNoInteractions(fixture.providers());
         assertStoredTtlBetween(

@@ -37,7 +37,13 @@
 			</view>
 		</button>
 
-		<uni-popup ref="popup" type="bottom" :safe-area="true" @change="onPopupChange">
+		<uni-popup
+			v-if="popupMounted"
+			ref="popup"
+			type="bottom"
+			:safe-area="true"
+			@change="onPopupChange"
+		>
 			<view
 				id="auth-country-dialog"
 				class="country-sheet"
@@ -134,6 +140,16 @@
 		computed: {
 			currentCountry() { return findPhoneCountryById(this.modelValue) },
 			countries() { return filterPhoneCountries(this.keyword) },
+			popupMounted() {
+				// H5 关闭时直接卸载 uni-popup，阻断其内部状态在页面恢复时自行显现。
+				// #ifdef H5
+				return this.isOpen
+				// #endif
+				// 非 H5 保留现有常驻弹层实例和原生交互行为。
+				// #ifndef H5
+				return true
+				// #endif
+			},
 			countryListKey() {
 				return this.keyword ? `search-${this.keyword.trim().toLowerCase()}` : 'all-countries'
 			}
@@ -147,12 +163,21 @@
 		mounted() {
 			// #ifdef H5
 			window.addEventListener('keydown', this.onWindowKeydown)
+			window.addEventListener('pagehide', this.dismissForPageExit)
 			// #endif
 		},
 		beforeUnmount() {
 			clearTimeout(this.scrollTimer)
 			// #ifdef H5
 			window.removeEventListener('keydown', this.onWindowKeydown)
+			window.removeEventListener('pagehide', this.dismissForPageExit)
+			this.isOpen = false
+			// #endif
+		},
+		deactivated() {
+			// H5 进入页面缓存前清掉弹层状态，返回页面时保持关闭。
+			// #ifdef H5
+			this.dismissForPageExit()
 			// #endif
 		},
 		methods: {
@@ -161,12 +186,42 @@
 				clearTimeout(this.scrollTimer)
 				this.keyword = ''
 				this.scrollTarget = ''
+				// H5 先由唯一的外部状态挂载弹层，再调用 uni-popup 动画入口。
+				// #ifdef H5
+				this.isOpen = true
+				this.$nextTick(() => {
+					if (!this.isOpen) return
+					const popup = this.$refs.popup
+					if (!popup?.open) {
+						this.onPopupChange({ show: false })
+						return
+					}
+					popup.open('bottom')
+				})
+				return
+				// #endif
+				// #ifndef H5
 				this.$refs.popup.open('bottom')
+				// #endif
 			},
 			closePicker() {
 				if (!this.isOpen) return false
-				this.$refs.popup.close()
+				const popup = this.$refs.popup
+				if (!popup?.close) {
+					this.onPopupChange({ show: false })
+					return true
+				}
+				popup.close()
 				return true
+			},
+			dismissForPageExit() {
+				if (!this.isOpen) return
+				clearTimeout(this.scrollTimer)
+				this.isOpen = false
+				this.keyword = ''
+				this.scrollTarget = ''
+				this.searchFocused = false
+				this.$emit('visibility-change', false)
 			},
 			onPopupChange(event) {
 				this.isOpen = Boolean(event.show)

@@ -76,7 +76,7 @@
 				</view>
 				<view class="workspace-drawer-account-copy">
 					<text class="workspace-drawer-account-name">{{ drawerDisplayName }}</text>
-					<text class="workspace-drawer-account-hint">查看个人资料</text>
+					<text class="workspace-drawer-account-hint">账号管理</text>
 				</view>
 				<uni-icons type="right" size="16" color="#718078" aria-hidden="true" />
 			</button>
@@ -87,9 +87,11 @@
 			<user-primary-navigation
 				v-if="androidClient"
 				:active-destination="activeDestination"
+				:show-api-keys="androidClient"
 				variant="drawer"
 				@destination-click="selectDrawerDestination"
 			/>
+			<view v-if="androidClient" class="workspace-drawer-divider" aria-hidden="true"></view>
 			<user-recent-conversations
 				content-id="workspace-mobile-recent"
 				:compact="androidClient"
@@ -310,6 +312,13 @@
 		gap: 7px;
 		border-radius: 10px;
 		font-size: 13px;
+	}
+	.workspace-drawer-divider {
+		width: 100%;
+		height: 1px;
+		margin: 4px 0;
+		flex: 0 0 1px;
+		background: rgba(151, 170, 160, .14);
 	}
 
 	.workspace-history-drawer.is-open {

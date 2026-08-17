@@ -75,18 +75,19 @@ test('API Key back handling closes overlays before returning to profile without 
 	assert.match(workspace,
 		/selectDestination\(destination\)[\s\S]*activeDestination === 'apiKeys'[\s\S]*apiKeyPanel\?\.closeIfOpen\(\)/)
 	assert.match(backHandler,
-		/closeIfOpen\(\)[\s\S]*activeDestination === 'apiKeys'[\s\S]*selectDestination\('profile'\)[\s\S]*drawerOpen[\s\S]*return false/)
+		/drawerOpen[\s\S]*closeIfOpen\(\)[\s\S]*activeDestination === 'apiKeys'[\s\S]*selectDestination\('profile'\)[\s\S]*return false/)
 	assert.doesNotMatch(backHandler, /returnToProfile|uni\.navigateBack|uni\.redirectTo/)
 })
 
-test('workspace reserves the remaining grid width and exposes one accessible sidebar toggle', () => {
+test('workspace reserves the effective sidebar width and exposes one accessible sidebar toggle', () => {
 	const workspace = read('components/user/user-workspace.vue')
 
 	assert.match(workspace, /:class="workspaceClass"/)
-	assert.match(workspace, /:open="sidebarOpen"/)
+	assert.match(workspace, /:open="effectiveSidebarOpen"/)
 	assert.match(workspace, /:mode="sidebarMode"/)
+	assert.match(workspace, /:presentation="sidebarPresentation"/)
 	assert.match(workspace, /aria-controls="workspace-conversation-sidebar"/)
-	assert.match(workspace, /:aria-expanded="String\(sidebarOpen\)"/)
+	assert.match(workspace, /:aria-expanded="String\(effectiveSidebarOpen\)"/)
 	assert.match(workspace, /@click="toggleSidebar"/)
 	assert.match(workspace, /this\.\$refs\.sidebarToggle/)
 	assert.doesNotMatch(workspace, /(?:localStorage|setStorageSync)\([^)]*sidebar/i)
@@ -95,6 +96,30 @@ test('workspace reserves the remaining grid width and exposes one accessible sid
 	assert.match(workspace,
 		/\.user-workspace-content\s*\{[^}]*max-width:\s*100%[^}]*min-width:\s*0/)
 	assert.match(workspace, /\.user-workspace\s*\{[^}]*overflow:\s*hidden/)
+})
+
+test('H5 account destinations use a 72 pixel rail without overwriting the saved sidebar preference', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const sidebar = read('components/user/user-h5-workspace-sidebar.vue')
+	const presentationResolver = workspace.match(
+		/sidebarPresentation\(\)\s*\{[\s\S]*?\n\s*\}/
+	)?.[0] || ''
+
+	assert.match(presentationResolver,
+		/sidebarMode === 'push'[\s\S]*\['profile', 'apiKeys'\]\.includes\(this\.activeDestination\)[\s\S]*\? 'rail'[\s\S]*: 'full'/)
+	assert.match(workspace,
+		/effectiveSidebarOpen\(\)[\s\S]*sidebarPresentation === 'rail'[\s\S]*this\.sidebarOpen/)
+	assert.match(workspace,
+		/effectiveSidebarWidth\(\)[\s\S]*sidebarPresentation === 'rail'\s*\?\s*72\s*:\s*this\.sidebarWidth/)
+	assert.match(workspace,
+		/workspaceStyle\(\)[\s\S]*--workspace-sidebar-width[\s\S]*effectiveSidebarWidth/)
+	assert.doesNotMatch(presentationResolver, /sidebarPreferenceTouched\s*=/)
+	assert.match(sidebar,
+		/presentation:\s*\{[\s\S]*default:\s*'full'[\s\S]*\['full', 'rail'\]\.includes\(value\)/)
+	assert.match(sidebar, /class="workspace-rail-chat"/)
+	assert.match(sidebar, /workspace-sidebar\.is-rail\s*\{[^}]*width:\s*72px/)
+	assert.match(sidebar, /v-if="presentation === 'full'"[\s\S]*user-recent-conversations/)
+	assert.match(sidebar, /handleOpenState\(value\)[\s\S]*presentation === 'rail'[\s\S]*return/)
 })
 
 test('H5 sidebar breakpoints use overlay below 768 and push tracks at 240 or 272 pixels', async () => {
@@ -159,8 +184,9 @@ test('workspace sidebar is a focused conversation surface with close and account
 	assert.match(sidebar, /@click="\$emit\('destination-click', 'profile'\)"/)
 	assert.match(sidebar, /ref="sidebar"/)
 	assert.match(sidebar, /tabindex="-1"/)
-	assert.match(sidebar, /@keydown\.esc\.stop="requestClose"/)
+	assert.match(sidebar, /@keydown\.esc\.stop="handleEscape"/)
 	assert.match(sidebar, /@keydown\.tab="trapSidebarFocus"/)
+	assert.match(sidebar, /handleEscape\(\)[\s\S]*presentation === 'full'[\s\S]*requestClose\(\)/)
 	assert.match(sidebar, /document\.body\.style\.overflow = 'hidden'/)
 	assert.match(sidebar, /if \(this\.mode !== 'overlay'\) return/)
 	assert.match(sidebar, /min\(88vw, 360px\)/)
@@ -172,10 +198,12 @@ test('Android moves primary navigation into the drawer while H5 keeps the existi
 
 	assert.match(sidebar, /v-if="!androidClient"[\s\S]*<user-primary-navigation/)
 	assert.match(sidebar, /v-if="androidClient"[\s\S]*variant="drawer"/)
+	assert.match(sidebar, /:show-api-keys="androidClient"/)
 	assert.match(sidebar, /getCurrentUserProfile\(\)/)
 	assert.match(sidebar, /class="workspace-drawer-account"[\s\S]*@click="selectDrawerDestination\('profile'\)"/)
 	assert.match(sidebar, /selectDrawerDestination\(destination\)[\s\S]*\$emit\('destination-click', destination\)[\s\S]*\$emit\('close-drawer'\)/)
 	assert.match(navigation, /variant === 'drawer'/)
+	assert.match(navigation, /showApiKeys:\s*\{[\s\S]*type:\s*Boolean[\s\S]*default:\s*false/)
 	assert.match(navigation, /\.user-primary-navigation\.is-drawer[\s\S]*position:\s*static/)
 	assert.match(sidebar, /width:\s*min\(70vw,\s*288px\)/)
 	assert.doesNotMatch(sidebar, />\s*(?:搜索|设置)\s*</)
@@ -194,6 +222,12 @@ test('Android drawer uses compact density without changing H5 navigation or conv
 	assert.match(navigation, /\.is-drawer \.user-primary-navigation-inner\s*\{[^}]*gap:\s*0/)
 	assert.match(navigation, /\.is-drawer \.user-primary-navigation-item\s*\{[^}]*min-height:\s*44px[^}]*font-size:\s*13px/)
 	assert.equal((navigation.match(/@click="navigate\('(chat|models|profile)'\)"/g) || []).length, 3)
+	assert.match(navigation, /v-if="showApiKeys"[\s\S]*@click="navigate\('apiKeys'\)"/)
+	assert.ok(navigation.indexOf("navigate('chat')") < navigation.indexOf("navigate('models')"))
+	assert.ok(navigation.indexOf("navigate('models')") < navigation.indexOf("navigate('profile')"))
+	assert.ok(navigation.indexOf("navigate('profile')") < navigation.indexOf("navigate('apiKeys')"))
+	assert.match(sidebar, /v-if="androidClient"\s+class="workspace-drawer-divider"/)
+	assert.match(sidebar, /\.workspace-drawer-divider\s*\{[^}]*height:\s*1px[^}]*background:/)
 	assert.match(recent, /\.recent-conversations\.is-compact \.recent-toggle\s*\{[^}]*min-height:\s*40px/)
 	assert.match(recent, /\.recent-conversations\.is-compact \.conversation-row\s*\{[^}]*height:\s*40px[^}]*margin:\s*0/)
 	assert.match(recent, /\.recent-conversations\.is-compact \.conversation-open\s*\{[^}]*min-height:\s*40px[^}]*font-size:\s*12px/)
@@ -244,7 +278,7 @@ test('Android workspace panels retain a drawer entry and delegate system back ha
 	assert.match(modelCatalog, /@click="\$emit\('open-conversation-drawer'\)"/)
 	assert.match(modelDetail, /@click="\$emit\('open-conversation-drawer'\)"/)
 	assert.match(profilePanel, /@click="\$emit\('open-conversation-drawer'\)"/)
-	assert.match(workspace, /handleBackPress\(\)[\s\S]*closeIfOpen\(\)[\s\S]*drawerOpen[\s\S]*return false/)
+	assert.match(workspace, /handleBackPress\(\)[\s\S]*drawerOpen[\s\S]*closeIfOpen\(\)[\s\S]*return false/)
 	for (const page of entries) {
 		assert.match(page, /onBackPress\(\)[\s\S]*handleBackPress\(\)/)
 	}
@@ -330,24 +364,22 @@ test('chat composer removes manual motion controls and follows the system on eve
 	assert.doesNotMatch(mounted, /this\.androidClient|snapshot\.preference/)
 })
 
-test('Android uses the compact two-row composer and keeps H5 picker controls', () => {
+test('Android keeps its custom sheet while H5 uses the custom generation settings surface', () => {
 	const chatPanel = read('components/user/workspace/user-chat-panel.vue')
+	const h5Settings = read('components/user/workspace/user-h5-generation-settings.vue')
 	const androidComposer = chatPanel.slice(
 		chatPanel.indexOf('class="android-composer-tools"'),
 		chatPanel.indexOf('<view v-if="!androidClient" class="composer-meta"')
-	)
-	const h5Controls = chatPanel.slice(
-		chatPanel.indexOf('<view v-if="!androidClient" class="composer-meta"'),
-		chatPanel.indexOf('<text v-if="pendingAttachments.length')
 	)
 
 	assert.match(androidComposer, /user-android-chat-settings-sheet/)
 	assert.match(androidComposer, /user-context-usage-sheet/)
 	assert.match(androidComposer, /user-model-provider-mark/)
 	assert.doesNotMatch(androidComposer, /<picker\b/)
-	assert.match(h5Controls, /<picker\b/)
-	assert.match(h5Controls, /class="composer-note"/)
-	assert.doesNotMatch(h5Controls, /user-model-provider-mark/)
+	assert.match(chatPanel, /<user-h5-generation-settings/)
+	assert.doesNotMatch(h5Settings, /<picker\b/)
+	assert.match(chatPanel, /<!-- #ifndef H5 -->[\s\S]*<picker\b[\s\S]*<!-- #endif -->/)
+	assert.match(chatPanel, /class="composer-note"/)
 	assert.match(chatPanel, /\.is-android-client\s*\{[\s\S]*padding-bottom:\s*0/)
 })
 

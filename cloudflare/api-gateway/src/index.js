@@ -454,7 +454,7 @@ async function h5ResourceResponse(request, env, route, fetchImpl) {
 	}
 	const sourceUrl = new URL(request.url)
 	const targetUrl = new URL(
-		route.h5Resource === 'page' ? '/index.html' : sourceUrl.pathname,
+		route.h5Resource === 'page' ? '/' : sourceUrl.pathname,
 		pagesOrigin)
 	if (route.h5Resource === 'asset') {
 		targetUrl.search = sourceUrl.search
@@ -484,9 +484,8 @@ async function h5ResourceResponse(request, env, route, fetchImpl) {
 	} catch {
 		return plainSiteError(502, 'Bad Gateway')
 	}
-	if ((upstream.status >= 300 && upstream.status < 400)
-		|| (upstream.status !== 304
-			&& (upstream.status < 200 || upstream.status >= 300))) {
+	if (upstream.status !== 304
+		&& (upstream.status < 200 || upstream.status >= 300)) {
 		return plainSiteError(502, 'Bad Gateway')
 	}
 	const contentType = headerValue(upstream.headers, 'Content-Type')
@@ -511,7 +510,8 @@ async function h5ResourceResponse(request, env, route, fetchImpl) {
 			'Cache-Control', 'public, max-age=31536000, immutable')
 	}
 	return new Response(
-		request.method === 'HEAD' ? null : upstream.body,
+		request.method === 'HEAD' || upstream.status === 304
+			? null : upstream.body,
 		{
 			status: upstream.status,
 			statusText: upstream.statusText,

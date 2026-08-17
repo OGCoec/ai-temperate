@@ -12,6 +12,7 @@ import com.example.temperate.service.user.apikey.cache.ApiKeyAuthenticationCache
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apikey.credential.ApiKeyCredentialService;
 import com.example.temperate.service.user.apikey.credential.GeneratedApiKey;
+import com.example.temperate.service.user.apikey.idempotency.ApiKeyCreateLockService;
 import com.example.temperate.service.user.apikey.management.ApiKeyCursorCodec;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementErrorCode;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementException;
@@ -39,9 +40,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 该实现是来在 PostgreSQL 本地事务中编排 API Key CRUD 和模型授权全量替换，并在提交后失效缓存、收敛 Bloom，绝不执行物理删除。
+ * 该实现是来在 PostgreSQL 本地事务中编排 API Key 幂等创建、CRUD 和模型授权全量替换，并在提交后失效缓存、收敛 Bloom，绝不执行物理删除。
  */
 @Service
 public final class UserApiKeyServiceImpl implements UserApiKeyService {
@@ -59,6 +61,8 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     private final ApiKeyCredentialService credentialService;
     private final ApiKeyAuthenticationCache authenticationCache;
     private final ApiKeyBloomService bloomService;
+    private final ApiKeyCreateLockService createLockService;
+    private final TransactionTemplate transactionTemplate;
     private final ApiKeyProperties properties;
     private final PublicIdCodec publicIdCodec;
     private final ApiKeyCursorCodec cursorCodec;
@@ -72,6 +76,8 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
             ApiKeyCredentialService credentialService,
             ApiKeyAuthenticationCache authenticationCache,
             ApiKeyBloomService bloomService,
+            ApiKeyCreateLockService createLockService,
+            TransactionTemplate transactionTemplate,
             ApiKeyProperties properties,
             PublicIdCodec publicIdCodec,
             Clock clock) {
@@ -82,6 +88,8 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         this.credentialService = Objects.requireNonNull(credentialService);
         this.authenticationCache = Objects.requireNonNull(authenticationCache);
         this.bloomService = Objects.requireNonNull(bloomService);
+        this.createLockService = Objects.requireNonNull(createLockService);
+        this.transactionTemplate = Objects.requireNonNull(transactionTemplate);
         this.properties = Objects.requireNonNull(properties);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
         this.cursorCodec = new ApiKeyCursorCodec();
@@ -89,35 +97,68 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
-    @Transactional
     public Created create(long loginIdentityId, CreateCommand command) {
         requireEnabled();
         requireUser(loginIdentityId);
+        if (command == null || command.idempotencyKey() == null) {
+            throw invalid("API Key create command is required");
+        }
+        if (command.idempotencyKey().version() != 4
+                || command.idempotencyKey().variant() != 2) {
+            throw new ApiKeyManagementException(
+                    ApiKeyManagementErrorCode.IDEMPOTENCY_KEY_INVALID,
+                    "API Key idempotency key must be UUIDv4");
+        }
+        // 锁包裹整个 TransactionTemplate，execute 返回时 PostgreSQL 已提交，随后 finally 才允许释放辅助锁。
+        return createLockService.execute(
+                loginIdentityId,
+                command.idempotencyKey(),
+                () -> Objects.requireNonNull(
+                        transactionTemplate.execute(
+                                status -> createInTransaction(loginIdentityId, command)),
+                        "API Key create transaction returned no result"));
+    }
+
+    /**
+     * 数据库唯一约束是最终幂等裁决者；只有 INSERT 实际成功的请求才允许写模型授权、Bloom 并返回一次明文。
+     */
+    private Created createInTransaction(
+            long loginIdentityId,
+            CreateCommand command) {
         if (!identityMapper.existsById(loginIdentityId)) {
             throw notFound();
         }
-        if (command == null) {
-            throw invalid("API Key create command is required");
+        if (apiKeyMapper.findByCreateIdempotencyKey(command.idempotencyKey()) != null) {
+            throw alreadyCompleted();
         }
         OffsetDateTime now = now();
         validateFutureExpiry(command.expiresAt(), now);
         List<Long> modelIds = decodeAndValidateModels(command.modelPublicIds(), 1);
         GeneratedApiKey generated = credentialService.generate();
 
-        // 数据库新增前先把 Bloom 置为 DEGRADED；进程崩溃时认证会回源，而不会错误拒绝新 Key。
-        ApiKeyBloomService.PositiveMutation mutation =
-                bloomService.beginPositiveMutation(generated.digest());
-        registerPositiveMutation(generated.digest(), mutation);
-
         UserApiKey entity = new UserApiKey();
         entity.setLoginIdentityId(loginIdentityId);
+        entity.setCreateIdempotencyKey(command.idempotencyKey());
         entity.setKeyDigest(generated.digest());
         entity.setKeyHint(generated.hint());
         entity.setStatus(STATUS_ENABLED);
         entity.setExpiresAt(command.expiresAt());
-        if (apiKeyMapper.insert(entity) != 1 || entity.getId() == null) {
+        int inserted = apiKeyMapper.insert(entity);
+        if (inserted == 0) {
+            // ON CONFLICT 不会让事务进入 aborted；回查只用于把唯一索引裁决转换为稳定业务错误。
+            if (apiKeyMapper.findByCreateIdempotencyKey(command.idempotencyKey()) != null) {
+                throw alreadyCompleted();
+            }
+            throw new IllegalStateException("API Key idempotency conflict row disappeared");
+        }
+        if (inserted != 1 || entity.getId() == null) {
             throw new IllegalStateException("API Key insert did not affect exactly one row");
         }
+
+        // 插入成功后、事务提交前把 Bloom 置为 DEGRADED；崩溃或回滚时认证会回源而不会错误拒绝新 Key。
+        ApiKeyBloomService.PositiveMutation mutation =
+                bloomService.beginPositiveMutation(generated.digest());
+        registerPositiveMutation(generated.digest(), mutation);
         if (modelGrantMapper.upsertActiveBatch(entity.getId(), modelIds, now) != modelIds.size()) {
             throw new IllegalStateException("API Key model grants were not fully inserted");
         }
@@ -491,6 +532,12 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         return new ApiKeyManagementException(
                 ApiKeyManagementErrorCode.API_KEY_NOT_FOUND,
                 "API Key was not found");
+    }
+
+    private static ApiKeyManagementException alreadyCompleted() {
+        return new ApiKeyManagementException(
+                ApiKeyManagementErrorCode.API_KEY_CREATE_ALREADY_COMPLETED,
+                "API Key creation was already completed");
     }
 
     private static ApiKeyManagementException versionConflict() {

@@ -34,6 +34,8 @@ final class CurrentUserApiKeyControllerResponsePolicyTest {
     private static final SessionPrincipal PRINCIPAL =
             new SessionPrincipal(7L, "ARCRqojCEAA", "API Key Test User");
     private static final ApiKeyPublicId API_KEY_ID = new ApiKeyPublicId("AAAAAAAAAAE");
+    private static final String IDEMPOTENCY_KEY =
+            "550e8400-e29b-41d4-a716-446655440000";
 
     @Test
     void allManagementResponsesDisableCachingAndRepresentationTransforms() {
@@ -43,6 +45,7 @@ final class CurrentUserApiKeyControllerResponsePolicyTest {
         List<ResponseEntity<?>> responses = List.of(
                 controller.create(
                         PRINCIPAL,
+                        IDEMPOTENCY_KEY,
                         new CurrentUserApiKeyController.CreateRequest(
                                 EXPIRES_AT,
                                 List.of("ARRtIXbCEAA"))),
@@ -80,6 +83,7 @@ final class CurrentUserApiKeyControllerResponsePolicyTest {
 
         assertThat(controller.create(
                 PRINCIPAL,
+                IDEMPOTENCY_KEY,
                 new CurrentUserApiKeyController.CreateRequest(
                         EXPIRES_AT,
                         List.of("ARRtIXbCEAA"))).getHeaders().getETag())

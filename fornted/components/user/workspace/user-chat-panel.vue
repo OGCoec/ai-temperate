@@ -518,7 +518,7 @@
 					title="模型与能力"
 					:max-visible-items="6"
 					platform-mode="native"
-					@change="handleAndroidSettingsChange"
+					@change="handleGenerationSettingsChange"
 					@close="restoreAndroidSettingsFocus"
 				/>
 				<view v-if="!androidClient" class="composer-meta">
@@ -528,6 +528,7 @@
 							ref="generationSettingsTrigger"
 							class="generation-settings-trigger"
 							type="button"
+							:disabled="generating || !models.length"
 							aria-haspopup="dialog"
 							aria-controls="h5-generation-settings"
 							:aria-expanded="String(generationSettingsOpen)"
@@ -537,40 +538,53 @@
 							<text>{{ generationSettingsSummary }}</text>
 							<uni-icons :type="generationSettingsOpen ? 'up' : 'down'" size="13" color="#9ba6a0" aria-hidden="true" />
 						</button>
-						<transition name="generation-settings-backdrop-motion">
-							<view
-								v-if="generationSettingsOpen"
-								class="generation-settings-backdrop"
-								aria-hidden="true"
-								@click="closeGenerationSettings"
-							></view>
-						</transition>
-						<transition name="generation-settings-surface-motion">
-							<view
-								v-if="generationSettingsOpen"
-								id="h5-generation-settings"
-								ref="generationSettingsPanel"
-								class="generation-settings-panel"
-								:class="`is-${generationSettingsPresentation}`"
-								role="dialog"
-								aria-modal="true"
-								aria-label="生成设置"
-								tabindex="-1"
-								@keydown.esc.stop.prevent="closeGenerationSettings"
-								@keydown.tab="trapGenerationSettingsFocus"
-							>
-							<view class="generation-settings-heading">
-								<view>
-									<text class="generation-settings-title">生成设置</text>
-									<text class="generation-settings-caption">模型、推理、联网与媒体参数</text>
+						<user-h5-generation-settings
+							ref="h5GenerationSettings"
+							:open="generationSettingsOpen"
+							:presentation="generationSettingsPresentation"
+							:models="models"
+							:selected-model-index="selectedModelIndex"
+							:sections="generationSettingsSections"
+							:disabled="generating || !models.length"
+							:loading="modelsLoading"
+							:summary="generationSettingsSummary"
+							@change="handleGenerationSettingsChange"
+							@close="closeGenerationSettings"
+						>
+							<template #context>
+								<view
+									v-if="contextUsage"
+									class="context-usage"
+									:class="`is-${contextUsageTone}`"
+									role="status"
+								>
+									<user-thinking-orb
+										v-if="contextCompactionPresentation"
+										:state="contextCompactionPresentation.state"
+										:size="20"
+										:reduced="motionReduced"
+										:aria-label="contextCompactionPresentation.label"
+									/>
+									<view class="context-usage-copy">
+										<text>{{ contextUsageLabel }}</text>
+										<text v-if="contextCompactionActive" class="context-usage-status">正在压缩上下文</text>
+										<text v-else-if="contextUsage.compactionStatus === 'FAILED'" class="context-usage-status">压缩失败</text>
+									</view>
+									<view
+										class="context-usage-track"
+										role="progressbar"
+										aria-label="上下文用量"
+										aria-valuemin="0"
+										aria-valuemax="100"
+										:aria-valuenow="String(contextUsageProgress)"
+									>
+										<view class="context-usage-fill" :style="{ width: `${contextUsageProgress}%` }"></view>
+									</view>
 								</view>
-								<button class="generation-settings-close" type="button" aria-label="关闭生成设置" @click="closeGenerationSettings">
-									<uni-icons type="closeempty" size="21" color="#dce5e0" aria-hidden="true" />
-								</button>
-							</view>
-							<scroll-view class="generation-settings-scroll" scroll-y>
-								<view class="generation-settings-fields">
+							</template>
+						</user-h5-generation-settings>
 						<!-- #endif -->
+						<!-- #ifndef H5 -->
 						<user-model-selector
 							class="model-picker-control"
 							:options="models"
@@ -581,20 +595,20 @@
 							presentation="embedded"
 							@change="selectModel"
 						/>
-							<view
-								v-if="contextUsage"
-								class="context-usage"
-								:class="`is-${contextUsageTone}`"
-								role="status"
-							>
-								<user-thinking-orb
-									v-if="contextCompactionPresentation"
-									:state="contextCompactionPresentation.state"
-									:size="20"
-									:reduced="motionReduced"
-									:aria-label="contextCompactionPresentation.label"
-								/>
-								<view class="context-usage-copy">
+						<view
+							v-if="contextUsage"
+							class="context-usage"
+							:class="`is-${contextUsageTone}`"
+							role="status"
+						>
+							<user-thinking-orb
+								v-if="contextCompactionPresentation"
+								:state="contextCompactionPresentation.state"
+								:size="20"
+								:reduced="motionReduced"
+								:aria-label="contextCompactionPresentation.label"
+							/>
+							<view class="context-usage-copy">
 								<text>{{ contextUsageLabel }}</text>
 								<text v-if="contextCompactionActive" class="context-usage-status">正在压缩上下文</text>
 								<text v-else-if="contextUsage.compactionStatus === 'FAILED'" class="context-usage-status">压缩失败</text>
@@ -609,7 +623,7 @@
 							>
 								<view class="context-usage-fill" :style="{ width: `${contextUsageProgress}%` }"></view>
 							</view>
-							</view>
+						</view>
 						<button
 							v-if="multipleImageOutputsAvailable"
 							ref="imageOutputCountTrigger"
@@ -703,11 +717,6 @@
 								<uni-icons type="down" size="14" color="#9bc8ec" />
 							</view>
 						</picker>
-						<!-- #ifdef H5 -->
-								</view>
-							</scroll-view>
-							</view>
-						</transition>
 						<!-- #endif -->
 					</view>
 					<text class="composer-note">模型可能会出错，请核查重要信息。</text>
@@ -716,11 +725,13 @@
 				<text v-if="composerError" class="composer-error" role="alert">{{ composerError }}</text>
 				<text class="visually-hidden" role="status" aria-live="polite">{{ voiceAnnouncement }}</text>
 			</view>
+			<!-- #ifndef H5 -->
 			<user-image-output-count-dialog
 				ref="imageOutputCountDialog"
 				@confirm="selectImageOutputCount"
 				@close="restoreImageOutputCountFocus"
 			/>
+			<!-- #endif -->
 			<user-generated-image-viewer
 				:open="imageViewerOpen"
 				:items="imageViewerItems"
@@ -901,6 +912,7 @@
 	import UserContextUsageSheet from './user-context-usage-sheet.vue'
 	import UserGeneratedImageGallery from './user-generated-image-gallery.vue'
 	import UserGeneratedImageViewer from './user-generated-image-viewer.vue'
+	import UserH5GenerationSettings from './user-h5-generation-settings.vue'
 	import UserImageOutputCountDialog from './user-image-output-count-dialog.vue'
 	import UserMarkdownMessage from './user-markdown-message.vue'
 	import UserMediaUploadProgress from './user-media-upload-progress.vue'
@@ -1128,6 +1140,7 @@
 			UserContextUsageSheet,
 			UserGeneratedImageGallery,
 			UserGeneratedImageViewer,
+			UserH5GenerationSettings,
 			UserImageOutputCountDialog,
 			UserMarkdownMessage,
 			UserMediaUploadProgress,
@@ -1405,37 +1418,46 @@
 				return Math.max(0, this.imageOutputCountOptions.findIndex(option =>
 					option.value === this.selectedImageOutputCount))
 			},
-			androidSettingsSections() {
+			generationSettingsSections() {
 				if (this.videoGenerationAvailable) {
 					return [
-						this.androidSettingsSection('videoMode', '模式', this.videoModeOptions,
+						this.generationSettingsSection('videoMode', '模式', this.videoModeOptions,
 							this.selectedVideoModeIndex),
-						this.androidSettingsSection('videoResolution', '清晰度', this.videoResolutionOptions,
+						this.generationSettingsSection('videoResolution', '清晰度', this.videoResolutionOptions,
 							this.selectedVideoResolutionIndex),
-						this.androidSettingsSection('videoAspect', '比例', this.videoAspectOptions,
+						this.generationSettingsSection('videoAspect', '比例', this.videoAspectOptions,
 							this.selectedVideoAspectIndex),
-						this.androidSettingsSection('videoDuration', '时长', this.videoDurationOptions,
-							this.selectedVideoDurationIndex)
+						this.generationSettingsSection('videoDuration', '时长', this.videoDurationOptions,
+							this.selectedVideoDurationIndex, { h5: 'grid' })
 					].filter(Boolean)
 				}
 				if (this.imageGenerationAvailable) {
 					return [
-						this.androidSettingsSection('imageQuality', '画质', this.reasoningEffortOptions,
+						this.generationSettingsSection('imageQuality', '画质', this.reasoningEffortOptions,
 							this.selectedReasoningEffortIndex),
-						this.androidSettingsSection('imageAspect', '比例', this.imageAspectOptions,
+						this.generationSettingsSection('imageAspect', '比例', this.imageAspectOptions,
 							this.selectedImageAspectIndex),
 						this.multipleImageOutputsAvailable
-							? this.androidSettingsSection('imageCount', '张数', this.imageOutputCountOptions,
-								this.selectedImageOutputCountIndex, 'rows')
+							? this.generationSettingsSection('imageCount', '张数', this.imageOutputCountOptions,
+								this.selectedImageOutputCountIndex, { h5: 'grid', android: 'rows' })
 							: null
 					].filter(Boolean)
 				}
 				return [
-					this.androidSettingsSection('reasoning', '推理强度', this.reasoningEffortOptions,
+					this.generationSettingsSection('reasoning', '推理强度', this.reasoningEffortOptions,
 						this.selectedReasoningEffortIndex),
-					this.androidSettingsSection('webSearch', '联网搜索', this.webSearchOptions,
-						this.selectedWebSearchModeIndex, '', !this.webSearchAvailable)
+					this.generationSettingsSection('webSearch', '联网搜索', this.webSearchOptions,
+						this.selectedWebSearchModeIndex, {
+							disabled: !this.webSearchAvailable,
+							hiddenOnH5: !this.webSearchAvailable
+						})
 				].filter(Boolean)
+			},
+			androidSettingsSections() {
+				return this.generationSettingsSections.map(section => Object.freeze({
+					...section,
+					presentation: section.presentations.android
+				}))
 			},
 			generationSettingsPresentation() {
 				return resolveH5GenerationSettingsPresentation(this.h5WindowWidth)
@@ -1644,16 +1666,20 @@
 			}
 		},
 		methods: {
-			androidSettingsSection(key, label, options, selectedIndex,
-				presentation = '', disabled = false) {
+			generationSettingsSection(key, label, options, selectedIndex, config = {}) {
 				if (!Array.isArray(options) || !options.length) return null
+				const fallback = options.length <= 4 ? 'segmented' : 'rows'
 				return Object.freeze({
 					key,
 					label,
 					options,
 					selectedIndex,
-					disabled: this.generating || disabled,
-					presentation: presentation || (options.length <= 4 ? 'segmented' : 'rows')
+					disabled: this.generating || config.disabled === true,
+					hiddenOnH5: config.hiddenOnH5 === true,
+					presentations: Object.freeze({
+						h5: config.h5 || fallback,
+						android: config.android || fallback
+					})
 				})
 			},
 			openAndroidSettings() {
@@ -1667,7 +1693,7 @@
 					trigger?.$el?.focus?.()
 				})
 			},
-			handleAndroidSettingsChange(event) {
+			handleGenerationSettingsChange(event) {
 				if (!event?.key || !event?.detail) return
 				const handlers = {
 					model: this.selectModel,
@@ -1688,6 +1714,7 @@
 				if (typeof handler === 'function') handler.call(this, event)
 			},
 			closeIfOpen() {
+				if (this.$refs.h5GenerationSettings?.closeIfOpen?.()) return true
 				if (this.$refs.androidSettingsSheet?.closeIfOpen?.()) return true
 				return this.$refs.contextUsageSheet?.closeIfOpen?.() === true
 			},
@@ -3917,17 +3944,12 @@
 				uni.previewImage({ current: source, urls })
 			},
 			toggleGenerationSettings() {
-				if (this.androidClient) return
+				if (this.androidClient || this.generating || !this.models.length) return
 				if (this.generationSettingsOpen) {
 					this.closeGenerationSettings()
 					return
 				}
 				this.generationSettingsOpen = true
-				this.$nextTick(() => {
-					const panel = this.$refs.generationSettingsPanel
-					const element = panel?.$el || panel
-					element?.focus?.({ preventScroll: true })
-				})
 			},
 			closeGenerationSettings() {
 				if (!this.generationSettingsOpen) return
@@ -3937,29 +3959,6 @@
 					const element = trigger?.$el || trigger
 					element?.focus?.({ preventScroll: true })
 				})
-			},
-			trapGenerationSettingsFocus(event) {
-				// #ifdef H5
-				const panel = this.$refs.generationSettingsPanel?.$el
-					|| this.$refs.generationSettingsPanel
-				const focusable = Array.from(panel?.querySelectorAll?.(
-					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-				) || [])
-				if (!focusable.length) {
-					event.preventDefault()
-					panel?.focus?.()
-					return
-				}
-				const first = focusable[0]
-				const last = focusable[focusable.length - 1]
-				if (event.shiftKey && document.activeElement === first) {
-					event.preventDefault()
-					last.focus()
-				} else if (!event.shiftKey && document.activeElement === last) {
-					event.preventDefault()
-					first.focus()
-				}
-				// #endif
 			},
 			generatedResponseImageKey(attachment) {
 				return String(attachment?.attachmentId || '')
@@ -4772,7 +4771,7 @@
 <style lang="scss">
 	@import '@/common/ui/user-material.scss';
 	.chat-header, .composer-meta, .composer-controls, .assistant-label { display: flex; align-items: center; }
-	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker, .generation-settings-trigger, .generation-settings-close, .return-latest, .chat-header-action { @include user-frosted-control; box-sizing: border-box; }
+	.icon-button, .history-more, .composer-icon, .voice-button, .voice-cancel-button, .voice-commit-button, .send-button, .attachment-file, .video-download-button, .research-toggle, .web-search-toggle, .image-count-picker, .generation-settings-trigger, .return-latest, .chat-header-action { @include user-frosted-control; box-sizing: border-box; }
 	.icon-button { width: 48px; height: 48px; margin: 0; padding: 0; border-radius: 14px; }
 	.history-more { min-height: 44px; margin: 8px auto; padding: 0 16px; color: #dce5e0; }
 	.chat-main { width: 100%; max-width: 100%; min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); color: #f3f5f4; background: #0b0d0c; box-sizing: border-box; }
@@ -4874,33 +4873,8 @@
 	.composer-controls { min-width: 0; position: relative; flex-wrap: wrap; gap: 6px; }
 	.generation-settings-trigger { min-width: 0; min-height: 44px; margin: 0; padding: 0 11px; display: flex; align-items: center; gap: 7px; border-radius: 12px; color: #c7d2cc; font-size: 12px; line-height: 1.2; }
 	.generation-settings-trigger text { max-width: min(58vw, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.generation-settings-trigger:focus-visible, .generation-settings-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
-	.generation-settings-trigger:active, .generation-settings-close:active { transform: scale(.97); }
-	.generation-settings-backdrop { position: fixed; inset: 0; z-index: 79; background: transparent; }
-	.generation-settings-panel { width: min(420px, calc(100vw - 32px)); max-height: min(72dvh, 620px); position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 80; overflow: hidden; border: 1px solid rgba(151, 177, 163, .24); border-radius: 18px; background: rgba(20, 25, 22, .97); box-shadow: 0 24px 70px rgba(0, 0, 0, .42); transform-origin: left bottom; }
-	.generation-settings-heading { min-height: 68px; padding: 12px 12px 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(151, 177, 163, .16); }
-	.generation-settings-title, .generation-settings-caption { display: block; }
-	.generation-settings-title { color: #f3f5f4; font-size: 16px; font-weight: 740; line-height: 1.3; }
-	.generation-settings-caption { margin-top: 3px; color: #98a39d; font-size: 11px; line-height: 1.4; }
-	.generation-settings-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border-radius: 12px; }
-	.generation-settings-scroll { max-height: calc(min(72dvh, 620px) - 68px); }
-	.generation-settings-fields { min-width: 0; padding: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; }
-	.generation-settings-fields .model-picker-control, .generation-settings-fields .context-usage { width: 100%; }
-	.generation-settings-fields .image-count-picker,
-	.generation-settings-fields .reasoning-effort-picker,
-	.generation-settings-fields .image-aspect-picker,
-	.generation-settings-fields .video-option-picker,
-	.generation-settings-fields .web-search-toggle { min-height: 44px; }
-	.generation-settings-backdrop-motion-enter-active { transition: opacity 220ms ease-out; }
-	.generation-settings-backdrop-motion-leave-active { transition: opacity 180ms ease-in; }
-	.generation-settings-backdrop-motion-enter,
-	.generation-settings-backdrop-motion-enter-from,
-	.generation-settings-backdrop-motion-leave-to { opacity: 0; }
-	.generation-settings-surface-motion-enter-active { transition: opacity 230ms ease-out, transform 230ms cubic-bezier(.2, .8, .2, 1); }
-	.generation-settings-surface-motion-leave-active { transition: opacity 190ms ease-in, transform 190ms cubic-bezier(.4, 0, 1, 1); }
-	.generation-settings-surface-motion-enter,
-	.generation-settings-surface-motion-enter-from,
-	.generation-settings-surface-motion-leave-to { opacity: 0; transform: translateY(8px) scale(.985); }
+	.generation-settings-trigger:focus-visible { outline: 2px solid rgba(55, 211, 154, .82); outline-offset: 2px; }
+	.generation-settings-trigger:active { transform: scale(.97); }
 	.model-picker-control { min-width: 0; }
 	.model-picker, .reasoning-effort-picker { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 5px; border-radius: 10px; color: #b7c2bc; font-size: 12px; }
 	.model-picker text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5025,12 +4999,6 @@
 		.chat-main:not(.is-android-client) .composer.is-voice-active .voice-commit-square { width: 12px; height: 12px; }
 	}
 	@media screen and (max-width: 767px) {
-		.generation-settings-backdrop { background: rgba(0, 0, 0, .58); }
-		.generation-settings-panel.is-sheet { width: 100%; max-height: min(82dvh, 680px); position: fixed; right: 0; bottom: 0; left: 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 22px 22px 0 0; transform-origin: center bottom; }
-		.generation-settings-panel.is-sheet .generation-settings-scroll { max-height: calc(min(82dvh, 680px) - 68px - env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
-		.generation-settings-surface-motion-enter.is-sheet,
-		.generation-settings-surface-motion-enter-from.is-sheet,
-		.generation-settings-surface-motion-leave-to.is-sheet { transform: translateY(24px); }
 		.chat-main:not(.is-android-client) .composer-note { display: none; }
 	}
 	@media screen and (min-width: 1024px) {
@@ -5048,13 +5016,8 @@
 	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
 		.chat-main:not(.is-android-client) .chat-header { background: #0b0d0c; backdrop-filter: none; -webkit-backdrop-filter: none; }
 		.chat-main:not(.is-android-client) .composer { background: #1a1e1b; backdrop-filter: none; -webkit-backdrop-filter: none; }
-		.generation-settings-panel { background: #141916; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.generation-settings-backdrop-motion-enter-active,
-		.generation-settings-backdrop-motion-leave-active,
-		.generation-settings-surface-motion-enter-active,
-		.generation-settings-surface-motion-leave-active { transition: none; }
-		.return-latest:active, .generation-settings-trigger:active, .generation-settings-close:active { transform: none; }
+		.return-latest:active, .generation-settings-trigger:active { transform: none; }
 	}
 </style>

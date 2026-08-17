@@ -2,9 +2,53 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 function read(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, '..', '..', relativePath), 'utf8')
+}
+
+function createNavigationGuardHarness({ authenticated = false, allowed = true } = {}) {
+	const source = read('common/auth/navigation-guard.js')
+		.replace(/^import .*$/gm, '')
+		.replace(
+			'export function installAuthenticatedNavigationGuard',
+			'function installAuthenticatedNavigationGuard'
+		)
+	const calls = []
+	const authenticationChecks = []
+	const interceptors = new Map()
+	const uni = {
+		addInterceptor(method, interceptor) {
+			interceptors.set(method, interceptor)
+		}
+	}
+
+	for (const method of ['navigateTo', 'redirectTo', 'reLaunch']) {
+		uni[method] = (options) => {
+			const interceptor = interceptors.get(method)
+			if (!interceptor || interceptor.invoke(options) !== false) {
+				calls.push({ method, options })
+			}
+		}
+	}
+
+	const context = vm.createContext({
+		uni,
+		isRuntimeSessionAuthenticated: () => authenticated,
+		isProtectedRoute: (route) => route === '/pages/user/user-workspace',
+		normalizeRoutePath: (url) => String(url || '').split(/[?#]/, 1)[0],
+		requireAuthenticatedPage: (route) => {
+			authenticationChecks.push(route)
+			return Promise.resolve(allowed)
+		}
+	})
+	vm.runInContext(
+		`${source}\nglobalThis.__installGuard = installAuthenticatedNavigationGuard`,
+		context
+	)
+	context.__installGuard()
+	return { authenticationChecks, calls, uni }
 }
 
 const nativeTabKey = 'tab' + 'Bar'
@@ -25,13 +69,14 @@ test('page guard verifies protected routes through the backend-backed session fl
 	assert.match(source, /isProtectedRoute/)
 })
 
-test('clearing a session also removes runtime model and conversation state', () => {
+test('clearing a session also removes runtime state and pending API Key create intent', () => {
 	const source = read('common/auth/session-vault.js')
 
 	assert.match(source, /clearRuntimeSessionAuthentication\(\)/)
 	assert.match(source, /clearAiModelCatalog\(\)/)
 	assert.match(source, /clearAiConversationStore\(\)/)
 	assert.match(source, /clearGenerationManager\(\)/)
+	assert.match(source, /clearApiKeyCreateIntent\(\)/)
 })
 
 test('risk blocking clears runtime-only account state before it replaces the current page', () => {
@@ -83,6 +128,52 @@ test('navigation guard intercepts all uni-app navigation methods', () => {
 	assert.match(source, /uni\.addInterceptor\(method/)
 	assert.match(source, /requireAuthenticatedPage/)
 	assert.match(source, /invokeWithoutGuard/)
+})
+
+test('navigation guard synchronously preserves the original protected navigation after login', () => {
+	const harness = createNavigationGuardHarness({ authenticated: true })
+	const success = () => {}
+	const fail = () => {}
+
+	harness.uni.reLaunch({
+		url: '/pages/user/user-workspace',
+		success,
+		fail
+	})
+
+	assert.deepEqual(harness.authenticationChecks, [])
+	assert.equal(harness.calls.length, 1)
+	assert.equal(harness.calls[0].method, 'reLaunch')
+	assert.equal(harness.calls[0].options.success, success)
+	assert.equal(harness.calls[0].options.fail, fail)
+})
+
+test('navigation guard keeps the existing asynchronous recovery for a cold protected navigation', async () => {
+	const harness = createNavigationGuardHarness({ authenticated: false, allowed: true })
+	const complete = () => {}
+
+	harness.uni.reLaunch({
+		url: '/pages/user/user-workspace',
+		complete
+	})
+
+	assert.equal(harness.calls.length, 0)
+	assert.deepEqual(harness.authenticationChecks, ['/pages/user/user-workspace'])
+	await Promise.resolve()
+	await Promise.resolve()
+	assert.equal(harness.calls.length, 1)
+	assert.equal(harness.calls[0].method, 'reLaunch')
+	assert.equal(harness.calls[0].options.complete, complete)
+})
+
+test('navigation guard leaves public navigation outside authentication recovery', () => {
+	const harness = createNavigationGuardHarness({ authenticated: false })
+
+	harness.uni.navigateTo({ url: '/pages/auth/login' })
+
+	assert.deepEqual(harness.authenticationChecks, [])
+	assert.equal(harness.calls.length, 1)
+	assert.equal(harness.calls[0].method, 'navigateTo')
 })
 
 test('application startup installs navigation and page lifecycle guards', () => {

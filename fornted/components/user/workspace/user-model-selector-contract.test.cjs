@@ -42,3 +42,36 @@ test('generation settings embeds the model list without relying on parent scoped
 	assert.match(selector, /user-model-selector\.is-embedded \.user-model-selector-panel/)
 	assert.doesNotMatch(chatPanel, /generation-settings-fields \.user-model-selector-panel/)
 })
+
+test('embedded model selector groups every model once by its primary generation capability', () => {
+	const selector = read(selectorPath)
+
+	assert.match(selector, /modelGroups\(\)/)
+	assert.match(selector, /primaryModelGroup\(model\)/)
+	assert.match(selector, /capabilities\.includes\('VIDEO_GENERATION'\)[\s\S]*return 'video'/)
+	assert.match(selector, /capabilities\.includes\('IMAGE_GENERATION'\)[\s\S]*return 'image'/)
+	assert.match(selector, /capabilities\.includes\('RESPONSES'\)[\s\S]*capabilities\.includes\('CHAT_COMPLETIONS'\)[\s\S]*return 'chat'/)
+	assert.match(selector, /v-for="group in modelGroups"/)
+	assert.match(selector, /v-for="entry in group\.models"/)
+	assert.match(selector, /select\(entry\.originalIndex\)/)
+})
+
+test('grouped model rows expose provider, description and protocol badges', () => {
+	const selector = read(selectorPath)
+	const settings = read(path.resolve(__dirname, 'user-h5-generation-settings.vue'))
+
+	assert.match(settings, /<user-model-selector[\s\S]*\bgrouped\b/)
+	assert.match(selector, /'is-grouped': grouped/)
+	assert.match(selector, /<user-model-provider-mark/)
+	assert.match(selector, /optionDescription\(entry\.model\)/)
+	assert.match(selector, /capabilityBadges\(entry\.model\)/)
+	assert.match(selector, /if \(!this\.grouped \|\| this\.primaryModelGroup\(model\) !== 'chat'\) return \[\]/)
+	assert.match(selector, /Responses/)
+	assert.match(selector, /Chat Completions/)
+	assert.match(selector, /@keydown\.down\.prevent="moveOptionFocus\(1\)"/)
+	assert.match(selector, /@keydown\.up\.prevent="moveOptionFocus\(-1\)"/)
+	assert.match(selector, /@keydown\.home\.prevent="focusBoundaryOption\(0\)"/)
+	assert.match(selector, /@keydown\.end\.prevent="focusBoundaryOption\(flatModelEntries\.length - 1\)"/)
+	assert.match(selector, /\.user-model-selector-option\s*\{[^}]*min-height:\s*58px/)
+	assert.match(selector, /\.user-model-selector\.is-grouped \.user-model-selector-option\s*\{[^}]*min-height:\s*70px/)
+})

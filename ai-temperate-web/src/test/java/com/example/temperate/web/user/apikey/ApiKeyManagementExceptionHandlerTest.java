@@ -10,6 +10,7 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 
 /**
@@ -35,5 +36,37 @@ final class ApiKeyManagementExceptionHandlerTest {
         assertThat(response.getHeaders().getCacheControl())
                 .contains("private")
                 .contains("no-store");
+    }
+
+    @Test
+    void createLockContentionReturnsConflictWithRetryAfter() {
+        ApiKeyManagementExceptionHandler handler = new ApiKeyManagementExceptionHandler(
+                Clock.fixed(Instant.parse("2026-08-17T11:50:00Z"), ZoneOffset.UTC));
+
+        var response = handler.handle(new ApiKeyManagementException(
+                ApiKeyManagementErrorCode.API_KEY_CREATE_IN_PROGRESS,
+                "API Key creation is already in progress"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("API_KEY_CREATE_IN_PROGRESS");
+    }
+
+    @Test
+    void completedCreateReturnsConflictWithoutPretendingThePlaintextCanBeReplayed() {
+        ApiKeyManagementExceptionHandler handler = new ApiKeyManagementExceptionHandler(
+                Clock.fixed(Instant.parse("2026-08-17T11:50:00Z"), ZoneOffset.UTC));
+
+        var response = handler.handle(new ApiKeyManagementException(
+                ApiKeyManagementErrorCode.API_KEY_CREATE_ALREADY_COMPLETED,
+                "already completed"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isNull();
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().message())
+                .contains("完整 API Key 无法再次获取")
+                .doesNotContain("sk-");
     }
 }

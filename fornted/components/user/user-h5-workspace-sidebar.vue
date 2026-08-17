@@ -12,19 +12,20 @@
 			class="workspace-sidebar"
 			:class="sidebarClass"
 			role="complementary"
-			aria-label="会话边栏"
+			:aria-label="presentation === 'rail' ? '账户导航轨道' : '会话边栏'"
 			:aria-hidden="String(!open)"
 			:inert="open ? undefined : true"
 			tabindex="-1"
-			@keydown.esc.stop="requestClose"
+			@keydown.esc.stop="handleEscape"
 			@keydown.tab="trapSidebarFocus"
 		>
 			<view class="workspace-sidebar-header">
 				<view class="workspace-brand" aria-label="AI Temperate">
 					<view class="workspace-brand-mark" aria-hidden="true">AI</view>
-					<text class="workspace-brand-name">AI Temperate</text>
+					<text v-if="presentation === 'full'" class="workspace-brand-name">AI Temperate</text>
 				</view>
 				<button
+					v-if="presentation === 'full'"
 					class="workspace-sidebar-close"
 					type="button"
 					aria-label="关闭会话边栏"
@@ -36,12 +37,23 @@
 				</button>
 			</view>
 
-			<button class="workspace-new-chat" type="button" @click="$emit('new-chat')">
+			<button class="workspace-new-chat" type="button" aria-label="新聊天" title="新聊天" @click="$emit('new-chat')">
 				<uni-icons type="compose" size="20" color="#37d39a" aria-hidden="true" />
-				<text>新聊天</text>
+				<text v-if="presentation === 'full'">新聊天</text>
 			</button>
 
-			<view class="workspace-sidebar-conversations">
+			<button
+				v-if="presentation === 'rail'"
+				class="workspace-rail-chat"
+				type="button"
+				aria-label="返回聊天并打开会话"
+				title="返回聊天"
+				@click="$emit('destination-click', 'chat')"
+			>
+				<uni-icons type="chat" size="20" color="#aeb9b3" aria-hidden="true" />
+			</button>
+
+			<view v-if="presentation === 'full'" class="workspace-sidebar-conversations">
 				<user-recent-conversations
 					content-id="workspace-h5-recent"
 					:expanded="recentExpanded"
@@ -63,11 +75,13 @@
 				<button
 					class="workspace-account-action"
 					type="button"
+					aria-label="账户与设置"
+					title="账户与设置"
 					:aria-current="['profile', 'apiKeys'].includes(activeDestination) ? 'page' : undefined"
 					@click="$emit('destination-click', 'profile')"
 				>
-					<uni-icons type="person" size="20" color="#aeb9b3" aria-hidden="true" />
-					<text>账户与设置</text>
+					<uni-icons type="person" size="20" :color="presentation === 'rail' ? '#37d39a' : '#aeb9b3'" aria-hidden="true" />
+					<text v-if="presentation === 'full'">账户与设置</text>
 				</button>
 			</view>
 		</view>
@@ -92,6 +106,11 @@
 				default: 'overlay',
 				validator: value => ['overlay', 'push'].includes(value)
 			},
+			presentation: {
+				type: String,
+				default: 'full',
+				validator: value => ['full', 'rail'].includes(value)
+			},
 			conversations: { type: Array, default: () => [] },
 			currentConversationPublicId: { type: String, default: '' },
 			conversationsLoaded: { type: Boolean, default: false },
@@ -104,14 +123,16 @@
 				return {
 					'is-open': this.open,
 					'is-overlay': this.mode === 'overlay',
-					'is-push': this.mode === 'push'
+					'is-push': this.mode === 'push',
+					'is-rail': this.presentation === 'rail'
 				}
 			},
 			sidebarClass() {
 				return {
 					'is-open': this.open,
 					'is-overlay': this.mode === 'overlay',
-					'is-push': this.mode === 'push'
+					'is-push': this.mode === 'push',
+					'is-rail': this.presentation === 'rail'
 				}
 			}
 		},
@@ -136,9 +157,12 @@
 			requestClose() {
 				this.$emit('close')
 			},
+			handleEscape() {
+				if (this.presentation === 'full') this.requestClose()
+			},
 			handleOpenState(value) {
 				this.syncBodyScrollLock()
-				if (!value) return
+				if (!value || this.presentation === 'rail') return
 				this.$nextTick(() => {
 					const sidebar = this.$refs.sidebar
 					const element = sidebar?.$el || sidebar
@@ -195,21 +219,29 @@
 	.workspace-brand { min-width: 0; display: flex; align-items: center; gap: 10px; }
 	.workspace-brand-mark { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; flex: 0 0 30px; border: 1px solid rgba(55, 211, 154, .28); border-radius: 9px; background: rgba(55, 211, 154, .08); color: #75dfb7; font-size: 11px; font-weight: 800; }
 	.workspace-brand-name { overflow: hidden; color: var(--ait-h5-text, #eef3f0); font-size: 14px; font-weight: 720; letter-spacing: -.1px; text-overflow: ellipsis; white-space: nowrap; }
-	.workspace-sidebar-close, .workspace-new-chat, .workspace-account-action { @include user-frosted-control; box-sizing: border-box; }
+	.workspace-sidebar-close, .workspace-new-chat, .workspace-rail-chat, .workspace-account-action { @include user-frosted-control; box-sizing: border-box; }
 	.workspace-sidebar-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border-radius: 12px; }
 	.workspace-new-chat, .workspace-account-action { width: 100%; min-height: 48px; margin: 8px 0 0; padding: 0 12px; display: flex; align-items: center; justify-content: flex-start; gap: 10px; border-radius: 12px; color: #dce5e0; font-size: 14px; font-weight: 680; text-align: left; }
+	.workspace-rail-chat { display: flex; align-items: center; justify-content: center; }
 	.workspace-sidebar-conversations { min-height: 0; margin: 10px -12px 0 0; flex: 1; overflow: hidden; --sidebar-inline-padding: 12px; }
 	.workspace-sidebar-conversations :deep(.conversation-copy) { width: 44px; height: 44px; min-height: 44px; flex-basis: 44px; }
 	.workspace-sidebar-conversations :deep(.recent-error button),
 	.workspace-sidebar-conversations :deep(.recent-more) { min-height: 44px; }
 	.workspace-sidebar-footer { padding-top: 10px; border-top: 1px solid rgba(151, 170, 160, .14); }
 	.workspace-account-action { margin-top: 0; color: #aeb9b3; }
-	.workspace-sidebar-close:focus-visible, .workspace-new-chat:focus-visible, .workspace-account-action:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
-	.workspace-sidebar-close:active, .workspace-new-chat:active, .workspace-account-action:active { transform: scale(.98); }
+	.workspace-sidebar-close:focus-visible, .workspace-new-chat:focus-visible, .workspace-rail-chat:focus-visible, .workspace-account-action:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
+	.workspace-sidebar-close:active, .workspace-new-chat:active, .workspace-rail-chat:active, .workspace-account-action:active { transform: scale(.98); }
+	.workspace-sidebar.is-rail { width: 72px; padding: 12px 10px max(12px, env(safe-area-inset-bottom)); align-items: center; }
+	.workspace-sidebar.is-rail .workspace-sidebar-header { width: 100%; justify-content: center; }
+	.workspace-sidebar.is-rail .workspace-brand { justify-content: center; }
+	.workspace-sidebar.is-rail .workspace-new-chat,
+	.workspace-sidebar.is-rail .workspace-rail-chat,
+	.workspace-sidebar.is-rail .workspace-account-action { width: 44px; height: 44px; min-height: 44px; margin: 8px auto 0; padding: 0; justify-content: center; border-radius: 12px; }
+	.workspace-sidebar.is-rail .workspace-sidebar-footer { width: 100%; margin-top: auto; padding-top: 0; border-top: 0; }
 	.workspace-sidebar-backdrop { position: fixed; inset: 0; z-index: 0; background: rgba(0, 0, 0, .58); opacity: 0; pointer-events: none; transition: opacity 180ms ease-out; }
 	.workspace-sidebar-layer.is-open .workspace-sidebar-backdrop { opacity: 1; pointer-events: auto; transition-duration: 220ms; }
 	.workspace-sidebar.is-overlay { width: min(88vw, 360px); position: fixed; inset: 0 auto 0 0; z-index: 1; box-shadow: 18px 0 48px rgba(0, 0, 0, .32); }
-	@media (hover: hover) and (pointer: fine) { .workspace-new-chat:hover, .workspace-account-action:hover, .workspace-sidebar-close:hover { background: rgba(243, 245, 244, .07); } }
-	@media (prefers-reduced-motion: reduce) { .workspace-sidebar, .workspace-sidebar-backdrop { transition: none; } .workspace-sidebar-close:active, .workspace-new-chat:active, .workspace-account-action:active { transform: none; } }
+	@media (hover: hover) and (pointer: fine) { .workspace-new-chat:hover, .workspace-rail-chat:hover, .workspace-account-action:hover, .workspace-sidebar-close:hover { background: rgba(243, 245, 244, .07); } }
+	@media (prefers-reduced-motion: reduce) { .workspace-sidebar, .workspace-sidebar-backdrop { transition: none; } .workspace-sidebar-close:active, .workspace-new-chat:active, .workspace-rail-chat:active, .workspace-account-action:active { transform: none; } }
 	@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) { .workspace-sidebar { background: #101310; } .workspace-sidebar-backdrop { background: rgba(0, 0, 0, .72); } }
 </style>

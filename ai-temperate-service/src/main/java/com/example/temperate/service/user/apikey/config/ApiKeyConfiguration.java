@@ -4,8 +4,10 @@ import com.example.temperate.common.bloom.counting.CountingBloomLayout;
 import com.example.temperate.common.redis.key.RedisKeyFactory;
 import com.example.temperate.service.bloom.CountingBloomNamespace;
 import com.example.temperate.service.user.aiconversation.config.AiInferenceProperties;
+import com.example.temperate.service.user.apikey.idempotency.ApiKeyCreateIdempotencyHasher;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -21,6 +23,16 @@ import org.springframework.web.reactive.function.client.WebClient;
 @EnableScheduling
 @EnableConfigurationProperties(ApiKeyProperties.class)
 public class ApiKeyConfiguration {
+
+    /**
+     * 创建锁摘要复用经过启动校验的 API Key 根密钥，并由摘要器的 purpose 做业务用途隔离。
+     */
+    @Bean
+    ApiKeyCreateIdempotencyHasher apiKeyCreateIdempotencyHasher(
+            ApiKeyProperties properties) {
+        return new ApiKeyCreateIdempotencyHasher(
+                Base64.getDecoder().decode(properties.getHmacSecretBase64()));
+    }
 
     /**
      * 固定 v1 的所有 Redis Key 都经工厂生成；通用引擎只接收不可变命名空间，不自行拼接业务 Key。

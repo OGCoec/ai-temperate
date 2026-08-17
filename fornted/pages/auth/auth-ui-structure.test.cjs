@@ -120,6 +120,25 @@ test('country search resets stale scroll targets while typing', () => {
 	assert.match(source, /if \(this\.keyword \|\| !this\.currentCountry\) return/)
 })
 
+test('h5 country picker stays unmounted until an explicit user open action', () => {
+	const source = read('components/auth/phone-country-picker.vue')
+	const mountedHook = source.slice(
+		source.indexOf('\t\tmounted()'),
+		source.indexOf('\t\tbeforeUnmount()')
+	)
+
+	assert.match(source, /<uni-popup[\s\S]*v-if="popupMounted"/)
+	assert.match(
+		source,
+		/popupMounted\(\)\s*\{[\s\S]*#ifdef H5[\s\S]*return this\.isOpen[\s\S]*#ifndef H5[\s\S]*return true/
+	)
+	assert.match(
+		source,
+		/openPicker\(\)\s*\{[\s\S]*#ifdef H5[\s\S]*this\.isOpen = true[\s\S]*this\.\$nextTick/
+	)
+	assert.doesNotMatch(mountedHook, /openPicker\(|\$refs\.popup\.open/)
+})
+
 test('auth phone submissions keep phoneNumber as the cleaned local digits', () => {
 	const login = read('pages/auth/login.vue')
 	const register = read('pages/auth/register.vue')

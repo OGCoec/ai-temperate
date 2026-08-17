@@ -16,6 +16,7 @@ import { clearRuntimeSessionAuthentication } from './authenticated-session-state
 import { clearAiModelCatalog } from '../aimodel/ai-model-catalog-store.js'
 import { clearAiConversationStore } from '../aichat/ai-conversation-store.js'
 import { clearGenerationManager } from '../aichat/ai-conversation-generation-manager.js'
+import { clearApiKeyCreateIntent } from '../user/api-key-create-intent.js'
 
 let principal = null
 let browserLegacyCleared = false
@@ -48,6 +49,8 @@ export function saveSession(response) {
 			clearAiModelCatalog()
 			clearAiConversationStore()
 			clearGenerationManager()
+			// 待确认创建意图不携带用户 ID；账号切换时必须清除，禁止把上一账号的 UUID 请求交给新账号。
+			clearApiKeyCreateIntent()
 		}
 		principal = {
 			publicUserId: response.publicUserId || principal?.publicUserId || '',
@@ -84,6 +87,8 @@ export function clearSession() {
 	clearAiModelCatalog()
 	clearAiConversationStore()
 	clearGenerationManager()
+	// 全局会话出口统一清理，覆盖 API Key 页面从未挂载时的退出登录与会话失效场景。
+	clearApiKeyCreateIntent()
 	if (clientPlatform() === 'ANDROID') clearAndroidSessionCredentials()
 	else clearBrowserLegacyOnce()
 }

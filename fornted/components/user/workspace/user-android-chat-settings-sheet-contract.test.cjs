@@ -27,11 +27,12 @@ test('chat panel builds capability sections from existing model option arrays', 
 	const chatPanel = read(chatPanelPath)
 
 	assert.match(chatPanel, /androidSettingsMode\(\)[\s\S]*'VIDEO'[\s\S]*'IMAGE'[\s\S]*'TEXT'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('reasoning'[\s\S]*androidSettingsSection\('webSearch'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('imageQuality'[\s\S]*androidSettingsSection\('imageAspect'[\s\S]*androidSettingsSection\('imageCount'/)
-	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*androidSettingsSection\('videoMode'[\s\S]*androidSettingsSection\('videoResolution'[\s\S]*androidSettingsSection\('videoAspect'[\s\S]*androidSettingsSection\('videoDuration'/)
+	assert.match(chatPanel, /generationSettingsSections\(\)[\s\S]*generationSettingsSection\('reasoning'[\s\S]*generationSettingsSection\('webSearch'/)
+	assert.match(chatPanel, /generationSettingsSections\(\)[\s\S]*generationSettingsSection\('imageQuality'[\s\S]*generationSettingsSection\('imageAspect'[\s\S]*generationSettingsSection\('imageCount'/)
+	assert.match(chatPanel, /generationSettingsSections\(\)[\s\S]*generationSettingsSection\('videoMode'[\s\S]*generationSettingsSection\('videoResolution'[\s\S]*generationSettingsSection\('videoAspect'[\s\S]*generationSettingsSection\('videoDuration'/)
+	assert.match(chatPanel, /androidSettingsSections\(\)[\s\S]*this\.generationSettingsSections\.map[\s\S]*section\.presentations\.android/)
 	assert.doesNotMatch(chatPanel, /key:\s*'videoCount'/)
-	assert.match(chatPanel, /handleAndroidSettingsChange\(event\)[\s\S]*selectModel[\s\S]*selectReasoningEffort[\s\S]*selectWebSearchMode[\s\S]*selectImageAspect[\s\S]*selectImageOutputCount[\s\S]*selectVideoMode[\s\S]*selectVideoDuration[\s\S]*selectVideoResolution[\s\S]*selectVideoAspect/)
+	assert.match(chatPanel, /handleGenerationSettingsChange\(event\)[\s\S]*selectModel[\s\S]*selectReasoningEffort[\s\S]*selectWebSearchMode[\s\S]*selectImageAspect[\s\S]*selectImageOutputCount[\s\S]*selectVideoMode[\s\S]*selectVideoDuration[\s\S]*selectVideoResolution[\s\S]*selectVideoAspect/)
 })
 
 test('Android model controls show provider marks without changing the picker event contract', () => {

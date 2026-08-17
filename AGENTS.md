@@ -502,6 +502,23 @@ Redis String + JSON
 
 允许循环处理多个批次，但禁止批次内部逐个执行网络请求。
 
+### 9.1 Redis 分布式锁规范
+
+本项目的分布式锁以 Redis 作为协调基础设施，并统一通过 Redisson 提供的锁 API 实现。业务代码禁止自行实现 Redis 分布式锁。
+
+- 所有分布式锁必须通过 Spring 注入的单例 `RedissonClient` 获取 `RLock`；禁止在 Controller、Service、Mapper、循环或请求处理中创建新的 Redisson 客户端。
+- 禁止使用原生 `SET NX EX/PX`、`RedisTemplate.opsForValue().setIfAbsent()`、手写 Lua 或其他自定义续租、解锁协议实现分布式锁。
+- 上述禁令只针对“锁”。验证码时间片防重放、一次性领取、状态机迁移、计数和其他 Redis 原子业务状态仍可以按对应规范使用 `SET NX` 或 Lua，但不得把这些操作命名或描述为分布式锁。
+- 所有分布式锁必须启用 Redisson 看门狗自动续租；获取普通业务锁时必须使用不显式传入 `leaseTime` 的 Redisson API，禁止通过固定租期关闭看门狗，也禁止业务代码自行调度续租任务。
+- 看门狗只保证持锁 Redisson 实例正常存活时持续续租，并在实例失联后依靠锁超时释放；禁止把看门狗描述为永久持锁、Exactly Once、最终幂等或跨 Redis 与 PostgreSQL 的原子性保证。
+- 获取锁必须设置有界等待时间并处理未取得锁、线程中断和 Redis 异常，禁止业务线程无限等待；锁内禁止执行无界循环或无法限制时长的外部网络调用。
+- 解锁必须放在 `finally` 中，并且只能由实际持锁线程执行；解锁前必须确认当前线程仍持有该锁，禁止误删或释放其他线程、其他实例已经取得的锁。
+- 所有锁 Key 必须由统一 `RedisKeyFactory` 生成；锁粒度必须绑定最小必要的受保护资源或幂等摘要，禁止直接使用客户端输入作为锁名，也禁止在锁 Key 中放入完整 API Key、Token、邮箱、手机号或其他敏感信息。
+- 分布式锁只允许作为并发削峰、减少重复 I/O 或协调单实例任务执行的辅助机制；最终幂等必须由 PostgreSQL 唯一约束、持久化幂等记录和本地事务保证，最终状态一致性必须由业务事实来源裁决。
+- API Key 创建等写入 PostgreSQL 的流程必须以客户端 UUIDv4 幂等键和数据库唯一约束作为最终保障；可选 Redisson 锁只能按受保护的幂等摘要过滤并发请求，禁止按整个用户加粗锁，也禁止用锁替代数据库约束。
+- 当辅助锁所保护的操作已经具备数据库最终幂等保障时，Redis 不可用应降级到 PostgreSQL 唯一约束裁决；无法安全降级的流程必须返回受控错误，禁止在未取得锁时继续执行无幂等保护的外部副作用。
+- 必须监控锁等待时间、获取失败、看门狗续租异常和持锁时间；监控标签禁止包含完整 Redis Key、幂等键、API Key 或无界高基数字段。
+
 ## 10. PostgreSQL 与 Redis 一致性
 
 本项目不使用分布式事务、Outbox 或 CDC，采用 Cache-Aside：
@@ -655,6 +672,8 @@ mvn dependency:tree
 - Controller、Service、Mapper 和其他 Java 后端源码是否包含 HTML、CSS、JavaScript、前端模板字符串或前端 SDK 地址；页面响应是否来自独立资源文件。
 - 是否在循环中调用 Mapper、Redis、MQ 或外部 API。
 - 是否可以改成批量 SQL、MGET/MSET、Pipeline 或 Lua。
+- 分布式锁是否统一通过 Redisson `RLock` 和看门狗实现，是否出现原生 `SET NX EX/PX`、`setIfAbsent()`、手写 Lua、自定义续租或固定 `leaseTime` 实现锁。
+- 分布式锁是否只承担辅助并发过滤，数据库写入是否仍由唯一约束、持久化幂等记录和本地事务提供最终保障。
 - 是否创建了新的数据库连接池或数据源。
 - 是否出现物理外键。
 - Service 是否采用接口 + `Impl`，调用方是否只依赖接口。

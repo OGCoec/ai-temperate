@@ -34,6 +34,28 @@ test('day and week presets use local calendar days', async () => {
 	assert.equal(createPresetExpirySelection(API_KEY_EXPIRY_OPTION.ONE_WEEK, now).localDate, '2026-08-21')
 })
 
+test('preset expiry serialization works when Android does not provide Object.hasOwn', async () => {
+	const originalHasOwn = Object.hasOwn
+	try {
+		Object.hasOwn = undefined
+		const {
+			API_KEY_EXPIRY_OPTION,
+			createPresetExpirySelection,
+			expiresAtFromExpirySelection
+		} = await loadModule()
+		const now = new Date(2026, 7, 14, 15, 30)
+		const selection = createPresetExpirySelection(API_KEY_EXPIRY_OPTION.ONE_WEEK, now)
+		const localExpiry = new Date(expiresAtFromExpirySelection(selection, now))
+
+		assert.equal(localExpiry.getFullYear(), 2026)
+		assert.equal(localExpiry.getMonth(), 7)
+		assert.equal(localExpiry.getDate(), 21)
+		assert.equal(localExpiry.getHours(), 23)
+	} finally {
+		Object.hasOwn = originalHasOwn
+	}
+})
+
 test('month and year presets clamp to the last valid target day', async () => {
 	const { API_KEY_EXPIRY_OPTION, createPresetExpirySelection } = await loadModule()
 

@@ -24,7 +24,8 @@ final class CommonDependencyContractTest {
         assertNotDeclared(commonPom, "ip2location-java");
         assertNotDeclared(commonPom, "ip2location-io-java");
 
-        assertNotDeclared(parentPom, "redisson.version");
+        // Redisson 只由 service 直接使用，但其版本仍必须在父 POM 统一管理。
+        assertDeclared(parentPom, "redisson.version");
         // common 的 AliyunUtils 直接使用 libphonenumber，因此模块必须直接声明依赖，版本仍统一由父 POM 管理。
         assertDeclared(commonPom, "libphonenumber");
         assertDeclared(parentPom, "libphonenumber.version");

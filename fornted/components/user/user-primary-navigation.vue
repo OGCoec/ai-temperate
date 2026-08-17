@@ -42,6 +42,17 @@
 				<uni-icons type="person" :size="variant === 'drawer' ? 18 : 22" :color="iconColor('profile')" aria-hidden="true" />
 				<text>个人</text>
 			</button>
+			<button
+				v-if="showApiKeys"
+				class="user-primary-navigation-item"
+				:class="{ 'is-active': activeDestination === 'apiKeys' }"
+				type="button"
+				:aria-current="activeDestination === 'apiKeys' ? 'page' : undefined"
+				@click="navigate('apiKeys')"
+			>
+				<uni-icons type="locked-filled" :size="variant === 'drawer' ? 18 : 22" :color="iconColor('apiKeys')" aria-hidden="true" />
+				<text>管理我的 API Key</text>
+			</button>
 		</view>
 		<view class="user-primary-navigation-after">
 			<slot name="after-items" />
@@ -50,7 +61,7 @@
 </template>
 
 <script>
-	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile'])
+	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys'])
 
 	export default {
 		props: {
@@ -63,6 +74,10 @@
 				type: String,
 				default: 'default',
 				validator: value => ['default', 'chat-sidebar', 'drawer'].includes(value)
+			},
+			showApiKeys: {
+				type: Boolean,
+				default: false
 			}
 		},
 		methods: {

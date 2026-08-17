@@ -4,8 +4,9 @@
 		<user-h5-workspace-sidebar
 			:active-destination="activeDestination"
 			:recent-expanded="recentExpanded"
-			:open="sidebarOpen"
+			:open="effectiveSidebarOpen"
 			:mode="sidebarMode"
+			:presentation="sidebarPresentation"
 			:conversations="conversations"
 			:current-conversation-public-id="currentConversationPublicId || ''"
 			:conversations-loaded="conversationsLoaded"
@@ -22,13 +23,13 @@
 			@close="closeSidebar"
 		/>
 		<button
-			v-if="!sidebarOpen"
+			v-if="!effectiveSidebarOpen"
 			ref="sidebarToggle"
 			class="workspace-sidebar-toggle"
 			type="button"
 			aria-label="打开会话边栏"
 			aria-controls="workspace-conversation-sidebar"
-			:aria-expanded="String(sidebarOpen)"
+			:aria-expanded="String(effectiveSidebarOpen)"
 			@click="toggleSidebar"
 		>
 			<uni-icons type="bars" size="21" color="#dce5e0" aria-hidden="true" />
@@ -85,14 +86,13 @@
 				@open-conversation-drawer="openConversationDrawer"
 				@open-api-keys="selectDestination('apiKeys')"
 			/>
-			<!-- #ifdef H5 -->
 			<user-api-key-panel
 				ref="apiKeyPanel"
 				v-if="visitedDestinations.apiKeys"
 				v-show="activeDestination === 'apiKeys'"
 				:authenticated="authenticated"
+				@open-conversation-drawer="openConversationDrawer"
 			/>
-			<!-- #endif -->
 		</view>
 	</view>
 </template>
@@ -116,9 +116,7 @@
 	import UserChatPanel from './workspace/user-chat-panel.vue'
 	import UserModelPanel from './workspace/user-model-panel.vue'
 	import UserProfilePanel from './workspace/user-profile-panel.vue'
-	// #ifdef H5
 	import UserApiKeyPanel from './workspace/user-api-key-panel.vue'
-	// #endif
 
 	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys'])
 	export default {
@@ -128,9 +126,7 @@
 			UserChatPanel,
 			UserModelPanel,
 			UserProfilePanel,
-			// #ifdef H5
 			UserApiKeyPanel
-			// #endif
 		},
 		props: {
 			initialDestination: {
@@ -176,20 +172,33 @@
 			}
 		},
 		computed: {
+			sidebarPresentation() {
+				return this.sidebarMode === 'push'
+					&& ['profile', 'apiKeys'].includes(this.activeDestination)
+					? 'rail'
+					: 'full'
+			},
+			effectiveSidebarOpen() {
+				return this.sidebarPresentation === 'rail' || this.sidebarOpen
+			},
+			effectiveSidebarWidth() {
+				return this.sidebarPresentation === 'rail' ? 72 : this.sidebarWidth
+			},
 			workspaceClass() {
 				// #ifdef H5
 				return {
 					'is-h5-workspace': true,
-					'is-sidebar-open': this.sidebarOpen,
+					'is-sidebar-open': this.effectiveSidebarOpen,
 					'is-sidebar-overlay': this.sidebarMode === 'overlay',
-					'is-sidebar-push': this.sidebarMode === 'push'
+					'is-sidebar-push': this.sidebarMode === 'push',
+					'is-sidebar-rail': this.sidebarPresentation === 'rail'
 				}
 				// #endif
 				return {}
 			},
 			workspaceStyle() {
 				// #ifdef H5
-				return { '--workspace-sidebar-width': `${this.sidebarWidth}px` }
+				return { '--workspace-sidebar-width': `${this.effectiveSidebarWidth}px` }
 				// #endif
 				return null
 			}
@@ -438,6 +447,10 @@
 				this.releaseWorkspaceBody()
 			},
 			handleBackPress() {
+				if (this.drawerOpen) {
+					this.drawerOpen = false
+					return true
+				}
 				const activePanel = this.activeDestination === 'chat'
 					? this.$refs.chatPanel
 					: this.activeDestination === 'models'
@@ -449,10 +462,6 @@
 					&& activePanel.closeIfOpen()) return true
 				if (this.activeDestination === 'apiKeys') {
 					this.selectDestination('profile')
-					return true
-				}
-				if (this.drawerOpen) {
-					this.drawerOpen = false
 					return true
 				}
 				return false

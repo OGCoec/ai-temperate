@@ -68,6 +68,20 @@ final class RedisKeyFactoryTest {
     }
 
     @Test
+    void apiKeyCreateLockContainsOnlyTheProtectedRequestIdentifier() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        HmacIdentifier protectedRequest = new HmacSha256Identifier(new byte[32])
+                .identify("api-key-create-lock:v1", "request".getBytes(StandardCharsets.UTF_8));
+
+        String key = factory.apiKeyCreateLockKey(protectedRequest);
+
+        assertEquals(
+                "ait:prod:auth:uak:v1:create-lock:" + protectedRequest.value(),
+                key);
+        assertFalse(key.contains("550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    @Test
     void createsIdentityPresenceBloomLifecycleKeys() {
         RedisKeyFactory factory = new RedisKeyFactory("test");
 

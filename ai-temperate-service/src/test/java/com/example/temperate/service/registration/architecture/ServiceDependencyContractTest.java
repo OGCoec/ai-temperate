@@ -23,6 +23,7 @@ class ServiceDependencyContractTest {
                 .contains("<artifactId>micrometer-core</artifactId>")
                 .contains("<artifactId>jjwt-api</artifactId>")
                 .contains("<artifactId>ip2location-java</artifactId>")
+                .contains("<artifactId>redisson</artifactId>")
                 .contains("<artifactId>jakarta.annotation-api</artifactId>");
     }
 

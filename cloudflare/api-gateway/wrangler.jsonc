@@ -17,7 +17,7 @@
   ],
   "vars": {
     "API_UPSTREAM_ORIGIN": "https://api.niko000o.site",
-    "H5_PAGES_ORIGIN": "https://ai-temperate-frontend.pages.dev",
+    "H5_PAGES_ORIGIN": "https://aa35563d.ai-temperate-frontend.pages.dev",
     "API_KEY_STREAM_DIAGNOSTICS_ENABLED": "true",
     "SSE_ROUTE_LOG_SAMPLE_RATE": "0.05"
   }

@@ -1,11 +1,16 @@
 package com.example.temperate.mapper.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
+import com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
+import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -21,6 +26,9 @@ final class UserApiKeyPersistenceContractTest {
 
         assertThat(schema)
                 .contains("key_digest BYTEA NOT NULL")
+                .contains("create_idempotency_key UUID")
+                .contains("CREATE UNIQUE INDEX uk_user_api_key_create_idempotency_key")
+                .contains("WHERE create_idempotency_key IS NOT NULL")
                 .contains("last_used_at TIMESTAMPTZ")
                 .contains("login_identity_id,\n        created_at DESC,\n        id DESC")
                 .contains("WHERE status IN (0, 1)")
@@ -88,6 +96,61 @@ final class UserApiKeyPersistenceContractTest {
     }
 
     @Test
+    void apiKeyMapperUsesUuidConflictHandlingWithoutAbortingTheTransaction()
+            throws IOException {
+        String mapper = read(
+                "ai-temperate-mapper/src/main/resources/mapper/ai/UserApiKeyMapper.xml");
+        String handler =
+                "com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler";
+        String handlerSource = read(
+                "ai-temperate-mapper/src/main/java/com/example/temperate/mapper/typehandler/"
+                        + "PostgreSqlUuidTypeHandler.java");
+
+        assertThat(mapper)
+                .contains("createIdempotencyKey")
+                .contains("create_idempotency_key")
+                .contains("javaType=\"java.util.UUID\"")
+                .contains("typeHandler=\"" + handler + "\"")
+                .contains("typeHandler=" + handler)
+                .contains("ON CONFLICT (create_idempotency_key)")
+                .contains("WHERE create_idempotency_key IS NOT NULL")
+                .contains("DO NOTHING")
+                .contains("findByCreateIdempotencyKey");
+        assertThat(countOccurrences(mapper, handler)).isEqualTo(3);
+        assertThat(handlerSource)
+                .contains("extends BaseTypeHandler<UUID>")
+                .contains("statement.setObject(index, parameter, Types.OTHER)")
+                .contains("resultSet.getObject(columnName)")
+                .contains("resultSet.getObject(columnIndex)")
+                .contains("statement.getObject(columnIndex)");
+    }
+
+    @Test
+    void apiKeyMapperXmlParsesWithThePostgreSqlUuidTypeHandler() throws IOException {
+        String resource = "mapper/ai/UserApiKeyMapper.xml";
+        Configuration configuration = new Configuration();
+        try (InputStream input = Files.newInputStream(PROJECT_ROOT.resolve(
+                "ai-temperate-mapper/src/main/resources/" + resource))) {
+            assertThatCode(() -> new XMLMapperBuilder(
+                    input,
+                    configuration,
+                    resource,
+                    configuration.getSqlFragments()).parse())
+                    .doesNotThrowAnyException();
+        }
+
+        var idempotencyMapping = configuration
+                .getResultMap("com.example.temperate.mapper.ai.UserApiKeyMapper.UserApiKeyResultMap")
+                .getResultMappings()
+                .stream()
+                .filter(mapping -> "createIdempotencyKey".equals(mapping.getProperty()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(idempotencyMapping.getTypeHandler())
+                .isInstanceOf(PostgreSqlUuidTypeHandler.class);
+    }
+
+    @Test
     void reservationAuthorizationKeepsMissingGrantVisibleFor403Classification()
             throws IOException {
         String mapper = read(
@@ -102,6 +165,10 @@ final class UserApiKeyPersistenceContractTest {
 
     private static String read(String relativePath) throws IOException {
         return Files.readString(PROJECT_ROOT.resolve(relativePath), StandardCharsets.UTF_8);
+    }
+
+    private static int countOccurrences(String source, String expected) {
+        return (source.length() - source.replace(expected, "").length()) / expected.length();
     }
 
     private static Path findProjectRoot() {

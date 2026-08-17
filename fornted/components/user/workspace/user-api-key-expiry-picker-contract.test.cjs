@@ -39,6 +39,13 @@ test('expiry picker owns an inline accessible calendar with keyboard navigation'
 	assert.match(source, /@keydown\.esc="handleEscape"/)
 })
 
+test('expiry picker keyboard handling is compatible with Android runtimes without Object.hasOwn', () => {
+	const source = readComponent()
+
+	assert.doesNotMatch(source, /Object\.hasOwn\s*\(/)
+	assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(offsets, event\.key\)/)
+})
+
 test('expiry picker connects validation messages and expandable state to the input', () => {
 	const source = readComponent()
 
@@ -60,6 +67,16 @@ test('expiry picker uses the shared calendar icon in a centered 44 pixel control
 		/\.expiry-calendar-toggle\s*\{[^}]*width:\s*44px[^}]*height:\s*44px[^}]*min-height:\s*44px/)
 	assert.match(source,
 		/\.expiry-calendar-toggle\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center/)
+})
+
+test('calendar month controls keep 44 pixel hit targets around centered 30 pixel surfaces', () => {
+	const source = readComponent()
+
+	assert.match(source, /class="expiry-calendar-nav"[\s\S]{0,220}<uni-icons\s+type="left"/)
+	assert.match(source, /class="expiry-calendar-nav"[\s\S]{0,220}<uni-icons\s+type="right"/)
+	assert.doesNotMatch(source, />\s*[‹›]\s*<\/button>/)
+	assert.match(source,
+		/\.expiry-calendar-nav\s*\{[^}]*@include user-android-compact-control\(30px,\s*30px,\s*9px\)[^}]*width:\s*44px[^}]*height:\s*44px[^}]*min-height:\s*44px/)
 })
 
 test('expiry picker uses a four-column desktop grid and a two-column narrow layout', () => {

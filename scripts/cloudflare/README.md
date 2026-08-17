@@ -38,7 +38,7 @@ Azure Connector 尚未逐条验证并完成切换前，必须保留下面的 Win
 - `scripts/cloudflare/windows-legacy-tunnel/cloudflare-ip-guard.ps1`：运行 `cloudflared`、记录 PID、显示日志并监控出口地址变化。
 - `scripts/cloudflare/windows-legacy-tunnel/stop-cloudflare.ps1`：按 Profile 核对 PID、进程名、可执行文件和启动时间后停止对应 Tunnel。
 
-生产 H5 的目标入口是 Cloudflare Pages，不是本地 Tunnel。完整迁移步骤见 `docs/operations/frontend-public-deployment.md`。
+生产 H5 的公网入口是全量接管 `niko000o.site/*` 的 `api-gateway` Worker；Cloudflare Pages 只作为精确回源的生产静态文件源站，不是本地 Tunnel，也不直接决定 H5 路由。完整迁移步骤见 `docs/operations/frontend-public-deployment.md`。
 
 ## 环境变量
 

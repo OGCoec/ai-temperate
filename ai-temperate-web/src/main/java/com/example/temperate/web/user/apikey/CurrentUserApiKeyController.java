@@ -30,6 +30,7 @@ import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -58,6 +59,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class CurrentUserApiKeyController {
 
     private static final String CDN_CACHE_CONTROL = "CDN-Cache-Control";
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+    private static final java.util.regex.Pattern UUID_V4_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
 
     private final UserApiKeyService apiKeyService;
 
@@ -65,14 +70,30 @@ public class CurrentUserApiKeyController {
         this.apiKeyService = Objects.requireNonNull(apiKeyService);
     }
 
+    /**
+     * 创建请求必须提供规范 UUIDv4；该值只标识一次创建意图，不参与认证，也不能用于找回完整 Key。
+     */
     @PostMapping
-    @Operation(summary = "创建 API Key 并只返回一次完整凭证")
+    @Operation(
+            summary = "创建 API Key 并只返回一次完整凭证",
+            description = "必须携带 Idempotency-Key。相同创建意图正在处理或已经完成时返回 409；已经完成的请求不会再次返回完整 Key。")
     public ResponseEntity<CreatedKey> create(
             @AuthenticationPrincipal SessionPrincipal principal,
+            @RequestHeader(name = IDEMPOTENCY_KEY_HEADER, required = false)
+            @Parameter(
+                    required = true,
+                    description = "本次 API Key 创建意图的规范小写 UUIDv4；客户端必须安全生成新值，文档示例仅展示格式；结果未确认时必须原样复用。",
+                    schema = @Schema(
+                            pattern = "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            example = "550e8400-e29b-41d4-a716-446655440000"))
+            String idempotencyKey,
             @Valid @RequestBody CreateRequest request) {
         Created created = apiKeyService.create(
                 principal.userId(),
-                new CreateCommand(request.expiresAt(), request.modelPublicIds()));
+                new CreateCommand(
+                        parseIdempotencyKey(idempotencyKey),
+                        request.expiresAt(),
+                        request.modelPublicIds()));
         CreatedKey response = ApiKeyManagementResponse.from(created);
         return ResponseEntity.created(URI.create("/api/users/me/api-keys/" + response.id()))
                 .eTag(ApiKeyVersionTag.format(response.rowVersion()))
@@ -178,6 +199,25 @@ public class CurrentUserApiKeyController {
         return CacheControl.noStore().cachePrivate().noTransform();
     }
 
+    /**
+     * 创建幂等键只接受规范小写 UUIDv4，避免不同文本表示或带时间 UUID 被数据库视为同一业务协议。
+     */
+    private static UUID parseIdempotencyKey(String value) {
+        if (value == null || !UUID_V4_PATTERN.matcher(value).matches()) {
+            throw invalidIdempotencyKey();
+        }
+        UUID parsed;
+        try {
+            parsed = UUID.fromString(value);
+        } catch (IllegalArgumentException exception) {
+            throw invalidIdempotencyKey();
+        }
+        if (parsed.version() != 4 || !parsed.toString().equals(value)) {
+            throw invalidIdempotencyKey();
+        }
+        return parsed;
+    }
+
     /** 创建只接受过期时间与一至五百个模型公共 ID。 */
     public record CreateRequest(
             OffsetDateTime expiresAt,
@@ -214,5 +254,11 @@ public class CurrentUserApiKeyController {
         return new ApiKeyManagementException(
                 com.example.temperate.service.user.apikey.management.ApiKeyManagementErrorCode.INPUT_INVALID,
                 "API Key request contains an unsupported field");
+    }
+
+    private static ApiKeyManagementException invalidIdempotencyKey() {
+        return new ApiKeyManagementException(
+                com.example.temperate.service.user.apikey.management.ApiKeyManagementErrorCode.IDEMPOTENCY_KEY_INVALID,
+                "API Key idempotency key must be a canonical lowercase UUIDv4");
     }
 }

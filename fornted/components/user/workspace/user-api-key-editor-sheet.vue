@@ -201,11 +201,16 @@
 				return true
 			},
 			focusEditor() {
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				const editor = this.$refs.editor?.$el || this.$refs.editor
 				const first = editor?.querySelector?.('button:not([disabled]), input:not([disabled])')
 				;(first || editor)?.focus?.({ preventScroll: true })
+				// #endif
 			},
 			trapFocus(event) {
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				const target = this.deleteConfirmOpen ? this.$refs.deleteDialog : this.$refs.editor
 				const root = target?.$el || target
 				const focusable = Array.from(root?.querySelectorAll?.('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])
@@ -217,14 +222,18 @@
 				} else if (!event.shiftKey && document.activeElement === last) {
 					event.preventDefault(); first.focus()
 				}
+				// #endif
 			},
 			openDeleteConfirm() {
 				this.deleteConfirmOpen = true
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				this.$nextTick(() => {
 					const dialog = this.$refs.deleteDialog?.$el || this.$refs.deleteDialog
 					const first = dialog?.querySelector?.('button:not([disabled])')
 					;(first || dialog)?.focus?.({ preventScroll: true })
 				})
+				// #endif
 			},
 			closeDeleteConfirm() {
 				if (this.deleteBusy) return
@@ -412,7 +421,7 @@
 	.api-key-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 18px; border-bottom: 1px solid rgba(151, 170, 160, .13); }
 	.api-key-editor-title { display: block; font-size: 24px; font-weight: 760; }
 	.api-key-editor-key { display: block; margin-top: 6px; color: #8f9b95; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
-	.api-key-editor-close { width: 44px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: 0; padding: 0; box-sizing: border-box; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 0; line-height: 1; }
+	.api-key-editor-close { @include user-android-compact-control(34px, 34px, 11px); width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; margin: 0; padding: 0; color: #aeb9b3; }
 	.api-key-editor-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .72); }
 	.api-key-editor-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 24px; }
 	.api-key-editor-state { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #8f9b95; text-align: center; }
@@ -443,5 +452,5 @@
 	.api-key-delete-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
 	.api-key-delete-actions button { @include user-frosted-control; margin: 0; border-radius: 12px; color: #dce5e0; }
 	.api-key-delete-actions .confirm { border-color: rgba(222, 112, 95, .4); color: #ef9e92; }
-	@media screen and (max-width: 680px) { .api-key-editor { width: 100%; border-radius: 0; } .api-key-editor-heading { padding: 20px 16px 16px; } .api-key-editor-body { padding: 0 16px calc(20px + env(safe-area-inset-bottom)); } .api-key-conflict { align-items: stretch; flex-direction: column; } }
+	@media screen and (max-width: 680px) { .api-key-editor { width: 100%; border-radius: 0; } .api-key-editor-heading { padding: calc(12px + env(safe-area-inset-top)) 16px 16px; } .api-key-editor-body { padding: 0 16px calc(20px + env(safe-area-inset-bottom)); } .api-key-conflict { align-items: stretch; flex-direction: column; } }
 </style>

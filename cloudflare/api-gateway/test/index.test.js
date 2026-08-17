@@ -118,7 +118,7 @@ test('wrangler sends every ordinary root-domain path through this Worker', () =>
 	assert.match(config, /"pattern":\s*"admin\.niko000o\.site\/api\/\*"/)
 })
 
-test('valid H5 pages fetch only the Pages index without forwarding credentials or query', async () => {
+test('valid H5 pages fetch the Pages root without forwarding credentials or query', async () => {
 	const pagePaths = [
 		'/',
 		'/pages/launch/session-gate',
@@ -158,7 +158,7 @@ test('valid H5 pages fetch only the Pages index without forwarding credentials o
 
 		assert.equal(response.status, 200, path)
 		assert.equal(captured.url,
-			'https://ai-temperate-frontend.pages.dev/index.html', path)
+			'https://ai-temperate-frontend.pages.dev/', path)
 		assert.equal(captured.redirect, 'manual', path)
 		assert.equal(captured.headers.get('Cookie'), null, path)
 		assert.equal(captured.headers.get('Authorization'), null, path)
@@ -257,6 +257,45 @@ test('only generated H5 assets can reach Pages', async () => {
 	assert.equal(captured.url,
 		'https://ai-temperate-frontend.pages.dev/static/bootstrap/viewport-bootstrap.js?v=1')
 	assert.equal(upstreamCalls, 1)
+})
+
+test('H5 asset cache revalidation preserves an upstream 304 response', async () => {
+	const etag = 'W/"pcm16-worklet-test"'
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/static/voice/pcm16-worklet.js', {
+			headers: { 'If-None-Match': etag }
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, {
+				status: 304,
+				headers: {
+					ETag: etag,
+					'Cache-Control': 'public, max-age=0, must-revalidate'
+				}
+			})
+		})
+	)
+
+	assert.equal(captured.headers.get('If-None-Match'), etag)
+	assert.equal(response.status, 304)
+	assert.equal(response.headers.get('ETag'), etag)
+	assert.equal(await response.text(), '')
+})
+
+test('H5 assets reject upstream redirect and error statuses', async () => {
+	for (const upstreamStatus of [301, 302, 404, 500]) {
+		const response = await handleRequest(
+			request('niko000o.site', '/static/voice/pcm16-worklet.js'),
+			ENV,
+			runtime(() => new Response(null, { status: upstreamStatus }))
+		)
+
+		assert.equal(response.status, 502, String(upstreamStatus))
+		assert.equal(await response.text(), 'Bad Gateway', String(upstreamStatus))
+	}
 })
 
 test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, and keeps SSE unbuffered', async () => {

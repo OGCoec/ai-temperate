@@ -35,10 +35,14 @@
 		},
 		watch: {
 			open(value) {
-				if (value) this.$nextTick(() => {
+				if (!value) return
+				// #ifdef H5
+				if (typeof document === 'undefined') return
+				this.$nextTick(() => {
 					const acknowledge = this.$refs.acknowledge?.$el || this.$refs.acknowledge
 					acknowledge?.focus?.({ preventScroll: true })
 				})
+				// #endif
 			}
 		},
 		methods: {
@@ -59,6 +63,8 @@
 				})
 			},
 			trapFocus(event) {
+				// #ifdef H5
+				if (typeof document === 'undefined') return
 				const dialog = this.$refs.dialog?.$el || this.$refs.dialog
 				const focusable = Array.from(dialog?.querySelectorAll?.('button:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])
 				if (!focusable.length) return
@@ -69,6 +75,7 @@
 				} else if (!event.shiftKey && document.activeElement === last) {
 					event.preventDefault(); first.focus()
 				}
+				// #endif
 			}
 		}
 	}
@@ -87,5 +94,5 @@
 	.api-key-secret-field button, .api-key-secret-acknowledge { @include user-frosted-control; width: 100%; margin: 14px 0 0; border-radius: 12px; color: #dce5e0; }
 	.api-key-secret-note { display: block; margin-top: 18px; color: #8f9b95; font-size: 12px; line-height: 1.6; }
 	.api-key-secret-acknowledge { border-color: rgba(55, 211, 154, .48); background: rgba(55, 211, 154, .13); color: #75dfb7; font-weight: 720; }
-	@media screen and (max-width: 640px) { .api-key-secret-layer { padding: 0; align-items: stretch; } .api-key-secret-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; padding: 24px 16px calc(24px + env(safe-area-inset-bottom)); border-radius: 0; } }
+	@media screen and (max-width: 640px) { .api-key-secret-layer { padding: 0; align-items: stretch; } .api-key-secret-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; padding: calc(24px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); border-radius: 0; } }
 </style>
