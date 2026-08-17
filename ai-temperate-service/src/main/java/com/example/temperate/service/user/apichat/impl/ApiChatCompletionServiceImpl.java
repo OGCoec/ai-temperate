@@ -11,15 +11,27 @@ import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Reservation;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticBoundary;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticContext;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticSession;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticStage;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatFrameKind;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatStreamDiagnostic;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatStreamDiagnosticService;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapterRegistry;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser;
+import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Normalization;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedChunk;
+import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedEvent;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.Executor;
@@ -49,6 +61,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
     private final ObjectMapper objectMapper;
     private final Executor finalizerExecutor;
     private final MeterRegistry meterRegistry;
+    private final ApiChatStreamDiagnosticService diagnostics;
 
     public ApiChatCompletionServiceImpl(
             ApiChatRequestValidator requestValidator,
@@ -59,7 +72,8 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
             ApiChatSseParser sseParser,
             ObjectMapper objectMapper,
             @Qualifier("aiConversationFinalizerExecutor") Executor finalizerExecutor,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            ApiChatStreamDiagnosticService diagnostics) {
         this.requestValidator = Objects.requireNonNull(requestValidator);
         this.concurrencyService = Objects.requireNonNull(concurrencyService);
         this.billingService = Objects.requireNonNull(billingService);
@@ -69,9 +83,11 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.finalizerExecutor = Objects.requireNonNull(finalizerExecutor);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
+        this.diagnostics = Objects.requireNonNull(diagnostics);
     }
 
     @Override
+    @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.COMPLETION_SERVICE)
     public Flux<String> stream(ApiKeyPrincipal principal, ApiChatRequest request) {
         ValidatedApiChatRequest validated;
         ObjectNode payload;
@@ -121,60 +137,47 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         AtomicBoolean sseStarted = new AtomicBoolean();
         AtomicBoolean finalized = new AtomicBoolean();
 
-        Flux<String> upstream = withLeaseRenewal(upstreamClient.stream(payload), permit)
-                .concatMap(data -> {
-                    ParsedChunk parsed = sseParser.parse(data);
-                    if (done.get()) {
-                        return Mono.error(protocolError());
+        Flux<String> rawUpstream = diagnostics.observeBoundary(
+                withLeaseRenewal(upstreamClient.stream(payload), permit),
+                ApiChatDiagnosticBoundary.UPSTREAM_RAW,
+                data -> data.getBytes(StandardCharsets.UTF_8).length,
+                data -> "[DONE]".equals(data)
+                        ? ApiChatFrameKind.DONE : ApiChatFrameKind.DATA);
+        Flux<String> upstream = rawUpstream
+                .concatMap(data -> Flux.deferContextual(context -> {
+                    ApiChatDiagnosticSession diagnosticSession =
+                            ApiChatDiagnosticContext.session(context);
+                    ParsedEvent parsedEvent = sseParser.parse(data);
+                    if (parsedEvent.normalization()
+                            == Normalization.COMBINED_CHOICES_AND_USAGE) {
+                        diagnosticSession.recordNormalization(
+                                parsedEvent.normalization(),
+                                parsedEvent.chunks().size());
+                        count("combined_usage_normalized");
                     }
-                    if (usage.get() != null && !parsed.done()) {
-                        // 最终 Usage 出现后只允许紧接 [DONE]；后续任意输出都会令已记录用量不再可信。
-                        return Mono.error(protocolError());
-                    }
-                    if (parsed.output()) {
-                        emittedBytes.addAndGet(parsed.outputUtf8Bytes());
-                    }
-                    if (parsed.finishReason() != null) {
-                        finishReason.set(safeFinishReason(parsed.finishReason()));
-                    }
-                    if (parsed.done()) {
-                        if (usage.get() == null) {
-                            return Mono.error(protocolError());
-                        }
-                        done.set(true);
-                        return Mono.fromRunnable(() -> billingService.settle(
-                                reservation, usage.get(), finishReason.get()))
-                                .subscribeOn(Schedulers.boundedElastic())
-                                .retry(2)
-                                // 结算 I/O 失败与上游系统失败不是同一种终态；保留 RESERVED 让恢复任务处理，禁止给已完整输出的请求立即免单。
-                                .onErrorMap(SettlementPendingException::new)
-                                .thenReturn("[DONE]")
-                                .doOnSuccess(ignored -> {
-                                    sseStarted.set(true);
-                                    finalized.set(true);
-                                    count("settled");
-                                });
-                    }
-                    if (parsed.usage() != null) {
-                        if (!parsed.usageOnly()
-                                || !usage.compareAndSet(null, parsed.usage())) {
-                            return Mono.error(protocolError());
-                        }
-                        if (!validated.includeUsage()) {
-                            return Mono.empty();
-                        }
-                    }
-                    return Mono.fromSupplier(() -> {
-                        sseStarted.set(true);
-                        return parsed.serializedData();
-                    });
-                })
+                    // concatMap 把同一上游事件拆出的 choices 与 Usage 串行送入状态机，禁止重排后先看到 Usage。
+                    return Flux.fromIterable(parsedEvent.chunks())
+                            .concatMap(parsed -> processParsedChunk(
+                                    parsed,
+                                    validated,
+                                    reservation,
+                                    diagnosticSession,
+                                    usage,
+                                    emittedBytes,
+                                    finishReason,
+                                    done,
+                                    sseStarted,
+                                    finalized));
+                }))
                 .concatWith(Mono.defer(() -> done.get()
                         ? Mono.empty()
-                        : Mono.error(protocolError())));
+                        : Mono.error(protocolError(
+                                ApiChatProtocolViolation.STREAM_ENDED_WITHOUT_DONE))));
 
-        return upstream
-                .onErrorResume(exception -> {
+        Flux<String> guarded = upstream
+                .onErrorResume(exception -> Flux.deferContextual(context -> {
+                    var diagnosticSession = ApiChatDiagnosticContext.session(context);
+                    diagnosticSession.recordFailure(exception);
                     boolean settlementPending =
                             hasCause(exception, SettlementPendingException.class);
                     ApiChatException controlled = settlementPending
@@ -196,7 +199,13 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                         return refund.thenMany(Flux.error(controlled));
                     }
                     return refund.thenMany(Flux.just(errorData(controlled), "[DONE]"));
-                })
+                }));
+
+        return diagnostics.observeBoundary(
+                        guarded,
+                        ApiChatDiagnosticBoundary.SSE_EVENT_READY,
+                        data -> data.getBytes(StandardCharsets.UTF_8).length,
+                        ApiChatCompletionServiceImpl::outgoingFrameKind)
                 .doFinally(signal -> {
                     concurrencyService.release(permit);
                     if (signal == reactor.core.publisher.SignalType.CANCEL
@@ -220,6 +229,81 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                         }
                     }
                 });
+    }
+
+    private Mono<String> processParsedChunk(
+            ParsedChunk parsed,
+            ValidatedApiChatRequest validated,
+            Reservation reservation,
+            ApiChatDiagnosticSession diagnosticSession,
+            AtomicReference<Usage> usage,
+            AtomicLong emittedBytes,
+            AtomicReference<String> finishReason,
+            AtomicBoolean done,
+            AtomicBoolean sseStarted,
+            AtomicBoolean finalized) {
+        ApiChatFrameKind frameKind = frameKind(parsed);
+        diagnosticSession.recordBoundary(
+                ApiChatDiagnosticBoundary.AFTER_PROTOCOL_PARSE,
+                parsed.serializedData().getBytes(StandardCharsets.UTF_8).length,
+                frameKind);
+        if (done.get()) {
+            return Mono.error(protocolError(ApiChatProtocolViolation.DATA_AFTER_DONE));
+        }
+        if (parsed.done()) {
+            Usage finalUsage = usage.get();
+            if (finalUsage == null) {
+                return Mono.error(protocolError(
+                        ApiChatProtocolViolation.DONE_WITHOUT_USAGE));
+            }
+            done.set(true);
+            diagnosticSession.recordDone();
+            return Mono.fromRunnable(() -> billingService.settle(
+                            reservation, finalUsage, finishReason.get()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .retry(2)
+                    // 结算 I/O 失败与上游系统失败不是同一种终态；保留 RESERVED 让恢复任务处理，禁止给已完整输出的请求立即免单。
+                    .onErrorMap(SettlementPendingException::new)
+                    .thenReturn("[DONE]")
+                    .doOnSuccess(ignored -> {
+                        sseStarted.set(true);
+                        finalized.set(true);
+                        diagnosticSession.recordBoundary(
+                                ApiChatDiagnosticBoundary.AFTER_BUSINESS_GATE,
+                                "[DONE]".length(),
+                                ApiChatFrameKind.DONE);
+                        count("settled");
+                    });
+        }
+        if (parsed.usage() != null) {
+            // CAS 是唯一重复 Usage 判据；合并终态已在解析边界拆分，不能再靠帧形状推断重复。
+            if (!usage.compareAndSet(null, parsed.usage())) {
+                return Mono.error(protocolError(
+                        ApiChatProtocolViolation.DUPLICATE_USAGE));
+            }
+            diagnosticSession.recordUsage(parsed.usage(), validated.includeUsage());
+            if (!validated.includeUsage()) {
+                return Mono.empty();
+            }
+        } else if (usage.get() != null) {
+            // 第一份最终 Usage 后只允许真实上游 [DONE]；普通数据会令计费终态不再可信。
+            return Mono.error(protocolError(
+                    ApiChatProtocolViolation.DATA_AFTER_USAGE));
+        }
+        if (parsed.output()) {
+            emittedBytes.addAndGet(parsed.outputUtf8Bytes());
+        }
+        if (parsed.finishReason() != null) {
+            finishReason.set(safeFinishReason(parsed.finishReason()));
+        }
+        return Mono.fromSupplier(() -> {
+            sseStarted.set(true);
+            diagnosticSession.recordBoundary(
+                    ApiChatDiagnosticBoundary.AFTER_BUSINESS_GATE,
+                    parsed.serializedData().getBytes(StandardCharsets.UTF_8).length,
+                    frameKind);
+            return parsed.serializedData();
+        });
     }
 
     private Mono<Void> refundSystemFailure(
@@ -328,11 +412,31 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         return false;
     }
 
-    private static ApiChatException protocolError() {
+    private static ApiChatException protocolError(
+            ApiChatProtocolViolation violation) {
         return new ApiChatException(
                 ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
                 "The model upstream did not provide a valid final Usage and [DONE].",
-                null);
+                null,
+                new ApiChatProtocolViolationException(violation));
+    }
+
+    private static ApiChatFrameKind frameKind(ParsedChunk parsed) {
+        if (parsed.done()) {
+            return ApiChatFrameKind.DONE;
+        }
+        if (parsed.usage() != null) {
+            return ApiChatFrameKind.USAGE;
+        }
+        return parsed.output() ? ApiChatFrameKind.OUTPUT : ApiChatFrameKind.DATA;
+    }
+
+    private static ApiChatFrameKind outgoingFrameKind(String data) {
+        if ("[DONE]".equals(data)) {
+            return ApiChatFrameKind.DONE;
+        }
+        return data != null && data.startsWith("{\"error\"")
+                ? ApiChatFrameKind.ERROR : ApiChatFrameKind.DATA;
     }
 
     private static ApiChatException infrastructure(String message) {

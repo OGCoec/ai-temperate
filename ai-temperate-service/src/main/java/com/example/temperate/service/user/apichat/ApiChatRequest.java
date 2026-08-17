@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 
 /**
- * 该严格 DTO 是来承载第一版 OpenAI Chat Completions 白名单字段，并在每一层拒绝未知属性而不是透传给 8317 产生 422。
+ * 该严格 DTO 是来承载 OpenAI Chat Completions 与 Agent 路由所需的白名单字段，并在每一层拒绝未知属性而不是透传给 8317 产生 422。
  */
 public record ApiChatRequest(
         String model,
@@ -15,6 +15,10 @@ public record ApiChatRequest(
         @JsonProperty("stream_options") StreamOptions streamOptions,
         @JsonProperty("max_completion_tokens") JsonNode maxCompletionTokens,
         @JsonProperty("max_tokens") JsonNode maxTokens,
+        @JsonProperty("reasoning_effort") JsonNode reasoningEffort,
+        @JsonProperty("prompt_cache_key") JsonNode promptCacheKey,
+        JsonNode store,
+        @JsonProperty("service_tier") JsonNode serviceTier,
         JsonNode temperature,
         @JsonProperty("top_p") JsonNode topP,
         @JsonProperty("presence_penalty") JsonNode presencePenalty,
@@ -31,10 +35,11 @@ public record ApiChatRequest(
         throw ApiChatException.invalid("Request contains an unsupported field.", name);
     }
 
-    /** 消息只允许文本 content、assistant tool_calls 和 tool_call_id 三类核心字段。 */
+    /** 消息只允许字符串或纯文本 parts content、assistant 推理历史、tool_calls 和 tool_call_id 四类核心字段。 */
     public record Message(
             String role,
             JsonNode content,
+            @JsonProperty("reasoning_content") JsonNode reasoningContent,
             @JsonProperty("tool_calls") List<ToolCall> toolCalls,
             @JsonProperty("tool_call_id") String toolCallId) {
 

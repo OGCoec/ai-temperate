@@ -1,37 +1,25 @@
+import {
+	isH5AssetPath,
+	isH5PagePath,
+	matchRootApiRoute
+} from './main-site-policy.js'
+
 const ROOT_HOST = 'niko000o.site'
 const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
-const API_CHAT_COMPLETIONS_PATH = '/v1/chat/completions'
+const API_KEY_MANAGEMENT_COLLECTION_PATH = '/api/users/me/api-keys'
+const API_KEY_MANAGEMENT_ITEM_PATH =
+	/^\/api\/users\/me\/api-keys\/[A-Za-z0-9_-]{11}$/
+const API_KEY_MANAGEMENT_MODELS_PATH =
+	/^\/api\/users\/me\/api-keys\/[A-Za-z0-9_-]{11}\/models$/
+const STRONG_API_KEY_ETAG = /^"v(0|[1-9][0-9]*)"$/
 const VOICE_WEBSOCKET_PATH = '/ws/voice'
 const VOICE_WEBSOCKET_PROTOCOL = 'ait-voice-v2'
 const VOICE_TICKET_PROTOCOL = /^ait-ticket\.[A-Za-z0-9_-]{43}$/
 const VOICE_WEBSOCKET_REJECTION_STATUSES = new Set([400, 401, 403, 428, 503])
-const ANDROID_CLEARANCE_PATH = '/__edge/android-clearance'
-const ANDROID_CLEARANCE_STATUS_PATH = '/__edge/android-clearance/status'
 const TURNSTILE_PAGE_PATH = '/api/auth/turnstile/page'
 const CLOUDFLARE_CLEARANCE_COOKIE = 'cf_clearance'
 const SIGNATURE_VERSION = 'v2'
-const AI_MODEL_DETAIL_PATH =
-	/^\/api\/ai-models\/[A-Za-z0-9_-]{11}$/
-const AI_CONVERSATION_MESSAGES_PATH =
-	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/messages$/
-const AI_CONVERSATION_RESPONSE_PATH =
-	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/responses$/
-const AI_CONVERSATION_CONTEXT_USAGE_PATH =
-	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/context-usage$/
-const AI_CONVERSATION_COMPACTION_PATH =
-	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/compactions$/
-const AI_CONVERSATION_CONTEXT_EVENTS_PATH =
-	/^\/api\/ai\/conversations\/[A-Za-z0-9_-]{22}\/context\/events$/
-const AI_CONVERSATION_GENERATION_EVENTS_PATH =
-	/^\/api\/ai\/conversations\/generations\/([A-Za-z0-9_-]{22})\/events$/
-const AI_CONVERSATION_GENERATION_DIAGNOSTICS_PATH =
-	/^\/api\/ai\/conversations\/generations\/[A-Za-z0-9_-]{22}\/stream-diagnostics$/
-const AI_CONVERSATION_GENERATION_PATH =
-	/^\/api\/ai\/conversations\/generations\/[A-Za-z0-9_-]{22}$/
-const AI_CONVERSATION_GENERATION_CANCELLATION_PATH =
-	/^\/api\/ai\/conversations\/generations\/[A-Za-z0-9_-]{22}\/cancel$/
-
 const EDGE_VERSION_HEADER = 'X-AIT-Edge-Version'
 const EDGE_HOST_HEADER = 'X-AIT-Edge-Host'
 const EDGE_TIMESTAMP_HEADER = 'X-AIT-Edge-Timestamp'
@@ -142,25 +130,32 @@ export async function handleRequest(request, env, runtime = {}) {
 	const url = new URL(request.url)
 	const route = classifyRoute(url)
 	if (!route.allowed) {
-		return isApiKeySdkSurface(url)
-			? openAiError(route.status, 'invalid_request',
-				'The requested API route is not available.')
-			: jsonError(route.status, route.code)
+		logRouteRejection(request, route, env, runtime)
+		return rejectedRouteResponse(url, route)
+	}
+	if (route.allowedMethods
+		&& !route.allowedMethods.includes(request.method)) {
+		const rejected = {
+			...route,
+			status: 405,
+			category: 'METHOD_NOT_ALLOWED'
+		}
+		logRouteRejection(request, rejected, env, runtime)
+		return methodNotAllowedResponse(route)
+	}
+	if (route.h5Resource) {
+		return h5ResourceResponse(request, env, route, fetchImpl)
 	}
 	if (route.androidClearance) {
-		if (request.method !== 'GET') {
-			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
-		}
 		return androidClearanceResponse(request, route.androidClearance)
 	}
 	const sseDiagnostic = createSseDiagnostic(route, request, env, runtime)
 	const voiceDiagnostic = createVoiceWebSocketDiagnostic(
 		route, request, runtime, now)
+	const apiKeyDiagnostic = createApiKeySdkDiagnostic(
+		route, request, env, runtime, now, Boolean(sseDiagnostic))
 
 	if (route.migration) {
-		if (request.method !== 'POST') {
-			return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'POST' })
-		}
 		return migrationResponse(request)
 	}
 	if (route.webSocket) {
@@ -186,12 +181,6 @@ export async function handleRequest(request, env, runtime = {}) {
 			})
 			return jsonError(400, 'EDGE_WEBSOCKET_PROTOCOL_INVALID')
 		}
-	} else if (route.apiKeySdk && request.method !== 'POST') {
-		return routeError(route, 405, 'method_not_allowed', {
-			Allow: 'POST'
-		})
-	} else if (route.riskChallenge && request.method !== 'GET') {
-		return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: 'GET' })
 	} else if (!API_METHODS.includes(request.method)) {
 		return jsonError(405, 'METHOD_NOT_ALLOWED', {
 			Allow: API_METHODS.join(', ')
@@ -204,6 +193,11 @@ export async function handleRequest(request, env, runtime = {}) {
 			? transport.kind : 'INVALID'
 	}
 	if (!transport.allowed) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'EDGE_ROUTE_REJECTED',
+			upstreamAttempted: false,
+			returnedStatus: transport.status
+		})
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
 		})
@@ -218,12 +212,22 @@ export async function handleRequest(request, env, runtime = {}) {
 		return jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
 	}
 	if (env.API_UPSTREAM_ORIGIN !== UPSTREAM_ORIGIN) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'EDGE_ROUTE_REJECTED',
+			upstreamAttempted: false,
+			returnedStatus: 503
+		})
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_UPSTREAM_CONFIGURATION_INVALID'
 		})
 		return routeError(route, 503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID')
 	}
 	if (!request.headers.get('CF-Ray')) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'EDGE_ROUTE_REJECTED',
+			upstreamAttempted: false,
+			returnedStatus: 503
+		})
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_RAY_UNAVAILABLE'
 		})
@@ -231,6 +235,7 @@ export async function handleRequest(request, env, runtime = {}) {
 	}
 
 	let upstreamResponse
+	let upstreamAttempted = false
 	try {
 		const upstreamRequest = await signedUpstreamRequest(
 			request,
@@ -239,8 +244,14 @@ export async function handleRequest(request, env, runtime = {}) {
 			transport,
 			now,
 			voiceDiagnostic)
+		upstreamAttempted = true
 		upstreamResponse = await fetchImpl(upstreamRequest)
 	} catch (error) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'UPSTREAM_NETWORK_ERROR',
+			upstreamAttempted,
+			returnedStatus: route.apiKeySdk ? 503 : 502
+		})
 		logSseRequest(sseDiagnostic, null)
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_UPSTREAM_UNAVAILABLE',
@@ -253,6 +264,12 @@ export async function handleRequest(request, env, runtime = {}) {
 	if ((route.apiKeySdk && upstreamResponse.status >= 300
 			&& upstreamResponse.status < 400)
 		|| isCrossHostRedirect(upstreamResponse, route.surface)) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'UPSTREAM_REDIRECT_REJECTED',
+			upstreamAttempted: true,
+			upstreamResponse,
+			returnedStatus: 502
+		})
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			...voiceUpstreamDiagnostic(upstreamResponse),
 			edgeOutcome: 'EDGE_UPSTREAM_REDIRECT_REJECTED'
@@ -268,124 +285,43 @@ export async function handleRequest(request, env, runtime = {}) {
 		upstreamResponse,
 		route.surface,
 		route.streaming === true,
-		transport)
+		transport,
+		route.apiKeyManagement === true,
+		requiresApiKeyStrongEtag(request.method, url.pathname),
+		apiKeyDiagnostic)
 	return instrumentSseResponse(response, sseDiagnostic, runtime)
 }
 
 function classifyRoute(url) {
-	if (unsafePath(url.pathname)) {
-		return denied()
-	}
 	if (url.hostname === ROOT_HOST) {
-		if (url.pathname === API_CHAT_COMPLETIONS_PATH) {
+		if (unsafePath(url.pathname)) {
+			return rootRouteNotFound(url.pathname, 'H5_PATH_UNSAFE')
+		}
+		const apiRoute = matchRootApiRoute(url.pathname)
+		if (apiRoute) {
+			return apiRoute.allowed === false
+				? apiRoute
+				: { ...apiRoute, allowed: true }
+		}
+		if (isH5PagePath(url.pathname)) {
 			return {
 				allowed: true,
-				migration: false,
 				surface: 'root',
-				streaming: true,
-				apiKeySdk: true,
-				routeTemplate: API_CHAT_COMPLETIONS_PATH
+				h5Resource: 'page',
+				allowedMethods: ['GET', 'HEAD']
 			}
 		}
-		if (url.pathname === ANDROID_CLEARANCE_PATH) {
+		if (isH5AssetPath(url.pathname)) {
 			return {
 				allowed: true,
-				androidClearance: 'page',
-				surface: 'root'
-			}
-		}
-		if (url.pathname === ANDROID_CLEARANCE_STATUS_PATH) {
-			return {
-				allowed: true,
-				androidClearance: 'status',
-				surface: 'root'
-			}
-		}
-		if (url.pathname === '/api/_edge/cookie-scope') {
-			return { allowed: true, migration: true, surface: 'root' }
-		}
-		if (url.pathname === '/api/_edge/risk-challenge') {
-			return {
-				allowed: true,
-				migration: false,
-				riskChallenge: true,
-				surface: 'root'
-			}
-		}
-		if (url.pathname === VOICE_WEBSOCKET_PATH) {
-			return {
-				allowed: true,
-				migration: false,
 				surface: 'root',
-				webSocket: true,
-				routeTemplate: VOICE_WEBSOCKET_PATH
+				h5Resource: 'asset',
+				allowedMethods: ['GET', 'HEAD']
 			}
 		}
-		const conversationResponse =
-			url.pathname === '/api/ai/conversations/responses'
-			|| AI_CONVERSATION_RESPONSE_PATH.test(url.pathname)
-		if (conversationResponse) {
-			return {
-				allowed: true,
-				migration: false,
-				surface: 'root',
-				streaming: true,
-				routeTemplate: url.pathname === '/api/ai/conversations/responses'
-					? '/api/ai/conversations/responses'
-					: '/api/ai/conversations/{conversationId}/responses'
-			}
-		}
-		const generationEvents = url.pathname.match(
-			AI_CONVERSATION_GENERATION_EVENTS_PATH)
-		if (generationEvents) {
-			return {
-				allowed: true,
-				migration: false,
-				surface: 'root',
-				streaming: true,
-				generationPublicId: generationEvents[1],
-				routeTemplate:
-					'/api/ai/conversations/generations/{generationId}/events'
-			}
-		}
-		if (AI_CONVERSATION_CONTEXT_EVENTS_PATH.test(url.pathname)) {
-			return {
-				allowed: true,
-				migration: false,
-				surface: 'root',
-				streaming: true,
-				routeTemplate:
-					'/api/ai/conversations/{conversationId}/context/events'
-			}
-		}
-		if (AI_CONVERSATION_GENERATION_DIAGNOSTICS_PATH.test(url.pathname)) {
-			return { allowed: true, migration: false, surface: 'root' }
-		}
-		const generationControlPath =
-			url.pathname === '/api/ai/conversations/generations'
-			|| url.pathname === '/api/ai/conversations/generations/by-idempotency'
-			|| AI_CONVERSATION_GENERATION_PATH.test(url.pathname)
-			|| AI_CONVERSATION_GENERATION_CANCELLATION_PATH.test(url.pathname)
-		const ordinaryAiPath =
-			url.pathname === '/api/ai-models'
-			|| AI_MODEL_DETAIL_PATH.test(url.pathname)
-			|| url.pathname === '/api/ai/conversations'
-			|| url.pathname === '/api/ai/conversations/responses/cancel'
-			|| AI_CONVERSATION_MESSAGES_PATH.test(url.pathname)
-			|| AI_CONVERSATION_CONTEXT_USAGE_PATH.test(url.pathname)
-			|| AI_CONVERSATION_COMPACTION_PATH.test(url.pathname)
-			|| url.pathname === '/api/ai/conversation-attachments/preuploads'
-			|| url.pathname === '/api/ai/conversations/stream-diagnostics'
-		if (url.pathname === '/api/health'
-			|| url.pathname === '/api/_edge/pre-auth'
-			|| url.pathname === '/api/_edge/webrtc/start'
-			|| url.pathname === '/api/_edge/webrtc/report'
-			|| pathWithin(url.pathname, '/api/auth')
-			|| pathWithin(url.pathname, '/api/users')
-			|| generationControlPath
-			|| ordinaryAiPath) {
-			return { allowed: true, migration: false, surface: 'root' }
-		}
+		return rootRouteNotFound(url.pathname)
+	}
+	if (unsafePath(url.pathname)) {
 		return denied()
 	}
 	if (url.hostname === ADMIN_HOST) {
@@ -424,23 +360,326 @@ function classifyRoute(url) {
 	return { allowed: false, status: 404, code: 'EDGE_ROUTE_NOT_FOUND' }
 }
 
+function rootRouteNotFound(pathname, category) {
+	const resolvedCategory = category
+		|| (pathWithin(pathname, '/api') || pathWithin(pathname, '/v1')
+			? 'API_ROUTE_NOT_FOUND'
+			: pathWithin(pathname, '/assets') || pathWithin(pathname, '/static')
+				? 'STATIC_ASSET_NOT_FOUND'
+				: 'H5_ROUTE_NOT_FOUND')
+	return {
+		allowed: false,
+		status: 404,
+		code: 'EDGE_ROUTE_NOT_FOUND',
+		category: resolvedCategory,
+		surface: 'root'
+	}
+}
+
 function pathWithin(pathname, prefix) {
 	return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+function requiresApiKeyStrongEtag(method, pathname) {
+	if (method === 'POST') {
+		return pathname === API_KEY_MANAGEMENT_COLLECTION_PATH
+	}
+	if (method === 'GET') {
+		return API_KEY_MANAGEMENT_ITEM_PATH.test(pathname)
+	}
+	return method === 'PUT'
+		&& (API_KEY_MANAGEMENT_ITEM_PATH.test(pathname)
+			|| API_KEY_MANAGEMENT_MODELS_PATH.test(pathname))
 }
 
 function unsafePath(pathname) {
 	return pathname.includes('//')
 		|| pathname.includes('\\')
 		|| pathname.includes('%')
+		|| (pathname.length > 1 && pathname.endsWith('/'))
 }
 
 function denied() {
 	return { allowed: false, status: 403, code: 'EDGE_ROUTE_FORBIDDEN' }
 }
 
+function rejectedRouteResponse(url, route) {
+	if (url.hostname === ROOT_HOST && isApiKeySdkSurface(url)) {
+		return openAiError(
+			route.status,
+			route.code,
+			'The requested API route is not available.')
+	}
+	if (url.hostname === ROOT_HOST && pathWithin(url.pathname, '/api')) {
+		return jsonError(route.status, route.code)
+	}
+	if (url.hostname === ROOT_HOST) {
+		return plainSiteError(route.status, route.status === 404
+			? 'Not Found' : 'Bad Request')
+	}
+	return jsonError(route.status, route.code)
+}
+
+function methodNotAllowedResponse(route) {
+	const allow = route.allowedMethods.join(', ')
+	if (route.apiKeySdk) {
+		return routeError(route, 405, 'method_not_allowed', { Allow: allow })
+	}
+	if (route.h5Resource) {
+		return plainSiteError(405, 'Method Not Allowed', { Allow: allow })
+	}
+	return jsonError(405, 'METHOD_NOT_ALLOWED', { Allow: allow })
+}
+
+function plainSiteError(status, body, additionalHeaders = {}) {
+	const headers = new Headers({
+		'Cache-Control': 'no-store',
+		'CDN-Cache-Control': 'no-store',
+		'Content-Security-Policy': "default-src 'none'",
+		'Content-Type': 'text/plain; charset=utf-8',
+		Pragma: 'no-cache',
+		'X-Content-Type-Options': 'nosniff',
+		'X-Robots-Tag': 'noindex, nofollow'
+	})
+	for (const [name, value] of Object.entries(additionalHeaders)) {
+		headers.set(name, value)
+	}
+	return new Response(body, { status, headers })
+}
+
+async function h5ResourceResponse(request, env, route, fetchImpl) {
+	const pagesOrigin = validatedPagesOrigin(env.H5_PAGES_ORIGIN)
+	if (!pagesOrigin) {
+		return plainSiteError(503, 'Service Unavailable')
+	}
+	const sourceUrl = new URL(request.url)
+	const targetUrl = new URL(
+		route.h5Resource === 'page' ? '/index.html' : sourceUrl.pathname,
+		pagesOrigin)
+	if (route.h5Resource === 'asset') {
+		targetUrl.search = sourceUrl.search
+	}
+	const headers = new Headers()
+	for (const name of [
+		'Accept',
+		'If-Modified-Since',
+		'If-None-Match',
+		'Range'
+	]) {
+		const value = request.headers.get(name)
+		if (value) headers.set(name, value)
+	}
+	if (route.h5Resource === 'page') {
+		headers.set('Accept', 'text/html')
+	}
+
+	let upstream
+	try {
+		upstream = await fetchImpl(new Request(targetUrl, {
+			method: request.method,
+			headers,
+			redirect: 'manual',
+			signal: request.signal
+		}))
+	} catch {
+		return plainSiteError(502, 'Bad Gateway')
+	}
+	if ((upstream.status >= 300 && upstream.status < 400)
+		|| (upstream.status !== 304
+			&& (upstream.status < 200 || upstream.status >= 300))) {
+		return plainSiteError(502, 'Bad Gateway')
+	}
+	const contentType = headerValue(upstream.headers, 'Content-Type')
+		.split(';', 1)[0].trim().toLowerCase()
+	if (upstream.status !== 304
+		&& ((route.h5Resource === 'page' && contentType !== 'text/html')
+			|| (route.h5Resource === 'asset' && contentType === 'text/html'))) {
+		return plainSiteError(502, 'Bad Gateway')
+	}
+
+	const responseHeaders = new Headers(upstream.headers)
+	responseHeaders.delete('Set-Cookie')
+	responseHeaders.delete('Location')
+	responseHeaders.set('X-Content-Type-Options', 'nosniff')
+	if (route.h5Resource === 'page') {
+		responseHeaders.set(
+			'Cache-Control', 'no-cache, no-store, must-revalidate')
+		responseHeaders.set('CDN-Cache-Control', 'no-store')
+		responseHeaders.set('Pragma', 'no-cache')
+	} else if (sourceUrl.pathname.startsWith('/assets/')) {
+		responseHeaders.set(
+			'Cache-Control', 'public, max-age=31536000, immutable')
+	}
+	return new Response(
+		request.method === 'HEAD' ? null : upstream.body,
+		{
+			status: upstream.status,
+			statusText: upstream.statusText,
+			headers: responseHeaders
+		})
+}
+
+function validatedPagesOrigin(value) {
+	if (typeof value !== 'string' || !value) return null
+	try {
+		const url = new URL(value)
+		if (url.protocol !== 'https:'
+			|| !url.hostname.endsWith('.pages.dev')
+			|| url.port
+			|| url.username
+			|| url.password
+			|| (url.pathname !== '/' && url.pathname !== '')
+			|| url.search
+			|| url.hash) {
+			return null
+		}
+		return url
+	} catch {
+		return null
+	}
+}
+
+function logRouteRejection(request, route, env, runtime) {
+	const url = new URL(request.url)
+	if (url.hostname !== ROOT_HOST) return
+	const logger = runtime.log || console
+	try {
+		logger.warn(JSON.stringify({
+			event: 'main_site_route_rejected',
+			category: route.category || 'API_ROUTE_NOT_FOUND',
+			method: request.method,
+			host: ROOT_HOST,
+			cfRay: headerValue(request.headers, 'CF-Ray') || 'ABSENT',
+			status: route.status,
+			upstreamAttempted: false
+		}))
+	} catch {
+		// 日志后端异常不能改变边缘的失败关闭结果。
+	}
+	if (isApiKeySdkSurface(url)
+		&& env.API_KEY_STREAM_DIAGNOSTICS_ENABLED === 'true') {
+		try {
+			logger.warn(JSON.stringify({
+				event: 'api_key_sdk_edge_summary',
+				diagnosticSchema: 'chat-diag-v1',
+				cfRay: safeApiKeyDiagnosticIdentifier(
+					headerValue(request.headers, 'CF-Ray')),
+				springTraceId: 'ABSENT',
+				route: route.routeTemplate || '/v1/{unmatched}',
+				method: request.method,
+				elapsedMs: 0,
+				upstreamAttempted: false,
+				upstreamStatus: -1,
+				upstreamContentType: 'unknown',
+				expectedContentType: 'application/json',
+				edgeOutcome: 'EDGE_ROUTE_REJECTED',
+				returnedStatus: route.status
+			}))
+		} catch {
+			// API Key 路由诊断失败不得改变既有拒绝响应。
+		}
+	}
+}
+
+function createApiKeySdkDiagnostic(
+	route,
+	request,
+	env,
+	runtime,
+	now,
+	streamSuccessSampled) {
+	if (!route?.apiKeySdk
+		|| env.API_KEY_STREAM_DIAGNOSTICS_ENABLED !== 'true') return null
+	let successSampled = streamSuccessSampled
+	if (!route.streaming) {
+		const sampleRate = Number(env.SSE_ROUTE_LOG_SAMPLE_RATE)
+		const random = runtime.random || Math.random
+		successSampled = Number.isFinite(sampleRate)
+			&& sampleRate > 0
+			&& random() < Math.min(1, sampleRate)
+	}
+	return {
+		logger: runtime.log || console,
+		now,
+		startedAt: safeApiKeyDiagnosticNow(now),
+		cfRay: safeApiKeyDiagnosticIdentifier(
+			headerValue(request.headers, 'CF-Ray')),
+		route: route.routeTemplate,
+		method: request.method,
+		streaming: route.streaming === true,
+		successSampled,
+		logged: false
+	}
+}
+
+function finishApiKeySdkDiagnostic(diagnostic, values) {
+	if (!diagnostic || diagnostic.logged) return
+	diagnostic.logged = true
+	const success = values.edgeOutcome === 'SSE_SUCCESS'
+		|| values.edgeOutcome === 'JSON_SUCCESS'
+	if (success && !diagnostic.successSampled) return
+	const upstream = values.upstreamResponse
+	const upstreamStatus = upstream?.status ?? -1
+	const upstreamContentType = normalizedApiKeyContentType(upstream?.headers)
+	const expectedContentType = values.expectedContentType
+		|| (upstreamStatus >= 200 && upstreamStatus < 300
+			? (diagnostic.streaming
+				? 'text/event-stream' : 'application/json')
+			: 'application/json')
+	const entry = {
+		event: 'api_key_sdk_edge_summary',
+		diagnosticSchema: 'chat-diag-v1',
+		cfRay: diagnostic.cfRay,
+		springTraceId: safeApiKeyDiagnosticIdentifier(
+			upstream?.headers
+				? headerValue(upstream.headers, 'X-Trace-Id') : ''),
+		route: diagnostic.route,
+		method: diagnostic.method,
+		elapsedMs: Math.max(0,
+			safeApiKeyDiagnosticNow(diagnostic.now) - diagnostic.startedAt),
+		upstreamAttempted: values.upstreamAttempted === true,
+		upstreamStatus,
+		upstreamContentType,
+		expectedContentType,
+		edgeOutcome: values.edgeOutcome,
+		returnedStatus: values.returnedStatus
+	}
+	try {
+		const log = success ? diagnostic.logger.info : diagnostic.logger.warn
+		if (typeof log === 'function') {
+			log.call(diagnostic.logger, JSON.stringify(entry))
+		}
+	} catch {
+		// 诊断输出是旁路行为，失败时不能改变 API Key SDK 响应。
+	}
+}
+
+function normalizedApiKeyContentType(headers) {
+	if (!headers) return 'unknown'
+	const value = headerValue(headers, 'Content-Type')
+		.split(';', 1)[0].trim().toLowerCase()
+	return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(value)
+		? value : 'unknown'
+}
+
+function safeApiKeyDiagnosticIdentifier(value) {
+	const normalized = String(value || '').trim()
+	return /^[A-Za-z0-9_-]{1,128}$/.test(normalized)
+		? normalized : 'ABSENT'
+}
+
+function safeApiKeyDiagnosticNow(now) {
+	try {
+		const value = Number(now())
+		return Number.isFinite(value) ? value : 0
+	} catch {
+		return 0
+	}
+}
+
 function classifyClientTransport(request, route, url) {
 	if (route.apiKeySdk) {
-		return classifyApiKeySdkTransport(request)
+		return classifyApiKeySdkTransport(request, route)
 	}
 	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim()
@@ -469,7 +708,7 @@ function classifyClientTransport(request, route, url) {
 	return { allowed: true, kind: ANDROID_TRANSPORT }
 }
 
-function classifyApiKeySdkTransport(request) {
+function classifyApiKeySdkTransport(request, route) {
 	const authorization = headerValue(request.headers, 'Authorization')
 	if (!/^Bearer [^\s,]+$/.test(authorization)) {
 		return {
@@ -478,17 +717,17 @@ function classifyApiKeySdkTransport(request) {
 			code: 'invalid_api_key'
 		}
 	}
+	// 只用浏览器凭据上下文头阻止长期 Key；Fetch Metadata 可能由 Node Fetch 附加，不能充当身份判据。
 	if (request.headers.has('Cookie')
 		|| request.headers.has('Origin')
-		|| request.headers.has('Referer')
-		|| hasFetchMetadata(request.headers)) {
+		|| request.headers.has('Referer')) {
 		return {
 			allowed: false,
 			status: 403,
 			code: 'browser_request_not_allowed'
 		}
 	}
-	if (!validApiKeySdkAccept(request.headers.get('Accept'))) {
+	if (!validApiKeySdkAccept(request.headers.get('Accept'), route.streaming)) {
 		return {
 			allowed: false,
 			status: 400,
@@ -498,9 +737,11 @@ function classifyApiKeySdkTransport(request) {
 	return { allowed: true, kind: API_KEY_SDK_TRANSPORT }
 }
 
-function validApiKeySdkAccept(value) {
+function validApiKeySdkAccept(value, streaming) {
 	if (value === null || value.trim() === '') return true
-	const allowed = new Set(['text/event-stream', 'application/json', '*/*'])
+	const allowed = streaming
+		? new Set(['text/event-stream', 'application/json', '*/*'])
+		: new Set(['application/json', '*/*'])
 	return value.split(',').every(part => {
 		const mediaType = part.split(';', 1)[0].trim().toLowerCase()
 		return allowed.has(mediaType)
@@ -613,8 +854,9 @@ async function signedUpstreamRequest(
 		headers.delete('Origin')
 		headers.delete('Referer')
 		headers.delete(CLIENT_PLATFORM_HEADER)
-		// 客户端可以使用 OpenAI SDK 常见 Accept；回源统一声明 SSE，避免 Spring 内容协商把合法流式请求判为 406。
-		headers.set('Accept', 'text/event-stream')
+		// Chat 成功时仍必须是 SSE；额外接受 JSON 只用于让源站返回可诊断的 4xx/5xx 错误包络。
+		headers.set('Accept', route.streaming
+			? 'text/event-stream, application/json;q=0.9' : 'application/json')
 		for (const name of [...headers.keys()]) {
 			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
 		}
@@ -890,15 +1132,34 @@ function androidClearancePage(nonce) {
 		+ '</body></html>'
 }
 
-function guardedResponse(response, surface, streaming = false, transport = null) {
+function guardedResponse(
+	response,
+	surface,
+	streaming = false,
+	transport = null,
+	apiKeyManagement = false,
+	requiresStrongEtag = false,
+	apiKeyDiagnostic = null) {
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'UPSTREAM_SET_COOKIE_REJECTED',
+			upstreamAttempted: true,
+			upstreamResponse: response,
+			returnedStatus: 502
+		})
 		return transport?.kind === API_KEY_SDK_TRANSPORT
 			? openAiError(502, 'upstream_protocol_error',
 				'The upstream response could not be validated.')
 			: jsonError(502, 'EDGE_SET_COOKIE_API_UNAVAILABLE')
 	}
 	if (transport?.kind === API_KEY_SDK_TRANSPORT && setCookies.length > 0) {
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: 'UPSTREAM_SET_COOKIE_REJECTED',
+			upstreamAttempted: true,
+			upstreamResponse: response,
+			returnedStatus: 502
+		})
 		return openAiError(502, 'upstream_protocol_error',
 			'The upstream response violated the API cookie policy.')
 	}
@@ -906,8 +1167,15 @@ function guardedResponse(response, surface, streaming = false, transport = null)
 		const contentType = headerValue(response.headers, 'Content-Type')
 			.split(';', 1)[0].trim().toLowerCase()
 		const expected = response.status >= 200 && response.status < 300
-			? 'text/event-stream' : 'application/json'
+			? (streaming ? 'text/event-stream' : 'application/json') : 'application/json'
 		if (contentType !== expected) {
+			finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+				edgeOutcome: 'UPSTREAM_CONTENT_TYPE_INVALID',
+				upstreamAttempted: true,
+				upstreamResponse: response,
+				expectedContentType: expected,
+				returnedStatus: 502
+			})
 			return openAiError(502, 'upstream_protocol_error',
 				'The upstream response used an invalid content type.')
 		}
@@ -923,20 +1191,46 @@ function guardedResponse(response, surface, streaming = false, transport = null)
 			return jsonError(502, 'EDGE_COOKIE_POLICY_VIOLATION')
 		}
 	}
+	if (requiresStrongEtag
+		&& response.status >= 200
+		&& response.status < 300
+		&& !STRONG_API_KEY_ETAG.test(headerValue(response.headers, 'ETag'))) {
+		return jsonError(502, 'EDGE_UPSTREAM_ETAG_INVALID', {
+			'Cache-Control': 'no-store, private, no-transform'
+		})
+	}
 
 	const headers = new Headers(response.headers)
 	headers.delete('Set-Cookie')
 	for (const cookie of setCookies) headers.append('Set-Cookie', cookie)
 	applyNoStore(headers)
+	if (apiKeyManagement || transport?.kind === API_KEY_SDK_TRANSPORT) {
+		// API Key 管理与公开 SDK 协议都不得被边缘压缩或重写；前者还依赖强 ETag 作为乐观锁版本。
+		headers.set('Cache-Control', 'no-store, private, no-transform')
+	}
 	if (streaming) {
 		headers.set('Cache-Control', 'no-store, private, no-transform')
 		headers.set('X-Accel-Buffering', 'no')
 	}
-	return new Response(response.body, {
+	const guarded = new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,
 		headers
 	})
+	if (transport?.kind === API_KEY_SDK_TRANSPORT) {
+		const success = response.status >= 200 && response.status < 300
+		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
+			edgeOutcome: success
+				? (streaming ? 'SSE_SUCCESS' : 'JSON_SUCCESS')
+				: 'JSON_ERROR_FORWARDED',
+			upstreamAttempted: true,
+			upstreamResponse: response,
+			expectedContentType: success && streaming
+				? 'text/event-stream' : 'application/json',
+			returnedStatus: guarded.status
+		})
+	}
+	return guarded
 }
 
 function guardedWebSocketResponse(response, transport, diagnostic) {
@@ -1293,8 +1587,10 @@ function routeError(route, status, code, additionalHeaders = {}) {
 		invalid_api_key: 'Invalid API Key.',
 		browser_request_not_allowed:
 			'Browser requests are not allowed for long-lived API Keys.',
-		invalid_accept: 'Accept must allow text/event-stream or application/json.',
-		method_not_allowed: 'Only POST is allowed for this endpoint.',
+		invalid_accept: route?.streaming === false
+			? 'Accept must allow application/json.'
+			: 'Accept must allow text/event-stream or application/json.',
+		method_not_allowed: `Only ${(route?.allowedMethods || ['POST']).join(' or ')} is allowed for this endpoint.`,
 		EDGE_UPSTREAM_CONFIGURATION_INVALID:
 			'The API gateway is temporarily unavailable.',
 		EDGE_RAY_UNAVAILABLE: 'The API gateway is temporarily unavailable.',

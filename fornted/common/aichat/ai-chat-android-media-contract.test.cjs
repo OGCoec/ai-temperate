@@ -130,6 +130,18 @@ test('Android image and file components expose bounded visible failure paths', (
 	assert.equal(file.includes('v-html'), false)
 })
 
+test('Android secondary generated-image placeholders stay compact and retryable', () => {
+	const image = readComponent('user-android-chat-image.vue')
+	const gallery = readComponent('user-generated-image-gallery.vue')
+
+	assert.match(image, /compactPlaceholder:\s*\{ type: Boolean, default: false \}/)
+	assert.match(image, /'is-compact-placeholder': compactPlaceholder/)
+	assert.match(image, /v-if="!compactPlaceholder"\s+class="android-image-placeholder-label"/)
+	assert.match(image, /v-if="compactPlaceholder"[\s\S]*?class="android-image-compact-retry"/)
+	assert.match(image, /aria-label="图片加载失败，点击重新加载"/)
+	assert.match(gallery, /:compact-placeholder="true"/)
+})
+
 test('input images keep local previews outside persisted attachment URLs', () => {
 	const panel = readComponent('user-chat-panel.vue')
 	const image = readComponent('user-android-chat-image.vue')

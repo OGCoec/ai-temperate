@@ -38,7 +38,7 @@ public final class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"/v1/chat/completions".equals(request.getRequestURI());
+        return !ApiKeyV1Paths.isApiKeyEndpoint(request.getMethod(), request.getRequestURI());
     }
 
     @Override
@@ -63,7 +63,7 @@ public final class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             reject(response);
             return;
         }
-        if (hasBrowserCredentialMetadata(request)) {
+        if (hasBrowserCredentialHeaders(request)) {
             errorWriter.write(
                     response,
                     HttpServletResponse.SC_FORBIDDEN,
@@ -115,19 +115,13 @@ public final class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                 "invalid_api_key");
     }
 
-    private static boolean hasBrowserCredentialMetadata(HttpServletRequest request) {
-        if (request.getHeader("Cookie") != null
+    /**
+     * 仅识别会把长期 API Key 带入浏览器凭据上下文的请求头。
+     * Fetch Metadata 可能由服务端 Node Fetch 自动附加，不能用于判定客户端身份或可信度。
+     */
+    private static boolean hasBrowserCredentialHeaders(HttpServletRequest request) {
+        return request.getHeader("Cookie") != null
                 || request.getHeader("Origin") != null
-                || request.getHeader("Referer") != null) {
-            return true;
-        }
-        java.util.Enumeration<String> names = request.getHeaderNames();
-        while (names != null && names.hasMoreElements()) {
-            if (names.nextElement().toLowerCase(java.util.Locale.ROOT)
-                    .startsWith("sec-fetch-")) {
-                return true;
-            }
-        }
-        return false;
+                || request.getHeader("Referer") != null;
     }
 }

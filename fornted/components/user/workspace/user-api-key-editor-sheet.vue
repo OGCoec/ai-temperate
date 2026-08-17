@@ -6,73 +6,77 @@
 					<text id="api-key-editor-title" class="api-key-editor-title">管理 API Key</text>
 					<text class="api-key-editor-key">{{ displayMaskedKey }}</text>
 				</view>
-				<button class="api-key-editor-close" type="button" aria-label="关闭 API Key 管理面板" @click="requestClose">×</button>
+				<button class="api-key-editor-close" type="button" aria-label="关闭 API Key 管理面板" @click="requestClose">
+					<uni-icons type="closeempty" size="20" color="#dce5e0" aria-hidden="true" />
+				</button>
 			</view>
 
-			<view v-if="loading && !detail" class="api-key-editor-state" role="status">正在读取 API Key 详情…</view>
-			<view v-else-if="loadError && !detail" class="api-key-editor-state api-key-editor-error" role="alert">
-				<text>{{ loadError }}</text>
-				<button type="button" @click="loadDetail">重新加载</button>
-			</view>
-
-			<template v-else-if="detail">
-				<view v-if="conflict" class="api-key-conflict" role="alert">
-					<text>API Key 已在其他页面发生变化。请重新加载，避免覆盖最新数据。</text>
-					<button type="button" @click="reloadAfterConflict">重新加载</button>
+			<view class="api-key-editor-body">
+				<view v-if="loading && !detail" class="api-key-editor-state" role="status">正在读取 API Key 详情…</view>
+				<view v-else-if="loadError && !detail" class="api-key-editor-state api-key-editor-error" role="alert">
+					<text>{{ loadError }}</text>
+					<button type="button" @click="loadDetail">重新加载</button>
 				</view>
 
-				<view class="api-key-editor-section">
-					<text class="api-key-editor-section-title">状态与有效期</text>
-					<view class="api-key-status-options" role="radiogroup" aria-label="API Key 状态">
-						<button type="button" :class="{ active: lifecycleStatus === 'ENABLED' }" :aria-pressed="String(lifecycleStatus === 'ENABLED')" @click="lifecycleStatus = 'ENABLED'">启用</button>
-						<button type="button" :class="{ active: lifecycleStatus === 'DISABLED' }" :aria-pressed="String(lifecycleStatus === 'DISABLED')" @click="lifecycleStatus = 'DISABLED'">停用</button>
+				<template v-else-if="detail">
+					<view v-if="conflict" class="api-key-conflict" role="alert">
+						<text>API Key 已在其他页面发生变化。请重新加载，避免覆盖最新数据。</text>
+						<button type="button" @click="reloadAfterConflict">重新加载</button>
 					</view>
-					<view class="api-key-expiry-editor">
-						<user-api-key-expiry-picker
-							:selection="expirySelection"
-							:disabled="busy || conflict"
-							@change="handleExpiryChange"
-							@validity="handleExpiryValidity"
+
+					<view class="api-key-editor-section">
+						<text class="api-key-editor-section-title">状态与有效期</text>
+						<view class="api-key-status-options" role="radiogroup" aria-label="API Key 状态">
+							<button type="button" :class="{ active: lifecycleStatus === 'ENABLED' }" :aria-pressed="String(lifecycleStatus === 'ENABLED')" @click="lifecycleStatus = 'ENABLED'">启用</button>
+							<button type="button" :class="{ active: lifecycleStatus === 'DISABLED' }" :aria-pressed="String(lifecycleStatus === 'DISABLED')" @click="lifecycleStatus = 'DISABLED'">停用</button>
+						</view>
+						<view class="api-key-expiry-editor">
+							<user-api-key-expiry-picker
+								:selection="expirySelection"
+								:disabled="busy || conflict"
+								@change="handleExpiryChange"
+								@validity="handleExpiryValidity"
+							/>
+						</view>
+						<text v-if="lifecycleError" class="api-key-section-error" role="alert">{{ lifecycleError }}</text>
+						<button class="api-key-save" type="button" :disabled="lifecycleBusy || !lifecycleDirty || conflict" @click="saveLifecycle">
+							{{ lifecycleBusy ? '正在保存…' : '保存设置' }}
+						</button>
+					</view>
+
+					<view class="api-key-editor-section">
+						<text class="api-key-editor-section-title">授权模型</text>
+						<user-api-key-model-picker
+							ref="modelPicker"
+							:selected-ids="selectedModelIds"
+							:minimum-models="0"
+							:disabled-models="disabledModels"
+							@change="selectedModelIds = $event"
 						/>
+						<text v-if="selectedModelIds.length === 0" class="api-key-empty-model-warning" role="status">保存空授权后，此 Key 将不能调用任何模型。</text>
+						<text v-if="modelsError" class="api-key-section-error" role="alert">{{ modelsError }}</text>
+						<button class="api-key-save" type="button" :disabled="modelsBusy || !modelsDirty || conflict" @click="saveModels">
+							{{ modelsBusy ? '正在保存…' : '保存授权' }}
+						</button>
 					</view>
-					<text v-if="lifecycleError" class="api-key-section-error" role="alert">{{ lifecycleError }}</text>
-					<button class="api-key-save" type="button" :disabled="lifecycleBusy || !lifecycleDirty || conflict" @click="saveLifecycle">
-						{{ lifecycleBusy ? '正在保存…' : '保存设置' }}
-					</button>
-				</view>
 
-				<view class="api-key-editor-section">
-					<text class="api-key-editor-section-title">授权模型</text>
-					<user-api-key-model-picker
-						ref="modelPicker"
-						:selected-ids="selectedModelIds"
-						:minimum-models="0"
-						:disabled-models="disabledModels"
-						@change="selectedModelIds = $event"
-					/>
-					<text v-if="selectedModelIds.length === 0" class="api-key-empty-model-warning" role="status">保存空授权后，此 Key 将不能调用任何模型。</text>
-					<text v-if="modelsError" class="api-key-section-error" role="alert">{{ modelsError }}</text>
-					<button class="api-key-save" type="button" :disabled="modelsBusy || !modelsDirty || conflict" @click="saveModels">
-						{{ modelsBusy ? '正在保存…' : '保存授权' }}
-					</button>
-				</view>
-
-				<view class="api-key-editor-section">
-					<text class="api-key-editor-section-title">使用信息</text>
-					<view class="api-key-metadata">
-						<view><text>最近使用</text><text>{{ formatOptionalTime(detail.lastUsedAt, '尚未使用') }}</text></view>
-						<view><text>创建时间</text><text>{{ formatOptionalTime(detail.createdAt) }}</text></view>
-						<view><text>更新时间</text><text>{{ formatOptionalTime(detail.updatedAt) }}</text></view>
+					<view class="api-key-editor-section">
+						<text class="api-key-editor-section-title">使用信息</text>
+						<view class="api-key-metadata">
+							<view><text>最近使用</text><text>{{ formatOptionalTime(detail.lastUsedAt, '尚未使用') }}</text></view>
+							<view><text>创建时间</text><text>{{ formatOptionalTime(detail.createdAt) }}</text></view>
+							<view><text>更新时间</text><text>{{ formatOptionalTime(detail.updatedAt) }}</text></view>
+						</view>
 					</view>
-				</view>
 
-				<view class="api-key-editor-section api-key-danger-zone">
-					<text class="api-key-editor-section-title">危险操作</text>
-					<text class="api-key-danger-copy">撤销后，这个 Key 将立即失效；历史 Usage 和计费记录仍会保留。</text>
-					<button class="api-key-delete" type="button" :disabled="deleteBusy || conflict" @click="openDeleteConfirm">撤销 API Key</button>
-					<text v-if="deleteError" class="api-key-section-error" role="alert">{{ deleteError }}</text>
-				</view>
-			</template>
+					<view class="api-key-editor-section api-key-danger-zone">
+						<text class="api-key-editor-section-title">危险操作</text>
+						<text class="api-key-danger-copy">撤销后，这个 Key 将立即失效；历史 Usage 和计费记录仍会保留。</text>
+						<button class="api-key-delete" type="button" :disabled="deleteBusy || conflict" @click="openDeleteConfirm">撤销 API Key</button>
+						<text v-if="deleteError" class="api-key-section-error" role="alert">{{ deleteError }}</text>
+					</view>
+				</template>
+			</view>
 		</view>
 
 		<view v-if="deleteConfirmOpen" class="api-key-delete-layer" role="presentation" @click.self="closeDeleteConfirm" @keydown.esc.stop.prevent="closeDeleteConfirm">
@@ -404,17 +408,18 @@
 <style lang="scss" scoped>
 	@import '@/common/ui/user-material.scss';
 	.api-key-editor-layer { position: fixed; inset: 0; z-index: 45; display: flex; justify-content: flex-end; background: rgba(0, 0, 0, .68); }
-	.api-key-editor { @include user-frosted-surface; width: min(680px, 100%); height: 100dvh; padding: 24px; box-sizing: border-box; overflow-y: auto; border-radius: 22px 0 0 22px; color: #f3f5f4; }
-	.api-key-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+	.api-key-editor { @include user-frosted-surface; width: min(680px, 100%); height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); box-sizing: border-box; overflow: hidden; border-radius: 22px 0 0 22px; color: #f3f5f4; }
+	.api-key-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 18px; border-bottom: 1px solid rgba(151, 170, 160, .13); }
 	.api-key-editor-title { display: block; font-size: 24px; font-weight: 760; }
 	.api-key-editor-key { display: block; margin-top: 6px; color: #8f9b95; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
-	.api-key-editor-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 24px; }
+	.api-key-editor-close { width: 44px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: 0; padding: 0; box-sizing: border-box; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 0; line-height: 1; }
 	.api-key-editor-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .72); }
+	.api-key-editor-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 24px; }
 	.api-key-editor-state { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #8f9b95; text-align: center; }
 	.api-key-editor-state button, .api-key-conflict button { @include user-frosted-control; margin: 0; padding: 0 16px; border-radius: 12px; color: #dce5e0; }
 	.api-key-editor-error, .api-key-section-error { color: #efb0aa; }
 	.api-key-conflict { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding: 14px; border: 1px solid rgba(222, 157, 80, .32); border-radius: 14px; background: rgba(201, 130, 47, .09); color: #efc18a; font-size: 13px; }
-	.api-key-editor-section { margin-top: 26px; padding-top: 24px; border-top: 1px solid rgba(151, 170, 160, .16); }
+	.api-key-editor-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(151, 170, 160, .16); }
 	.api-key-editor-section-title { display: block; margin-bottom: 12px; color: #cbd4cf; font-size: 14px; font-weight: 720; }
 	.api-key-status-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 	.api-key-status-options button, .api-key-save { @include user-frosted-control; margin: 0; border-radius: 12px; color: #aeb9b3; }
@@ -438,5 +443,5 @@
 	.api-key-delete-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
 	.api-key-delete-actions button { @include user-frosted-control; margin: 0; border-radius: 12px; color: #dce5e0; }
 	.api-key-delete-actions .confirm { border-color: rgba(222, 112, 95, .4); color: #ef9e92; }
-	@media screen and (max-width: 680px) { .api-key-editor { width: 100%; padding: 20px 16px; border-radius: 0; } .api-key-conflict { align-items: stretch; flex-direction: column; } }
+	@media screen and (max-width: 680px) { .api-key-editor { width: 100%; border-radius: 0; } .api-key-editor-heading { padding: 20px 16px 16px; } .api-key-editor-body { padding: 0 16px calc(20px + env(safe-area-inset-bottom)); } .api-key-conflict { align-items: stretch; flex-direction: column; } }
 </style>

@@ -12,7 +12,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来保留全部已声明字段及其 JSON 类型、移除空值，并在上游请求中强制 stream=true 与 include_usage=true。
+ * 该实现是来把已验证的纯文本 content parts 无分隔符规范化为上游字符串、保留其余白名单 JSON 类型，并强制 stream=true 与 include_usage=true。
  */
 @Service
 public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
@@ -30,6 +30,7 @@ public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
             throw new IllegalStateException("Validated API chat request must encode to an object");
         }
         pruneNulls(payload);
+        flattenTextContentParts(payload);
         payload.put("model", validated.model().modelName());
         payload.put("stream", true);
         payload.remove(List.of("max_tokens", "max_completion_tokens"));
@@ -37,6 +38,30 @@ public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
         ObjectNode streamOptions = payload.with("stream_options");
         streamOptions.put("include_usage", true);
         return payload;
+    }
+
+    private static void flattenTextContentParts(ObjectNode payload) {
+        JsonNode messages = payload.get("messages");
+        if (!(messages instanceof ArrayNode messageArray)) {
+            return;
+        }
+        for (JsonNode message : messageArray) {
+            if (!(message instanceof ObjectNode messageObject)
+                    || !(messageObject.get("content") instanceof ArrayNode contentParts)) {
+                continue;
+            }
+            StringBuilder flattened = new StringBuilder();
+            for (JsonNode part : contentParts) {
+                JsonNode text = part.get("text");
+                if (text == null || !text.isTextual()) {
+                    throw new IllegalStateException(
+                            "Validated text content part must contain string text");
+                }
+                flattened.append(text.textValue());
+            }
+            // 文本块的结构边界不应凭空注入字符；按原顺序直接拼接才能保留客户端提交的全部文本字节。
+            messageObject.put("content", flattened.toString());
+        }
     }
 
     private static void pruneNulls(JsonNode node) {

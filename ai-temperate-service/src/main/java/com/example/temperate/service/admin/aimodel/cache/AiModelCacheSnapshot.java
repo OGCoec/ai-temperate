@@ -9,8 +9,8 @@ import java.util.List;
  */
 public record AiModelCacheSnapshot(int schemaVersion, List<AiModelCacheEntry> models) {
 
-    // v6 使用细分后的媒体能力枚举，旧快照中的聚合能力值不得进入模型选择和附件授权链路。
-    public static final int CURRENT_SCHEMA_VERSION = 6;
+    // v7 将模型创建日期纳入快照，供公开 Models API 输出稳定的 OpenAI created 字段；旧快照必须回源重建。
+    public static final int CURRENT_SCHEMA_VERSION = 7;
 
     public AiModelCacheSnapshot {
         models = models == null ? List.of() : List.copyOf(models);

@@ -85,6 +85,18 @@ class NetworkRiskPropertiesTest {
         assertThat(properties.isWebRtcConfigValid()).isTrue();
     }
 
+    @Test
+    void apiKeyFilterWaitTimeoutAddsOnlyTheCompletionMargin() {
+        NetworkRiskProperties properties = properties(
+                NetworkRiskMode.ENFORCE,
+                VALID_SECRET,
+                VALID_SECRET,
+                WEBRTC_SECRET);
+
+        assertThat(properties.apiKeyFilterWaitTimeout())
+                .isEqualTo(Duration.ofMillis(8500));
+    }
+
     private static NetworkRiskProperties properties(
             NetworkRiskMode mode,
             String hmacSecret,
@@ -99,7 +111,7 @@ class NetworkRiskPropertiesTest {
                 true,
                 Duration.ofSeconds(8),
                 Duration.ofHours(6),
-                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
                 Duration.ofSeconds(9),
                 32,
                 Duration.ofMinutes(30),

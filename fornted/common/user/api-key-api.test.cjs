@@ -26,7 +26,7 @@ function summary(overrides = {}) {
 		lastUsedAt: null,
 		createdAt: '2026-08-14T00:00:00Z',
 		updatedAt: '2026-08-14T00:00:00Z',
-		rowVersion: 3,
+		rowVersion: '3',
 		...overrides
 	}
 }
@@ -48,7 +48,7 @@ test('lists masked summaries with stable cursor pagination', async () => {
 	const calls = []
 	const { apiKeyApi } = await loadApi(async (...args) => {
 		calls.push(args)
-		return { items: [summary()], nextCursor: 'next/cursor+' }
+		return { items: [summary({ rowVersion: '0' })], nextCursor: 'next/cursor+' }
 	})
 
 	const page = await apiKeyApi.list({ cursor: 'before/cursor+', pageSize: 20 })
@@ -58,6 +58,7 @@ test('lists masked summaries with stable cursor pagination', async () => {
 		{ method: 'GET' }
 	]])
 	assert.equal(page.items[0].maskedKey, 'sk-…Ab3D')
+	assert.equal(page.items[0].rowVersion, '0')
 	assert.equal(page.nextCursor, 'next/cursor+')
 	assert.equal(Object.isFrozen(page.items[0]), true)
 })
@@ -76,6 +77,7 @@ test('creates one full key and requires the server ETag to match rowVersion', as
 	})
 
 	assert.equal(created.value.apiKey, fullKey)
+	assert.equal(created.value.rowVersion, '3')
 	assert.equal(created.etag, '"v3"')
 	assert.deepEqual(calls, [[
 		'/api/users/me/api-keys',
@@ -85,6 +87,38 @@ test('creates one full key and requires the server ETag to match rowVersion', as
 			captureEtag: true
 		}
 	]])
+})
+
+test('loads detail with a string rowVersion and matching ETag', async () => {
+	const { apiKeyApi } = await loadApi(async () => ({
+		data: detail({ rowVersion: '0' }),
+		etag: '"v0"'
+	}))
+
+	const result = await apiKeyApi.detail('AAAAAAAAAAE')
+
+	assert.equal(result.value.rowVersion, '0')
+	assert.equal(result.etag, '"v0"')
+	assert.equal(result.value.models[0].modelPublicId, 'AAAAAAAAAAI')
+})
+
+test('preserves rowVersion beyond the JavaScript safe integer range across response and If-Match', async () => {
+	const rowVersion = '9007199254740993'
+	const etag = `"v${rowVersion}"`
+	const calls = []
+	const { apiKeyApi } = await loadApi(async (...args) => {
+		calls.push(args)
+		return { data: detail({ rowVersion }), etag }
+	})
+
+	const result = await apiKeyApi.update('AAAAAAAAAAE', etag, {
+		status: 'DISABLED',
+		expiresAt: null
+	})
+
+	assert.equal(result.value.rowVersion, rowVersion)
+	assert.equal(result.etag, etag)
+	assert.equal(calls[0][1].headers['If-Match'], etag)
 })
 
 test('rejects full secrets in list and detail responses', async () => {
@@ -115,21 +149,35 @@ test('rejects missing weak or row-version-mismatched ETags', async () => {
 	}
 })
 
+test('rejects numeric and non-canonical rowVersion values', async () => {
+	for (const rowVersion of [0, -1, '', '01', '-1', '1.0']) {
+		const { apiKeyApi } = await loadApi(async () => ({
+			items: [summary({ rowVersion })],
+			nextCursor: null
+		}))
+		await assert.rejects(
+			() => apiKeyApi.list({}),
+			error => error.code === 'API_KEY_RESPONSE_INVALID')
+	}
+})
+
 test('sends the latest strong ETag for lifecycle model and soft-delete requests', async () => {
 	const calls = []
 	const { apiKeyApi } = await loadApi(async (...args) => {
 		calls.push(args)
 		if (args[1].method === 'DELETE') return undefined
-		return { data: detail({ rowVersion: 4 }), etag: '"v4"' }
+		return { data: detail({ rowVersion: '4' }), etag: '"v4"' }
 	})
 
-	await apiKeyApi.update('AAAAAAAAAAE', '"v3"', {
+	const updated = await apiKeyApi.update('AAAAAAAAAAE', '"v3"', {
 		status: 'DISABLED',
 		expiresAt: null
 	})
-	await apiKeyApi.replaceModels('AAAAAAAAAAE', '"v4"', [])
+	const replaced = await apiKeyApi.replaceModels('AAAAAAAAAAE', '"v4"', [])
 	await apiKeyApi.remove('AAAAAAAAAAE', '"v5"')
 
+	assert.equal(updated.value.rowVersion, '4')
+	assert.equal(replaced.value.rowVersion, '4')
 	assert.deepEqual(calls.map(call => call[1].headers['If-Match']), ['"v3"', '"v4"', '"v5"'])
 	assert.equal(calls[1][0], '/api/users/me/api-keys/AAAAAAAAAAE/models')
 	assert.equal(calls[2][1].method, 'DELETE')

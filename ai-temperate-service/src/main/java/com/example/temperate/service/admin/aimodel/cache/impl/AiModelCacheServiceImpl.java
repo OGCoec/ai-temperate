@@ -19,6 +19,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -198,6 +200,7 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
         return new AiModelCacheEntry(
                 model.getId(),
                 model.getModelName(),
+                createdEpochSeconds(model.getCreatedAt()),
                 model.getVendor(),
                 model.getDescription(),
                 model.getIcon(),
@@ -208,6 +211,13 @@ public final class AiModelCacheServiceImpl implements AiModelCacheService {
                 contextWindowTokens,
                 maxOutputTokens,
                 capabilities);
+    }
+
+    private static long createdEpochSeconds(LocalDate createdAt) {
+        if (createdAt == null) {
+            throw new IllegalStateException("Enabled AI model creation date is invalid.");
+        }
+        return createdAt.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
     }
 
     private static boolean validConfiguredTokenLimits(

@@ -109,6 +109,7 @@ class SecurityConfigurationTest {
                         "X-Refresh-Token");
         assertThat(configuration.getExposedHeaders())
                 .contains(
+                        HttpHeaders.ETAG,
                         "X-Trace-Id",
                         "X-AI-Generation-Id",
                         "X-New-Access-Token",

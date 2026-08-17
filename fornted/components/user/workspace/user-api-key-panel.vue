@@ -194,9 +194,6 @@
 			handlePageShow() {
 				this.onAuthenticatedPageReady()
 			},
-			handlePageHide() {
-				this.releasePageState()
-			},
 			handlePageUnload() {
 				this.releasePageState()
 			},

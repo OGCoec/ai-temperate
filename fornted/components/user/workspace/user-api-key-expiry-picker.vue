@@ -44,7 +44,7 @@
 					aria-controls="api-key-expiry-calendar"
 					@click="toggleCalendar"
 				>
-					<text aria-hidden="true">▦</text>
+					<uni-icons type="calendar" size="18" color="#75dfb7" aria-hidden="true" />
 				</button>
 			</view>
 			<text id="api-key-expiry-help" class="expiry-input-help">支持 2026-08-20 或 2026年8月20日</text>
@@ -374,7 +374,7 @@
 	.expiry-input-shell:focus-within { border-color: rgba(55, 211, 154, .56); box-shadow: 0 0 0 3px rgba(55, 211, 154, .08); }
 	.expiry-input-shell.invalid { border-color: rgba(229, 135, 126, .58); }
 	.expiry-input { flex: 1; min-width: 0; height: 46px; padding: 0 14px; box-sizing: border-box; border: 0; background: transparent; color: #eef4f1; font-size: 14px; }
-	.expiry-calendar-toggle { width: 44px; height: 40px; min-height: 40px; margin: 0 4px 0 0; padding: 0; border: 0; border-radius: 9px; background: rgba(55, 211, 154, .08); color: #75dfb7; font-size: 20px; }
+	.expiry-calendar-toggle { width: 44px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: 0 2px 0 0; padding: 0; box-sizing: border-box; border: 0; border-radius: 9px; background: rgba(55, 211, 154, .08); color: #75dfb7; font-size: 0; line-height: 1; }
 	.expiry-input-help, .expiry-input-error { display: block; margin-top: 7px; font-size: 11px; line-height: 1.5; }
 	.expiry-input-help { color: #7e8b84; }
 	.expiry-input-error { color: #efb0aa; }

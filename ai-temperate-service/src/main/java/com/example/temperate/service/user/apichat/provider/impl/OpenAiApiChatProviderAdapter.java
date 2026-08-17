@@ -17,6 +17,7 @@ public final class OpenAiApiChatProviderAdapter implements ApiChatProviderAdapte
     private static final Set<String> ALLOWED_FIELDS = Set.of(
             "model", "messages", "stream", "stream_options",
             "max_completion_tokens", "temperature", "top_p",
+            "reasoning_effort", "prompt_cache_key", "store", "service_tier",
             "presence_penalty", "frequency_penalty", "stop", "seed", "n",
             "tools", "tool_choice", "parallel_tool_calls");
     private final ApiChatPayloadFactory payloadFactory;

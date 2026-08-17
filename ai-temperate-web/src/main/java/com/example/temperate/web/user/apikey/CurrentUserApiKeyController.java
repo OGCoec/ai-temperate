@@ -57,6 +57,8 @@ import org.springframework.web.bind.annotation.RestController;
         description = "供已通过现有用户会话认证的客户端创建、分页查询、更新、替换模型授权和软删除外部 API Key。完整 Key 只在创建响应出现一次；接口不提供解密、找回、名称或物理删除。")
 public class CurrentUserApiKeyController {
 
+    private static final String CDN_CACHE_CONTROL = "CDN-Cache-Control";
+
     private final UserApiKeyService apiKeyService;
 
     public CurrentUserApiKeyController(UserApiKeyService apiKeyService) {
@@ -74,7 +76,8 @@ public class CurrentUserApiKeyController {
         CreatedKey response = ApiKeyManagementResponse.from(created);
         return ResponseEntity.created(URI.create("/api/users/me/api-keys/" + response.id()))
                 .eTag(ApiKeyVersionTag.format(response.rowVersion()))
-                .cacheControl(CacheControl.noStore().cachePrivate())
+                .cacheControl(apiKeyResponseCacheControl())
+                .header(CDN_CACHE_CONTROL, "no-store")
                 .body(response);
     }
 
@@ -85,7 +88,8 @@ public class CurrentUserApiKeyController {
             @RequestParam(required = false) @Size(max = 128) String cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore().cachePrivate())
+                .cacheControl(apiKeyResponseCacheControl())
+                .header(CDN_CACHE_CONTROL, "no-store")
                 .body(ApiKeyManagementResponse.from(
                         apiKeyService.list(principal.userId(), cursor, pageSize)));
     }
@@ -105,7 +109,8 @@ public class CurrentUserApiKeyController {
                 apiKeyService.detail(principal.userId(), apiKeyPublicId.value()));
         return ResponseEntity.ok()
                 .eTag(ApiKeyVersionTag.format(response.rowVersion()))
-                .cacheControl(CacheControl.noStore().cachePrivate())
+                .cacheControl(apiKeyResponseCacheControl())
+                .header(CDN_CACHE_CONTROL, "no-store")
                 .body(response);
     }
 
@@ -152,7 +157,8 @@ public class CurrentUserApiKeyController {
                 apiKeyPublicId.value(),
                 ApiKeyVersionTag.parseRequired(ifMatch));
         return ResponseEntity.noContent()
-                .cacheControl(CacheControl.noStore().cachePrivate())
+                .cacheControl(apiKeyResponseCacheControl())
+                .header(CDN_CACHE_CONTROL, "no-store")
                 .build();
     }
 
@@ -160,8 +166,16 @@ public class CurrentUserApiKeyController {
         Key response = ApiKeyManagementResponse.from(detail);
         return ResponseEntity.ok()
                 .eTag(ApiKeyVersionTag.format(response.rowVersion()))
-                .cacheControl(CacheControl.noStore().cachePrivate())
+                .cacheControl(apiKeyResponseCacheControl())
+                .header(CDN_CACHE_CONTROL, "no-store")
                 .body(response);
+    }
+
+    /**
+     * 禁止浏览器和边缘节点缓存或转换 API Key 管理响应，避免压缩代理把乐观锁强 ETag 降级为弱标签。
+     */
+    private static CacheControl apiKeyResponseCacheControl() {
+        return CacheControl.noStore().cachePrivate().noTransform();
     }
 
     /** 创建只接受过期时间与一至五百个模型公共 ID。 */

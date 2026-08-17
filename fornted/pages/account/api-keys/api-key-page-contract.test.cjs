@@ -32,6 +32,19 @@ test('API Key page uses the shared workspace and keeps account navigation select
 	assert.match(sidebar, /\['profile', 'apiKeys'\]\.includes\(activeDestination\)/)
 })
 
+test('H5 background transitions preserve API Key state until unload or logout', () => {
+	const workspace = read('components/user/user-workspace.vue')
+	const panel = read('components/user/workspace/user-api-key-panel.vue')
+
+	assert.match(workspace, /handlePageHide\(\)\s*\{\s*this\.\$refs\.chatPanel\?\.handlePageHide\(\)\s*\}/)
+	assert.doesNotMatch(workspace, /handlePageHide\(\)[\s\S]{0,160}apiKeyPanel\?\.handlePageHide/)
+	assert.doesNotMatch(panel, /handlePageHide\(\)/)
+	assert.match(panel, /handlePageUnload\(\)[\s\S]{0,100}releasePageState\(\)/)
+	assert.match(panel, /authenticated\(value\)[\s\S]{0,160}else this\.releasePageState\(\)/)
+	assert.match(panel, /createdSecret\s*=\s*created\.value\.apiKey/)
+	assert.doesNotMatch(panel, /visibilitychange|localStorage|sessionStorage|indexedDB|setStorage/)
+})
+
 test('management page keeps secrets out of list state and separates lifecycle from model saves', () => {
 	const panel = read('components/user/workspace/user-api-key-panel.vue')
 	const createDialog = read('components/user/workspace/user-api-key-create-dialog.vue')
@@ -80,6 +93,24 @@ test('model selection is server-paged, searchable, cross-page and bounded at 500
 	assert.doesNotMatch(createDialog, /displayName|hmac|prefix|status:/i)
 })
 
+test('create and management model rows reuse cached icons in a compact single-line grid', () => {
+	const picker = read('components/user/workspace/user-api-key-model-picker.vue')
+
+	assert.match(picker, /import UserModelProviderMark from '\.\/user-model-provider-mark\.vue'/)
+	assert.match(picker, /components:\s*\{\s*UserModelProviderMark\s*\}/)
+	assert.match(picker,
+		/model-picker-check[\s\S]{0,180}<user-model-provider-mark[\s\S]{0,180}model-picker-vendor[\s\S]{0,180}model-picker-name/)
+	assert.match(picker, /:model="model"/)
+	assert.match(picker, /:size="20"/)
+	assert.match(picker,
+		/grid-template-columns:\s*22px\s+20px\s+64px\s+minmax\(0,\s*1fr\)/)
+	assert.match(picker, /min-height:\s*48px/)
+	assert.match(picker, /padding:\s*8px\s+10px/)
+	assert.match(picker, /column-gap:\s*10px/)
+	assert.match(picker, /model-picker-list\s*\{[^}]*gap:\s*6px/)
+	assert.doesNotMatch(picker, /google\.com\/s2\/favicons|favicon\.ico/)
+})
+
 test('create and edit flows share the local-date expiry picker and never use sentinels', () => {
 	const createDialog = read('components/user/workspace/user-api-key-create-dialog.vue')
 	const editor = read('components/user/workspace/user-api-key-editor-sheet.vue')
@@ -122,6 +153,26 @@ test('dialogs trap focus, secret Escape is non-destructive and narrow screens be
 	assert.match(secretDialog, /@keydown\.esc\.stop\.prevent="remind"/)
 	assert.match(secretDialog, /我已保存，关闭/)
 	assert.match(editor, /width:\s*100%/)
+})
+
+test('create and management dialogs keep controls fixed around independently scrolling content', () => {
+	const createDialog = read('components/user/workspace/user-api-key-create-dialog.vue')
+	const editor = read('components/user/workspace/user-api-key-editor-sheet.vue')
+
+	assert.match(createDialog, /class="api-key-dialog-body"/)
+	assert.match(createDialog, /class="api-key-dialog-footer"/)
+	assert.match(createDialog,
+		/\.api-key-dialog\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto[^}]*overflow:\s*hidden/)
+	assert.match(createDialog, /\.api-key-dialog-body\s*\{[^}]*overflow-y:\s*auto/)
+	assert.match(createDialog, /type="closeempty"/)
+	assert.doesNotMatch(createDialog, />\s*×\s*<\/button>/)
+
+	assert.match(editor, /class="api-key-editor-body"/)
+	assert.match(editor,
+		/\.api-key-editor\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)[^}]*overflow:\s*hidden/)
+	assert.match(editor, /\.api-key-editor-body\s*\{[^}]*overflow-y:\s*auto/)
+	assert.match(editor, /type="closeempty"/)
+	assert.doesNotMatch(editor, />\s*×\s*<\/button>/)
 })
 
 test('H5 owns the only visible entry and production sources contain no literal complete key', () => {

@@ -23,9 +23,15 @@ import com.example.temperate.service.user.apichat.impl.ApiChatCompletionServiceI
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapter;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapterRegistry;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser;
+import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Normalization;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedChunk;
+import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedEvent;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
+import com.example.temperate.service.user.apichat.diagnostic.impl.ApiChatStreamDiagnosticServiceImpl;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
+import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -42,6 +48,12 @@ import reactor.core.publisher.Flux;
  */
 final class ApiChatCompletionServiceImplTest {
 
+    private static final String OUTPUT_FRAME = "{\"chunk\":1}";
+    private static final String COMBINED_CHOICES_FRAME =
+            "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}";
+    private static final String USAGE_FRAME =
+            "{\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}";
+
     @Test
     void settlesOnlyAfterUniqueFinalUsageAndDone() {
         Fixture fixture = fixture(Flux.just("output", "usage", "done"));
@@ -55,6 +67,63 @@ final class ApiChatCompletionServiceImplTest {
                 fixture.reservation(), new Usage(12, 3, 2), "STOP");
         verify(fixture.billingService(), never()).refundSystemFailure(any(), any());
         verify(fixture.concurrencyService()).release(fixture.permit());
+    }
+
+    @Test
+    void combinedTerminalUsageIsNormalizedAndForwardedWhenRequested() {
+        Fixture fixture = fixture(Flux.just("combined", "done"), true);
+
+        List<String> output = fixture.service().stream(fixture.principal(), fixture.request())
+                .collectList()
+                .block();
+
+        assertThat(output).containsExactly(
+                COMBINED_CHOICES_FRAME,
+                USAGE_FRAME,
+                "[DONE]");
+        verify(fixture.billingService(), times(1)).settle(
+                fixture.reservation(), new Usage(12, 3, 2), "STOP");
+        verify(fixture.billingService(), never()).refundSystemFailure(any(), any());
+        verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
+        assertThat(fixture.meterRegistry()
+                .get("api.chat.completion")
+                .tag("result", "combined_usage_normalized")
+                .counter()
+                .count())
+                .isEqualTo(1.0d);
+    }
+
+    @Test
+    void combinedTerminalUsageIsKeptForSettlementButHiddenWhenNotRequested() {
+        Fixture fixture = fixture(Flux.just("combined", "done"), false);
+
+        List<String> output = fixture.service().stream(fixture.principal(), fixture.request())
+                .collectList()
+                .block();
+
+        assertThat(output).containsExactly(COMBINED_CHOICES_FRAME, "[DONE]");
+        verify(fixture.billingService(), times(1)).settle(
+                fixture.reservation(), new Usage(12, 3, 2), "STOP");
+        verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
+    }
+
+    @Test
+    void rejectsSecondRealUsageAsDuplicateUsage() {
+        Fixture fixture = fixture(Flux.just("usage", "usage", "done"));
+
+        assertThatThrownBy(() -> fixture.service()
+                .stream(fixture.principal(), fixture.request())
+                .collectList()
+                .block())
+                .isInstanceOf(ApiChatException.class)
+                .satisfies(failure -> assertProtocolViolation(
+                        failure,
+                        ApiChatProtocolViolation.DUPLICATE_USAGE));
+
+        verify(fixture.billingService()).refundSystemFailure(
+                fixture.reservation(), ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR.name());
+        verify(fixture.billingService(), never()).settle(any(), any(), any());
+        verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
     }
 
     @Test
@@ -85,7 +154,10 @@ final class ApiChatCompletionServiceImplTest {
                 .stream(fixture.principal(), fixture.request())
                 .collectList()
                 .block())
-                .isInstanceOf(ApiChatException.class);
+                .isInstanceOf(ApiChatException.class)
+                .satisfies(failure -> assertProtocolViolation(
+                        failure,
+                        ApiChatProtocolViolation.DATA_AFTER_USAGE));
 
         verify(fixture.billingService()).refundSystemFailure(
                 fixture.reservation(), ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR.name());
@@ -93,11 +165,59 @@ final class ApiChatCompletionServiceImplTest {
         verify(fixture.concurrencyService()).release(fixture.permit());
     }
 
+    @Test
+    void combinedUsageWithoutRealDoneRefundsAndReturnsControlledStreamError() {
+        Fixture fixture = fixture(Flux.just("combined"));
+
+        List<String> output = fixture.service().stream(fixture.principal(), fixture.request())
+                .collectList()
+                .block();
+
+        assertThat(output).hasSize(3);
+        assertThat(output.get(0)).isEqualTo(COMBINED_CHOICES_FRAME);
+        assertThat(output.get(1)).contains("upstream_protocol_error");
+        assertThat(output.get(2)).isEqualTo("[DONE]");
+        verify(fixture.billingService()).refundSystemFailure(
+                fixture.reservation(), ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR.name());
+        verify(fixture.billingService(), never()).settle(any(), any(), any());
+        verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
+    }
+
+    @Test
+    void doneWithoutUsageIsRejectedBeforeSettlement() {
+        Fixture fixture = fixture(Flux.just("done"));
+
+        assertThatThrownBy(() -> fixture.service()
+                .stream(fixture.principal(), fixture.request())
+                .collectList()
+                .block())
+                .isInstanceOf(ApiChatException.class)
+                .satisfies(failure -> assertProtocolViolation(
+                        failure,
+                        ApiChatProtocolViolation.DONE_WITHOUT_USAGE));
+
+        verify(fixture.billingService()).refundSystemFailure(
+                fixture.reservation(), ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR.name());
+        verify(fixture.billingService(), never()).settle(any(), any(), any());
+        verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
+    }
+
     private static Fixture fixture(Flux<String> upstreamData) {
+        return fixture(upstreamData, false);
+    }
+
+    private static Fixture fixture(
+            Flux<String> upstreamData,
+            boolean includeUsage) {
         ApiChatRequest request = new ApiChatRequest(
                 "gpt-test",
                 List.of(),
                 JsonNodeFactory.instance.booleanNode(true),
+                new ApiChatRequest.StreamOptions(
+                        JsonNodeFactory.instance.booleanNode(includeUsage)),
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -125,7 +245,7 @@ final class ApiChatCompletionServiceImplTest {
                 512,
                 List.of(AiModelCapabilityCode.CHAT_COMPLETIONS));
         ValidatedApiChatRequest validated =
-                new ValidatedApiChatRequest(request, model, 128, 32, false);
+                new ValidatedApiChatRequest(request, model, 128, 32, includeUsage);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
                 11L,
                 17L,
@@ -167,20 +287,27 @@ final class ApiChatCompletionServiceImplTest {
         when(billing.reserve(principal, validated)).thenReturn(reservation);
         ApiChatUpstreamClient upstream = ignored -> upstreamData;
         ApiChatSseParser parser = data -> switch (data) {
-            case "output" -> new ParsedChunk(
-                    "{\"chunk\":1}", null, false, true, 3, "stop", false);
-            case "usage" -> new ParsedChunk(
-                    "{\"choices\":[],\"usage\":{}}",
-                    new Usage(12, 3, 2),
-                    false,
-                    false,
-                    0,
-                    null,
-                    true);
-            case "done" -> new ParsedChunk(
-                    "[DONE]", null, true, false, 0, null, false);
+            case "output" -> event(new ParsedChunk(
+                    OUTPUT_FRAME, null, false, true, 3, "stop"));
+            case "usage" -> event(usageChunk());
+            case "combined" -> new ParsedEvent(
+                    List.of(
+                            new ParsedChunk(
+                                    COMBINED_CHOICES_FRAME,
+                                    null,
+                                    false,
+                                    false,
+                                    0,
+                                    "stop"),
+                            usageChunk()),
+                    Normalization.COMBINED_CHOICES_AND_USAGE);
+            case "done" -> event(new ParsedChunk(
+                    "[DONE]", null, true, false, 0, null));
             default -> throw new AssertionError("Unexpected upstream fixture data");
         };
+        ApiKeyProperties diagnosticProperties = new ApiKeyProperties();
+        diagnosticProperties.getStreamDiagnostics().setEnabled(false);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         ApiChatCompletionService service = new ApiChatCompletionServiceImpl(
                 validator,
                 concurrency,
@@ -190,7 +317,8 @@ final class ApiChatCompletionServiceImplTest {
                 parser,
                 new ObjectMapper(),
                 Runnable::run,
-                new SimpleMeterRegistry());
+                meterRegistry,
+                new ApiChatStreamDiagnosticServiceImpl(diagnosticProperties));
         return new Fixture(
                 service,
                 principal,
@@ -198,7 +326,32 @@ final class ApiChatCompletionServiceImplTest {
                 billing,
                 concurrency,
                 reservation,
-                permit);
+                permit,
+                meterRegistry);
+    }
+
+    private static ParsedEvent event(ParsedChunk chunk) {
+        return new ParsedEvent(List.of(chunk), Normalization.NONE);
+    }
+
+    private static ParsedChunk usageChunk() {
+        return new ParsedChunk(
+                USAGE_FRAME,
+                new Usage(12, 3, 2),
+                false,
+                false,
+                0,
+                null);
+    }
+
+    private static void assertProtocolViolation(
+            Throwable failure,
+            ApiChatProtocolViolation expected) {
+        ApiChatException controlled = (ApiChatException) failure;
+        assertThat(controlled.getCause())
+                .isInstanceOf(ApiChatProtocolViolationException.class);
+        assertThat(((ApiChatProtocolViolationException) controlled.getCause()).violation())
+                .isEqualTo(expected);
     }
 
     private record Fixture(
@@ -208,6 +361,7 @@ final class ApiChatCompletionServiceImplTest {
             ApiChatBillingService billingService,
             AiInferenceConcurrencyService concurrencyService,
             Reservation reservation,
-            AiInferenceConcurrencyPermit permit) {
+            AiInferenceConcurrencyPermit permit,
+            SimpleMeterRegistry meterRegistry) {
     }
 }

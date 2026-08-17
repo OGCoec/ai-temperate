@@ -70,7 +70,7 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
         Mono<IpIntelligenceSnapshot> fallback = localFallback(canonicalIp)
                 .flatMap(snapshot -> cacheBestEffort(ipDigest, snapshot));
         Duration externalBudget = externalLookupBudget(properties.lookupTimeout());
-        return Mono.defer(() -> cached(ipDigest)
+        return Mono.defer(() -> cachedBestEffort(ipDigest)
                         .doOnNext(ignored -> metrics.ipIntelligenceCache("hit"))
                         .map(snapshot -> new IpIntelligenceLookupResult(
                                 snapshot,
@@ -113,24 +113,31 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
                         owner,
                         properties.singleFlightTtl()))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(acquired -> {
-                    metrics.ipIntelligenceLookup(
-                            acquired ? "single_flight_owner" : "single_flight_wait");
-                    return acquired
-                            ? queryAndCache(canonicalIp, ipDigest)
-                            : waitForOwner(canonicalIp, ipDigest);
+                .map(acquired -> new SingleFlightAcquisition(acquired, true))
+                /*
+                 * Redis 是性能协调层而不是权威风险来源。协调服务故障时仍受本机舱壁保护地查询供应商，
+                 * 否则 Redis 短暂不可用会把所有新 IP 错误地固定降级为不可用。
+                 */
+                .onErrorResume(ignored -> {
+                    metrics.ipIntelligenceLookup("single_flight_acquire_error");
+                    metrics.ipIntelligenceLookup("coordination_bypass");
+                    return Mono.just(new SingleFlightAcquisition(false, false));
                 })
-                .doFinally(signal -> {
-                    Mono.fromRunnable(() -> cache.releaseLookup(ipDigest, owner))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .onErrorResume(ignored -> {
-                                metrics.ipIntelligenceLookup(
-                                        "single_flight_release_error");
-                                return Mono.empty();
-                            })
-                            .subscribe();
-                    bulkhead.release();
-                });
+                .flatMap(acquisition -> {
+                    if (!acquisition.coordinationAvailable()) {
+                        return queryAndCache(canonicalIp, ipDigest);
+                    }
+                    metrics.ipIntelligenceLookup(
+                            acquisition.ownerAcquired()
+                                    ? "single_flight_owner"
+                                    : "single_flight_wait");
+                    if (!acquisition.ownerAcquired()) {
+                        return waitForOwner(canonicalIp, ipDigest);
+                    }
+                    return queryAndCache(canonicalIp, ipDigest)
+                            .doFinally(signal -> releaseLookupBestEffort(ipDigest, owner));
+                })
+                .doFinally(signal -> bulkhead.release());
     }
 
     private Mono<IpIntelligenceSnapshot> waitForOwner(
@@ -140,7 +147,7 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
                 .minus(Duration.ofMillis(100));
         return Flux.interval(Duration.ZERO, Duration.ofMillis(100))
                 .take(pollingWindow)
-                .concatMap(ignored -> cached(ipDigest))
+                .concatMap(ignored -> cachedBestEffort(ipDigest))
                 .next()
                 .switchIfEmpty(localFallback(canonicalIp)
                         .flatMap(snapshot -> cacheBestEffort(
@@ -168,6 +175,23 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
         return Mono.fromCallable(() -> cache.find(ipDigest))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(optional -> optional.map(Mono::just).orElseGet(Mono::empty));
+    }
+
+    private Mono<IpIntelligenceSnapshot> cachedBestEffort(HmacIdentifier ipDigest) {
+        return cached(ipDigest).onErrorResume(ignored -> {
+            metrics.ipIntelligenceLookup("cache_read_error");
+            return Mono.empty();
+        });
+    }
+
+    private void releaseLookupBestEffort(HmacIdentifier ipDigest, String owner) {
+        Mono.fromRunnable(() -> cache.releaseLookup(ipDigest, owner))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(ignored -> {
+                    metrics.ipIntelligenceLookup("single_flight_release_error");
+                    return Mono.empty();
+                })
+                .subscribe();
     }
 
     private Mono<IpIntelligenceSnapshot> cacheBestEffort(
@@ -324,5 +348,13 @@ public final class IpIntelligenceServiceImpl implements IpIntelligenceService {
             }
         }
         return null;
+    }
+
+    /**
+     * 绑定 single-flight 获取结果与协调层可用性，避免 Redis 故障降级路径错误释放其他实例的锁。
+     */
+    private record SingleFlightAcquisition(
+            boolean ownerAcquired,
+            boolean coordinationAvailable) {
     }
 }

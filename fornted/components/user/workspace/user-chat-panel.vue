@@ -730,6 +730,7 @@
 				:has-more-before="imageViewerHasMoreBefore"
 				:loading-before="imageViewerLoadingBefore"
 				:download-busy="imageViewerDownloadBusy"
+				:reduced-motion="motionReduced"
 				:error="imageViewerError"
 				@close="closeGeneratedImageViewer"
 				@select="selectGeneratedImageViewerItem"

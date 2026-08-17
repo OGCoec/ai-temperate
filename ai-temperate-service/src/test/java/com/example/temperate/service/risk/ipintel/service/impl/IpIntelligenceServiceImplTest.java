@@ -115,6 +115,53 @@ class IpIntelligenceServiceImplTest {
     }
 
     @Test
+    void cacheReadFailureStillQueriesIp2Location() {
+        Fixture fixture = fixture(Duration.ofSeconds(8));
+        when(fixture.cache().find(any())).thenThrow(
+                new IllegalStateException("redis read unavailable"));
+        ExternalIpIntelligenceProvider ip2 = provider(
+                ExternalIpProviderType.IP2LOCATION,
+                result(
+                        ExternalIpProviderType.IP2LOCATION,
+                        91,
+                        "US",
+                        new BigDecimal("41.8781"),
+                        new BigDecimal("-87.6298")));
+        when(fixture.providers().getRequired(ExternalIpProviderType.IP2LOCATION))
+                .thenReturn(ip2);
+
+        IpIntelligenceLookupResult lookup = fixture.service().lookup(IP).block();
+
+        assertThat(lookup.initialCacheHit()).isFalse();
+        assertThat(lookup.snapshot().source()).isEqualTo(IpIntelligenceSource.IP2LOCATION);
+        verify(ip2).query(IP);
+    }
+
+    @Test
+    void singleFlightCoordinationFailureStillQueriesIp2LocationWithoutRelease() {
+        Fixture fixture = fixture(Duration.ofSeconds(8));
+        when(fixture.cache().tryAcquireLookup(any(), any(), any())).thenThrow(
+                new IllegalStateException("redis coordination unavailable"));
+        ExternalIpIntelligenceProvider ip2 = provider(
+                ExternalIpProviderType.IP2LOCATION,
+                result(
+                        ExternalIpProviderType.IP2LOCATION,
+                        91,
+                        "US",
+                        new BigDecimal("41.8781"),
+                        new BigDecimal("-87.6298")));
+        when(fixture.providers().getRequired(ExternalIpProviderType.IP2LOCATION))
+                .thenReturn(ip2);
+
+        IpIntelligenceLookupResult lookup = fixture.service().lookup(IP).block();
+
+        assertThat(lookup.initialCacheHit()).isFalse();
+        assertThat(lookup.snapshot().source()).isEqualTo(IpIntelligenceSource.IP2LOCATION);
+        verify(ip2).query(IP);
+        verify(fixture.cache(), never()).releaseLookup(any(), any());
+    }
+
+    @Test
     void partialIp2LocationGeoIsCombinedWithIpingScore() {
         Fixture fixture = fixture(Duration.ofSeconds(8));
         ProviderIpIntelligenceResult partialIp2 = new ProviderIpIntelligenceResult(
@@ -187,8 +234,8 @@ class IpIntelligenceServiceImplTest {
         assertThat(result.source()).isEqualTo(IpIntelligenceSource.LOCAL_BIN);
         assertStoredTtlBetween(
                 fixture.cache(),
-                Duration.ofMinutes(8),
-                Duration.ofMinutes(12));
+                Duration.ofSeconds(24),
+                Duration.ofSeconds(36));
     }
 
     @Test
@@ -210,8 +257,8 @@ class IpIntelligenceServiceImplTest {
         assertThat(result.source()).isEqualTo(IpIntelligenceSource.DEFAULT);
         assertStoredTtlBetween(
                 fixture.cache(),
-                Duration.ofMinutes(8),
-                Duration.ofMinutes(12));
+                Duration.ofSeconds(24),
+                Duration.ofSeconds(36));
     }
 
     @Test
@@ -227,8 +274,8 @@ class IpIntelligenceServiceImplTest {
         verifyNoInteractions(fixture.providers());
         assertStoredTtlBetween(
                 fixture.cache(),
-                Duration.ofMinutes(8),
-                Duration.ofMinutes(12));
+                Duration.ofSeconds(24),
+                Duration.ofSeconds(36));
     }
 
     private static Fixture fixture(Duration lookupTimeout) {
@@ -328,7 +375,7 @@ class IpIntelligenceServiceImplTest {
                 true,
                 lookupTimeout,
                 Duration.ofHours(6),
-                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
                 Duration.ofSeconds(10),
                 32,
                 Duration.ofMinutes(30),

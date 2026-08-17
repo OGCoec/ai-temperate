@@ -7,23 +7,7 @@
   "preview_urls": false,
   "routes": [
     {
-      "pattern": "niko000o.site/api/*",
-      "zone_name": "niko000o.site"
-    },
-    {
-      "pattern": "niko000o.site/v1/*",
-      "zone_name": "niko000o.site"
-    },
-    {
-      "pattern": "niko000o.site/ws/voice",
-      "zone_name": "niko000o.site"
-    },
-    {
-      "pattern": "niko000o.site/__edge/android-clearance",
-      "zone_name": "niko000o.site"
-    },
-    {
-      "pattern": "niko000o.site/__edge/android-clearance/status",
+      "pattern": "niko000o.site/*",
       "zone_name": "niko000o.site"
     },
     {
@@ -33,6 +17,8 @@
   ],
   "vars": {
     "API_UPSTREAM_ORIGIN": "https://api.niko000o.site",
+    "H5_PAGES_ORIGIN": "https://ai-temperate-frontend.pages.dev",
+    "API_KEY_STREAM_DIAGNOSTICS_ENABLED": "true",
     "SSE_ROUTE_LOG_SAMPLE_RATE": "0.05"
   }
 }

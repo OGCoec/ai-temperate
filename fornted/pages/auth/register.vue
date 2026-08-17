@@ -40,16 +40,16 @@
 				<view class="auth-field">
 					<label class="auth-label" for="auth-register-phone">手机号</label>
 					<view class="auth-control phone-row" :class="{ invalid: fieldErrors.phoneNumber }">
-						<text class="dial-prefix" aria-hidden="true">{{ dialCode }}</text>
+						<text v-if="!internationalDraft" class="dial-prefix" aria-hidden="true">{{ dialCode }}</text>
 						<input
 							:key="phoneInputKey"
 							id="auth-register-phone"
-							:value="phoneDisplay"
+							:value="effectivePhoneDisplay"
 							class="auth-control-input phone-input"
 							type="tel"
 							maxlength="32"
-							autocomplete="tel-national"
-							placeholder="本地手机号"
+							autocomplete="tel"
+							placeholder="本地手机号或含 + 的国际手机号"
 							:focus="focusedField === 'phoneNumber'"
 							:aria-label="phoneAriaLabel"
 							:aria-invalid="Boolean(fieldErrors.phoneNumber)"
@@ -203,11 +203,12 @@
 		resolveInitialPhoneCountry,
 		selectPhoneCountry
 	} from '@/common/auth/phone-country-default.js'
-	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
+	import { findPhoneCountryById, getPhoneCountryByIso2 } from '@shared-auth/phone-country-search.js'
 	import {
 		formatLocalPhoneNumberInput,
 		isValidLocalPhoneNumber,
-		normalizePhoneInputForCountry
+		normalizePhoneInputForCountry,
+		normalizeInternationalPhoneInput
 	} from '@shared-auth/phone-validation.js'
 	import { derivePhonePresentation } from '@/common/user/phone-presentation.js'
 
@@ -274,6 +275,11 @@
 				fieldErrors: emptyFieldErrors(),
 				focusedField: '',
 				phoneInputKey: 0,
+				/**
+				 * 国际号码草稿：用户输入 `+...` 但尚未完成有效 E.164 时，
+				 * 原样保存在此字段中，不写入正式 phoneNumber 状态。
+				 */
+				internationalDraft: '',
 				countryPickerOpen: false,
 				turnstileVerifying: false,
 				flowSuperseded: false,
@@ -285,6 +291,13 @@
 			dialCode() { return this.country?.dialCode || '—' },
 			phoneDisplay() {
 				return formatLocalPhoneNumberInput(this.phoneNumber, this.country?.iso2)
+			},
+			/**
+			 * 输入框实际展示值：国际草稿期间显示草稿原文，
+			 * 否则显示按当前国家格式化的本地号码。
+			 */
+			effectivePhoneDisplay() {
+				return this.internationalDraft || this.phoneDisplay
 			},
 			registrationEmail() {
 				return this.registrationIdentity.email || this.email
@@ -314,6 +327,7 @@
 				)
 			},
 			phoneAriaLabel() {
+				if (this.internationalDraft) return '国际手机号输入中，请输入完整号码'
 				return this.country
 					? `手机号，当前国家区号 ${this.country.dialCode}`
 					: '手机号，国家或地区仍在识别'
@@ -330,7 +344,10 @@
 			email() { this.fieldErrors.email = '' },
 			countryId() {
 				this.fieldErrors.phoneNumber = ''
-				this.formatExistingPhoneNumber()
+				// 国家变化时不重格式化尚未完成的国际草稿。
+				if (!this.internationalDraft) {
+					this.formatExistingPhoneNumber()
+				}
 			},
 			phoneSupportsWhatsapp(supported) {
 				if (!supported) this.phoneDeliveryMethod = 'SMS'
@@ -394,6 +411,7 @@
 				this.email = ''
 				this.phoneNumber = ''
 				this.countryId = ''
+				this.internationalDraft = ''
 				this.registrationIdentity = { email: '', phoneE164: '' }
 				this.emailCode = ''
 				this.smsCode = ''
@@ -454,18 +472,59 @@
 			},
 			handlePhoneNumberInput(event) {
 				const rawValue = event?.detail?.value || ''
+
+				// 首字符为 `+` 时进入国际号码识别流程。
+				if (typeof rawValue === 'string' && rawValue.startsWith('+')) {
+					const intl = normalizeInternationalPhoneInput(rawValue)
+					if (intl && intl.pendingInternational) {
+						// 未完成的国际输入只保留草稿；清空正式号码，避免提交上一次的本地号码。
+						this.internationalDraft = intl.sanitized
+						this.phoneNumber = ''
+						return
+					}
+					if (intl && !intl.pendingInternational && intl.detectedCountryIso2) {
+						// 完整有效国际号码：先切换国家，再写入本地数字，清除草稿。
+						const detectedCountry = getPhoneCountryByIso2(intl.detectedCountryIso2)
+						if (detectedCountry) {
+							this.internationalDraft = ''
+							if (detectedCountry.id !== this.countryId) {
+								this.handleCountryUserSelection(detectedCountry.id)
+							}
+							this.phoneNumber = intl.localDigits
+							this.phoneInputKey += 1
+							return
+						}
+
+						// 号码库识别出的国家若不在前端选项中，仍保留草稿且禁止产生错误的正式号码。
+						this.internationalDraft = intl.sanitized
+						this.phoneNumber = ''
+						return
+					}
+				}
+
+				// 首字符不是 `+` 时才按当前所选国家处理本地号码。
+				this.internationalDraft = ''
 				const normalized = normalizePhoneInputForCountry(
 					rawValue,
 					this.country?.iso2,
 					this.phoneDisplay
 				)
-				if (normalized.digits === this.phoneNumber && normalized.display !== rawValue) {
-					this.phoneInputKey += 1
+				let countryChanged = false
+				if (normalized.detectedCountryIso2) {
+					// 无 `+` 的完整 NANP 号码只在严格有效后切换国家，输入过程保持当前选择。
+					const detectedCountry = getPhoneCountryByIso2(normalized.detectedCountryIso2)
+					if (detectedCountry && detectedCountry.id !== this.countryId) {
+						this.handleCountryUserSelection(detectedCountry.id)
+						countryChanged = true
+					}
 				}
+				const shouldRefreshInput = countryChanged ||
+					(normalized.digits === this.phoneNumber && normalized.display !== rawValue)
 				this.phoneNumber = normalized.digits
+				if (shouldRefreshInput) this.phoneInputKey += 1
 			},
 			formatExistingPhoneNumber() {
-				if (!this.phoneNumber) return
+				if (!this.phoneNumber || this.internationalDraft) return
 				const normalized = normalizePhoneInputForCountry(this.phoneNumber, this.country?.iso2)
 				if (normalized.digits !== this.phoneNumber) this.phoneNumber = normalized.digits
 			},

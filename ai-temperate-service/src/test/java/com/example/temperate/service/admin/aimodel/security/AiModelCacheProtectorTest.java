@@ -23,7 +23,7 @@ final class AiModelCacheProtectorTest {
 
     @Test
     void protectsWholeSnapshotWithoutLeakingModelText() {
-        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(6);
+        assertThat(AiModelCacheSnapshot.CURRENT_SCHEMA_VERSION).isEqualTo(7);
 
         AiModelCacheProtector protector = new AiModelCacheProtector(KEY, new ObjectMapper());
         AiModelCacheSnapshot snapshot = snapshot();

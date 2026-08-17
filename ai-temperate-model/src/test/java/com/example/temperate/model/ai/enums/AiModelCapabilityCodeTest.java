@@ -7,7 +7,7 @@ import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证模型能力枚举与数据库、HTTP 和前端共享的十二项稳定代码完全一致。
+ * 验证模型能力枚举与数据库、HTTP 和前端共享的十三项稳定代码完全一致。
  */
 final class AiModelCapabilityCodeTest {
 
@@ -28,7 +28,8 @@ final class AiModelCapabilityCodeTest {
                         "AUDIO_EDIT",
                         "VIDEO_INPUT",
                         "VIDEO_GENERATION",
-                        "VIDEO_EDIT");
+                        "VIDEO_EDIT",
+                        "VIDEO_EXTENSION");
     }
 
     @Test

@@ -1,10 +1,25 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const {
+	collectPublicAssetPaths
+} = require('./generate-h5-edge-assets.cjs')
 
 const REQUIRED_FILES = ['index.html', '_headers', '_redirects']
+const DEFAULT_ASSET_MANIFEST = path.resolve(
+	__dirname,
+	'..',
+	'..',
+	'cloudflare',
+	'api-gateway',
+	'src',
+	'generated',
+	'h5-assets.js')
 const PUBLIC_HTML_PREVIEW_ORIGIN = 'https://ai-temperate-html-preview.pages.dev'
 const FORBIDDEN_FILE_PATTERNS = [
 	{ re: /\.vue(?:$|[?#])/, label: 'Vue source module' },
+	{ re: /\.map$/, label: 'source map' },
+	{ re: /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i, label: 'test artifact' },
+	{ re: /(?:^|\/)__tests__(?:\/|$)/, label: 'test artifact directory' },
 	{ re: /(?:^|\/)node_modules(?:\/|$)/, label: 'node_modules content' },
 	{ re: /(?:^|\/)\.env(?:\.|$)/, label: 'environment file' }
 ]
@@ -78,6 +93,69 @@ function verifyHeaders(root, errors) {
 	}
 }
 
+function verifyRedirects(root, errors) {
+	const source = readIfExists(path.join(root, '_redirects'))
+	if (/^\s*\/\*\s+\/index\.html\s+200(?:\s|$)/m.test(source)) {
+		errors.push(
+			'_redirects must not restore the global SPA fallback; '
+			+ 'the main-site Worker owns exact page routing')
+	}
+}
+
+function parseAssetManifest(source) {
+	const match = source.match(
+		/export const H5_ASSET_PATHS = Object\.freeze\((\[[\s\S]*\])\)\s*$/)
+	if (!match) {
+		throw new Error('H5 edge asset manifest has an invalid module format')
+	}
+	const values = JSON.parse(match[1])
+	if (!Array.isArray(values)
+		|| values.some(value => typeof value !== 'string')) {
+		throw new Error('H5 edge asset manifest must contain only path strings')
+	}
+	return [...new Set(values)].sort()
+}
+
+function expectedAssetPaths(options) {
+	if (Array.isArray(options.assetManifestPaths)) {
+		return [...new Set(options.assetManifestPaths)].sort()
+	}
+	const manifest = path.resolve(
+		options.assetManifestPath || DEFAULT_ASSET_MANIFEST)
+	if (!fs.existsSync(manifest)) {
+		throw new Error(`H5 edge asset manifest does not exist: ${manifest}`)
+	}
+	return parseAssetManifest(fs.readFileSync(manifest, 'utf8'))
+}
+
+function verifyAssetManifest(root, errors, options) {
+	let expected
+	try {
+		expected = expectedAssetPaths(options)
+	} catch (error) {
+		errors.push(error.message)
+		return
+	}
+	const actual = collectPublicAssetPaths(root)
+	if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+		errors.push(
+			'H5 edge asset manifest does not match the exact /assets and /static release files')
+	}
+}
+
+function verifyIndexAssetReferences(indexSource, assetPaths, errors) {
+	const references = [...indexSource.matchAll(
+		/(?:src|href)\s*=\s*["'](\/(?:assets|static)\/[^"'?#]+)(?:[?#][^"']*)?["']/g)]
+		.map(match => match[1])
+	const allowed = new Set(assetPaths)
+	for (const reference of references) {
+		if (!allowed.has(reference)) {
+			errors.push(
+				`index.html references an asset outside the exact edge manifest: ${reference}`)
+		}
+	}
+}
+
 function verifyH5ReleaseArtifacts(options = {}) {
 	const root = path.resolve(options.root || path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'h5'))
 	const errors = []
@@ -91,7 +169,14 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	}
 
 	verifyHeaders(root, errors)
+	verifyRedirects(root, errors)
+	verifyAssetManifest(root, errors, options)
 	const indexSource = readIfExists(path.join(root, 'index.html'))
+	try {
+		verifyIndexAssetReferences(indexSource, expectedAssetPaths(options), errors)
+	} catch (error) {
+		// 清单格式错误已经由 verifyAssetManifest 报告，避免重复输出相同的配置异常。
+	}
 	const frameSource = indexSource.match(/frame-src ([^;]+)/)?.[1] || ''
 	if (!frameSource.includes(PUBLIC_HTML_PREVIEW_ORIGIN)) {
 		errors.push(

@@ -1,5 +1,6 @@
 package com.example.temperate.web.apikey;
 
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.ipintel.domain.IpIntelligenceLookupResult;
 import com.example.temperate.service.risk.ipintel.domain.IpIntelligenceSnapshot;
 import com.example.temperate.service.risk.ipintel.domain.IpIntelligenceSource;
@@ -15,6 +16,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.TimeoutException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -23,11 +26,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
 
-    private static final Duration LOOKUP_TIMEOUT = Duration.ofSeconds(5);
-
     private final TrustedEdgeNetworkContextResolver edgeContextResolver;
     private final IpIntelligenceService ipIntelligenceService;
     private final ApiKeyProperties properties;
+    private final NetworkRiskProperties networkRiskProperties;
     private final OpenAiErrorResponseWriter errorWriter;
     private final MeterRegistry meterRegistry;
 
@@ -35,18 +37,20 @@ public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
             TrustedEdgeNetworkContextResolver edgeContextResolver,
             IpIntelligenceService ipIntelligenceService,
             ApiKeyProperties properties,
+            NetworkRiskProperties networkRiskProperties,
             OpenAiErrorResponseWriter errorWriter,
             MeterRegistry meterRegistry) {
         this.edgeContextResolver = Objects.requireNonNull(edgeContextResolver);
         this.ipIntelligenceService = Objects.requireNonNull(ipIntelligenceService);
         this.properties = Objects.requireNonNull(properties);
+        this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
         this.errorWriter = Objects.requireNonNull(errorWriter);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"/v1/chat/completions".equals(request.getRequestURI());
+        return !ApiKeyV1Paths.isApiKeyEndpoint(request.getMethod(), request.getRequestURI());
     }
 
     @Override
@@ -56,20 +60,24 @@ public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         TrustedEdgeNetworkContext edgeContext = edgeContextResolver.resolve(request).orElse(null);
         if (edgeContext == null || edgeContext.clientIp() == null) {
-            unavailable(response);
+            unavailable(response, "missing_edge_context", false);
             return;
         }
         IpIntelligenceLookupResult result;
         try {
             result = ipIntelligenceService
                     .lookup(edgeContext.clientIp())
-                    .block(LOOKUP_TIMEOUT);
+                    .block(lookupWaitTimeout(networkRiskProperties));
         } catch (RuntimeException exception) {
-            unavailable(response);
+            if (wasInterrupted(exception)) {
+                // Servlet 容器已要求取消请求时恢复中断标记，避免后续线程复用时把取消信号吞掉。
+                Thread.currentThread().interrupt();
+            }
+            unavailable(response, isTimeout(exception) ? "lookup_timeout" : "lookup_error", true);
             return;
         }
         if (result == null || !authoritative(result.snapshot())) {
-            unavailable(response);
+            unavailable(response, "non_authoritative", true);
             return;
         }
         if (result.snapshot().trustScore() < properties.getMinimumIpTrustScore()) {
@@ -94,9 +102,39 @@ public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
                 && snapshot.source() != IpIntelligenceSource.DEFAULT;
     }
 
-    private void unavailable(HttpServletResponse response) throws IOException {
+    static Duration lookupWaitTimeout(NetworkRiskProperties properties) {
+        return Objects.requireNonNull(properties).apiKeyFilterWaitTimeout();
+    }
+
+    private static boolean isTimeout(Throwable exception) {
+        for (Throwable current = exception; current != null; current = current.getCause()) {
+            if (current instanceof TimeoutException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean wasInterrupted(Throwable exception) {
+        for (Throwable current = exception; current != null; current = current.getCause()) {
+            if (current instanceof InterruptedException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void unavailable(
+            HttpServletResponse response,
+            String reason,
+            boolean retryable) throws IOException {
         count("unavailable");
+        meterRegistry.counter("api.key.ip.gate.unavailable", "reason", reason).increment();
         SecurityContextHolder.clearContext();
+        if (retryable) {
+            long seconds = Math.max(1L, networkRiskProperties.fallbackCacheTtl().toSeconds());
+            response.setHeader(HttpHeaders.RETRY_AFTER, Long.toString(seconds));
+        }
         errorWriter.write(
                 response,
                 HttpServletResponse.SC_SERVICE_UNAVAILABLE,

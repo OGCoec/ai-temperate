@@ -17,11 +17,11 @@
 			<button class="viewer-button" type="button" aria-label="关闭图片查看器" @click="$emit('close')">
 				<text aria-hidden="true">×</text>
 			</button>
-			<text class="viewer-counter" role="status">{{ activeIndex + 1 }} / {{ items.length }}</text>
+			<text class="viewer-counter" role="status">{{ presentedIndex + 1 }} / {{ items.length }}</text>
 			<button
 				class="viewer-button is-download"
 				type="button"
-				:disabled="downloadBusy || !activeDownloadReady"
+				:disabled="downloadBusy || rippleTransitioning || !activeDownloadReady"
 				aria-label="下载当前图片"
 				@click="$emit('download', activeItem)"
 			>
@@ -45,10 +45,10 @@
 						v-for="(item, index) in items"
 						:key="item.identity"
 						class="viewer-thumbnail"
-						:class="{ 'is-active': item.identity === activeIdentity }"
+						:class="{ 'is-active': item.identity === presentedIdentity }"
 						type="button"
 						:aria-label="`第 ${index + 1} 张图片，共 ${items.length} 张`"
-						:aria-current="item.identity === activeIdentity ? 'true' : undefined"
+						:aria-current="item.identity === presentedIdentity ? 'true' : undefined"
 						@click="selectIdentity(item.identity, index)"
 					>
 						<image :src="displaySource(item)" mode="aspectFill" lazy-load aria-hidden="true" />
@@ -84,6 +84,16 @@
 						mode="aspectFit"
 						:aria-label="`第 ${activeIndex + 1} 张图片，共 ${items.length} 张`"
 						@error="handleViewerImageError(activeItem)"
+					/>
+					<user-generated-image-ripple-stage
+						v-if="activeItem && !activeImageFailed"
+						:items="items"
+						:active-identity="activeIdentity"
+						:reduced-motion="reducedMotion"
+						@visual-change="handleRippleVisualChange"
+						@transitioning-change="handleRippleTransitioningChange"
+						@settled="handleRippleSettled"
+						@failure="handleRippleFailure"
 					/>
 					<view v-else class="viewer-empty" role="status">
 						<text>{{ activeItem ? '图片加载失败' : '暂无可查看图片' }}</text>
@@ -126,9 +136,11 @@
 				class="viewer-button is-download"
 				type="button"
 				:disabled="downloadBusy || !activeDownloadReady"
+				aria-label="下载当前图片"
 				@click="$emit('download', activeItem)"
 			>
-				{{ downloadBusy ? '保存中' : '保存' }}
+				<uni-icons type="download" size="18" color="#f2fff9" aria-hidden="true" />
+				<text>{{ downloadBusy ? '下载中' : '下载' }}</text>
 			</button>
 		</view>
 
@@ -139,26 +151,27 @@
 		>
 			<swiper-item v-for="item in androidWindowItems" :key="item.identity">
 				<view class="viewer-android-stage">
-					<image
-						v-if="displaySource(item)"
-						class="viewer-active-image"
-						:src="displaySource(item)"
-						mode="aspectFit"
-					/>
-					<view
-						v-if="displaySource(item) && sourceStatus(item) !== 'FINAL_READY'"
-						class="viewer-quality-status"
-						:role="sourceStatus(item) === 'ERROR' ? 'alert' : 'status'"
-					>
-						<text>{{ sourceStatus(item) === 'ERROR' ? '高清图片加载失败' : '高清图片加载中…' }}</text>
-						<button
-							v-if="sourceStatus(item) === 'ERROR'"
-							type="button"
-							@click="$emit('retry', item)"
+					<block v-if="displaySource(item)">
+						<image
+							class="viewer-active-image"
+							:src="displaySource(item)"
+							mode="aspectFit"
+						/>
+						<view
+							v-if="sourceStatus(item) !== 'FINAL_READY'"
+							class="viewer-quality-status"
+							:role="sourceStatus(item) === 'ERROR' ? 'alert' : 'status'"
 						>
-							重试
-						</button>
-					</view>
+							<text>{{ sourceStatus(item) === 'ERROR' ? '高清图片加载失败' : '高清图片加载中…' }}</text>
+							<button
+								v-if="sourceStatus(item) === 'ERROR'"
+								type="button"
+								@click="$emit('retry', item)"
+							>
+								重试
+							</button>
+						</view>
+					</block>
 					<view v-else class="viewer-empty" role="status">
 						<text>{{ sourceStatus(item) === 'ERROR' ? '图片加载失败' : '图片加载中…' }}</text>
 						<button
@@ -205,6 +218,7 @@
 
 <script>
 	import { activeGeneratedImageIndex } from '@/common/aichat/ai-conversation-image-viewer.js'
+	import UserGeneratedImageRippleStage from './user-generated-image-ripple-stage.vue'
 
 	const ANDROID_WINDOW_RADIUS = 2
 	const ANDROID_THUMBNAIL_RADIUS = 4
@@ -214,6 +228,7 @@
 
 	export default {
 		name: 'UserGeneratedImageViewer',
+		components: { UserGeneratedImageRippleStage },
 		props: {
 			open: { type: Boolean, default: false },
 			items: { type: Array, default: () => [] },
@@ -223,6 +238,7 @@
 			hasMoreBefore: { type: Boolean, default: false },
 			loadingBefore: { type: Boolean, default: false },
 			downloadBusy: { type: Boolean, default: false },
+			reducedMotion: { type: Boolean, default: false },
 			error: { type: String, default: '' }
 		},
 		emits: ['close', 'select', 'request-older', 'download', 'retry'],
@@ -234,6 +250,8 @@
 				wheelDeltaY: 0,
 				wheelResetTimer: null,
 				lastWheelNavigationAt: 0,
+				presentedIdentity: '',
+				rippleTransitioning: false,
 				failedIdentities: Object.freeze({}),
 				imageRetryRevisions: Object.freeze({})
 			}
@@ -245,6 +263,10 @@
 			},
 			activeItem() {
 				return this.items[this.activeIndex] || null
+			},
+			presentedIndex() {
+				const index = activeGeneratedImageIndex(this.items, this.presentedIdentity)
+				return index >= 0 ? index : this.activeIndex
 			},
 			activeImageFailed() {
 				return Boolean(this.activeItem
@@ -289,16 +311,28 @@
 		watch: {
 			open(nextOpen) {
 				if (nextOpen) {
+					this.presentedIdentity = this.activeIdentity
 					this.prepareH5Dialog()
 					this.requestOlderNearBoundary()
 				}
 				else this.releaseH5Dialog()
 			},
 			activeIdentity() {
+				if (this.reducedMotion || !this.presentedIdentity) {
+					this.presentedIdentity = this.activeIdentity
+				}
 				this.requestOlderNearBoundary()
 			},
 			items() {
+				if (!this.items.some(item => item.identity === this.presentedIdentity)) {
+					this.presentedIdentity = this.activeIdentity
+				}
 				this.requestOlderNearBoundary()
+			},
+			reducedMotion(value) {
+				if (!value) return
+				this.presentedIdentity = this.activeIdentity
+				this.rippleTransitioning = false
 			}
 		},
 		mounted() {
@@ -308,6 +342,20 @@
 			this.releaseH5Dialog()
 		},
 		methods: {
+			handleRippleVisualChange(identity) {
+				if (!this.items.some(item => item.identity === identity)) return
+				this.presentedIdentity = identity
+			},
+			handleRippleTransitioningChange(value) {
+				this.rippleTransitioning = Boolean(value)
+			},
+			handleRippleSettled(identity) {
+				this.handleRippleVisualChange(identity)
+			},
+			handleRippleFailure() {
+				this.presentedIdentity = this.activeIdentity
+				this.rippleTransitioning = false
+			},
 			displaySource(item) {
 				if (!item) return ''
 				if (this.androidClient) {
@@ -416,6 +464,8 @@
 				this.wheelDeltaY = 0
 				this.wheelResetTimer = null
 				this.lastWheelNavigationAt = 0
+				this.presentedIdentity = ''
+				this.rippleTransitioning = false
 				this.failedIdentities = Object.freeze({})
 				this.imageRetryRevisions = Object.freeze({})
 			},
@@ -453,9 +503,11 @@
 	.viewer-toolbar.is-android-safe { padding-top: calc(12px + env(safe-area-inset-top)); }
 	.viewer-button { min-width: 48px; min-height: 44px; margin: 0; padding: 0 14px; justify-self: start; border: 1px solid var(--viewer-control-border); border-radius: 999px; background: var(--viewer-control-background); color: #f2fff9; box-shadow: 0 8px 24px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255, 255, 255, .06); font-size: 18px; line-height: 42px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
 	.viewer-button.is-download { justify-self: end; font-size: 14px; }
+	.generated-image-viewer.is-android .viewer-button.is-download { display: inline-flex; align-items: center; justify-content: center; gap: 6px; line-height: 1; }
 	.viewer-button::after { border: 0; }
 	.viewer-button:active { transform: scale(.96); }
 	.viewer-button:disabled { opacity: .42; }
+	.generated-image-viewer.is-android .viewer-button.is-download:disabled { opacity: .62; }
 	.viewer-button:focus-visible,
 	.viewer-thumbnail:focus-visible,
 	.viewer-navigation:focus-visible,
@@ -471,8 +523,9 @@
 	.viewer-load-older { min-height: 40px; margin: 0; padding: 4px 8px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 10px; background: #1b1b1b; color: #d9dfdc; font-size: 11px; line-height: 1.25; }
 	.viewer-load-older::after { border: 0; }
 	.viewer-stage { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; padding: 24px 80px; box-sizing: border-box; }
-	.viewer-media-frame { width: min(calc(100% - 224px), 1440px); height: min(calc(100% - 48px), 900px); min-width: 0; min-height: 0; display: grid; place-items: center; }
+	.viewer-media-frame { width: min(calc(100% - 224px), 1440px); height: min(calc(100% - 48px), 900px); min-width: 0; min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; background: #000; }
 	.viewer-active-image { width: 100%; height: 100%; display: block; object-fit: contain; }
+	.generated-image-viewer.is-h5 .viewer-media-frame > .viewer-active-image { position: relative; z-index: 1; }
 	.viewer-navigation { width: 48px; height: 48px; min-height: 48px; position: absolute; top: 50%; z-index: 2; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--viewer-control-border); border-radius: 50%; background: var(--viewer-control-background); color: #f2fff9; box-shadow: 0 8px 24px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255, 255, 255, .06); line-height: 1; transform: translateY(-50%); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
 	.viewer-navigation-icon { width: 24px; height: 24px; display: block; flex: 0 0 24px; }
 	.viewer-navigation::after { border: 0; }
@@ -485,6 +538,7 @@
 	.viewer-status button { min-height: 34px; margin: 0; padding: 0 12px; border-radius: 9px; }
 	.viewer-swiper { height: calc(100vh - 72px - 112px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 	.viewer-android-stage { width: 100%; height: 100%; position: relative; display: flex; align-items: center; justify-content: center; }
+	.viewer-android-stage > .viewer-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 	.viewer-quality-status { position: absolute; right: 16px; bottom: 14px; left: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: rgba(20, 20, 20, .86); color: #e6ebe8; font-size: 12px; }
 	.viewer-quality-status button { min-height: 34px; margin: 0; padding: 0 12px; border-radius: 9px; }
 	.viewer-android-footer { min-height: 112px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: stretch; gap: 8px; box-sizing: border-box; }

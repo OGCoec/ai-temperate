@@ -51,6 +51,17 @@ test('expiry picker connects validation messages and expandable state to the inp
 	assert.match(source, /\$emit\('change'/)
 })
 
+test('expiry picker uses the shared calendar icon in a centered 44 pixel control', () => {
+	const source = readComponent()
+
+	assert.match(source, /<uni-icons\s+type="calendar"[\s\S]{0,100}aria-hidden="true"/)
+	assert.doesNotMatch(source, />\s*▦\s*</)
+	assert.match(source,
+		/\.expiry-calendar-toggle\s*\{[^}]*width:\s*44px[^}]*height:\s*44px[^}]*min-height:\s*44px/)
+	assert.match(source,
+		/\.expiry-calendar-toggle\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center/)
+})
+
 test('expiry picker uses a four-column desktop grid and a two-column narrow layout', () => {
 	const source = readComponent()
 

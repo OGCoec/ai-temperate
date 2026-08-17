@@ -3,6 +3,11 @@ package com.example.temperate.service.user.apichat.upstream.impl;
 import com.example.temperate.service.user.aiconversation.config.AiInferenceProperties;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticContext;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatUpstreamFailure;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatUpstreamFailureException;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -51,7 +56,10 @@ public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClie
                     "The model upstream is not enabled.",
                     null));
         }
-        return Flux.defer(() -> {
+        return Flux.deferContextual(subscriptionContext -> {
+            // 连接异常可能发生在收到任何响应头之前，因此必须在真正发起 8317 请求前记录边界。
+            ApiChatDiagnosticContext.session(subscriptionContext)
+                    .recordUpstreamAttempted();
             long startedNanos = System.nanoTime();
             AtomicBoolean firstChunk = new AtomicBoolean();
             return webClient.post()
@@ -59,30 +67,35 @@ public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClie
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(payload)
-                .exchangeToFlux(response -> {
+                .exchangeToFlux(response -> Flux.deferContextual(context -> {
+                    MediaType contentType = response.headers().contentType().orElse(null);
+                    boolean sse = contentType != null
+                            && MediaType.TEXT_EVENT_STREAM.isCompatibleWith(contentType);
+                    ApiChatDiagnosticContext.session(context).recordUpstreamHeaders(
+                            response.statusCode().value(),
+                            contentType == null ? "unknown" : contentType.toString(),
+                            sse);
                     if (!response.statusCode().is2xxSuccessful()) {
                         // 必须释放但不读取或转发原始错误正文，防止供应商细节和内部配置泄露。
                         return response.releaseBody().thenMany(Flux.error(
-                                new ApiChatException(
+                                protocolFailure(
                                         response.statusCode().is5xxServerError()
                                                 ? ApiChatErrorCode.UPSTREAM_UNAVAILABLE
                                                 : ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
                                         "The model upstream rejected the request.",
-                                        null)));
+                                        ApiChatProtocolViolation.UPSTREAM_REJECTED)));
                     }
-                    MediaType contentType = response.headers().contentType().orElse(null);
-                    if (contentType == null
-                            || !MediaType.TEXT_EVENT_STREAM.isCompatibleWith(contentType)) {
+                    if (!sse) {
                         return response.releaseBody().thenMany(Flux.error(
-                                new ApiChatException(
+                                protocolFailure(
                                         ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
                                         "The model upstream did not return an SSE response.",
-                                        null)));
+                                        ApiChatProtocolViolation.NON_SSE_CONTENT_TYPE)));
                     }
                     return response.bodyToFlux(SSE_TYPE)
                             .map(ServerSentEvent::data)
                             .filter(Objects::nonNull);
-                })
+                }))
                 // `Flux.timeout(Duration)` 只限制相邻 chunk 空闲时间；这里使用独立总时钟保证整条流绝不超过十五分钟恢复边界。
                 .transform(source -> enforceMaximumDuration(
                         source, properties.maxStreamDuration()))
@@ -90,12 +103,14 @@ public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClie
                         new ApiChatException(
                                 ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
                                 "The model upstream is unavailable.",
-                                null))
+                                null,
+                                new ApiChatUpstreamFailureException(
+                                        ApiChatUpstreamFailure.CONNECTION_FAILURE)))
                 .onErrorMap(CodecException.class, exception ->
-                        new ApiChatException(
+                        protocolFailure(
                                 ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
                                 "The model upstream returned an invalid SSE body.",
-                                null))
+                                ApiChatProtocolViolation.INVALID_SSE_BODY))
                 .doOnNext(ignored -> {
                     if (firstChunk.compareAndSet(false, true)) {
                         Timer.builder("api.chat.upstream.first.byte")
@@ -123,9 +138,22 @@ public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClie
                     .thenMany(Flux.<String>error(new ApiChatException(
                             ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
                             "The model upstream exceeded the maximum stream duration.",
-                            null)))
+                            null,
+                            new ApiChatUpstreamFailureException(
+                                    ApiChatUpstreamFailure.MAXIMUM_DURATION_EXCEEDED))))
                     .takeUntilOther(shared.then(Mono.just(Boolean.TRUE)));
             return Flux.merge(shared, deadline);
         });
+    }
+
+    private static ApiChatException protocolFailure(
+            ApiChatErrorCode code,
+            String message,
+            ApiChatProtocolViolation violation) {
+        return new ApiChatException(
+                code,
+                message,
+                null,
+                new ApiChatProtocolViolationException(violation));
     }
 }

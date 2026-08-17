@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 
-const sourcePath = path.resolve(__dirname, 'webrtc-probe.js')
+const sourcePath = path.resolve(__dirname, '../../hybrid/html/webrtc-probe.js')
 const sourceText = fs.readFileSync(sourcePath, 'utf8')
 const adminSourcePath = path.resolve(
 	__dirname,

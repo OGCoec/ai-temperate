@@ -9,7 +9,15 @@ public final class ApiChatException extends RuntimeException {
     private final String parameter;
 
     public ApiChatException(ApiChatErrorCode code, String message, String parameter) {
-        super(message);
+        this(code, message, parameter, null);
+    }
+
+    public ApiChatException(
+            ApiChatErrorCode code,
+            String message,
+            String parameter,
+            Throwable cause) {
+        super(message, cause);
         this.code = code;
         this.parameter = parameter;
     }

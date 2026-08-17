@@ -57,7 +57,12 @@ final class ApiKeyConfigurationContractTest {
     void productionYamlParsesAndBindsApiKeysAsEnabledByDefault() {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(context.getBean(ApiKeyProperties.class).isEnabled()).isTrue();
+            ApiKeyProperties properties = context.getBean(ApiKeyProperties.class);
+            assertThat(properties.isEnabled()).isTrue();
+            assertThat(properties.getRequest().getMaxToolDescriptionBytes())
+                    .isEqualTo(32_768);
+            assertThat(properties.getRequest().getMaxToolDefinitionsBytes())
+                    .isEqualTo(524_288);
         });
     }
 
@@ -69,6 +74,31 @@ final class ApiKeyConfigurationContractTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(ApiKeyProperties.class).isEnabled()).isFalse();
                 });
+    }
+
+    @Test
+    void environmentCanOverrideValidToolBudgets() {
+        contextRunner
+                .withPropertyValues(
+                        "API_KEY_REQUEST_MAX_TOOL_DESCRIPTION_BYTES=65536",
+                        "API_KEY_REQUEST_MAX_TOOL_DEFINITIONS_BYTES=786432")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    ApiKeyProperties.Request request = context
+                            .getBean(ApiKeyProperties.class)
+                            .getRequest();
+                    assertThat(request.getMaxToolDescriptionBytes()).isEqualTo(65_536);
+                    assertThat(request.getMaxToolDefinitionsBytes()).isEqualTo(786_432);
+                });
+    }
+
+    @Test
+    void applicationContextRejectsInvertedToolBudgets() {
+        contextRunner
+                .withPropertyValues(
+                        "API_KEY_REQUEST_MAX_TOOL_DESCRIPTION_BYTES=262144",
+                        "API_KEY_REQUEST_MAX_TOOL_DEFINITIONS_BYTES=131072")
+                .run(context -> assertThat(context).hasFailed());
     }
 
     @Configuration(proxyBeanMethods = false)

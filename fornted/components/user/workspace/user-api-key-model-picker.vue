@@ -22,9 +22,12 @@
 
 		<view v-if="disabledModels.length" class="model-picker-disabled" role="status">
 			<text class="model-picker-disabled-title">已停用的原授权</text>
-			<text v-for="model in disabledModels" :key="model.modelPublicId" class="model-picker-disabled-item">
-				{{ model.modelName }} · {{ model.vendor }}（保存后移除）
-			</text>
+			<view v-for="model in disabledModels" :key="model.modelPublicId" class="model-picker-disabled-item">
+				<user-model-provider-mark :model="model" :size="18" />
+				<text class="model-picker-disabled-vendor">{{ model.vendor }}</text>
+				<text class="model-picker-disabled-name">{{ model.modelName }}</text>
+				<text class="model-picker-disabled-note">保存后移除</text>
+			</view>
 		</view>
 
 		<view v-if="error && !models.length" class="model-picker-state model-picker-error" role="alert">
@@ -45,10 +48,9 @@
 				@click="toggleModel(model)"
 			>
 				<view class="model-picker-check" aria-hidden="true">{{ isSelected(model.publicId) ? '✓' : '' }}</view>
-				<view class="model-picker-copy">
-					<text class="model-picker-name">{{ model.modelName }}</text>
-					<text class="model-picker-vendor">{{ model.vendor }}</text>
-				</view>
+				<user-model-provider-mark :model="model" :size="20" />
+				<text class="model-picker-vendor">{{ model.vendor }}</text>
+				<text class="model-picker-name">{{ model.modelName }}</text>
 			</button>
 		</view>
 
@@ -67,8 +69,10 @@
 
 <script>
 	import { aiModelApi } from '@/common/aimodel/ai-model-api.js'
+	import UserModelProviderMark from './user-model-provider-mark.vue'
 
 	export default {
+		components: { UserModelProviderMark },
 		props: {
 			selectedIds: { type: Array, default: () => [] },
 			minimumModels: { type: Number, default: 0 },
@@ -188,23 +192,26 @@
 	@import '@/common/ui/user-material.scss';
 
 	.api-key-model-picker { min-width: 0; }
-	.model-picker-toolbar { display: flex; gap: 10px; }
-	.model-picker-search { min-width: 0; height: 46px; flex: 1; box-sizing: border-box; padding: 0 14px; border: 1px solid rgba(151, 170, 160, .22); border-radius: 12px; background: #101310; color: #f3f5f4; font-size: 14px; }
+	.model-picker-toolbar { display: flex; gap: 8px; }
+	.model-picker-search { min-width: 0; height: 44px; flex: 1; box-sizing: border-box; padding: 0 14px; border: 1px solid rgba(151, 170, 160, .22); border-radius: 12px; background: #101310; color: #f3f5f4; font-size: 14px; }
 	.model-picker-search:focus { border-color: rgba(55, 211, 154, .64); outline: 2px solid rgba(55, 211, 154, .18); }
 	.model-picker-search-button, .model-picker-more, .model-picker-state button { @include user-frosted-control; margin: 0; padding: 0 16px; border-radius: 12px; color: #dce5e0; font-size: 14px; }
-	.model-picker-summary { display: flex; justify-content: space-between; gap: 12px; margin: 10px 2px; color: #8f9b95; font-size: 12px; }
+	.model-picker-summary { display: flex; justify-content: space-between; gap: 12px; margin: 8px 2px; color: #8f9b95; font-size: 12px; }
 	.model-picker-limit { display: block; margin: -2px 2px 10px; color: #efc18a; font-size: 12px; }
 	.model-picker-disabled { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; padding: 12px 14px; border: 1px solid rgba(222, 157, 80, .28); border-radius: 12px; background: rgba(201, 130, 47, .08); color: #d9b17a; font-size: 12px; }
 	.model-picker-disabled-title { color: #efc18a; font-weight: 700; }
-	.model-picker-list { max-height: 310px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; }
-	.model-picker-option { width: 100%; min-height: 58px; margin: 0; padding: 10px 12px; display: flex; align-items: center; gap: 12px; border: 1px solid rgba(151, 170, 160, .18); border-radius: 13px; background: #141816; color: #f3f5f4; text-align: left; }
+	.model-picker-disabled-item { min-width: 0; display: grid; grid-template-columns: 18px 64px minmax(0, 1fr) auto; align-items: center; column-gap: 8px; }
+	.model-picker-disabled-vendor { color: #c79b64; font-size: 11px; text-transform: uppercase; }
+	.model-picker-disabled-name { min-width: 0; overflow: hidden; color: #e3c79f; text-overflow: ellipsis; white-space: nowrap; }
+	.model-picker-disabled-note { color: #a9865d; white-space: nowrap; }
+	.model-picker-list { max-height: 320px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; }
+	.model-picker-option { width: 100%; min-height: 48px; margin: 0; padding: 8px 10px; display: grid; grid-template-columns: 22px 20px 64px minmax(0, 1fr); align-items: center; column-gap: 10px; border: 1px solid rgba(151, 170, 160, .18); border-radius: 11px; background: #141816; color: #f3f5f4; text-align: left; }
 	.model-picker-option.is-selected { border-color: rgba(55, 211, 154, .52); background: rgba(55, 211, 154, .08); }
 	.model-picker-option:focus-visible { outline: 2px solid rgba(55, 211, 154, .72); outline-offset: 2px; }
 	.model-picker-option[disabled] { opacity: .46; }
 	.model-picker-check { width: 22px; height: 22px; flex: 0 0 22px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(151, 170, 160, .38); border-radius: 7px; color: #37d39a; }
-	.model-picker-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-	.model-picker-name { overflow: hidden; font-size: 14px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
-	.model-picker-vendor { color: #8f9b95; font-size: 12px; text-transform: uppercase; }
+	.model-picker-vendor { overflow: hidden; color: #8f9b95; font-size: 11px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+	.model-picker-name { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
 	.model-picker-state { min-height: 112px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-direction: column; color: #8f9b95; text-align: center; }
 	.model-picker-error, .model-picker-inline-error { color: #efb0aa; }
 	.model-picker-inline-error { margin-top: 10px; font-size: 12px; }

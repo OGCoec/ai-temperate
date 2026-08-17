@@ -29,11 +29,17 @@ final class ApiChatProviderAdapterContractTest {
     @Test
     void everyProviderProducesTheApprovedOpenAiCompatibleJsonTypes()
             throws Exception {
+        String longDescription = "x".repeat(7_125);
         ApiChatRequest request = objectMapper.readValue("""
                 {
                   "model":"client-model",
-                  "messages":[{"role":"user","content":"hello"}],
+                  "messages":[{"role":"user","content":[
+                    {"type":"text","text":"hel"},{"type":"text","text":"lo"}]}],
                   "stream":true,
+                  "reasoning_effort":"ultra",
+                  "prompt_cache_key":"agent-session-1",
+                  "store":false,
+                  "service_tier":"flex",
                   "stream_options":{"include_usage":false},
                   "max_tokens":128,
                   "temperature":0.5,
@@ -43,11 +49,11 @@ final class ApiChatProviderAdapterContractTest {
                   "stop":["END"],
                   "seed":7,
                   "n":1,
-                  "tools":[{"type":"function","function":{"name":"weather","description":"lookup","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
+                  "tools":[{"type":"function","function":{"name":"weather","description":"%s","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
                   "tool_choice":{"type":"function","function":{"name":"weather"}},
                   "parallel_tool_calls":true
                 }
-                """, ApiChatRequest.class);
+                """.formatted(longDescription), ApiChatRequest.class);
 
         for (AiModelProvider provider : AiModelProvider.values()) {
             ObjectNode payload = adapter(provider, payloadFactory).adapt(
@@ -56,7 +62,12 @@ final class ApiChatProviderAdapterContractTest {
             assertThat(payload.get("model").textValue())
                     .isEqualTo(provider.vendor() + "-test");
             assertThat(payload.get("messages").isArray()).isTrue();
+            assertThat(payload.at("/messages/0/content").textValue()).isEqualTo("hello");
             assertThat(payload.get("stream").isBoolean()).isTrue();
+            assertThat(payload.path("reasoning_effort").textValue()).isEqualTo("ultra");
+            assertThat(payload.path("prompt_cache_key").textValue()).isEqualTo("agent-session-1");
+            assertThat(payload.path("store").booleanValue()).isFalse();
+            assertThat(payload.path("service_tier").textValue()).isEqualTo("flex");
             assertThat(payload.at("/stream_options/include_usage").booleanValue())
                     .isTrue();
             assertThat(payload.get("max_completion_tokens").isIntegralNumber())
@@ -67,6 +78,10 @@ final class ApiChatProviderAdapterContractTest {
             assertThat(payload.get("seed").isIntegralNumber()).isTrue();
             assertThat(payload.get("n").isIntegralNumber()).isTrue();
             assertThat(payload.get("tools").isArray()).isTrue();
+            assertThat(payload.at("/tools/0/function/description").textValue())
+                    .isEqualTo(longDescription);
+            assertThat(payload.at("/tools/0/function/parameters/properties/city/type")
+                    .textValue()).isEqualTo("string");
             assertThat(payload.get("tool_choice").isObject()).isTrue();
             assertThat(payload.get("parallel_tool_calls").isBoolean()).isTrue();
         }

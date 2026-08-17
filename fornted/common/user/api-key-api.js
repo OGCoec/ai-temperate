@@ -3,6 +3,7 @@ import { authorizedRequest } from '../auth/http-client.js'
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
 const MASKED_KEY_PATTERN = /^sk-…[A-Za-z0-9_-]{4}$/
 const FULL_KEY_PATTERN = /^sk-[A-Za-z0-9_-]{86}$/
+const ROW_VERSION_PATTERN = /^(0|[1-9][0-9]*)$/
 const STRONG_ETAG_PATTERN = /^"v(0|[1-9][0-9]*)"$/
 const STATUS_VALUES = new Set(['ENABLED', 'DISABLED'])
 
@@ -49,7 +50,9 @@ function normalizedDate(value, nullable) {
 }
 
 function normalizedRowVersion(value) {
-	if (!Number.isSafeInteger(value) || value < 0) throw responseError()
+	if (typeof value !== 'string' || !ROW_VERSION_PATTERN.test(value)) {
+		throw responseError()
+	}
 	return value
 }
 
@@ -129,13 +132,15 @@ function normalizedMetadata(value, normalizer) {
 	const normalized = normalizer(source.data)
 	if (typeof source.etag !== 'string') throw responseError()
 	const match = STRONG_ETAG_PATTERN.exec(source.etag)
-	if (!match || Number(match[1]) !== normalized.rowVersion) throw responseError()
+	if (!match || match[1] !== normalized.rowVersion) {
+		throw responseError()
+	}
 	return Object.freeze({ value: normalized, etag: source.etag })
 }
 
 function normalizedEtag(value) {
 	const match = typeof value === 'string' ? STRONG_ETAG_PATTERN.exec(value) : null
-	if (!match || !Number.isSafeInteger(Number(match[1]))) {
+	if (!match) {
 		throw inputError('API Key ETag 无效。')
 	}
 	return value

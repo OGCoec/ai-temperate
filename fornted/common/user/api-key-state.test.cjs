@@ -43,12 +43,13 @@ test('removes the one-time secret before a created key enters list state', async
 		lastUsedAt: null,
 		createdAt: '2026-08-14T00:00:00Z',
 		updatedAt: '2026-08-14T00:00:00Z',
-		rowVersion: 0,
+		rowVersion: '0',
 		models: [],
 		apiKey: `sk-${'A'.repeat(86)}`
 	})
 
 	assert.equal(Object.hasOwn(summary, 'apiKey'), false)
 	assert.equal(Object.hasOwn(summary, 'models'), false)
+	assert.equal(summary.rowVersion, '0')
 	assert.equal(Object.isFrozen(summary), true)
 })

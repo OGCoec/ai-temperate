@@ -1,7 +1,11 @@
 <template>
 	<view
 		class="android-chat-image"
-		:class="{ 'is-thumbnail': variant === 'THUMBNAIL', 'is-error': phase === 'ERROR' }"
+		:class="{
+			'is-thumbnail': variant === 'THUMBNAIL',
+			'is-compact-placeholder': compactPlaceholder,
+			'is-error': phase === 'ERROR'
+		}"
 		:style="frameStyle"
 	>
 		<image
@@ -14,18 +18,39 @@
 			@load="handleLoad"
 			@error="handleError"
 		/>
-		<view v-if="phase === 'LOADING'" class="android-image-placeholder" role="status">
-			<uni-icons type="image" size="24" color="#73827a" aria-hidden="true" />
-			<text>图片加载中…</text>
+		<view
+			v-if="phase === 'LOADING'"
+			class="android-image-placeholder"
+			role="status"
+			:aria-label="compactPlaceholder ? '图片加载中' : undefined"
+		>
+			<uni-icons type="image" :size="compactPlaceholder ? 18 : 24" color="#73827a" aria-hidden="true" />
+			<text v-if="!compactPlaceholder" class="android-image-placeholder-label">图片加载中…</text>
 		</view>
-		<view v-else-if="phase === 'WAITING_REMOTE'" class="android-image-placeholder" role="status">
-			<uni-icons type="image" size="24" color="#8fdcbe" aria-hidden="true" />
-			<text>图片正在处理</text>
+		<view
+			v-else-if="phase === 'WAITING_REMOTE'"
+			class="android-image-placeholder"
+			role="status"
+			:aria-label="compactPlaceholder ? '图片正在处理' : undefined"
+		>
+			<uni-icons type="image" :size="compactPlaceholder ? 18 : 24" color="#8fdcbe" aria-hidden="true" />
+			<text v-if="!compactPlaceholder" class="android-image-placeholder-label">图片正在处理</text>
 		</view>
 		<view v-else-if="phase === 'ERROR'" class="android-image-placeholder is-error" role="alert">
-			<uni-icons type="info" size="24" color="#ff9b94" aria-hidden="true" />
-			<text>图片加载失败</text>
-			<button class="android-image-retry" type="button" @click.stop="retry">重新加载</button>
+			<button
+				v-if="compactPlaceholder"
+				class="android-image-compact-retry"
+				type="button"
+				aria-label="图片加载失败，点击重新加载"
+				@click.stop="retry"
+			>
+				<uni-icons type="info" size="18" color="#ff9b94" aria-hidden="true" />
+			</button>
+			<block v-else>
+				<uni-icons type="info" size="24" color="#ff9b94" aria-hidden="true" />
+				<text class="android-image-placeholder-label">图片加载失败</text>
+				<button class="android-image-retry" type="button" @click.stop="retry">重新加载</button>
+			</block>
 		</view>
 	</view>
 </template>
@@ -42,6 +67,7 @@
 			sourceStatus: { type: String, default: '' },
 			diagnosticRunId: { type: String, default: '' },
 			managedLocalSource: { type: Boolean, default: false },
+			compactPlaceholder: { type: Boolean, default: false },
 			variant: {
 				type: String,
 				default: 'FULL',
@@ -260,9 +286,13 @@
 	.android-chat-image.is-thumbnail { height: 100%; min-height: 0; aspect-ratio: var(--android-image-aspect, 1); }
 	.android-chat-image-element { width: 100%; height: auto; display: block; }
 	.android-chat-image.is-thumbnail .android-chat-image-element { width: 100%; height: 100%; }
-	.android-image-placeholder { position: absolute; inset: 0; min-height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; background: linear-gradient(145deg, #121815, #0d110f); color: #7f8d85; font-size: 12px; }
+	.android-image-placeholder { position: absolute; inset: 0; min-height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; background: #111714; color: #7f8d85; font-size: 12px; }
 	.android-chat-image.is-thumbnail .android-image-placeholder { min-height: 0; }
+	.android-chat-image.is-compact-placeholder .android-image-placeholder { gap: 0; }
+	.android-image-placeholder-label { line-height: 1.4; text-align: center; }
 	.android-image-placeholder.is-error { color: #ffd0cc; }
+	.android-image-compact-retry { width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: inherit; background: transparent; line-height: 1; }
+	.android-image-compact-retry::after { border: 0; }
 	.android-image-retry { min-height: 34px; margin: 0; padding: 0 12px; border: 1px solid #4a3a38; border-radius: 8px; background: #211716; color: #ffd0cc; font-size: 12px; line-height: 32px; }
 	.android-image-retry::after { border: 0; }
 </style>

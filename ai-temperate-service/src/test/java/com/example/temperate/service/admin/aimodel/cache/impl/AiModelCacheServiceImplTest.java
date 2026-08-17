@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.Base64;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -108,7 +109,7 @@ final class AiModelCacheServiceImplTest {
     }
 
     @Test
-    void rejectsPreviousMediaCapabilitySnapshotThenUnlinksLoadsDatabaseAndWritesV6() {
+    void rejectsPreviousSnapshotThenUnlinksLoadsDatabaseAndWritesV7() {
         ObjectMapper objectMapper = new ObjectMapper();
         AiModelCacheSnapshot v5 = new AiModelCacheSnapshot(5, List.of());
         String envelope = new AiModelCacheProtector(TEST_KEY_BASE64, objectMapper)
@@ -123,8 +124,12 @@ final class AiModelCacheServiceImplTest {
 
         AiModelCacheSnapshot result = service.getOrLoadEnabledSnapshot();
 
-        assertThat(result.schemaVersion()).isEqualTo(6);
+        assertThat(result.schemaVersion()).isEqualTo(7);
         assertThat(result.models()).hasSize(1);
+        assertThat(result.models().get(0).createdEpochSeconds())
+                .isEqualTo(LocalDate.of(2026, 8, 15)
+                        .atStartOfDay(java.time.ZoneOffset.UTC)
+                        .toEpochSecond());
         verify(redisTemplate, times(2)).unlink(CACHE_KEY);
         verify(valueOperations).set(eq(CACHE_KEY), any(String.class), any(Duration.class));
     }
@@ -221,6 +226,7 @@ final class AiModelCacheServiceImplTest {
         model.setContextWindowTokens(256000L);
         model.setMaxOutputTokens(32000L);
         model.setEnabled(true);
+        model.setCreatedAt(LocalDate.of(2026, 8, 15));
         return model;
     }
 }

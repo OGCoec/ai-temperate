@@ -7,6 +7,13 @@ const source = fs.readFileSync(
 	path.resolve(__dirname, 'user-generated-image-viewer.vue'),
 	'utf8'
 )
+const panelSource = fs.readFileSync(
+	path.resolve(__dirname, 'user-chat-panel.vue'),
+	'utf8'
+)
+const androidTemplateSource = source.match(
+	/<!-- #ifdef APP-PLUS -->([\s\S]*?)<!-- #endif -->/
+)?.[1] || ''
 
 test('implements an accessible modal image viewer on H5', () => {
 	assert.match(source, /role="dialog"/)
@@ -26,6 +33,26 @@ test('uses contain presentation and selectable conversation thumbnails', () => {
 	assert.match(source, /activeIndex \+ 1/)
 	assert.match(source, /handleViewerImageError/)
 	assert.match(source, /retryViewerImage/)
+})
+
+test('layers the H5 ripple stage over the accessible image fallback', () => {
+	assert.match(source, /<user-generated-image-ripple-stage/)
+	assert.match(source, /:active-identity="activeIdentity"/)
+	assert.match(source, /:reduced-motion="reducedMotion"/)
+	assert.match(source, /@visual-change="handleRippleVisualChange"/)
+	assert.match(source, /@transitioning-change="handleRippleTransitioningChange"/)
+	assert.match(source, /presentedIdentity/)
+	assert.match(source, /presentedIndex \+ 1/)
+	assert.match(source, /downloadBusy \|\| rippleTransitioning/)
+})
+
+test('keeps pointer-driven water displacement and autoplay out of the viewer', () => {
+	assert.doesNotMatch(source, /@pointermove|@pointerleave|setInterval/i)
+})
+
+test('passes the shared reduced-motion preference into the H5 ripple stage', () => {
+	assert.match(panelSource, /:reduced-motion="motionReduced"/)
+	assert.match(source, /reducedMotion:\s*\{ type: Boolean, default: false \}/)
 })
 
 test('keeps the H5 image centered in a bounded frame at every browser zoom level', () => {
@@ -69,6 +96,42 @@ test('uses an Android swiper with a bounded rendered window', () => {
 	assert.match(source, /viewer-quality-status/)
 	assert.match(source, /高清图片加载中/)
 	assert.doesNotMatch(source, /uni\.previewImage/)
+})
+
+test('keeps Android image and empty states mutually exclusive', () => {
+	assert.match(androidTemplateSource, /<block\s+v-if="displaySource\(item\)">/)
+	assert.match(
+		androidTemplateSource,
+		/<\/block>\s*<view\s+v-else\s+class="viewer-empty"/s
+	)
+	assert.match(
+		androidTemplateSource,
+		/v-if="sourceStatus\(item\) !== 'FINAL_READY'"[\s\S]*?class="viewer-quality-status"/
+	)
+	assert.doesNotMatch(
+		androidTemplateSource,
+		/v-if="displaySource\(item\) && sourceStatus\(item\) !== 'FINAL_READY'"/
+	)
+	assert.doesNotMatch(
+		androidTemplateSource,
+		/<image\s*\r?\n\s*v-if="displaySource\(item\)"/
+	)
+	assert.match(
+		source,
+		/\.viewer-android-stage\s*>\s*\.viewer-empty\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*justify-content:\s*center/s
+	)
+	assert.match(androidTemplateSource, /aria-label="下载当前图片"/)
+	assert.match(androidTemplateSource, /<uni-icons\s+type="download"/)
+	assert.match(androidTemplateSource, /downloadBusy \? '下载中' : '下载'/)
+	assert.doesNotMatch(androidTemplateSource, /保存中|>保存</)
+	assert.match(
+		source,
+		/\.generated-image-viewer\.is-android\s+\.viewer-button\.is-download:disabled\s*\{[^}]*opacity:\s*\.62/s
+	)
+	assert.match(
+		source,
+		/\.generated-image-viewer\.is-android\s+\.viewer-button\.is-download\s*\{[^}]*display:\s*inline-flex[^}]*gap:\s*6px/s
+	)
 })
 
 test('exposes download, retry and older-page events without owning API state', () => {

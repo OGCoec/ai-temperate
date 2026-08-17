@@ -48,6 +48,24 @@ class EdgeProxySignatureFilterTest {
     }
 
     @Test
+    void requiredModeRejectsUnsignedUnknownApiBeforeSpringRouteResolution()
+            throws Exception {
+        EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/api/not-exist");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
+        assertThat(response.getContentAsString())
+                .contains("EDGE_PROXY_SIGNATURE_INVALID");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
     void requiredModeRejectsUnsignedBrowserWebSocketUpgrade() throws Exception {
         EdgeProxySignatureFilter filter = filter(EdgeProxyMode.REQUIRED);
         MockHttpServletRequest request =

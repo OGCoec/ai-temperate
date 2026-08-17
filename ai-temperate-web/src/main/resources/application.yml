@@ -572,6 +572,30 @@ app:
       max-messages: ${API_KEY_REQUEST_MAX_MESSAGES:256}
       # 一次请求最多声明一百二十八个函数工具。
       max-tools: ${API_KEY_REQUEST_MAX_TOOLS:128}
+      # 单个函数工具描述按 UTF-8 字节限制为三十二 KiB，兼容 Agent 长说明且阻止单项无界膨胀。
+      max-tool-description-bytes: ${API_KEY_REQUEST_MAX_TOOL_DESCRIPTION_BYTES:32768}
+      # 完整 tools JSON 按 UTF-8 字节限制为五百一十二 KiB，并且不得超过整体请求体预算。
+      max-tool-definitions-bytes: ${API_KEY_REQUEST_MAX_TOOL_DEFINITIONS_BYTES:524288}
+    # 公开 Chat 流诊断只记录阶段、帧长度、节奏和终止分类，禁止记录正文、输出、工具参数与完整凭据。
+    stream-diagnostics:
+      # 默认开启全链路诊断；紧急关闭后退化为 No-Op 路径且不包装业务 Flux。
+      enabled: ${API_KEY_STREAM_DIAGNOSTICS_ENABLED:true}
+      # 该比例只采样成功请求和高频流遥测；诊断开启时所有校验与链路失败始终全量记录。
+      sample-rate: ${API_KEY_STREAM_DIAGNOSTICS_SAMPLE_RATE:1.0}
+      # 一秒窗口用于周期帧计数，并作为静默阈值和爆发窗口的上界基准。
+      window: ${API_KEY_STREAM_DIAGNOSTICS_WINDOW:1s}
+      # 连续一百帧记录一次进度，Usage 与 DONE 无论序号都单独记录。
+      log-every-frames: ${API_KEY_STREAM_DIAGNOSTICS_LOG_EVERY_FRAMES:100}
+      # 相邻观察帧超过两秒时记录静默事件，用于识别上游停顿或中间层缓冲。
+      silence-threshold: ${API_KEY_STREAM_DIAGNOSTICS_SILENCE_THRESHOLD:2s}
+      # 二百五十毫秒作为爆发帧聚合窗口，禁止用缓冲操作实现该统计。
+      burst-window: ${API_KEY_STREAM_DIAGNOSTICS_BURST_WINDOW:250ms}
+      # 同一窗口达到五十帧时记录一次爆发事件。
+      burst-frames: ${API_KEY_STREAM_DIAGNOSTICS_BURST_FRAMES:50}
+      # 每条流只保留最后三十二条帧元数据，禁止保存任何 SSE 正文。
+      terminal-history-size: ${API_KEY_STREAM_DIAGNOSTICS_TERMINAL_HISTORY_SIZE:32}
+      # 异常栈只保留十二个类名和方法名，禁止输出异常携带的外部正文。
+      stack-frame-limit: ${API_KEY_STREAM_DIAGNOSTICS_STACK_FRAME_LIMIT:12}
     # 固定 v1 API Key 计数 Bloom 使用四个约三点四三 MiB Bucket 和 Receipt 元素幂等。
     bloom:
       # 全部 Bucket 合计包含一千四百三十七万七千五百八十八个单字节计数器。
@@ -619,8 +643,8 @@ app:
     lookup-timeout: ${NETWORK_RISK_LOOKUP_TIMEOUT:8s}
     # 完整第三方结果缓存六小时，并由实现增加正负百分之二十抖动。
     positive-cache-ttl: ${NETWORK_RISK_POSITIVE_CACHE_TTL:6h}
-    # 本地 BIN 或默认六十分只缓存十分钟，以便较快重试第三方。
-    fallback-cache-ttl: ${NETWORK_RISK_FALLBACK_CACHE_TTL:10m}
+    # 本地 BIN 或默认六十分只短暂缓存三十秒，避免供应商恢复后新 IP 长时间继续收到不可用响应。
+    fallback-cache-ttl: ${NETWORK_RISK_FALLBACK_CACHE_TTL:30s}
     # 同一 IP 的跨实例 single-flight 锁只覆盖一次外部查询预算。
     single-flight-ttl: ${NETWORK_RISK_SINGLE_FLIGHT_TTL:9s}
     # 单实例最多允许三十二个缓存未命中的外部风险查询并发。
@@ -1304,6 +1328,10 @@ logging:
     com.example.temperate.web.risk: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
     # 网络风险 Service 默认只记录状态转换失败，临时 DEBUG 用于关联 PreAuth 与风险评估轨迹。
     com.example.temperate.service.risk.logging: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # API Chat Service、协议解析与 AOP 诊断默认记录 INFO 元数据，禁止在该包启用正文级 TRACE。
+    com.example.temperate.service.user.apichat.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # API Chat Servlet 诊断默认记录请求、异步和错误分派，便于关联 Tomcat 二次分派。
+    com.example.temperate.web.apichat.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
 
 # 普通用户头像对象存储只保存 Bucket 位置和非敏感行为参数，OSS 凭据由 SDK 标准环境变量读取。
 user-avatar:

@@ -94,8 +94,8 @@ test('phone inputs use tel keyboards and shared country-aware formatting', () =>
 
 	assert.match(identifier, /type="tel"/)
 	assert.match(register, /type="tel"/)
-	assert.match(identifier, /:value="phoneDisplay"/)
-	assert.match(register, /:value="phoneDisplay"/)
+	assert.match(identifier, /:value="effectivePhoneDisplay"/)
+	assert.match(register, /:value="effectivePhoneDisplay"/)
 	assert.match(identifier, /:key="phoneInputKey"/)
 	assert.match(register, /:key="phoneInputKey"/)
 	assert.match(identifier, /normalizePhoneInputForCountry/)
@@ -131,4 +131,131 @@ test('auth phone submissions keep phoneNumber as the cleaned local digits', () =
 	assert.doesNotMatch(login, /phoneNumber:\s*formatLocalPhoneNumberInput/)
 	assert.doesNotMatch(register, /phoneNumber:\s*formatLocalPhoneNumberInput/)
 	assert.doesNotMatch(reset, /phoneNumber:\s*formatLocalPhoneNumberInput/)
+})
+
+// ── 国际手机号自动识别 UI 契约 ──────────────────────────────────
+
+test('shared and register components import normalizeInternationalPhoneInput', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /normalizeInternationalPhoneInput/)
+	assert.match(register, /normalizeInternationalPhoneInput/)
+})
+
+test('shared and register components import getPhoneCountryByIso2 for country detection', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /getPhoneCountryByIso2/)
+	assert.match(register, /getPhoneCountryByIso2/)
+})
+
+test('shared and register components maintain internationalDraft data field', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /internationalDraft/)
+	assert.match(register, /internationalDraft/)
+})
+
+test('shared and register components use effectivePhoneDisplay for input value', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /:value="effectivePhoneDisplay"/)
+	assert.match(register, /:value="effectivePhoneDisplay"/)
+})
+
+test('dial-prefix is hidden during international draft in shared and register components', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /v-if="!internationalDraft"[\s\S]*class="dial-prefix"/)
+	assert.match(register, /v-if="!internationalDraft"[\s\S]*class="dial-prefix"/)
+})
+
+test('phone input uses tel autocomplete to allow international input', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(identifier, /autocomplete="tel"/)
+	assert.match(register, /autocomplete="tel"/)
+})
+
+test('pending international drafts clear canonical phone state without changing country', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(
+		identifier,
+		/if \(intl && intl\.pendingInternational\)[\s\S]*this\.internationalDraft = intl\.sanitized[\s\S]*this\.\$emit\('update:phone', ''\)[\s\S]*return/
+	)
+	assert.match(
+		register,
+		/if \(intl && intl\.pendingInternational\)[\s\S]*this\.internationalDraft = intl\.sanitized[\s\S]*this\.phoneNumber = ''[\s\S]*return/
+	)
+})
+
+test('valid international numbers update country before canonical local digits', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(
+		identifier,
+		/this\.\$emit\('update:countryId', detectedCountry\.id\)[\s\S]*this\.\$emit\('update:phone', intl\.localDigits\)/
+	)
+	assert.match(
+		register,
+		/this\.handleCountryUserSelection\(detectedCountry\.id\)[\s\S]*this\.phoneNumber = intl\.localDigits/
+	)
+})
+
+test('complete local nanp numbers update country before canonical local digits', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(
+		identifier,
+		/if \(normalized\.detectedCountryIso2\)[\s\S]*getPhoneCountryByIso2\(normalized\.detectedCountryIso2\)[\s\S]*this\.\$emit\('update:countryId', detectedCountry\.id\)[\s\S]*this\.\$emit\('update:phone', normalized\.digits\)/
+	)
+	assert.match(
+		register,
+		/if \(normalized\.detectedCountryIso2\)[\s\S]*getPhoneCountryByIso2\(normalized\.detectedCountryIso2\)[\s\S]*this\.handleCountryUserSelection\(detectedCountry\.id\)[\s\S]*this\.phoneNumber = normalized\.digits/
+	)
+})
+
+test('local phone input clears international draft before nanp normalization', () => {
+	const identifier = read('components/auth/identifier-fields.vue')
+	const register = read('pages/auth/register.vue')
+
+	assert.match(
+		identifier,
+		/this\.internationalDraft = ''[\s\S]*const normalized = normalizePhoneInputForCountry/
+	)
+	assert.match(
+		register,
+		/this\.internationalDraft = ''[\s\S]*const normalized = normalizePhoneInputForCountry/
+	)
+})
+
+test('admin shared component also supports international phone detection', () => {
+	const adminRoot = path.resolve(__dirname, '../../../myuniappadmin')
+	const adminIdentifier = fs.readFileSync(
+		path.join(adminRoot, 'components/auth/identifier-fields.vue'), 'utf8'
+	)
+
+	assert.match(adminIdentifier, /normalizeInternationalPhoneInput/)
+	assert.match(adminIdentifier, /getPhoneCountryByIso2/)
+	assert.match(adminIdentifier, /internationalDraft/)
+	assert.match(adminIdentifier, /:value="effectivePhoneDisplay"/)
+	assert.match(adminIdentifier, /v-if="!internationalDraft"[\s\S]*class="dial-prefix"/)
+	assert.match(adminIdentifier, /autocomplete="tel"/)
+	assert.match(
+		adminIdentifier,
+		/if \(normalized\.detectedCountryIso2\)[\s\S]*getPhoneCountryByIso2\(normalized\.detectedCountryIso2\)[\s\S]*this\.\$emit\('update:countryId', detectedCountry\.id\)[\s\S]*this\.\$emit\('update:phone', normalized\.digits\)/
+	)
+	// 管理员组件保留既有事件名称
+	assert.match(adminIdentifier, /update:countryId/)
+	assert.match(adminIdentifier, /update:phone/)
 })

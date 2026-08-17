@@ -9,6 +9,8 @@ import {
 
 const ENV = {
 	API_UPSTREAM_ORIGIN: 'https://api.niko000o.site',
+	H5_PAGES_ORIGIN: 'https://ai-temperate-frontend.pages.dev',
+	API_KEY_STREAM_DIAGNOSTICS_ENABLED: 'true',
 	SSE_ROUTE_LOG_SAMPLE_RATE: '0',
 	EDGE_PROXY_HMAC_SECRET_BASE64: Buffer
 		.from('worker-edge-test-secret-0123456789abcdef')
@@ -108,20 +110,153 @@ function websocketUpgradeResponse(options = {}) {
 	}
 }
 
-test('wrangler exposes only the two exact Android clearance routes', () => {
+test('wrangler sends every ordinary root-domain path through this Worker', () => {
 	const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
 
-	assert.match(config, /"pattern":\s*"niko000o\.site\/__edge\/android-clearance"/)
-	assert.match(config,
-		/"pattern":\s*"niko000o\.site\/__edge\/android-clearance\/status"/)
-	assert.doesNotMatch(config, /niko000o\.site\/__edge\/\*/)
+	assert.match(config, /"pattern":\s*"niko000o\.site\/\*"/)
+	assert.doesNotMatch(config, /"pattern":\s*"niko000o\.site\/(?:api|v1)\/\*"/)
+	assert.match(config, /"pattern":\s*"admin\.niko000o\.site\/api\/\*"/)
 })
 
-test('wrangler routes the root-domain v1 prefix through the API gateway', () => {
-	const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
+test('valid H5 pages fetch only the Pages index without forwarding credentials or query', async () => {
+	const pagePaths = [
+		'/',
+		'/pages/launch/session-gate',
+		'/pages/auth/login',
+		'/pages/auth/totp-login',
+		'/pages/auth/register',
+		'/pages/auth/password-reset',
+		'/pages/ai-chat/index',
+		'/pages/account/profile',
+		'/pages/account/api-keys',
+		'/pages/account/totp-security',
+		'/pages/ai-models/catalog',
+		'/pages/ai-models/detail',
+		'/pages/risk/challenge-complete',
+		'/pages/risk/challenge-failed',
+		'/pages/risk/blocked',
+		'/pages/risk/webrtc-failed'
+	]
 
-	assert.match(config, /"pattern":\s*"niko000o\.site\/v1\/\*"/)
-	assert.doesNotMatch(config, /api\.niko000o\.site\/v1/)
+	for (const path of pagePaths) {
+		let captured
+		const response = await handleRequest(
+			request('niko000o.site', `${path}?source=contract`, {
+				headers: {
+					Authorization: 'Bearer must-not-reach-pages',
+					'X-XSRF-TOKEN': 'must-not-reach-pages'
+				}
+			}),
+			ENV,
+			runtime(upstream => {
+				captured = upstream
+				return new Response('<!doctype html><div id="app"></div>', {
+					headers: { 'Content-Type': 'text/html; charset=utf-8' }
+				})
+			})
+		)
+
+		assert.equal(response.status, 200, path)
+		assert.equal(captured.url,
+			'https://ai-temperate-frontend.pages.dev/index.html', path)
+		assert.equal(captured.redirect, 'manual', path)
+		assert.equal(captured.headers.get('Cookie'), null, path)
+		assert.equal(captured.headers.get('Authorization'), null, path)
+		assert.equal(captured.headers.get('X-XSRF-TOKEN'), null, path)
+		assert.match(response.headers.get('Cache-Control'), /no-store/, path)
+	}
+})
+
+test('invalid H5 paths return a non-HTML 404 without calling Pages or Java', async () => {
+	const paths = [
+		'/shopping/user/login',
+		'/pages/auth/not-found',
+		'/pages/auth/login/',
+		'/pages//auth/login',
+		'/pages%2Fauth/login',
+		'/pages%5Cauth/login',
+		'/pages/auth/%00login',
+		'/@vite/client',
+		'/components/auth/identifier-fields.vue',
+		'/index.html'
+	]
+	let upstreamCalls = 0
+
+	for (const path of paths) {
+		const response = await handleRequest(
+			request('niko000o.site', path),
+			ENV,
+			runtime(() => {
+				upstreamCalls += 1
+				return new Response(null)
+			})
+		)
+
+		assert.equal(response.status, 404, path)
+		assert.equal(response.headers.get('Content-Type'),
+			'text/plain; charset=utf-8', path)
+		assert.equal(response.headers.get('Cache-Control'), 'no-store', path)
+		assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff', path)
+		assert.equal(response.headers.get('Content-Security-Policy'),
+			"default-src 'none'", path)
+		assert.equal(await response.text(), 'Not Found', path)
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
+test('known H5 pages reject unsupported methods with 405 before Pages', async () => {
+	let upstreamCalls = 0
+	const response = await handleRequest(
+		request('niko000o.site', '/pages/auth/login', { method: 'POST' }),
+		ENV,
+		runtime(() => {
+			upstreamCalls += 1
+			return new Response(null)
+		})
+	)
+
+	assert.equal(response.status, 405)
+	assert.equal(response.headers.get('Allow'), 'GET, HEAD')
+	assert.equal(response.headers.get('Content-Type'), 'text/plain; charset=utf-8')
+	assert.equal(upstreamCalls, 0)
+})
+
+test('only generated H5 assets can reach Pages', async () => {
+	let captured
+	let upstreamCalls = 0
+	const allowed = await handleRequest(
+		request('niko000o.site', '/static/bootstrap/viewport-bootstrap.js?v=1'),
+		ENV,
+		runtime(upstream => {
+			upstreamCalls += 1
+			captured = upstream
+			return new Response('export {}', {
+				headers: { 'Content-Type': 'application/javascript' }
+			})
+		})
+	)
+	const rejectedPaths = [
+		'/assets/not-found.js',
+		'/static/not-found.js',
+		'/hybrid/html/webrtc-probe.html',
+		'/uni_modules/example.js'
+	]
+	for (const path of rejectedPaths) {
+		const response = await handleRequest(
+			request('niko000o.site', path),
+			ENV,
+			runtime(() => {
+				upstreamCalls += 1
+				return new Response(null)
+			})
+		)
+		assert.equal(response.status, 404, path)
+	}
+
+	assert.equal(allowed.status, 200)
+	assert.equal(captured.url,
+		'https://ai-temperate-frontend.pages.dev/static/bootstrap/viewport-bootstrap.js?v=1')
+	assert.equal(upstreamCalls, 1)
 })
 
 test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, and keeps SSE unbuffered', async () => {
@@ -142,6 +277,10 @@ test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, an
 				Authorization: `Bearer ${apiKey}`,
 				Accept: 'text/event-stream, application/json;q=0.9',
 				'Content-Type': 'application/json',
+				'Sec-Fetch-Mode': 'cors',
+				'Sec-Fetch-Site': 'none',
+				'Sec-Fetch-Dest': 'empty',
+				'Sec-Fetch-User': '?1',
 				'X-Forwarded-For': '198.51.100.200',
 				'X-AIT-Edge-Signature': 'forged',
 				'X-Client-Platform': 'ANDROID'
@@ -163,7 +302,12 @@ test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, an
 	assert.equal(captured.headers.get('Cookie'), null)
 	assert.equal(captured.headers.get('Origin'), null)
 	assert.equal(captured.headers.get('Referer'), null)
-	assert.equal(captured.headers.get('Accept'), 'text/event-stream')
+	assert.equal(captured.headers.get('Sec-Fetch-Mode'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Site'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Dest'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-User'), null)
+	assert.equal(captured.headers.get('Accept'),
+		'text/event-stream, application/json;q=0.9')
 	assert.equal(captured.headers.get('X-Forwarded-For'), null)
 	assert.equal(captured.headers.get('X-Client-Platform'), null)
 	assert.notEqual(captured.headers.get('X-AIT-Edge-Signature'), 'forged')
@@ -175,13 +319,106 @@ test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, an
 	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
 })
 
-test('API Key SDK transport rejects browser credentials and metadata before Origin', async () => {
+test('API Key SDK model discovery forwards a signed GET and requires JSON', async () => {
+	const apiKey = `sk-${'M'.repeat(86)}`
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'application/json',
+				'Sec-Fetch-Mode': 'cors',
+				'Sec-Fetch-Site': 'none',
+				'Sec-Fetch-Dest': 'empty',
+				'Sec-Fetch-User': '?1',
+				'X-Client-Platform': 'ANDROID',
+				'X-Forwarded-For': '198.51.100.200'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return Response.json({
+				object: 'list',
+				data: [{ id: 'gpt-test', object: 'model' }]
+			})
+		})
+	)
+
+	assert.equal(captured.method, 'GET')
+	assert.equal(captured.url, 'https://api.niko000o.site/v1/models')
+	assert.equal(captured.headers.get('Authorization'), `Bearer ${apiKey}`)
+	assert.equal(captured.headers.get('Accept'), 'application/json')
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Mode'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Site'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Dest'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-User'), null)
+	assert.equal(captured.headers.get('X-Client-Platform'), null)
+	assert.equal(captured.headers.get('X-Forwarded-For'), null)
+	assert.equal(response.status, 200)
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+	assert.deepEqual(await response.json(), {
+		object: 'list', data: [{ id: 'gpt-test', object: 'model' }]
+	})
+})
+
+test('API Key SDK model discovery enforces GET and JSON upstream responses', async () => {
+	const apiKey = `sk-${'N'.repeat(86)}`
+	const headers = {
+		Authorization: `Bearer ${apiKey}`,
+		Accept: 'application/json'
+	}
+	const noUpstream = runtime(() => {
+		throw new Error('invalid method must not call Origin')
+	})
+	const wrongMethod = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			method: 'POST', migrated: false, headers
+		}), ENV, noUpstream)
+	const invalidContent = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			migrated: false, headers
+		}), ENV, runtime(() => new Response('not json', {
+			headers: { 'Content-Type': 'text/plain' }
+		})))
+	const cookieViolation = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			migrated: false, headers
+		}), ENV, runtime(() => new Response('{"object":"list","data":[]}', {
+			headers: {
+				'Content-Type': 'application/json',
+				'Set-Cookie': 'access_token=forbidden; Path=/'
+			}
+		})))
+	const redirect = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			migrated: false, headers
+		}), ENV, runtime(() => new Response(null, {
+			status: 302,
+			headers: { Location: 'https://unexpected.example/models' }
+		})))
+
+	assert.equal(wrongMethod.status, 405)
+	assert.equal(wrongMethod.headers.get('Allow'), 'GET')
+	assert.equal((await wrongMethod.json()).error.code, 'method_not_allowed')
+	assert.equal(invalidContent.status, 502)
+	assert.equal((await invalidContent.json()).error.code, 'upstream_protocol_error')
+	assert.equal(cookieViolation.status, 502)
+	assert.equal((await cookieViolation.json()).error.code, 'upstream_protocol_error')
+	assert.equal(redirect.status, 502)
+	assert.equal((await redirect.json()).error.code, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
+})
+
+test('API Key SDK transport rejects browser credential headers before Origin', async () => {
 	const apiKey = `sk-${'B'.repeat(86)}`
 	const forbiddenHeaders = [
 		{ Cookie: 'access_token=browser' },
 		{ Origin: 'https://niko000o.site' },
 		{ Referer: 'https://niko000o.site/' },
-		{ 'Sec-Fetch-Mode': 'cors' }
+		{ Origin: 'https://niko000o.site', 'Sec-Fetch-Mode': 'cors' }
 	]
 	let upstreamCalls = 0
 	for (const extra of forbiddenHeaders) {
@@ -231,8 +468,10 @@ test('API Key SDK route rejects missing Bearer, invalid Accept, methods, and oth
 			headers: { Authorization: `Bearer ${apiKey}` }
 		}), ENV, noUpstream)
 	const wrongPath = await handleRequest(
-		request('niko000o.site', '/v1/sdk', {
-			method: 'POST', migrated: false
+		request('niko000o.site', '/v1/responses', {
+			method: 'POST',
+			migrated: false,
+			headers: { Authorization: `Bearer ${apiKey}` }
 		}), ENV, noUpstream)
 
 	assert.equal(missingBearer.status, 401)
@@ -242,8 +481,88 @@ test('API Key SDK route rejects missing Bearer, invalid Accept, methods, and oth
 	assert.equal(wrongMethod.status, 405)
 	assert.equal(wrongMethod.headers.get('Allow'), 'POST')
 	assert.equal((await wrongMethod.json()).error.code, 'method_not_allowed')
-	assert.equal(wrongPath.status, 403)
-	assert.equal((await wrongPath.json()).error.code, 'invalid_request')
+	assert.equal(wrongPath.status, 404)
+	assert.equal((await wrongPath.json()).error.code, 'EDGE_ROUTE_NOT_FOUND')
+})
+
+test('root API policy rejects unknown paths and wrong methods before Origin', async () => {
+	let upstreamCalls = 0
+	const noUpstream = runtime(() => {
+		upstreamCalls += 1
+		return new Response(null)
+	})
+	const unknownAuth = await handleRequest(
+		request('niko000o.site', '/api/auth/not-a-real-endpoint', {
+			method: 'POST'
+		}), ENV, noUpstream)
+	const unknownUser = await handleRequest(
+		request('niko000o.site', '/api/users/me/not-a-real-endpoint'),
+		ENV, noUpstream)
+	const wrongMethod = await handleRequest(
+		request('niko000o.site', '/api/auth/csrf', { method: 'POST' }),
+		ENV, noUpstream)
+
+	assert.equal(unknownAuth.status, 404)
+	assert.equal((await unknownAuth.json()).code, 'EDGE_ROUTE_NOT_FOUND')
+	assert.equal(unknownUser.status, 404)
+	assert.equal((await unknownUser.json()).code, 'EDGE_ROUTE_NOT_FOUND')
+	assert.equal(wrongMethod.status, 405)
+	assert.equal(wrongMethod.headers.get('Allow'), 'GET')
+	assert.equal((await wrongMethod.json()).code, 'METHOD_NOT_ALLOWED')
+	assert.equal(upstreamCalls, 0)
+})
+
+test('root API policy returns 400 for malformed IDs on known templates', async () => {
+	let upstreamCalls = 0
+	const noUpstream = runtime(() => {
+		upstreamCalls += 1
+		return new Response(null)
+	})
+	const paths = [
+		'/api/ai-models/not-a-public-id',
+		'/api/ai-models/AAAAAAAAAAA',
+		'/api/ai-models/AAAAAAAAAAB',
+		'/api/ai/conversations/not-a-public-id/messages',
+		'/api/ai/conversations/generations/not-a-public-id/events',
+		'/api/users/me/api-keys/not-a-public-id',
+		'/api/users/me/avatar/preuploads/not-a-preupload-id/confirm'
+	]
+
+	for (const path of paths) {
+		const response = await handleRequest(
+			request('niko000o.site', path), ENV, noUpstream)
+		assert.equal(response.status, 400, path)
+		assert.equal((await response.json()).code, 'INVALID_INPUT', path)
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
+test('route rejection logs only bounded classification metadata', async () => {
+	const diagnostic = diagnosticLogger()
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/auth/not-a-real-endpoint?token=must-not-be-logged',
+			{ headers: { Authorization: 'Bearer must-not-be-logged' } }),
+		ENV,
+		runtime(() => {
+			throw new Error('upstream must not be called')
+		}, diagnostic.logger)
+	)
+
+	assert.equal(response.status, 404)
+	assert.equal(diagnostic.entries.length, 1)
+	assert.deepEqual(diagnostic.entries[0], {
+		event: 'main_site_route_rejected',
+		category: 'API_ROUTE_NOT_FOUND',
+		method: 'GET',
+		host: 'niko000o.site',
+		cfRay: 'test-ray-ord',
+		status: 404,
+		upstreamAttempted: false
+	})
+	assert.doesNotMatch(JSON.stringify(diagnostic.entries),
+		/must-not-be-logged|not-a-real-endpoint/)
 })
 
 test('API Key SDK client cancellation aborts the signed Origin request', async () => {
@@ -316,6 +635,257 @@ test('API Key SDK converts Origin network, redirect, and content-type violations
 		'upstream_protocol_error')
 })
 
+test('API Key SDK preserves a JSON upstream client error for Chat requests', async () => {
+	const apiKey = `sk-${'F'.repeat(86)}`
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'text/event-stream, application/json;q=0.9'
+			}
+		}),
+		ENV,
+		runtime(() => new Response(JSON.stringify({
+			error: {
+				message: 'Request contains an unsupported field.',
+				type: 'invalid_request_error',
+				param: 'thinking',
+				code: 'invalid_request'
+			}
+		}), {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' }
+		}))
+	)
+
+	assert.equal(response.status, 400)
+	assert.equal(response.headers.get('Content-Type'), 'application/json')
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+	assert.equal((await response.json()).error.param, 'thinking')
+})
+
+test('API Key SDK samples successful Chat and Models edge summaries without changing responses', async () => {
+	const apiKey = `sk-${'K'.repeat(86)}`
+	const chatDiagnostic = diagnosticLogger()
+	const chatResponse = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: { Authorization: `Bearer ${apiKey}` }
+		}),
+		{ ...ENV, SSE_ROUTE_LOG_SAMPLE_RATE: '1' },
+		{
+			...runtime(() => new Response('data: [DONE]\n\n', {
+				status: 200,
+				headers: {
+					'Content-Type': 'text/event-stream',
+					'X-Trace-Id': 'trace-chat-success'
+				}
+			}), chatDiagnostic.logger),
+			random: () => 0
+		}
+	)
+	const modelsDiagnostic = diagnosticLogger()
+	const modelsResponse = await handleRequest(
+		request('niko000o.site', '/v1/models', {
+			migrated: false,
+			headers: { Authorization: `Bearer ${apiKey}` }
+		}),
+		{ ...ENV, SSE_ROUTE_LOG_SAMPLE_RATE: '1' },
+		{
+			...runtime(() => new Response('{"object":"list","data":[]}', {
+				status: 200,
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Trace-Id': 'trace-models-success'
+				}
+			}), modelsDiagnostic.logger),
+			random: () => 0
+		}
+	)
+
+	assert.equal(chatResponse.status, 200)
+	assert.equal(modelsResponse.status, 200)
+	assert.equal(await chatResponse.text(), 'data: [DONE]\n\n')
+	assert.deepEqual(await modelsResponse.json(), { object: 'list', data: [] })
+	assert.equal(chatDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'SSE_SUCCESS')
+	assert.equal(modelsDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'JSON_SUCCESS')
+})
+
+test('API Key SDK logs a bounded JSON error summary with Spring trace correlation', async () => {
+	const diagnostic = diagnosticLogger()
+	const apiKey = `sk-${'L'.repeat(86)}`
+	const response = await handleRequest(
+		request('niko000o.site',
+			'/v1/chat/completions?prompt=must-not-be-logged', {
+				method: 'POST',
+				migrated: false,
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					Accept: 'text/event-stream, application/json;q=0.9'
+				},
+				body: '{"secret":"request-body-must-not-be-logged"}'
+			}),
+		ENV,
+		runtime(() => new Response(JSON.stringify({
+			error: {
+				message: 'Function tool is invalid.',
+				type: 'invalid_request_error',
+				param: 'tools',
+				code: 'invalid_request'
+			}
+		}), {
+			status: 400,
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Trace-Id': 'trace-spring-json-error'
+			}
+		}), diagnostic.logger)
+	)
+
+	assert.equal(response.status, 400)
+	const summary = diagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary')
+	assert.deepEqual(summary, {
+		event: 'api_key_sdk_edge_summary',
+		diagnosticSchema: 'chat-diag-v1',
+		cfRay: 'test-ray-ord',
+		springTraceId: 'trace-spring-json-error',
+		route: '/v1/chat/completions',
+		method: 'POST',
+		elapsedMs: 0,
+		upstreamAttempted: true,
+		upstreamStatus: 400,
+		upstreamContentType: 'application/json',
+		expectedContentType: 'application/json',
+		edgeOutcome: 'JSON_ERROR_FORWARDED',
+		returnedStatus: 400
+	})
+	assert.doesNotMatch(JSON.stringify(diagnostic.entries),
+		/must-not-be-logged|request-body|Function tool is invalid|sk-/)
+})
+
+test('API Key SDK logs protocol and network failures without changing their responses', async () => {
+	const apiKey = `sk-${'P'.repeat(86)}`
+	const options = {
+		method: 'POST',
+		migrated: false,
+		headers: { Authorization: `Bearer ${apiKey}` }
+	}
+	const protocolDiagnostic = diagnosticLogger()
+	const protocolFailure = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => new Response('body-secret', {
+			status: 500,
+			headers: {
+				'Content-Type': 'text/plain',
+				'X-Trace-Id': 'trace-protocol-failure'
+			}
+		}), protocolDiagnostic.logger)
+	)
+	const networkDiagnostic = diagnosticLogger()
+	const networkFailure = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => {
+			throw new Error('network-secret')
+		}, networkDiagnostic.logger)
+	)
+	const redirectDiagnostic = diagnosticLogger()
+	const redirectFailure = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => new Response(null, {
+			status: 302,
+			headers: { Location: '/v1/chat/completions' }
+		}), redirectDiagnostic.logger)
+	)
+	const cookieDiagnostic = diagnosticLogger()
+	const cookieFailure = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', options),
+		ENV,
+		runtime(() => new Response('data: [DONE]\n\n', {
+			status: 200,
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Set-Cookie': 'session=must-not-be-logged; Secure; HttpOnly'
+			}
+		}), cookieDiagnostic.logger)
+	)
+
+	assert.equal(protocolFailure.status, 502)
+	assert.equal((await protocolFailure.json()).error.code,
+		'upstream_protocol_error')
+	assert.equal(networkFailure.status, 503)
+	assert.equal((await networkFailure.json()).error.code,
+		'EDGE_UPSTREAM_UNAVAILABLE')
+	assert.equal(protocolDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'UPSTREAM_CONTENT_TYPE_INVALID')
+	assert.equal(networkDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'UPSTREAM_NETWORK_ERROR')
+	assert.equal(redirectFailure.status, 502)
+	assert.equal(redirectDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'UPSTREAM_REDIRECT_REJECTED')
+	assert.equal(cookieFailure.status, 502)
+	assert.equal(cookieDiagnostic.entries.find(entry =>
+		entry.event === 'api_key_sdk_edge_summary').edgeOutcome,
+	'UPSTREAM_SET_COOKIE_REJECTED')
+	assert.doesNotMatch(JSON.stringify([
+		...protocolDiagnostic.entries,
+		...networkDiagnostic.entries,
+		...redirectDiagnostic.entries,
+		...cookieDiagnostic.entries
+	]), /body-secret|network-secret|must-not-be-logged|sk-/)
+})
+
+test('API Key SDK diagnostics can be disabled and logger failures do not change responses', async () => {
+	const apiKey = `sk-${'Q'.repeat(86)}`
+	const requestValue = request('niko000o.site', '/v1/chat/completions', {
+		method: 'POST',
+		migrated: false,
+		headers: { Authorization: `Bearer ${apiKey}` }
+	})
+	const diagnostic = diagnosticLogger()
+	const disabledResponse = await handleRequest(
+		requestValue,
+		{ ...ENV, API_KEY_STREAM_DIAGNOSTICS_ENABLED: 'false' },
+		runtime(() => new Response('{"error":{}}', {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' }
+		}), diagnostic.logger)
+	)
+	const loggerFailureResponse = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: { Authorization: `Bearer ${apiKey}` }
+		}),
+		ENV,
+		runtime(() => new Response('{"error":{}}', {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' }
+		}), {
+			info() { throw new Error('diagnostic-info-failure') },
+			warn() { throw new Error('diagnostic-warn-failure') }
+		})
+	)
+
+	assert.equal(disabledResponse.status, 400)
+	assert.equal(diagnostic.entries.length, 0)
+	assert.equal(loggerFailureResponse.status, 400)
+})
+
 test('Android clearance page and status never call the API upstream', async () => {
 	let upstreamCalls = 0
 	const fetchImpl = () => {
@@ -370,7 +940,7 @@ test('Android clearance page and status never call the API upstream', async () =
 	assert.equal(upstreamCalls, 0)
 })
 
-test('Android clearance routing accepts only exact GET paths', async () => {
+test('Android clearance routing returns 405 for wrong methods and 404 for unknown paths', async () => {
 	const noUpstream = runtime(() => {
 		throw new Error('clearance route must not call upstream')
 	})
@@ -395,7 +965,7 @@ test('Android clearance routing accepts only exact GET paths', async () => {
 
 	assert.equal(notGet.status, 405)
 	assert.equal(notGet.headers.get('Allow'), 'GET')
-	assert.deepEqual(forbidden.map(response => response.status), [403, 403, 403, 403])
+	assert.deepEqual(forbidden.map(response => response.status), [404, 404, 404, 404])
 })
 
 test('root host forwards only ordinary API paths and preserves path plus query', async () => {
@@ -605,7 +1175,9 @@ test('Android Turnstile WebView rejects every request outside the controlled doc
 			name: 'non-GET method',
 			path: turnstilePagePath(),
 			method: 'POST',
-			headers: androidWebViewHeaders()
+			headers: androidWebViewHeaders(),
+			expectedStatus: 405,
+			expectedCode: 'METHOD_NOT_ALLOWED'
 		},
 		{
 			name: 'fetch instead of navigation',
@@ -711,10 +1283,10 @@ test('Android Turnstile WebView rejects every request outside the controlled doc
 			runtime(fetchImpl)
 		)
 
-		assert.equal(response.status, 403, invalid.name)
+		assert.equal(response.status, invalid.expectedStatus || 403, invalid.name)
 		assert.equal(
 			(await response.json()).code,
-			'EDGE_CLIENT_TRANSPORT_INVALID',
+			invalid.expectedCode || 'EDGE_CLIENT_TRANSPORT_INVALID',
 			invalid.name
 		)
 	}
@@ -834,6 +1406,83 @@ test('root host forwards the ordinary AI model APIs without changing their paths
 		'https://api.niko000o.site/api/ai-models?pageNum=1&pageSize=20'
 	)
 	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+})
+
+test('API Key management preserves strong ETags and disables response transforms', async () => {
+	const cases = [
+		{ method: 'POST', path: '/api/users/me/api-keys', status: 201 },
+		{ method: 'GET', path: '/api/users/me/api-keys/AAAAAAAAAAE', status: 200 },
+		{ method: 'PUT', path: '/api/users/me/api-keys/AAAAAAAAAAE', status: 200 },
+		{ method: 'PUT', path: '/api/users/me/api-keys/AAAAAAAAAAE/models', status: 200 }
+	]
+
+	for (const item of cases) {
+		const response = await handleRequest(
+			request('niko000o.site', item.path, { method: item.method }),
+			ENV,
+			runtime(() => Response.json({ rowVersion: '0' }, {
+				status: item.status,
+				headers: { ETag: '"v0"' }
+			}))
+		)
+
+		assert.equal(response.status, item.status)
+		assert.equal(response.headers.get('ETag'), '"v0"')
+		assert.equal(
+			response.headers.get('Cache-Control'),
+			'no-store, private, no-transform')
+		assert.equal(response.headers.get('CDN-Cache-Control'), 'no-store')
+		assert.equal(response.headers.get('Pragma'), 'no-cache')
+	}
+})
+
+test('API Key list and delete responses do not require ETags', async () => {
+	const list = await handleRequest(
+		request('niko000o.site', '/api/users/me/api-keys?pageSize=20'),
+		ENV,
+		runtime(() => Response.json({ items: [], nextCursor: null }))
+	)
+	const deletion = await handleRequest(
+		request('niko000o.site', '/api/users/me/api-keys/AAAAAAAAAAE', {
+			method: 'DELETE'
+		}),
+		ENV,
+		runtime(() => new Response(null, { status: 204 }))
+	)
+
+	assert.equal(list.status, 200)
+	assert.equal(list.headers.get('ETag'), null)
+	assert.equal(list.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+	assert.equal(deletion.status, 204)
+	assert.equal(deletion.headers.get('ETag'), null)
+	assert.equal(deletion.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+})
+
+test('API Key versioned responses reject missing weak and malformed ETags', async () => {
+	const etags = [null, 'W/"v0"', '"0"']
+
+	for (const etag of etags) {
+		const headers = { 'Content-Type': 'application/json' }
+		if (etag !== null) headers.ETag = etag
+		const response = await handleRequest(
+			request('niko000o.site', '/api/users/me/api-keys/AAAAAAAAAAE'),
+			ENV,
+			runtime(() => new Response('{"rowVersion":"0"}', {
+				status: 200,
+				headers
+			}))
+		)
+
+		assert.equal(response.status, 502)
+		assert.equal((await response.json()).code,
+			'EDGE_UPSTREAM_ETAG_INVALID')
+		assert.equal(response.headers.get('Cache-Control'),
+			'no-store, private, no-transform')
+		assert.equal(response.headers.get('CDN-Cache-Control'), 'no-store')
+		assert.equal(response.headers.get('Pragma'), 'no-cache')
+	}
 })
 
 test('root host forwards an ordinary AI model detail path', async () => {
@@ -1063,7 +1712,7 @@ test('root host forwards only exact asynchronous generation query and cancel end
 	assert.equal(byIdempotency.status, 200)
 	assert.equal(detail.status, 200)
 	assert.equal(cancellation.status, 200)
-	assert.equal(unknownAction.status, 403)
+	assert.equal(unknownAction.status, 404)
 	assert.deepEqual(forwarded, [
 		{
 			url: 'https://api.niko000o.site/api/ai/conversations/generations',
@@ -1297,7 +1946,7 @@ test('root host forwards only canonical AI conversation continuation IDs', async
 		captured.url,
 		`https://api.niko000o.site/api/ai/conversations/${publicId}/responses`
 	)
-	assert.equal(malformed.status, 403)
+	assert.equal(malformed.status, 400)
 	assert.equal(admin.status, 403)
 })
 
@@ -1408,14 +2057,14 @@ test('host and path policy rejects cross-surface and encoded-path bypasses', asy
 		})
 	)
 
-	assert.equal(forbiddenAdmin.status, 403)
+	assert.equal(forbiddenAdmin.status, 404)
 	assert.equal(forbiddenUser.status, 403)
 	assert.equal(forbiddenUserModelApi.status, 403)
-	assert.equal(malformedModelDetail.status, 403)
-	assert.equal(malformedMessages.status, 403)
-	assert.equal(unknownConversationAction.status, 403)
-	assert.equal(nestedConversationList.status, 403)
-	assert.equal(encoded.status, 403)
+	assert.equal(malformedModelDetail.status, 400)
+	assert.equal(malformedMessages.status, 400)
+	assert.equal(unknownConversationAction.status, 404)
+	assert.equal(nestedConversationList.status, 404)
+	assert.equal(encoded.status, 404)
 })
 
 test('worker overwrites spoofable proxy headers and signs the exact upstream request', async () => {
@@ -1749,7 +2398,7 @@ test('voice WebSocket accepts only the exact path and a GET Upgrade request', as
 	assert.equal(missingUpgrade.status, 426)
 	assert.equal(missingUpgrade.headers.get('Upgrade'), 'websocket')
 	assert.equal(wrongUpgrade.status, 426)
-	assert.deepEqual(forbiddenPaths.map(response => response.status), [403, 403, 403])
+	assert.deepEqual(forbiddenPaths.map(response => response.status), [404, 404, 404])
 })
 
 test('voice WebSocket fails closed when the upstream handshake is unsafe', async () => {
@@ -1887,7 +2536,7 @@ test('pre-auth and risk challenge paths are isolated to their matching host', as
 
 	assert.equal(rootPreAuth.status, 204)
 	assert.equal(adminPreAuth.status, 204)
-	assert.equal(wrongSurface.status, 403)
+	assert.equal(wrongSurface.status, 404)
 	assert.deepEqual(forwarded, [
 		'/api/_edge/pre-auth',
 		'/api/admin/_edge/pre-auth'

@@ -13,6 +13,7 @@ import java.util.List;
 public record AiModelCacheEntry(
         long id,
         String modelName,
+        long createdEpochSeconds,
         String vendor,
         String description,
         String icon,
@@ -27,5 +28,37 @@ public record AiModelCacheEntry(
     public AiModelCacheEntry {
         tags = tags == null ? List.of() : List.copyOf(tags);
         capabilities = capabilities == null ? List.of() : List.copyOf(capabilities);
+    }
+
+    /**
+     * 保留旧测试夹具的构造方式；真实缓存只能由带创建时间戳的主构造器写入，避免公开模型列表凭空伪造日期。
+     */
+    public AiModelCacheEntry(
+            long id,
+            String modelName,
+            String vendor,
+            String description,
+            String icon,
+            List<String> tags,
+            BigDecimal inputRatio,
+            BigDecimal cachedInputRatio,
+            BigDecimal outputRatio,
+            long contextWindowTokens,
+            long maxOutputTokens,
+            List<AiModelCapabilityCode> capabilities) {
+        this(
+                id,
+                modelName,
+                0L,
+                vendor,
+                description,
+                icon,
+                tags,
+                inputRatio,
+                cachedInputRatio,
+                outputRatio,
+                contextWindowTokens,
+                maxOutputTokens,
+                capabilities);
     }
 }

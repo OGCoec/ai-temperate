@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
@@ -30,6 +31,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -240,8 +243,37 @@ class GlobalExceptionHandlerCookieTest {
                 new NoResourceFoundException(HttpMethod.GET, "favicon.ico"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getHeaders().getCacheControl()).contains("private", "no-store");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("RESOURCE_NOT_FOUND");
+    }
+
+    @Test
+    void missingApiHandlerUsesTheSameNonCachedNotFoundEnvelope() {
+        var response = handler.handleResourceNotFound(
+                new NoHandlerFoundException(
+                        "GET", "/api/not-exist", HttpHeaders.EMPTY));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getHeaders().getCacheControl()).contains("private", "no-store");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("RESOURCE_NOT_FOUND");
+    }
+
+    @Test
+    void knownRouteWithWrongMethodReturnsNonCachedMethodNotAllowedAndAllowHeader() {
+        var exception = mock(HttpRequestMethodNotSupportedException.class);
+        when(exception.getSupportedHttpMethods())
+                .thenReturn(java.util.Set.of(HttpMethod.GET, HttpMethod.HEAD));
+
+        var response = handler.handleMethodNotAllowed(exception);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED);
+        assertThat(response.getHeaders().getAllow())
+                .containsExactlyInAnyOrder(HttpMethod.GET, HttpMethod.HEAD);
+        assertThat(response.getHeaders().getCacheControl()).contains("private", "no-store");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("METHOD_NOT_ALLOWED");
     }
 
     @Test

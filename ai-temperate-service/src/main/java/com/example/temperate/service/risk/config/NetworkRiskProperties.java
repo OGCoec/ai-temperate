@@ -40,6 +40,8 @@ public record NetworkRiskProperties(
         @NotNull Duration temporaryBlockTtl,
         @NotNull WebRtc webRtc) {
 
+    private static final Duration API_KEY_FILTER_COMPLETION_MARGIN = Duration.ofMillis(500);
+
     private static final List<String> REQUIRED_STUN_URLS = List.of(
             "stun:stun.l.google.com:19302",
             "stun:stun.cloudflare.com:3478",
@@ -86,6 +88,18 @@ public record NetworkRiskProperties(
         return lookupTimeout != null
                 && lookupTimeout.compareTo(Duration.ofMillis(100)) >= 0
                 && lookupTimeout.compareTo(Duration.ofSeconds(8)) <= 0;
+    }
+
+    /**
+     * 返回 API Key 安全 Filter 的最终等待上限。
+     *
+     * <p>外部查询必须受 {@link #lookupTimeout()} 约束；额外五百毫秒只预留给 Reactor 将超时转换为
+     * 本地降级结果，避免两个相同截止点竞争时把确定的失败关闭响应误判为 Filter 超时。</p>
+     *
+     * @return 外部查询预算与本地完成余量之和
+     */
+    public Duration apiKeyFilterWaitTimeout() {
+        return lookupTimeout.plus(API_KEY_FILTER_COMPLETION_MARGIN);
     }
 
     @AssertTrue(message = "IP intelligence endpoints must use HTTPS")

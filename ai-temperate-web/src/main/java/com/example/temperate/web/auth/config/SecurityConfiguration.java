@@ -2,12 +2,15 @@ package com.example.temperate.web.auth.config;
 
 import com.example.temperate.service.user.voice.config.VoiceProperties;
 import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
 import com.example.temperate.web.apikey.ApiChatBodyLimitFilter;
 import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
+import com.example.temperate.web.apikey.ApiKeyV1Paths;
 import com.example.temperate.web.apikey.OpenAiErrorResponseWriter;
+import com.example.temperate.web.apichat.diagnostic.ApiChatStreamDiagnosticFilter;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
@@ -17,6 +20,7 @@ import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.DispatcherType;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Base64;
 import java.util.List;
@@ -29,11 +33,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.annotation.Order;
+import org.springframework.core.Ordered;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AuthorizeHttpRequestsConfigurer;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
@@ -95,12 +102,14 @@ public class SecurityConfiguration {
             TrustedEdgeNetworkContextResolver edgeContextResolver,
             IpIntelligenceService ipIntelligenceService,
             ApiKeyProperties properties,
+            NetworkRiskProperties networkRiskProperties,
             OpenAiErrorResponseWriter errorWriter,
             MeterRegistry meterRegistry) {
         return new ApiKeyIpRiskFilter(
                 edgeContextResolver,
                 ipIntelligenceService,
                 properties,
+                networkRiskProperties,
                 errorWriter,
                 meterRegistry);
     }
@@ -110,6 +119,43 @@ public class SecurityConfiguration {
             ApiKeyProperties properties,
             OpenAiErrorResponseWriter errorWriter) {
         return new ApiChatBodyLimitFilter(properties, errorWriter);
+    }
+
+    /**
+     * 公开 Chat 流诊断作为 Servlet 外层观察器覆盖 REQUEST、ASYNC 与 ERROR 分派，
+     * 只记录生命周期元数据，不参与认证、授权或响应体转换。
+     */
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "app.api-key.stream-diagnostics",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    ApiChatStreamDiagnosticFilter apiChatStreamDiagnosticFilter(
+            ApiKeyProperties properties) {
+        return new ApiChatStreamDiagnosticFilter(properties, System::nanoTime);
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "app.api-key.stream-diagnostics",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    FilterRegistrationBean<ApiChatStreamDiagnosticFilter>
+            apiChatStreamDiagnosticFilterRegistration(
+                    ApiChatStreamDiagnosticFilter filter) {
+        FilterRegistrationBean<ApiChatStreamDiagnosticFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setName("apiChatStreamDiagnosticFilter");
+        registration.setUrlPatterns(List.of("/v1/chat/completions"));
+        registration.setDispatcherTypes(
+                DispatcherType.REQUEST,
+                DispatcherType.ASYNC,
+                DispatcherType.ERROR);
+        registration.setAsyncSupported(true);
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
+        return registration;
     }
 
     /**
@@ -181,6 +227,7 @@ public class SecurityConfiguration {
                 PreAuthTransport.RESET_HEADER,
                 CSRF_HEADER));
         configuration.setExposedHeaders(List.of(
+                HttpHeaders.ETAG,
                 "Retry-After",
                 AuthRequestTraceFilter.TRACE_HEADER,
                 "X-AI-Generation-Id",
@@ -197,9 +244,9 @@ public class SecurityConfiguration {
     }
 
     /**
-     * 为公开 Chat Completions 建立不含 Cookie、Session、CORS 和 CSRF 的精确无状态安全链。
+     * 为公开 API Key v1 接口建立不含 Cookie、Session、CORS 和 CSRF 的精确无状态安全链。
      *
-     * <p>该链依次完成 Edge HMAC、Bearer API Key、权威 IP 风险和请求体大小门禁；
+     * <p>该链依次完成 Edge HMAC、Bearer API Key 和权威 IP 风险；Chat Completions 再额外经过请求体大小门禁。
      * 普通 H5、Android 与语音请求仍进入各自既有安全链。</p>
      */
     @Bean
@@ -214,13 +261,14 @@ public class SecurityConfiguration {
         // 公开 API 不创建 Session、不读取 Cookie、不启用 CORS，所有身份只来自当前 Bearer 和 Worker 签名。
         return http
                 .securityMatcher(request ->
-                        "/v1/chat/completions".equals(request.getRequestURI()))
+                        ApiKeyV1Paths.isApiKeyEndpoint(
+                                request.getMethod(), request.getRequestURI()))
                 .cors(AbstractHttpConfigurer::disable)
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(authorize -> authorize
-                        .anyRequest().authenticated())
+                .authorizeHttpRequests(
+                        SecurityConfiguration::configureApiChatAuthorization)
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) ->
                                 errorWriter.write(
@@ -242,6 +290,20 @@ public class SecurityConfiguration {
                         apiChatBodyLimitFilter,
                         ApiKeyIpRiskFilter.class)
                 .build();
+    }
+
+    /**
+     * 初始 REQUEST 必须保留认证要求；ASYNC/ERROR 是 Servlet 容器对同一条已鉴权流的内部完成派发，
+     * 客户端无法通过请求头伪造 DispatcherType，因此允许它们恢复响应不会扩大外部访问边界。
+     */
+    static void configureApiChatAuthorization(
+            AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry
+                    authorize) {
+        authorize
+                .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR)
+                .permitAll()
+                .anyRequest()
+                .authenticated();
     }
 
     @Bean

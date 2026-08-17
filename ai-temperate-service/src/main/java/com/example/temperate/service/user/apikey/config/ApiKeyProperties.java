@@ -36,6 +36,9 @@ public class ApiKeyProperties {
     private Request request = new Request();
     @Valid
     @NotNull
+    private StreamDiagnostics streamDiagnostics = new StreamDiagnostics();
+    @Valid
+    @NotNull
     private Bloom bloom = new Bloom();
 
     /**
@@ -109,6 +112,14 @@ public class ApiKeyProperties {
 
     public void setRequest(Request request) {
         this.request = request;
+    }
+
+    public StreamDiagnostics getStreamDiagnostics() {
+        return streamDiagnostics;
+    }
+
+    public void setStreamDiagnostics(StreamDiagnostics streamDiagnostics) {
+        this.streamDiagnostics = streamDiagnostics;
     }
 
     public Bloom getBloom() {
@@ -192,6 +203,21 @@ public class ApiKeyProperties {
         @Min(0)
         @Max(512)
         private int maxTools = 128;
+        @Min(1024)
+        @Max(262144)
+        private int maxToolDescriptionBytes = 32768;
+        @Min(32768)
+        @Max(1048576)
+        private int maxToolDefinitionsBytes = 524288;
+
+        /**
+         * 单项工具描述、完整工具集合和请求体必须形成单调预算，避免较小的外层限制让内部兼容配置失效。
+         */
+        @AssertTrue(message = "API Key tool definition byte budgets are invalid")
+        public boolean isToolBudgetsValid() {
+            return maxToolDescriptionBytes <= maxToolDefinitionsBytes
+                    && maxToolDefinitionsBytes <= maxBodyBytes;
+        }
 
         public int getMaxBodyBytes() {
             return maxBodyBytes;
@@ -215,6 +241,143 @@ public class ApiKeyProperties {
 
         public void setMaxTools(int maxTools) {
             this.maxTools = maxTools;
+        }
+
+        public int getMaxToolDescriptionBytes() {
+            return maxToolDescriptionBytes;
+        }
+
+        public void setMaxToolDescriptionBytes(int maxToolDescriptionBytes) {
+            this.maxToolDescriptionBytes = maxToolDescriptionBytes;
+        }
+
+        public int getMaxToolDefinitionsBytes() {
+            return maxToolDefinitionsBytes;
+        }
+
+        public void setMaxToolDefinitionsBytes(int maxToolDefinitionsBytes) {
+            this.maxToolDefinitionsBytes = maxToolDefinitionsBytes;
+        }
+    }
+
+    /**
+     * 该配置组是来控制公开 API Key 流的安全诊断采样、节奏窗口和有界终止历史；采样率只约束成功与高频遥测，
+     * 诊断开启时失败分类始终全量记录，且禁止记录请求正文、模型输出、工具参数或完整凭据。
+     */
+    public static class StreamDiagnostics {
+        private boolean enabled = true;
+        private double sampleRate = 1.0d;
+        @NotNull
+        private Duration window = Duration.ofSeconds(1);
+        private int logEveryFrames = 100;
+        @NotNull
+        private Duration silenceThreshold = Duration.ofSeconds(2);
+        @NotNull
+        private Duration burstWindow = Duration.ofMillis(250);
+        private int burstFrames = 50;
+        private int terminalHistorySize = 32;
+        private int stackFrameLimit = 12;
+
+        /**
+         * 诊断窗口必须保持有界且时间关系单调，防止误配置产生无界内存、日志洪泛或无意义的静默判定。
+         */
+        @AssertTrue(message = "API Key stream diagnostics bounds are invalid")
+        public boolean isValid() {
+            return sampleRate >= 0.0d
+                    && sampleRate <= 1.0d
+                    && boundedDuration(window)
+                    && boundedDuration(silenceThreshold)
+                    && boundedDuration(burstWindow)
+                    && window.compareTo(silenceThreshold) <= 0
+                    && burstWindow.compareTo(window) <= 0
+                    && logEveryFrames >= 1
+                    && logEveryFrames <= 10_000
+                    && burstFrames >= 2
+                    && burstFrames <= 10_000
+                    && terminalHistorySize >= 1
+                    && terminalHistorySize <= 128
+                    && stackFrameLimit >= 1
+                    && stackFrameLimit <= 64;
+        }
+
+        private static boolean positive(Duration value) {
+            return value != null && !value.isNegative() && !value.isZero();
+        }
+
+        private static boolean boundedDuration(Duration value) {
+            return positive(value) && value.compareTo(Duration.ofHours(1)) <= 0;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public double getSampleRate() {
+            return sampleRate;
+        }
+
+        public void setSampleRate(double sampleRate) {
+            this.sampleRate = sampleRate;
+        }
+
+        public Duration getWindow() {
+            return window;
+        }
+
+        public void setWindow(Duration window) {
+            this.window = window;
+        }
+
+        public int getLogEveryFrames() {
+            return logEveryFrames;
+        }
+
+        public void setLogEveryFrames(int logEveryFrames) {
+            this.logEveryFrames = logEveryFrames;
+        }
+
+        public Duration getSilenceThreshold() {
+            return silenceThreshold;
+        }
+
+        public void setSilenceThreshold(Duration silenceThreshold) {
+            this.silenceThreshold = silenceThreshold;
+        }
+
+        public Duration getBurstWindow() {
+            return burstWindow;
+        }
+
+        public void setBurstWindow(Duration burstWindow) {
+            this.burstWindow = burstWindow;
+        }
+
+        public int getBurstFrames() {
+            return burstFrames;
+        }
+
+        public void setBurstFrames(int burstFrames) {
+            this.burstFrames = burstFrames;
+        }
+
+        public int getTerminalHistorySize() {
+            return terminalHistorySize;
+        }
+
+        public void setTerminalHistorySize(int terminalHistorySize) {
+            this.terminalHistorySize = terminalHistorySize;
+        }
+
+        public int getStackFrameLimit() {
+            return stackFrameLimit;
+        }
+
+        public void setStackFrameLimit(int stackFrameLimit) {
+            this.stackFrameLimit = stackFrameLimit;
         }
     }
 

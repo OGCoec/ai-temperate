@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.Set;
@@ -22,11 +23,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该测试是来约束 API Key 认证的格式→Bloom→缓存→PostgreSQL 懒加载顺序、Bloom Fail Open 和统一无效凭证结果。
+ * 该测试是来约束 API Key 认证的格式→Bloom→缓存→PostgreSQL 懒加载顺序、Bloom Fail Open、生命周期状态检查和统一无效凭证结果。
  */
 final class ApiKeyAuthenticationServiceImplTest {
 
     private static final String API_KEY = "sk-" + "A".repeat(86);
+    private static final Instant NOW = Instant.parse("2026-08-13T00:00:00Z");
 
     @Test
     void firstMaybePresentCallLoadsDatabaseAndSecondCallUsesPositiveCache() {
@@ -58,7 +60,85 @@ final class ApiKeyAuthenticationServiceImplTest {
         assertThat(fixture.cached().negative()).isTrue();
     }
 
+    @Test
+    void databaseMissUsesUnifiedErrorAndNegativeCache() {
+        Fixture fixture = fixture(ApiKeyBloomService.LookupResult.MAYBE_PRESENT, null);
+
+        assertInvalidApiKey(fixture);
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isEqualTo(1);
+        assertThat(fixture.cached()).isNotNull();
+        assertThat(fixture.cached().negative()).isTrue();
+    }
+
+    @Test
+    void disabledCredentialLoadedFromDatabaseUsesUnifiedErrorAndNegativeCache() {
+        Fixture fixture = fixture(
+                ApiKeyBloomService.LookupResult.MAYBE_PRESENT,
+                credential(0, null));
+
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isEqualTo(1);
+        assertThat(fixture.cached()).isNotNull();
+        assertThat(fixture.cached().negative()).isTrue();
+    }
+
+    @Test
+    void softDeletedCredentialLoadedFromDatabaseUsesUnifiedErrorAndNegativeCache() {
+        Fixture fixture = fixture(
+                ApiKeyBloomService.LookupResult.MAYBE_PRESENT,
+                credential(2, null));
+
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isEqualTo(1);
+        assertThat(fixture.cached()).isNotNull();
+        assertThat(fixture.cached().negative()).isTrue();
+    }
+
+    @Test
+    void expiredCredentialLoadedFromDatabaseUsesUnifiedErrorAndNegativeCache() {
+        Fixture fixture = fixture(
+                ApiKeyBloomService.LookupResult.MAYBE_PRESENT,
+                credential(1, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)));
+
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isEqualTo(1);
+        assertThat(fixture.cached()).isNotNull();
+        assertThat(fixture.cached().negative()).isTrue();
+    }
+
+    @Test
+    void disabledPositiveCacheCannotBypassCredentialStatusCheck() {
+        Fixture fixture = fixture(ApiKeyBloomService.LookupResult.MAYBE_PRESENT);
+        fixture.cache(credential(0, null));
+
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isZero();
+    }
+
+    @Test
+    void expiredPositiveCacheCannotBypassCredentialExpiryCheck() {
+        Fixture fixture = fixture(ApiKeyBloomService.LookupResult.MAYBE_PRESENT);
+        fixture.cache(credential(
+                1, OffsetDateTime.ofInstant(NOW.minusSeconds(1), ZoneOffset.UTC)));
+
+        assertInvalidApiKey(fixture);
+
+        assertThat(fixture.databaseLoads()).isZero();
+    }
+
     private static Fixture fixture(ApiKeyBloomService.LookupResult result) {
+        return fixture(result, credential(1, null));
+    }
+
+    private static Fixture fixture(
+            ApiKeyBloomService.LookupResult result,
+            CachedCredential databaseCredential) {
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);
         properties.setHmacSecretBase64(Base64.getEncoder().encodeToString(
@@ -69,7 +149,7 @@ final class ApiKeyAuthenticationServiceImplTest {
         AtomicInteger databaseLoads = new AtomicInteger();
         ApiKeyAuthenticationDatabaseService database = digest -> {
             databaseLoads.incrementAndGet();
-            return new CachedCredential(1, 11L, 17L, 1, null, Set.of(23L), false);
+            return databaseCredential;
         };
         ApiKeyAuthenticationService service = new ApiKeyAuthenticationServiceImpl(
                 credentialService,
@@ -77,8 +157,18 @@ final class ApiKeyAuthenticationServiceImplTest {
                 cache,
                 database,
                 new SimpleMeterRegistry(),
-                Clock.fixed(Instant.parse("2026-08-13T00:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneOffset.UTC));
         return new Fixture(service, databaseLoads, cache.value);
+    }
+
+    private static CachedCredential credential(int status, OffsetDateTime expiresAt) {
+        return new CachedCredential(
+                1, 11L, 17L, status, expiresAt, Set.of(23L), false);
+    }
+
+    private static void assertInvalidApiKey(Fixture fixture) {
+        assertThatThrownBy(() -> fixture.service().authenticate(API_KEY))
+                .isExactlyInstanceOf(ApiKeyAuthenticationException.class);
     }
 
     private static ApiKeyBloomService bloom(ApiKeyBloomService.LookupResult result) {
@@ -145,6 +235,10 @@ final class ApiKeyAuthenticationServiceImplTest {
 
         CachedCredential cached() {
             return cachedReference.get();
+        }
+
+        void cache(CachedCredential credential) {
+            cachedReference.set(credential);
         }
     }
 }

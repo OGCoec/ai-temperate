@@ -431,7 +431,6 @@
 			},
 			handlePageHide() {
 				this.$refs.chatPanel?.handlePageHide()
-				this.$refs.apiKeyPanel?.handlePageHide()
 			},
 			handlePageUnload() {
 				this.$refs.chatPanel?.handlePageUnload()

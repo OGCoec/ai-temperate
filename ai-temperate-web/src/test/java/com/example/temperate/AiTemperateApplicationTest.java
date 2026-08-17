@@ -18,8 +18,14 @@ import com.example.temperate.mapper.ai.AiConversationMessageMapper;
 import com.example.temperate.mapper.ai.AiModelCapabilityMapper;
 import com.example.temperate.mapper.ai.AiModelIconMapper;
 import com.example.temperate.mapper.ai.AiModelMapper;
+import com.example.temperate.mapper.ai.AiModelApiUsageDetailMapper;
+import com.example.temperate.mapper.ai.AiModelApiUsageMapper;
 import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
+import com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper;
 import com.example.temperate.mapper.ai.AiModelUsageMapper;
+import com.example.temperate.mapper.ai.UserApiKeyMapper;
+import com.example.temperate.mapper.ai.UserApiKeyModelMapper;
+import com.example.temperate.mapper.audit.access.AccessRequestAuditMapper;
 import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
@@ -36,6 +42,7 @@ import com.example.temperate.service.user.aiconversation.diagnostic.AiConversati
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationLifecycleTimingAspect;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamFailureDiagnosticService;
 import com.example.temperate.service.user.aiconversation.diagnostic.impl.NoOpAiConversationLifecycleDiagnosticServiceImpl;
+import com.example.temperate.service.user.aiconversation.generation.observer.AiConversationGenerationOutputStore;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureVerifier;
@@ -93,6 +100,9 @@ class AiTemperateApplicationTest {
     private RedisMessageListenerContainer redisMessageListenerContainer;
 
     @MockitoBean
+    private AiConversationGenerationOutputStore aiConversationGenerationOutputStore;
+
+    @MockitoBean
     private UserLoginIdentityMapper userLoginIdentityMapper;
 
     @MockitoBean
@@ -120,6 +130,9 @@ class AiTemperateApplicationTest {
     private AiModelUsageDetailMapper aiModelUsageDetailMapper;
 
     @MockitoBean
+    private AiModelUsageVideoDetailMapper aiModelUsageVideoDetailMapper;
+
+    @MockitoBean
     private AiModelMapper aiModelMapper;
 
     @MockitoBean
@@ -129,7 +142,22 @@ class AiTemperateApplicationTest {
     private AiModelIconMapper aiModelIconMapper;
 
     @MockitoBean
+    private AiModelApiUsageMapper aiModelApiUsageMapper;
+
+    @MockitoBean
+    private AiModelApiUsageDetailMapper aiModelApiUsageDetailMapper;
+
+    @MockitoBean
+    private UserApiKeyMapper userApiKeyMapper;
+
+    @MockitoBean
+    private UserApiKeyModelMapper userApiKeyModelMapper;
+
+    @MockitoBean
     private UserAvatarMapper userAvatarMapper;
+
+    @MockitoBean
+    private AccessRequestAuditMapper accessRequestAuditMapper;
 
     @MockitoBean
     private VerificationDeliveryPublisher verificationDeliveryPublisher;

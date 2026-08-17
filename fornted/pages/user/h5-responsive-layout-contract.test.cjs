@@ -53,9 +53,9 @@ test('H5 generated images stay bounded and the full-screen viewer adapts its thu
 	assert.match(viewer,
 		/\.generated-image-viewer\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/)
 	assert.match(viewer,
-		/\.viewer-body\s*\{[^}]*grid-template-columns:\s*92px\s+minmax\(0,\s*1fr\)/)
+		/\.viewer-thumbnails\s*\{[^}]*width:\s*92px[^}]*position:\s*absolute[^}]*left:\s*0/)
 	assert.match(viewer,
-		/@media screen and \(max-width:\s*767px\)[\s\S]*?\.viewer-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+86px/)
+		/@media screen and \(max-width:\s*767px\)[\s\S]*?\.viewer-thumbnails\s*\{[^}]*width:\s*auto[^}]*height:\s*86px[^}]*top:\s*auto[^}]*right:\s*0[^}]*bottom:\s*0/)
 })
 
 test('H5 model surfaces expand to the workspace and reflow at 1200 and 1920 pixels', () => {

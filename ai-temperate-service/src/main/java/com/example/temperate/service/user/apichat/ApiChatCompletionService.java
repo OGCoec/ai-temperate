@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.apichat;
 
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticStage;
+import com.example.temperate.service.user.apichat.diagnostic.ApiChatStreamDiagnostic;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import reactor.core.publisher.Flux;
 
@@ -8,5 +10,6 @@ import reactor.core.publisher.Flux;
  */
 public interface ApiChatCompletionService {
 
+    @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.COMPLETION_SERVICE)
     Flux<String> stream(ApiKeyPrincipal principal, ApiChatRequest request);
 }

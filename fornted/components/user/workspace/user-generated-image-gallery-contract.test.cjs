@@ -43,4 +43,9 @@ test('keeps Android generated images on the controlled local source path', () =>
 	assert.match(source, /user-android-chat-image/)
 	assert.match(source, /:local-src="androidSource\(attachment\)\.src"/)
 	assert.match(source, /:managed-local-source="true"/)
+	assert.match(
+		source,
+		/class="generated-image-tile is-secondary"[\s\S]*?<user-android-chat-image[\s\S]*?:compact-placeholder="true"/
+	)
+	assert.equal((source.match(/:compact-placeholder="true"/g) || []).length, 1)
 })

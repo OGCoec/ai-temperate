@@ -92,6 +92,7 @@
 							:source-status="androidSource(attachment).status"
 							:diagnostic-run-id="androidSource(attachment).diagnosticRunId"
 							:managed-local-source="true"
+							:compact-placeholder="true"
 							variant="THUMBNAIL"
 							:aspect-ratio="1"
 							@layout-change="$emit('android-layout-change', $event)"

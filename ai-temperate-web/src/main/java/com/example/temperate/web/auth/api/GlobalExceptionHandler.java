@@ -19,20 +19,25 @@ import com.example.temperate.web.risk.PreAuthTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Clock;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -276,15 +281,38 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     }
 
     /**
-     * 将静态资源缺失保留为 404，避免浏览器自动请求 favicon 等资源时被兜底处理误报为系统 500。
+     * 将未映射的 API 与静态资源统一保留为 404，防止未知路径落入通用 500 响应。
+     *
+     * <p>该处理只负责 Spring 已经判定不存在的路由，不维护另一份 Controller 白名单，也不会进入业务 Service。</p>
      */
-    @ExceptionHandler(NoResourceFoundException.class)
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
     public ResponseEntity<ApiErrorResponse> handleResourceNotFound(
-            NoResourceFoundException exception) {
+            Exception exception) {
         return response(
                 HttpStatus.NOT_FOUND,
                 "RESOURCE_NOT_FOUND",
                 "请求资源不存在。");
+    }
+
+    /**
+     * 将已知 Spring 路由的方法错误映射为 405，并把框架计算出的允许方法写入 Allow 响应头。
+     *
+     * <p>Allow 只来自服务端 Controller 映射，禁止根据客户端输入拼接，因而不会泄露任意请求内容。</p>
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiErrorResponse> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException exception) {
+        ResponseEntity.BodyBuilder response = ResponseEntity
+                .status(HttpStatus.METHOD_NOT_ALLOWED)
+                .cacheControl(CacheControl.noStore().cachePrivate());
+        Set<HttpMethod> supportedMethods = exception.getSupportedHttpMethods();
+        if (supportedMethods != null && !supportedMethods.isEmpty()) {
+            response.allow(supportedMethods.toArray(HttpMethod[]::new));
+        }
+        return response.body(new ApiErrorResponse(
+                "METHOD_NOT_ALLOWED",
+                "请求方法不受支持。",
+                clock.instant()));
     }
 
     @Override
@@ -292,6 +320,7 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleUnexpected(
             Exception exception,
             HttpServletRequest request) {
+        logUnexpectedApiChatSelection(exception, request);
         // 异常消息可能包含第三方响应或输入片段，只记录追踪号和类型，不把消息或堆栈写入认证日志。
         LOGGER.error(
                 "auth_unexpected_exception traceId={} exceptionClass={}",
@@ -303,9 +332,50 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
                 "服务暂时不可用，请稍后再试。");
     }
 
+    /**
+     * 精确 Chat 路径若落入通用处理器，只记录处理器选择和异常类型；MDC 不存在表示诊断关闭，此时保持完全静默。
+     */
+    private static void logUnexpectedApiChatSelection(
+            Exception exception,
+            HttpServletRequest request) {
+        if (request == null
+                || !"POST".equalsIgnoreCase(request.getMethod())
+                || !"/v1/chat/completions".equals(request.getRequestURI())) {
+            return;
+        }
+        String traceId = MDC.get("apiChatTraceId");
+        if (traceId == null || !traceId.matches("[A-Za-z0-9_-]{1,128}")) {
+            return;
+        }
+        try {
+            LOGGER.error(
+                    "event=api_chat_unexpected_handler_selected diagnosticSchema=chat-diag-v1 traceId={} handler=GLOBAL_EXCEPTION_HANDLER exceptionType={} rootExceptionType={} status=500",
+                    traceId,
+                    safeExceptionType(exception),
+                    safeRootExceptionType(exception));
+        } catch (RuntimeException ignored) {
+            // 诊断日志失败不能替换既有通用 500 响应。
+        }
+    }
+
+    private static String safeRootExceptionType(Throwable failure) {
+        Throwable current = failure;
+        int depth = 0;
+        while (current != null && current.getCause() != null && depth++ < 16) {
+            current = current.getCause();
+        }
+        return safeExceptionType(current);
+    }
+
+    private static String safeExceptionType(Throwable failure) {
+        String value = failure == null ? "none" : failure.getClass().getName();
+        return value.matches("[A-Za-z0-9_.$]{1,200}") ? value : "unknown";
+    }
+
     private ResponseEntity<ApiErrorResponse> response(
             HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
+                .cacheControl(CacheControl.noStore().cachePrivate())
                 .body(new ApiErrorResponse(code, message, clock.instant()));
     }
 

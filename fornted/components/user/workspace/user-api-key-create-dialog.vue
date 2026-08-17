@@ -6,34 +6,40 @@
 					<text id="api-key-create-title" class="api-key-dialog-title">创建 API Key</text>
 					<text class="api-key-dialog-subtitle">选择有效期和允许调用的模型。</text>
 				</view>
-				<button class="api-key-dialog-close" type="button" :disabled="busy" aria-label="关闭创建窗口" @click="requestClose">×</button>
-			</view>
-
-			<view class="api-key-form-section">
-				<text class="api-key-form-label">有效期</text>
-				<user-api-key-expiry-picker
-					:selection="expirySelection"
-					:disabled="busy"
-					@change="handleExpiryChange"
-					@validity="handleExpiryValidity"
-				/>
-			</view>
-
-			<view class="api-key-form-section">
-				<text class="api-key-form-label">授权模型</text>
-				<user-api-key-model-picker
-					:selected-ids="selectedModelIds"
-					:minimum-models="1"
-					@change="selectedModelIds = $event"
-				/>
-			</view>
-
-			<text v-if="localError || error" class="api-key-dialog-error" role="alert">{{ localError || error }}</text>
-			<view class="api-key-dialog-actions">
-				<button class="api-key-cancel" type="button" :disabled="busy" @click="requestClose">取消</button>
-				<button class="api-key-submit" type="button" :disabled="busy" @click="submit">
-					{{ busy ? '正在创建…' : '创建 API Key' }}
+				<button class="api-key-dialog-close" type="button" :disabled="busy" aria-label="关闭创建窗口" @click="requestClose">
+					<uni-icons type="closeempty" size="20" color="#dce5e0" aria-hidden="true" />
 				</button>
+			</view>
+
+			<view class="api-key-dialog-body">
+				<view class="api-key-form-section">
+					<text class="api-key-form-label">有效期</text>
+					<user-api-key-expiry-picker
+						:selection="expirySelection"
+						:disabled="busy"
+						@change="handleExpiryChange"
+						@validity="handleExpiryValidity"
+					/>
+				</view>
+
+				<view class="api-key-form-section">
+					<text class="api-key-form-label">授权模型</text>
+					<user-api-key-model-picker
+						:selected-ids="selectedModelIds"
+						:minimum-models="1"
+						@change="selectedModelIds = $event"
+					/>
+				</view>
+			</view>
+
+			<view class="api-key-dialog-footer">
+				<text v-if="localError || error" class="api-key-dialog-error" role="alert">{{ localError || error }}</text>
+				<view class="api-key-dialog-actions">
+					<button class="api-key-cancel" type="button" :disabled="busy" @click="requestClose">取消</button>
+					<button class="api-key-submit" type="button" :disabled="busy" @click="submit">
+						{{ busy ? '正在创建…' : '创建 API Key' }}
+					</button>
+				</view>
 			</view>
 		</view>
 	</view>
@@ -131,17 +137,20 @@
 <style lang="scss" scoped>
 	@import '@/common/ui/user-material.scss';
 	.api-key-dialog-layer { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 22px; box-sizing: border-box; background: rgba(0, 0, 0, .72); }
-	.api-key-dialog { @include user-frosted-surface; width: min(680px, 100%); max-height: min(860px, calc(100dvh - 44px)); overflow-y: auto; padding: 24px; box-sizing: border-box; border-radius: 22px; color: #f3f5f4; }
-	.api-key-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+	.api-key-dialog { @include user-frosted-surface; width: min(680px, 100%); max-height: min(860px, calc(100dvh - 44px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; box-sizing: border-box; border-radius: 22px; color: #f3f5f4; }
+	.api-key-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 16px; }
 	.api-key-dialog-title { display: block; font-size: 24px; font-weight: 760; }
 	.api-key-dialog-subtitle { display: block; margin-top: 6px; color: #8f9b95; font-size: 13px; }
-	.api-key-dialog-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 24px; }
+	.api-key-dialog-close { width: 44px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: 0; padding: 0; box-sizing: border-box; border: 1px solid rgba(151, 170, 160, .2); border-radius: 12px; background: #171b18; color: #aeb9b3; font-size: 0; line-height: 1; }
 	.api-key-dialog-close:focus-visible { outline: 2px solid rgba(55, 211, 154, .72); }
-	.api-key-form-section { margin-top: 24px; }
+	.api-key-dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 8px; }
+	.api-key-form-section { margin-top: 20px; }
+	.api-key-form-section:first-child { margin-top: 4px; }
 	.api-key-form-label { display: block; margin-bottom: 10px; color: #cbd4cf; font-size: 13px; font-weight: 700; }
-	.api-key-dialog-error { display: block; margin-top: 18px; color: #efb0aa; font-size: 13px; }
-	.api-key-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+	.api-key-dialog-footer { padding: 16px 24px 24px; border-top: 1px solid rgba(151, 170, 160, .13); background: #151816; }
+	.api-key-dialog-error { display: block; margin-bottom: 12px; color: #efb0aa; font-size: 13px; }
+	.api-key-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
 	.api-key-cancel, .api-key-submit { @include user-frosted-control; min-width: 128px; margin: 0; padding: 0 18px; border-radius: 12px; color: #dce5e0; }
 	.api-key-submit { border-color: rgba(55, 211, 154, .46); background: rgba(55, 211, 154, .13); color: #75dfb7; }
-	@media screen and (max-width: 640px) { .api-key-dialog-layer { padding: 0; align-items: stretch; } .api-key-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); border-radius: 0; } .api-key-dialog-actions { position: sticky; bottom: 0; padding-top: 12px; background: #151816; } .api-key-cancel, .api-key-submit { min-width: 0; flex: 1; } }
+	@media screen and (max-width: 640px) { .api-key-dialog-layer { padding: 0; align-items: stretch; } .api-key-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; border-radius: 0; } .api-key-dialog-heading { padding: 20px 16px 14px; } .api-key-dialog-body { padding: 0 16px 8px; } .api-key-dialog-footer { padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); } .api-key-cancel, .api-key-submit { min-width: 0; flex: 1; } }
 </style>

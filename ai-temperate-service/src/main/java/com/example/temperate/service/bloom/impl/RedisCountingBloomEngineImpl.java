@@ -258,6 +258,7 @@ public final class RedisCountingBloomEngineImpl implements CountingBloomEngine {
             @SuppressWarnings({"rawtypes", "unchecked"})
             public Object execute(RedisOperations operations) {
                 for (int bucket = 0; bucket < namespace.bucketKeys().size(); bucket++) {
+                    // StringRedisTemplate 的 Lua 参数使用字符串序列化；布局整数只在 Redis 边界编码。
                     operations.execute(
                             INITIALIZE_BUCKET,
                             List.of(
@@ -266,7 +267,7 @@ public final class RedisCountingBloomEngineImpl implements CountingBloomEngine {
                                     namespace.bucketKeys().get(bucket)),
                             fence.leaseValue(),
                             Long.toString(fence.epoch()),
-                            namespace.layout().bucketByteLength(bucket));
+                            Integer.toString(namespace.layout().bucketByteLength(bucket)));
                 }
                 return null;
             }
@@ -605,8 +606,10 @@ public final class RedisCountingBloomEngineImpl implements CountingBloomEngine {
         arguments.add(Integer.toString(namespace.layout().bucketCount()));
         for (CountingBloomPosition position : positions) {
             // Lua 的 KEYS 从一开始：查询首个 Bucket 位于 2，更新首个 Bucket 位于 3。
-            arguments.add(position.bucketNumber() + (includeIdentifier ? 3 : 2));
-            arguments.add(position.byteOffset());
+            // 位置仍以整数完成 Java 计算，只在进入 StringRedisTemplate 时编码；Lua 使用 tonumber 恢复数值。
+            arguments.add(Integer.toString(
+                    position.bucketNumber() + (includeIdentifier ? 3 : 2)));
+            arguments.add(Integer.toString(position.byteOffset()));
         }
         if (fence != null) {
             arguments.add("BUILD_FENCE");
