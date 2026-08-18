@@ -2,6 +2,7 @@ package com.example.temperate.service.user.apikey.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -33,5 +34,18 @@ final class ApiKeyRequestPropertiesTest {
         request.setMaxBodyBytes(262_144);
         request.setMaxToolDefinitionsBytes(524_288);
         assertThat(request.isToolBudgetsValid()).isFalse();
+    }
+
+    @Test
+    void enablesLooseCompatibilityByDefaultAndSanitizesPassthroughModels() {
+        ApiKeyProperties.OpenAiCompatibility compatibility =
+                new ApiKeyProperties().getOpenAiCompatibility();
+
+        compatibility.setPassthroughModels(List.of(
+                " GPT-TEST ", "gpt-test", "", "claude-test"));
+
+        assertThat(compatibility.isEnabled()).isTrue();
+        assertThat(compatibility.getPassthroughModels())
+                .containsExactly("GPT-TEST", "gpt-test", "claude-test");
     }
 }

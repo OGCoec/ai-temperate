@@ -360,6 +360,13 @@ test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, an
 
 test('Responses adaptive route forwards JSON without SSE buffering headers', async () => {
 	const apiKey = `sk-${'R'.repeat(86)}`
+	const requestBody = JSON.stringify({
+		model: 'gpt-test',
+		input: 'hello',
+		stream: false,
+		client_metadata: { agent: 'codex' },
+		background: true
+	})
 	let captured
 	const response = await handleRequest(
 		request('niko000o.site', '/v1/responses', {
@@ -370,7 +377,7 @@ test('Responses adaptive route forwards JSON without SSE buffering headers', asy
 				Accept: 'application/json',
 				'Content-Type': 'application/json'
 			},
-			body: '{"model":"gpt-test","input":"hello","stream":false}'
+			body: requestBody
 		}),
 		ENV,
 		runtime(upstream => {
@@ -382,6 +389,7 @@ test('Responses adaptive route forwards JSON without SSE buffering headers', asy
 	assert.equal(captured.url, 'https://api.niko000o.site/v1/responses')
 	assert.equal(captured.headers.get('Accept'),
 		'text/event-stream, application/json;q=0.9')
+	assert.equal(await captured.text(), requestBody)
 	assert.equal(response.status, 200)
 	assert.equal(response.headers.get('Content-Type'), 'application/json')
 	assert.equal(response.headers.get('X-Accel-Buffering'), null)
@@ -391,6 +399,12 @@ test('Responses adaptive route forwards JSON without SSE buffering headers', asy
 
 test('Chat adaptive route forwards JSON without requiring an SSE Accept header', async () => {
 	const apiKey = `sk-${'C'.repeat(86)}`
+	const requestBody = JSON.stringify({
+		model: 'gpt-test',
+		messages: [{ role: 'user', content: 'hello', agent: 'workbuddy' }],
+		stream: false,
+		vendor_extension: { enabled: true }
+	})
 	let captured
 	const response = await handleRequest(
 		request('niko000o.site', '/v1/chat/completions', {
@@ -401,7 +415,7 @@ test('Chat adaptive route forwards JSON without requiring an SSE Accept header',
 				Accept: 'application/json',
 				'Content-Type': 'application/json'
 			},
-			body: '{"model":"gpt-test","messages":[],"stream":false}'
+			body: requestBody
 		}),
 		ENV,
 		runtime(upstream => {
@@ -416,6 +430,7 @@ test('Chat adaptive route forwards JSON without requiring an SSE Accept header',
 
 	assert.equal(captured.url,
 		'https://api.niko000o.site/v1/chat/completions')
+	assert.equal(await captured.text(), requestBody)
 	assert.equal(response.status, 200)
 	assert.equal(response.headers.get('Content-Type'), 'application/json')
 	assert.equal(response.headers.get('X-Accel-Buffering'), null)

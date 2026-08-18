@@ -11,8 +11,10 @@ import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequest.Tool;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequestValidator;
 import com.example.temperate.service.user.apiresponse.ValidatedApiResponseRequest;
-import com.example.temperate.service.user.apiresponse.openai.OpenAiApiResponseRequestValidation;
-import com.example.temperate.service.user.apiresponse.openai.OpenAiApiResponseRequestValidator;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestContext;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalization;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalizerRegistry;
+import com.example.temperate.service.user.openaicompatibility.OpenAiCompatibilityProtocol;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,7 +30,7 @@ import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来对白名单 Responses 子集执行逐层类型、关系、大小、模型能力与上下文校验，确保失败发生在资源预扣之前。
+ * 该实现是来在开关开启时把所有厂商交给 Responses 宽松规范化策略，关闭时继续执行旧白名单语义和关系校验。
  */
 @Service
 public final class ApiResponseRequestValidatorImpl
@@ -59,17 +61,17 @@ public final class ApiResponseRequestValidatorImpl
     private final AiModelCacheService modelCacheService;
     private final ApiKeyProperties properties;
     private final ObjectMapper objectMapper;
-    private final OpenAiApiResponseRequestValidator openAiRequestValidator;
+    private final LooseOpenAiRequestNormalizerRegistry normalizerRegistry;
 
     public ApiResponseRequestValidatorImpl(
             AiModelCacheService modelCacheService,
             ApiKeyProperties properties,
             ObjectMapper objectMapper,
-            OpenAiApiResponseRequestValidator openAiRequestValidator) {
+            LooseOpenAiRequestNormalizerRegistry normalizerRegistry) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
         this.properties = Objects.requireNonNull(properties);
         this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.openAiRequestValidator = Objects.requireNonNull(openAiRequestValidator);
+        this.normalizerRegistry = Objects.requireNonNull(normalizerRegistry);
     }
 
     @Override
@@ -86,24 +88,24 @@ public final class ApiResponseRequestValidatorImpl
             throw invalid("Model is required.", "model");
         }
         AiModelCacheEntry model = findModel(modelNode.textValue());
-        if (properties.getOpenAiCompatibility().isEnabled()
-                && "openai".equalsIgnoreCase(model.vendor())) {
-            OpenAiApiResponseRequestValidation enhanced =
-                    openAiRequestValidator.validate(request);
-            validateEnhancedModelAccess(principal, model);
-            long effectiveMax = enhanced.requestedMaxOutputTokens() == null
-                    ? model.maxOutputTokens()
-                    : Math.min(enhanced.requestedMaxOutputTokens(), model.maxOutputTokens());
-            long estimatedInput = estimateRawInputTokens(enhanced.payload());
-            if (estimatedInput > model.contextWindowTokens() - effectiveMax) {
+        if (properties.getOpenAiCompatibility().isEnabled()) {
+            validateCompatibleModelAccess(principal, model);
+            LooseOpenAiRequestNormalization normalized = normalizerRegistry
+                    .getRequired(OpenAiCompatibilityProtocol.RESPONSES)
+                    .normalize(new LooseOpenAiRequestContext(
+                            request, model, OpenAiCompatibilityProtocol.RESPONSES));
+            long estimatedInput = estimateRawInputTokens(normalized.normalizedPayload());
+            if (estimatedInput > model.contextWindowTokens()
+                    - normalized.effectiveMaxOutputTokens()) {
                 throw new ApiChatException(
                         ApiChatErrorCode.CONTEXT_LENGTH_EXCEEDED,
                         "The request exceeds the model context window.",
                         "input");
             }
-            return ValidatedApiResponseRequest.openAiEnhanced(
-                    model, effectiveMax, estimatedInput,
-                    enhanced.stream(), enhanced.payload());
+            return ValidatedApiResponseRequest.compatible(
+                    model, normalized.effectiveMaxOutputTokens(), estimatedInput,
+                    normalized.stream(), normalized.normalizedPayload(),
+                    normalized.payloadMode(), normalized.droppedFieldCount());
         }
         try {
             return validate(principal,
@@ -117,7 +119,7 @@ public final class ApiResponseRequestValidatorImpl
         }
     }
 
-    private void validateEnhancedModelAccess(
+    private void validateCompatibleModelAccess(
             ApiKeyPrincipal principal,
             AiModelCacheEntry model) {
         if (!model.capabilities().contains(AiModelCapabilityCode.RESPONSES)

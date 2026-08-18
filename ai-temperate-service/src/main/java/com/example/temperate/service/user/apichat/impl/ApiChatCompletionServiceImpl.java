@@ -25,6 +25,7 @@ import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViol
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatStreamDiagnostic;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatStreamDiagnosticService;
+import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapter;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapterRegistry;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Normalization;
@@ -138,16 +139,20 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
             ValidatedApiChatRequest validated,
             String clientRequestId) {
         ObjectNode payload;
+        ApiChatProviderAdapter adapter;
         try {
             // 适配失败必须发生在并发租约和额度预扣之前，避免纯请求错误占用资源或遗留 RESERVED 账单。
-            payload = adapterRegistry
-                    .getRequired(validated.model().vendor())
-                    .adapt(validated);
+            adapter = adapterRegistry.getRequired(validated.model().vendor());
+            payload = adapter.adapt(validated);
         } catch (ApiChatException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             throw infrastructure("Request validation is temporarily unavailable.");
         }
+        recordNormalization(
+                validated,
+                adapter.type().name(),
+                validated.droppedFieldCount() + adapterDroppedFields(validated, payload));
         ApiInferenceLifecycleSession session = lifecycleService.start(
                 principal,
                 new ApiInferenceExecutionRequest(
@@ -162,7 +167,45 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                 session,
                 new ApiInferenceUpstreamRequest(
                         clientRequestId,
-                        validated.openAiEnhanced()));
+                        validated.payloadMode().isCompatibilityEnabled()));
+    }
+
+    private void recordNormalization(
+            ValidatedApiChatRequest validated,
+            String provider,
+            int droppedFieldCount) {
+        String mode = validated.payloadMode().name().toLowerCase(java.util.Locale.ROOT);
+        String providerTag = provider.toLowerCase(java.util.Locale.ROOT);
+        meterRegistry.counter(
+                "api.inference.normalization.requests",
+                "protocol", "chat_completions",
+                "provider", providerTag,
+                "payload_mode", mode).increment();
+        if (droppedFieldCount > 0) {
+            // 字段丢弃指标只累计数量，不记录字段名、模型名或正文，避免高基数和客户端隐私泄露。
+            meterRegistry.counter(
+                    "api.inference.normalization.fields.dropped",
+                    "protocol", "chat_completions",
+                    "provider", providerTag,
+                    "payload_mode", mode).increment(droppedFieldCount);
+        }
+    }
+
+    private static int adapterDroppedFields(
+            ValidatedApiChatRequest validated,
+            ObjectNode adaptedPayload) {
+        ObjectNode normalized = validated.normalizedPayload();
+        if (normalized == null) {
+            return 0;
+        }
+        int dropped = 0;
+        var fields = normalized.fieldNames();
+        while (fields.hasNext()) {
+            if (!adaptedPayload.has(fields.next())) {
+                dropped++;
+            }
+        }
+        return dropped;
     }
 
     private Flux<String> streamReserved(

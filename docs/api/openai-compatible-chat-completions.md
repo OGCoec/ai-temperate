@@ -1,6 +1,6 @@
-# OpenAI 常用协议兼容矩阵
+# OpenAI 风格宽松兼容矩阵
 
-本项目提供 OpenAI 常用协议兼容层，而不是 OpenAI 平台的完整镜像。契约基线固定为 2026-08-18 的正式版 [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 与 [Responses API](https://developers.openai.com/api/reference/overview)。未来官方字段不会自动获得支持。
+本项目用独立 Java 代码实现宽松兼容行为，不复制 new-api/AGPL 源码，也不宣称完整复制 OpenAI 平台。目标是让能够使用 OpenAI Chat Completions 或 Responses 模式的 Agent 共用稳定入口，同时保留认证、模型授权、Token 预扣与权威 Usage 结算边界。
 
 ```text
 Base URL: https://niko000o.site/v1
@@ -9,49 +9,54 @@ POST /chat/completions
 POST /responses
 ```
 
-增强路径仅用于模型供应商为 `OPENAI` 的请求，并由 `API_KEY_OPENAI_COMPATIBILITY_ENABLED` 控制。开关关闭时立即回到原有严格 DTO 路径；xAI、Anthropic、Google 等供应商继续使用原来的白名单和适配器。
+本次不增加 `/v1/messages` 或 Gemini 原生路由，也不执行 Chat Completions 与 Responses 之间的协议转换。模型必须显式声明当前入口对应的 `CHAT_COMPLETIONS` 或 `RESPONSES` 能力。
 
-## 总体边界
+## 三种请求模式
 
-| 能力 | Chat Completions | Responses |
-| --- | --- | --- |
-| 非流式 JSON | 支持 | 支持 |
-| 流式 SSE | 支持，以 `[DONE]` 结束 | 支持，保留原生 event 名称 |
-| 文本输入 | 支持 | 支持 |
-| Function 工具 | 支持 | 支持 |
-| JSON Object / JSON Schema | 支持 | 支持 |
-| 多模态、文件 | 不支持，明确报错 | 不支持，明确报错 |
-| 托管工具或 MCP | 不支持 | 不支持 |
-| 存储、后台、历史资源 | 不支持 | 不支持 |
+| 模式 | 触发条件 | 未知 Body 字段 | 厂商 Adapter |
+| --- | --- | --- | --- |
+| `STRICT_DTO` | 兼容开关关闭 | 按旧 DTO 和旧验证规则处理 | 保持旧行为 |
+| `LOOSE_NORMALIZED` | 兼容开关开启，模型不在透传列表 | 顶层及 Chat 消息未知字段静默丢弃 | 静默删除厂商不支持的可选字段 |
+| `CONTROLLED_PASSTHROUGH` | 兼容开关开启，规范模型名命中透传列表 | 保留未知 Body 扩展 | 保留未知厂商扩展，仍删除已知不安全或不兼容字段 |
 
-未支持的字段不会被静默丢弃。请求会得到精确字段路径：
+兼容开关作用于 OpenAI、xAI、Anthropic、Google 等全部已注册厂商，不按客户端名称或 User-Agent 写分支。关闭开关后，所有厂商立即回退到旧严格 DTO 路径。
 
-```json
-{
-  "error": {
-    "message": "Unsupported parameter: store",
-    "type": "invalid_request_error",
-    "param": "store",
-    "code": "unsupported_parameter"
-  }
-}
-```
+受控透传只涉及 JSON Body。`Authorization`、Cookie、Host、转发链、内部签名和其他客户端 Header 永远不会因此透传。无论哪种兼容模式，网关都会强制覆盖规范模型名、流模式、有效 Token 上限、结算所需 Usage 和无状态字段。
+
+## 共同硬边界
+
+宽松不等于取消网关安全校验。下列条件仍在连接 8317 和额度预扣之前检查：
+
+- 请求必须是合法 JSON 对象，序列化后不超过 1 MiB。
+- `model` 必须存在，模型必须启用、属于 API Key 授权范围并声明当前路由能力。
+- Chat 的 `messages` 必须是 1～256 项数组；Responses 的 `input` 必须存在，数组输入不得为空或超过 256 项。
+- `stream` 缺省为 `false`，显式值必须是 JSON 布尔值。
+- Token 字段必须是安全范围内的正整数，并受模型最大输出和上下文窗口限制。
+- 工具数量和 UTF-8 总字节数继续受现有配置限制。
+- 已识别的图片、音频和视频输入分别要求 `IMAGE_INPUT`、`AUDIO_INPUT` 和 `VIDEO_INPUT` 能力。
+- `input_file` 因当前没有文件输入能力码而返回受控错误。
+
+Java 不再验证完整消息角色状态机、工具调用引用关系或所有上游枚举，也不会为缺失的 `content` 等语义字段补空串。语义不完整但未破坏网关边界的请求会原样交给 8317/最终上游裁决。
 
 ## Chat Completions
 
-支持的消息角色为 `developer`、`system`、`user`、`assistant`、`tool`，以及兼容旧客户端的 `function`。`content` 可为字符串或 `type=text` 的文本块；`reasoning_content` 是保留给现有客户端的显式扩展字段。
+普通宽松模式保留以下常用结构：
 
-支持的常用字段：
+- 消息字段：`role`、`content`、`name`、`tool_calls`、`tool_call_id`、`function_call`、`reasoning_content`、`refusal`、`audio`。
+- 生成字段：`max_completion_tokens`、`max_tokens`、`temperature`、`top_p`、`presence_penalty`、`frequency_penalty`、`stop`、`seed`、`n`。
+- 模型与输出字段：`reasoning_effort`、`service_tier`、`verbosity`、`safety_identifier`、`user`、`logprobs`、`top_logprobs`、`prediction`。
+- 缓存、工具与结构化输出：`prompt_cache_key`、`prompt_cache_options`、`tools`、`tool_choice`、`parallel_tool_calls`、旧版 `functions`、`function_call`、`response_format`。
 
-- 生成控制：`max_completion_tokens`、旧版 `max_tokens`、`temperature`、`top_p`、`presence_penalty`、`frequency_penalty`、`stop`、`seed`、`n`。
-- 模型控制：`reasoning_effort`、`service_tier`、`verbosity`、`safety_identifier`、`user`。
-- 输出信息：`logprobs`、`top_logprobs`、文本 `prediction`。
-- 缓存提示：`prompt_cache_key`、`prompt_cache_options`、文本块 `prompt_cache_breakpoint`。
-- 工具：`tools`、`tool_choice`、`parallel_tool_calls`，以及旧版 `functions`、`function_call`。
-- 结构化输出：`response_format.type` 为 `text`、`json_object` 或 `json_schema`。
-- 传输：`stream` 与 `stream_options.include_usage`。
+`content`、工具参数、JSON Schema 和其他复杂已知值以 `JsonNode` 保留，不被收窄成字符串 DTO。`messages[].agent` 等消息方言字段在普通模式静默删除；模型位于透传列表时才会保留。
 
-`max_completion_tokens` 和 `max_tokens` 不能同时提交。`store` 只允许缺省、`null` 或 `false`。
+具体规范化规则：
+
+- `stream` 省略时按 `false` 处理，JSON 与 SSE 均支持。
+- `max_completion_tokens` 与 `max_tokens` 同时存在时，前者优先；出站统一写入有效 `max_completion_tokens`。
+- `store` 始终覆盖为 `false`。
+- 顶层 `modalities`、音频输出配置等本次未承诺的媒体输出字段删除。
+- Function 工具保留；Web Search 只在模型声明 `WEB_SEARCH` 时保留；其他托管、custom 或 MCP 工具静默删除。
+- 未识别的 content 块不由 Java 猜测语义，保留给最终上游处理。
 
 非流式示例：
 
@@ -71,57 +76,53 @@ POST /responses
         "additionalProperties": false
       }
     }
-  },
-  "stream": false
+  }
 }
 ```
 
 ## Responses
 
-支持字符串 `input`，以及文本 message、reasoning、function call 和 function call output 输入项。省略 `store` 时，增强路径会把它规范化为 `false`，保持无状态行为。
+普通宽松模式保留 `model`、`input`、`instructions`、`stream`、`max_output_tokens`、`reasoning`、Function 工具、`text`、采样字段、service tier、truncation、cache、user/safety、`include` 和 `client_metadata`。`input`、`reasoning`、`text`、工具内容及未知 input/content 块保持 JSON 结构。
 
-支持的常用字段：
+具体规范化规则：
 
-- 生成控制：`max_output_tokens`、`reasoning`、`temperature`、`top_p`、`top_logprobs`。
-- 模型控制：`service_tier`、`truncation`、`safety_identifier`、`user`。
-- 缓存提示：`prompt_cache_key`、`prompt_cache_retention`。
-- 工具：Function `tools`、`tool_choice`、`parallel_tool_calls`、`max_tool_calls`。
-- 结构化输出：`text.format.type` 为 `text`、`json_object` 或 `json_schema`；支持 `text.verbosity`。
-- 无状态 include：`reasoning.encrypted_content`、`message.output_text.logprobs`。
-- 传输：`stream=false` 或省略时返回 JSON；`stream=true` 返回原生 Responses SSE。
+- `stream` 省略时返回 JSON；`stream=true` 返回原生 Responses SSE。
+- `store` 始终覆盖为 `false`。
+- `background`、`previous_response_id` 和 `conversation` 静默删除，不再由 Java 提前返回 400。
+- Function 工具保留；Web Search 只在模型声明 `WEB_SEARCH` 时保留。
+- File Search、Code Interpreter、MCP 和其他托管工具静默删除。
+- 图片、音频、视频输入按模型能力门控；`input_file` 明确拒绝。
 
-明确拒绝 `store=true`、`background=true`、`previous_response_id`、`conversation`、图片、音频、文件以及 Function 以外的 hosted/custom/MCP 工具。
+## 厂商 Adapter
 
-## 成功响应与错误
+公共规范化完成后，Registry 根据模型数据库中的厂商枚举选择唯一 Adapter，不根据 Codex、WorkBuddy、Claude Code 或其他客户端名称分支。
 
-OPENAI 增强路径不重建成功正文：JSON 保留完整对象；SSE 保留原始 event 名称和 data JSON。Chat 不限制 choice 数量或 choice index，因此 multiple choices、logprobs、tool calls、refusal、usage、system fingerprint 与其他上游字段不会因网关重建而丢失。
+- OpenAI Adapter 保留公共层批准的全部已知字段。
+- xAI、Anthropic 和 Google Adapter 对自己未声明支持的已知可选字段执行静默删除。
+- 普通宽松模式不会让未知字段越过 Adapter。
+- 受控透传模式可以保留未进入公共字段目录的厂商扩展，但不能恢复已经被状态、Token、工具或媒体安全规则删除的字段。
+- 厂商、Adapter 和模型能力不一致时仍返回受控模型错误，不自动转换成另一种协议。
 
-网关只旁路读取结算必需的 Usage、缓存输入 Token、finish reason 和 Responses 终态。Chat 非流式响应必须在本地结算成功后才建立 HTTP 200；流式 Chat 会强制向上游请求最终 Usage，但客户端没有请求 Usage 时不输出仅供结算的 Usage chunk。`n>1` 始终按上游总 Usage 结算。
+## 成功响应、错误与结算
 
-只有满足以下安全条件的 OpenAI 上游错误才原样返回：
+请求兼容改造不重建成功正文：JSON 保留完整对象；SSE 保留原始 event 名称和 data JSON。旁路解析器只提取权威 Usage、缓存输入 Token、finish reason 和 Responses 终态。
 
-- HTTP 状态在 400～599；
-- `Content-Type` 为 JSON；
-- 正文是合法 OpenAI `error` 包络；
-- 正文不含内部 8317 地址、凭据或内部路由标记。
+Chat 非流式响应必须在本地结算成功后才建立 HTTP 200。流式 Chat 可以强制向上游请求最终 Usage；客户端没有请求 Usage 时，仅供结算的 Usage chunk 不向客户端输出。`n>1` 始终按上游总 Usage 结算。Usage 缺失、非法或终态不完整时继续执行现有协议错误、退款或恢复流程，禁止估算后收费。
 
-安全错误会保留原始状态和错误字段。其他错误统一转换为受控网关错误。可透传的响应头仅限 `x-request-id`、`openai-*`、`x-ratelimit-*` 和 `retry-after`。
+合法 OpenAI error envelope 会保留原始 HTTP 状态和安全响应头。非 JSON、错误 Content-Type、包含内部 8317 信息或凭据的错误会转换为受控网关错误。允许的响应头仍仅限 `x-request-id`、`openai-*`、`x-ratelimit-*` 和 `retry-after`。
 
-客户端可提交 `X-Client-Request-Id`；该值必须为 1～512 个可打印 ASCII 字符。服务不会记录完整请求正文、Authorization 或供应商凭据。
+服务不会记录完整请求正文、工具参数、消息内容、Authorization、供应商凭据或完整模型名。规范化指标只包含 protocol、provider、payload mode、丢弃数量、上游结果和结算终态等低基数信息。
 
-## 安全、额度与部署
-
-- API Key 只能放在服务端进程或 Secret 管理系统中，禁止嵌入浏览器、H5 或公开前端。
-- Cloudflare 仅开放 `/v1/chat/completions`、`/v1/responses` 和 `/v1/models`，两个 create 路由都根据上游实际 Content-Type 自适应转发 JSON 或 SSE。
-- JSON 与 SSE 都使用 `no-store`；只有实际 SSE 响应添加禁缓冲头。
-- 继续使用现有并发准入、Token 预扣、终态结算和取消恢复机制。
-- 本兼容子集不提供托管工具或持久资源，因此不增加非 Token 额度和计费逻辑。
-- 图片、音频、文件、Web Search、File Search、Code Interpreter、MCP、Conversation、历史 Response、WebSocket 与 Beta Multi-agent 均不在此契约内。
-
-测试环境启用示例：
+## 配置与部署
 
 ```text
+# 默认 true；false 会让全部厂商恢复旧严格 DTO 路径。
 API_KEY_OPENAI_COMPATIBILITY_ENABLED=true
+
+# 逗号分隔、按规范模型名大小写不敏感匹配；默认空列表。
+API_KEY_OPENAI_PASSTHROUGH_MODELS=gpt-test,gpt-5.6-terra
 ```
 
-生产启用前必须完成 Java、Cloudflare、本地假上游和官方 SDK 契约测试。真实 8317 测试会使用模型额度，需要单独批准。
+Cloudflare 仍只开放 `/v1/chat/completions`、`/v1/responses` 和 `/v1/models`，两个 create 路由根据上游实际 Content-Type 自适应转发 JSON 或 SSE，并保持无缓存、禁止 SSE 缓冲、Worker 验签和 API Key Header 安全边界。
+
+本次不新增数据库表、公开路由、协议转换、持久资源或非 Token 计费逻辑。Java、Cloudflare 和本地假 8317 测试只有在用户明确批准后才执行；真实 8317、Codex、WorkBuddy 或其他 Agent 测试还需要单独批准，因为可能消耗模型额度。

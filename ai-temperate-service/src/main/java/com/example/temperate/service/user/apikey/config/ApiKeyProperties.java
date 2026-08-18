@@ -4,9 +4,12 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -393,10 +396,12 @@ public class ApiKeyProperties {
     }
 
     /**
-     * 该配置组是来隔离 OpenAI 厂商的常用协议增强路径，关闭时其他厂商和旧严格路径均不受影响。
+     * 该配置组是来控制所有厂商共享的 OpenAI 风格宽松入口和受控 Body 透传模型，关闭时立即恢复旧严格 DTO 路径。
      */
     public static class OpenAiCompatibility {
-        private boolean enabled;
+        private boolean enabled = true;
+        @Size(max = 500)
+        private List<@NotBlank @Size(max = 128) String> passthroughModels = List.of();
 
         public boolean isEnabled() {
             return enabled;
@@ -404,6 +409,20 @@ public class ApiKeyProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public List<String> getPassthroughModels() {
+            return passthroughModels;
+        }
+
+        public void setPassthroughModels(List<String> passthroughModels) {
+            this.passthroughModels = passthroughModels == null
+                    ? List.of()
+                    : passthroughModels.stream()
+                    .filter(value -> value != null && !value.isBlank())
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
         }
     }
 

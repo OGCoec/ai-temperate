@@ -10,7 +10,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * 该无状态适配器是来校验并生成 Anthropic 厂商的 8317 Chat Completions 核心请求，不静默丢弃客户端字段。
+ * 该无状态适配器是来生成 Anthropic 厂商的 8317 Chat Completions 请求，并按请求模式过滤其不支持的可选字段。
  */
 @Component
 public final class AnthropicApiChatProviderAdapter implements ApiChatProviderAdapter {
@@ -33,7 +33,7 @@ public final class AnthropicApiChatProviderAdapter implements ApiChatProviderAda
 
     @Override
     public ObjectNode adapt(ValidatedApiChatRequest request) {
-        return ApiChatProviderPayloadPolicy.requireAllowed(
+        return ApiChatProviderPayloadPolicy.adaptAllowed(
                 type(), request, payloadFactory.create(request), ALLOWED_FIELDS);
     }
 }

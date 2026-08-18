@@ -2,6 +2,7 @@ package com.example.temperate.service.user.apiresponse.impl;
 
 import com.example.temperate.service.user.apiresponse.ApiResponsePayloadFactory;
 import com.example.temperate.service.user.apiresponse.ValidatedApiResponseRequest;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -28,7 +29,7 @@ public final class ApiResponsePayloadFactoryImpl implements ApiResponsePayloadFa
         ObjectNode payload = request.normalizedPayload() == null
                 ? objectMapper.valueToTree(request.request())
                 : request.normalizedPayload().deepCopy();
-        if (!request.openAiEnhanced()) {
+        if (request.payloadMode() == OpenAiRequestPayloadMode.STRICT_DTO) {
             removeNulls(payload);
             removeEmptyNestedObject(payload, "text", "format");
             removeEmptyObject(payload, "reasoning");

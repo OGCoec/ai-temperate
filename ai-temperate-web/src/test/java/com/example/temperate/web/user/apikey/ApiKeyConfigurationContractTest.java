@@ -51,6 +51,9 @@ final class ApiKeyConfigurationContractTest {
         assertThat(yaml).contains(
                 "    # 默认启用公开 API Key 管理与认证；启动前必须完成数据库迁移、固定 Secret 和 Bloom 重建准备。\n"
                         + "    enabled: ${API_KEY_ENABLED:true}");
+        assertThat(yaml).contains(
+                "      # 仅列表内规范模型名在安全覆盖后保留未知 Body 字段，空值表示全部使用普通宽松投影。\n"
+                        + "      passthrough-models: ${API_KEY_OPENAI_PASSTHROUGH_MODELS:}");
     }
 
     @Test
@@ -63,7 +66,27 @@ final class ApiKeyConfigurationContractTest {
                     .isEqualTo(32_768);
             assertThat(properties.getRequest().getMaxToolDefinitionsBytes())
                     .isEqualTo(524_288);
+            assertThat(properties.getOpenAiCompatibility().isEnabled()).isTrue();
+            assertThat(properties.getOpenAiCompatibility().getPassthroughModels())
+                    .isEmpty();
         });
+    }
+
+    @Test
+    void environmentCanDisableLooseCompatibilityAndBindPassthroughModels() {
+        contextRunner
+                .withPropertyValues(
+                        "API_KEY_OPENAI_COMPATIBILITY_ENABLED=false",
+                        "API_KEY_OPENAI_PASSTHROUGH_MODELS=GPT-Test,claude-test")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    ApiKeyProperties.OpenAiCompatibility compatibility = context
+                            .getBean(ApiKeyProperties.class)
+                            .getOpenAiCompatibility();
+                    assertThat(compatibility.isEnabled()).isFalse();
+                    assertThat(compatibility.getPassthroughModels())
+                            .containsExactly("GPT-Test", "claude-test");
+                });
     }
 
     @Test

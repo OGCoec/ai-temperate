@@ -8,7 +8,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 该结果是来在严格校验后显式区分 Responses JSON 与 SSE 两种返回模式，使 Controller 不读取请求体猜测传输类型。
+ * 该结果是来在请求规范化后显式区分 Responses JSON 与 SSE 两种返回模式，使 Controller 不读取请求体猜测传输类型。
  */
 public sealed interface ApiResponseCreation
         permits ApiResponseCreation.Stream, ApiResponseCreation.Json {

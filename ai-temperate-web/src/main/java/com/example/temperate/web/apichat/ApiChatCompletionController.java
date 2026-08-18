@@ -32,9 +32,9 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/v1")
 @Tag(
         name = "开放接口-Chat Completions",
-        description = "供 OpenAI SDK、Agent、curl 与服务端应用调用的无状态 Chat Completions 常用文本子集。"
-                + "仅接受 Worker 验签和 Bearer API Key；支持 JSON/SSE、函数工具和结构化输出，"
-                + "不负责持久化、多模态、托管工具或其他厂商协议扩展。")
+        description = "供 OpenAI SDK、Agent、curl 与服务端应用调用的无状态 Chat Completions 宽松兼容入口。"
+                + "仅接受 Worker 验签和 Bearer API Key；支持 JSON/SSE、函数工具、结构化输出和受能力门控的输入，"
+                + "普通模式静默过滤未知或厂商不支持字段，且不负责持久化、媒体输出或持续托管资源。")
 public class ApiChatCompletionController {
 
     private final ApiChatCompletionService completionService;
@@ -49,7 +49,8 @@ public class ApiChatCompletionController {
     @Operation(
             summary = "创建 Chat Completion",
             description = "Authorization 使用脱敏 Bearer sk-***。stream 缺省或 false 返回 JSON，"
-                    + "stream=true 返回 SSE；服务端为结算强制获取 Usage，但只在客户端请求时输出 Usage chunk。",
+                    + "stream=true 返回 SSE；服务端为结算强制获取 Usage，但只在客户端请求时输出 Usage chunk。"
+                    + "兼容开关开启时未知请求字段按普通宽松或受控透传模式处理。",
             security = @SecurityRequirement(name = "apiKeyBearer"))
     @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.HTTP_CONTROLLER)
     public Mono<ResponseEntity<?>> create(

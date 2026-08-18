@@ -2,6 +2,7 @@ package com.example.temperate.service.user.apichat.provider.impl;
 
 import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.provider.ApiChatPayloadFactory;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,7 +13,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来让旧厂商路径继续扁平化文本块，并让 OpenAI 增强路径保留原始结构后只覆盖授权、Token 与结算所需字段。
+ * 该实现是来让旧严格路径继续扁平化文本块，并让宽松兼容路径保留 JSON 结构后只覆盖授权、Token 与结算所需字段。
  */
 @Service
 public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
@@ -31,13 +32,14 @@ public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
         if (!(tree instanceof ObjectNode payload)) {
             throw new IllegalStateException("Validated API chat request must encode to an object");
         }
-        if (!validated.openAiEnhanced()) {
+        if (validated.payloadMode() == OpenAiRequestPayloadMode.STRICT_DTO) {
             pruneNulls(payload);
             flattenTextContentParts(payload);
         }
         payload.put("model", validated.model().modelName());
         payload.put("stream", validated.stream());
-        if (validated.openAiEnhanced() && payload.hasNonNull("max_tokens")) {
+        if (validated.payloadMode() != OpenAiRequestPayloadMode.STRICT_DTO
+                && payload.hasNonNull("max_tokens")) {
             payload.remove("max_completion_tokens");
             payload.put("max_tokens", validated.effectiveMaxOutputTokens());
         } else {

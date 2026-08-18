@@ -875,7 +875,7 @@ async function signedUpstreamRequest(
 		headers.delete('Origin')
 		headers.delete('Referer')
 		headers.delete(CLIENT_PLATFORM_HEADER)
-		// Chat 成功时仍必须是 SSE；额外接受 JSON 只用于让源站返回可诊断的 4xx/5xx 错误包络。
+		// 两个 create 路由均由源站按 stream 决定 JSON 或 SSE；边缘同时声明接受两者并按实际 Content-Type 自适应转发。
 		headers.set('Accept', route.streaming
 			? 'text/event-stream, application/json;q=0.9' : 'application/json')
 		for (const name of [...headers.keys()]) {

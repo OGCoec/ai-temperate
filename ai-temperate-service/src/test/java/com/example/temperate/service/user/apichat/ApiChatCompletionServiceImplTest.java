@@ -40,6 +40,7 @@ import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViol
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -224,8 +225,9 @@ final class ApiChatCompletionServiceImplTest {
                 BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
                 8_192, 512,
                 List.of(AiModelCapabilityCode.CHAT_COMPLETIONS));
-        ValidatedApiChatRequest validated = ValidatedApiChatRequest.openAiEnhanced(
-                model, 128, 32, false, false, raw);
+        ValidatedApiChatRequest validated = ValidatedApiChatRequest.compatible(
+                model, 128, 32, false, false, raw,
+                OpenAiRequestPayloadMode.LOOSE_NORMALIZED, 0);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
                 11L, 17L, new byte[32], "B".repeat(43), Set.of(23L));
         ApiChatRequestValidator validator = mock(ApiChatRequestValidator.class);

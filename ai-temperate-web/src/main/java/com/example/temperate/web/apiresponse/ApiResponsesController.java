@@ -49,9 +49,9 @@ import reactor.core.publisher.SignalType;
 @RequestMapping("/v1")
 @Tag(
         name = "开放接口-Responses",
-        description = "供 Codex、OpenAI SDK 与服务端应用调用的无状态 Responses 常用文本子集。"
-                + "仅接受 Worker 验签和 Bearer API Key，固定 store=false；支持函数工具和结构化输出，"
-                + "不负责保存 Response、后台任务、托管工具或多模态。")
+        description = "供 Codex、OpenAI SDK、Agent 与服务端应用调用的无状态 Responses 宽松兼容入口。"
+                + "仅接受 Worker 验签和 Bearer API Key，固定 store=false；支持函数工具、结构化输出和能力门控输入，"
+                + "状态字段与不支持的托管工具会静默删除，不负责保存 Response 或后台任务。")
 public class ApiResponsesController {
 
     private final ApiResponseService responseService;
@@ -71,7 +71,7 @@ public class ApiResponsesController {
             summary = "创建无状态 Response",
             description = "Authorization 使用脱敏 Bearer sk-***。stream 缺省或 false 返回 JSON，"
                     + "stream=true 返回保留 Responses event 名称的 SSE；服务端强制 store=false，"
-                    + "不会转发客户端 API Key 到 8317。",
+                    + "不会转发客户端 API Key 到 8317；未知字段按普通宽松或受控透传模式处理。",
             security = @SecurityRequirement(name = "apiKeyBearer"))
     @ApiResponseStreamDiagnostic(stage = ApiResponseDiagnosticStage.HTTP_CONTROLLER)
     public Mono<ResponseEntity<?>> create(

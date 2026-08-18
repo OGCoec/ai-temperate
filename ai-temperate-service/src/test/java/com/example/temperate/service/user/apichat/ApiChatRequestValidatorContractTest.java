@@ -12,9 +12,11 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.user.apichat.impl.ApiChatRequestValidatorImpl;
 import com.example.temperate.service.user.apichat.provider.impl.ApiChatPayloadFactoryImpl;
-import com.example.temperate.service.user.apichat.openai.impl.OpenAiApiChatRequestValidatorImpl;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalizerRegistry;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
+import com.example.temperate.service.user.openaicompatibility.impl.ChatLooseOpenAiRequestNormalizerImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -23,28 +25,29 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * 该测试是来约束旧 Chat 严格路径与 OpenAI 原始 JSON 增强路径的分流、Token 上限、授权和上下文边界。
+ * 该测试是来约束旧 Chat 严格回滚路径与所有厂商共享的宽松 JSON 路径、Token 上限、授权和上下文边界。
  */
 final class ApiChatRequestValidatorContractTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ApiKeyProperties defaultProperties = new ApiKeyProperties();
     private final ApiChatRequestValidator validator = new ApiChatRequestValidatorImpl(
             cacheService(model()),
-            new ApiKeyProperties(),
+            defaultProperties,
             objectMapper,
-            new OpenAiApiChatRequestValidatorImpl(
-                    objectMapper, new ApiKeyProperties()));
+            registry(defaultProperties));
     private final ApiKeyPrincipal principal = new ApiKeyPrincipal(
             1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
 
     @Test
-    void routesOnlyOpenAiModelsThroughTheRawCompatibilityValidator() throws Exception {
+    void routesEnabledModelsThroughTheLooseCompatibilityValidator() throws Exception {
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.getOpenAiCompatibility().setEnabled(true);
         ObjectNode raw = (ObjectNode) objectMapper.readTree("""
@@ -56,7 +59,8 @@ final class ApiChatRequestValidatorContractTest {
         ValidatedApiChatRequest validated = validator(properties, model())
                 .validate(principal, raw);
 
-        assertThat(validated.openAiEnhanced()).isTrue();
+        assertThat(validated.payloadMode())
+                .isEqualTo(OpenAiRequestPayloadMode.LOOSE_NORMALIZED);
         assertThat(validated.stream()).isFalse();
         assertThat(validated.normalizedPayload().path("verbosity").textValue())
                 .isEqualTo("low");
@@ -69,7 +73,7 @@ final class ApiChatRequestValidatorContractTest {
     }
 
     @Test
-    void keepsNonOpenAiModelsOnTheLegacyStreamingContract() throws Exception {
+    void routesNonOpenAiModelsThroughTheSameLooseContract() throws Exception {
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.getOpenAiCompatibility().setEnabled(true);
         ObjectNode raw = (ObjectNode) objectMapper.readTree("""
@@ -77,10 +81,25 @@ final class ApiChatRequestValidatorContractTest {
                  "content":"hello"}],"stream":false}
                 """);
 
-        assertThatThrownBy(() -> validator(properties, model(4_096, "xai"))
-                .validate(principal, raw))
-                .isInstanceOf(ApiChatException.class)
-                .hasMessageContaining("stream=true");
+        ValidatedApiChatRequest validated = validator(
+                properties, model(4_096, "xai")).validate(principal, raw);
+
+        assertThat(validated.payloadMode())
+                .isEqualTo(OpenAiRequestPayloadMode.LOOSE_NORMALIZED);
+        assertThat(validated.stream()).isFalse();
+    }
+
+    @Test
+    void disabledCompatibilitySwitchRestoresLegacyStrictDtoBehavior() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getOpenAiCompatibility().setEnabled(false);
+        ObjectNode raw = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-test","messages":[{"role":"user","content":"hello",
+                 "agent":"workbuddy"}],"stream":false}
+                """);
+
+        assertThatThrownBy(() -> validator(properties, model()).validate(principal, raw))
+                .isInstanceOf(ApiChatException.class);
     }
 
     @Test
@@ -725,7 +744,13 @@ final class ApiChatRequestValidatorContractTest {
                 cacheService(model),
                 properties,
                 objectMapper,
-                new OpenAiApiChatRequestValidatorImpl(objectMapper, properties));
+                registry(properties));
+    }
+
+    private LooseOpenAiRequestNormalizerRegistry registry(ApiKeyProperties properties) {
+        return new LooseOpenAiRequestNormalizerRegistry(Map.of(
+                "chatLooseOpenAiRequestNormalizer",
+                new ChatLooseOpenAiRequestNormalizerImpl(properties, objectMapper)));
     }
 
     private static AiModelCacheService cacheService(AiModelCacheEntry model) {

@@ -112,10 +112,12 @@ app:
   api-key:
     # 上下文测试不启动公开 API Key 路由及 Bloom 重建。
     enabled: false
-    # 测试环境启用 OpenAI 常用协议增强，以覆盖原始 JSON Bean 绑定和路由选择；生产默认仍关闭。
+    # 测试环境启用所有厂商共享的 OpenAI 风格宽松兼容，以覆盖原始 JSON Bean 绑定和路由选择。
     open-ai-compatibility:
       # 测试只验证本地契约，不会因此连接 8317 或使用真实模型额度。
       enabled: true
+      # 测试默认不启用未知 Body 字段透传，避免隐藏普通宽松投影的字段丢弃契约。
+      passthrough-models: ""
     # 固定测试 HMAC Secret 恰好解码为三十二字节，不对应任何生产凭证。
     hmac-secret-base64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 

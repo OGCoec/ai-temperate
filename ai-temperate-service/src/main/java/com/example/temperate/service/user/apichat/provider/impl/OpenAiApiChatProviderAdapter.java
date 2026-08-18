@@ -10,7 +10,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * 该无状态适配器是来校验并生成 OpenAI 厂商的 8317 Chat Completions 核心请求，不静默丢弃客户端字段。
+ * 该无状态适配器是来生成 OpenAI 厂商的 8317 Chat Completions 请求，并保留宽松层批准的全部已知字段。
  */
 @Component
 public final class OpenAiApiChatProviderAdapter implements ApiChatProviderAdapter {
@@ -22,7 +22,7 @@ public final class OpenAiApiChatProviderAdapter implements ApiChatProviderAdapte
             "tools", "tool_choice", "parallel_tool_calls", "verbosity",
             "safety_identifier", "user", "logprobs", "top_logprobs",
             "prediction", "prompt_cache_options", "functions", "function_call",
-            "response_format", "max_tokens");
+            "response_format", "max_tokens", "metadata", "web_search_options");
     private final ApiChatPayloadFactory payloadFactory;
 
     public OpenAiApiChatProviderAdapter(ApiChatPayloadFactory payloadFactory) {
@@ -36,7 +36,7 @@ public final class OpenAiApiChatProviderAdapter implements ApiChatProviderAdapte
 
     @Override
     public ObjectNode adapt(ValidatedApiChatRequest request) {
-        return ApiChatProviderPayloadPolicy.requireAllowed(
+        return ApiChatProviderPayloadPolicy.adaptAllowed(
                 type(), request, payloadFactory.create(request), ALLOWED_FIELDS);
     }
 }

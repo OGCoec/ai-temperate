@@ -17,31 +17,34 @@ import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apiresponse.impl.ApiResponsePayloadFactoryImpl;
 import com.example.temperate.service.user.apiresponse.impl.ApiResponseRequestValidatorImpl;
-import com.example.temperate.service.user.apiresponse.openai.impl.OpenAiApiResponseRequestValidatorImpl;
 import com.example.temperate.service.user.apiresponse.provider.ApiResponseProviderAdapter;
 import com.example.temperate.service.user.apiresponse.provider.ApiResponseProviderAdapterRegistry;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseJsonResult.Status;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseSseFrame.TerminalKind;
 import com.example.temperate.service.user.apiresponse.upstream.impl.ApiResponseProtocolParserImpl;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalizerRegistry;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
+import com.example.temperate.service.user.openaicompatibility.impl.ResponsesLooseOpenAiRequestNormalizerImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该测试是来锁定 Responses 旧厂商路径与 OpenAI 增强路径的分流、store=false、Usage 终态和原始 SSE 契约。
+ * 该测试是来锁定 Responses 严格回滚路径与所有厂商共享宽松路径、store=false、Usage 终态和原始 SSE 契约。
  */
 final class ApiResponseContractTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void routesOpenAiRawRequestsButLeavesOtherVendorsOnTheLegacyPath()
+    void routesAllVendorsThroughTheLooseCompatibilityPath()
             throws Exception {
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.getOpenAiCompatibility().setEnabled(true);
@@ -54,11 +57,12 @@ final class ApiResponseContractTest {
                         List.of(AiModelCapabilityCode.RESPONSES), "openai")),
                 properties,
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(objectMapper, properties));
+                registry(properties));
 
         ValidatedApiResponseRequest enhanced = openAi.validate(principal(), raw);
 
-        assertThat(enhanced.openAiEnhanced()).isTrue();
+        assertThat(enhanced.payloadMode())
+                .isEqualTo(OpenAiRequestPayloadMode.LOOSE_NORMALIZED);
         assertThat(enhanced.normalizedPayload().path("store").booleanValue()).isFalse();
         ObjectNode enhancedPayload = new ApiResponsePayloadFactoryImpl(objectMapper)
                 .create(enhanced);
@@ -71,11 +75,29 @@ final class ApiResponseContractTest {
                         List.of(AiModelCapabilityCode.RESPONSES), "xai")),
                 properties,
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(objectMapper, properties));
+                registry(properties));
         ObjectNode legacy = (ObjectNode) objectMapper.readTree(
                 "{\"model\":\"gpt-test\",\"input\":\"hello\"}");
 
-        assertThat(xai.validate(principal(), legacy).openAiEnhanced()).isFalse();
+        assertThat(xai.validate(principal(), legacy).payloadMode())
+                .isEqualTo(OpenAiRequestPayloadMode.LOOSE_NORMALIZED);
+    }
+
+    @Test
+    void disabledCompatibilitySwitchRestoresLegacyStatefulRejection() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getOpenAiCompatibility().setEnabled(false);
+        ApiResponseRequestValidator validator = new ApiResponseRequestValidatorImpl(
+                cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
+                properties,
+                objectMapper,
+                registry(properties));
+        ObjectNode raw = (ObjectNode) objectMapper.readTree(
+                "{\"model\":\"gpt-test\",\"input\":\"hello\",\"store\":true}");
+
+        assertThatThrownBy(() -> validator.validate(principal(), raw))
+                .isInstanceOf(ApiChatException.class)
+                .hasMessageContaining("store=false");
     }
 
     @Test
@@ -110,8 +132,7 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
 
         ValidatedApiResponseRequest validated = validator.validate(principal(), request);
         JsonNode payload = new ApiResponsePayloadFactoryImpl(objectMapper).create(validated);
@@ -252,8 +273,7 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
         ApiResponseRequest store = objectMapper.readValue("""
                 {"model":"gpt-test","input":"hello","store":true}
                 """, ApiResponseRequest.class);
@@ -282,8 +302,7 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.CHAT_COMPLETIONS))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
 
         assertThatThrownBy(() -> validator.validate(principal(), request))
                 .isInstanceOf(ApiChatException.class)
@@ -300,8 +319,7 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
         ApiKeyPrincipal unauthorized = new ApiKeyPrincipal(
                 11L, 17L, new byte[32], "B".repeat(43), Set.of());
 
@@ -317,8 +335,7 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
         ApiResponseRequest unknown = objectMapper.readValue("""
                 {"model":"gpt-test","input":[
                   {"type":"function_call_output","call_id":"call_missing","output":"x"}
@@ -423,8 +440,13 @@ final class ApiResponseContractTest {
                 cacheService(model(List.of(AiModelCapabilityCode.RESPONSES))),
                 new ApiKeyProperties(),
                 objectMapper,
-                new OpenAiApiResponseRequestValidatorImpl(
-                        objectMapper, new ApiKeyProperties()));
+                registry(new ApiKeyProperties()));
+    }
+
+    private LooseOpenAiRequestNormalizerRegistry registry(ApiKeyProperties properties) {
+        return new LooseOpenAiRequestNormalizerRegistry(Map.of(
+                "responsesLooseOpenAiRequestNormalizer",
+                new ResponsesLooseOpenAiRequestNormalizerImpl(properties, objectMapper)));
     }
 
     private ApiResponseRequest requestWithMaxOutputTokens(String jsonValue)

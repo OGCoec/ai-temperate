@@ -24,6 +24,7 @@ import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseFail
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseFrameClass;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseStreamDiagnostic;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseStreamDiagnosticService;
+import com.example.temperate.service.user.apiresponse.provider.ApiResponseProviderAdapter;
 import com.example.temperate.service.user.apiresponse.provider.ApiResponseProviderAdapterRegistry;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseJsonResult;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseProtocolParser;
@@ -115,11 +116,11 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
             String clientRequestId) {
         ApiResponseDiagnosticSession diagnosticSession = diagnostics.currentSession();
         ObjectNode payload;
+        ApiResponseProviderAdapter adapter;
         try {
             // 供应商适配仍属于纯校验阶段，必须在并发准入和 PostgreSQL 预扣之前完成。
-            payload = adapterRegistry
-                    .getRequired(validated.model().vendor())
-                    .adapt(validated);
+            adapter = adapterRegistry.getRequired(validated.model().vendor());
+            payload = adapter.adapt(validated);
         } catch (ApiChatException exception) {
             diagnostics.recordFailure(
                     diagnosticSession, ApiResponseFailureStage.VALIDATION, exception);
@@ -129,6 +130,10 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
                     diagnosticSession, ApiResponseFailureStage.VALIDATION, exception);
             throw infrastructure("Request validation is temporarily unavailable.");
         }
+        recordNormalization(
+                validated,
+                adapter.type().name(),
+                validated.droppedFieldCount() + adapterDroppedFields(validated, payload));
         ApiInferenceLifecycleSession session;
         try {
             session = lifecycleService.start(
@@ -148,7 +153,7 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
         log(traceId, "start", validated.stream() ? "sse" : "json", "accepted");
         ApiInferenceUpstreamRequest upstreamRequest = new ApiInferenceUpstreamRequest(
                 clientRequestId,
-                validated.openAiEnhanced());
+                validated.payloadMode().isCompatibilityEnabled());
         if (validated.stream()) {
             Mono<HttpStream> response = upstreamClient
                     .stream(payload, upstreamRequest)
@@ -161,6 +166,44 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
         }
         return new ApiResponseCreation.Json(json(
                 session, payload, upstreamRequest, traceId, diagnosticSession));
+    }
+
+    private void recordNormalization(
+            ValidatedApiResponseRequest validated,
+            String provider,
+            int droppedFieldCount) {
+        String mode = validated.payloadMode().name().toLowerCase(Locale.ROOT);
+        String providerTag = provider.toLowerCase(Locale.ROOT);
+        meterRegistry.counter(
+                "api.inference.normalization.requests",
+                "protocol", "responses",
+                "provider", providerTag,
+                "payload_mode", mode).increment();
+        if (droppedFieldCount > 0) {
+            // 指标只使用稳定枚举标签和累计数量，绝不输出字段名、模型正文或客户端请求内容。
+            meterRegistry.counter(
+                    "api.inference.normalization.fields.dropped",
+                    "protocol", "responses",
+                    "provider", providerTag,
+                    "payload_mode", mode).increment(droppedFieldCount);
+        }
+    }
+
+    private static int adapterDroppedFields(
+            ValidatedApiResponseRequest validated,
+            ObjectNode adaptedPayload) {
+        ObjectNode normalized = validated.normalizedPayload();
+        if (normalized == null) {
+            return 0;
+        }
+        int dropped = 0;
+        var fields = normalized.fieldNames();
+        while (fields.hasNext()) {
+            if (!adaptedPayload.has(fields.next())) {
+                dropped++;
+            }
+        }
+        return dropped;
     }
 
     private Flux<ApiResponseSseFrame> stream(

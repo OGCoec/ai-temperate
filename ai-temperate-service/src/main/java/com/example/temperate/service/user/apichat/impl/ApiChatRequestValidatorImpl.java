@@ -15,10 +15,12 @@ import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticParameter;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatValidationFailureRule;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatValidationRejection;
-import com.example.temperate.service.user.apichat.openai.OpenAiApiChatRequestValidation;
-import com.example.temperate.service.user.apichat.openai.OpenAiApiChatRequestValidator;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestContext;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalization;
+import com.example.temperate.service.user.openaicompatibility.LooseOpenAiRequestNormalizerRegistry;
+import com.example.temperate.service.user.openaicompatibility.OpenAiCompatibilityProtocol;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,8 +38,7 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来拒绝数字字符串、未知字段、非文本多模态和无界工具定义，以分层 UTF-8 字节预算兼容 Agent 长工具说明，
- * 并让同一有效 Token 上限同时进入上下文校验、预扣与上游请求。
+ * 该实现是来在开关开启时把所有厂商交给 Chat 宽松规范化策略，关闭时保留旧严格校验，并让同一 Token 上限进入上下文、预扣与上游请求。
  */
 @Service
 public final class ApiChatRequestValidatorImpl implements ApiChatRequestValidator {
@@ -59,17 +60,17 @@ public final class ApiChatRequestValidatorImpl implements ApiChatRequestValidato
     private final AiModelCacheService modelCacheService;
     private final ApiKeyProperties properties;
     private final ObjectMapper objectMapper;
-    private final OpenAiApiChatRequestValidator openAiRequestValidator;
+    private final LooseOpenAiRequestNormalizerRegistry normalizerRegistry;
 
     public ApiChatRequestValidatorImpl(
             AiModelCacheService modelCacheService,
             ApiKeyProperties properties,
             ObjectMapper objectMapper,
-            OpenAiApiChatRequestValidator openAiRequestValidator) {
+            LooseOpenAiRequestNormalizerRegistry normalizerRegistry) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
         this.properties = Objects.requireNonNull(properties);
         this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.openAiRequestValidator = Objects.requireNonNull(openAiRequestValidator);
+        this.normalizerRegistry = Objects.requireNonNull(normalizerRegistry);
     }
 
     @Override
@@ -86,27 +87,29 @@ public final class ApiChatRequestValidatorImpl implements ApiChatRequestValidato
             throw ApiChatException.invalid("Model is required.", "model");
         }
         AiModelCacheEntry model = findModel(modelNode.textValue());
-        if (properties.getOpenAiCompatibility().isEnabled()
-                && "openai".equalsIgnoreCase(model.vendor())) {
-            OpenAiApiChatRequestValidation enhanced = openAiRequestValidator.validate(request);
-            validateEnhancedModelAccess(principal, model);
-            long effectiveMax = enhanced.requestedMaxOutputTokens() == null
-                    ? model.maxOutputTokens()
-                    : Math.min(enhanced.requestedMaxOutputTokens(), model.maxOutputTokens());
-            long estimatedPrompt = estimateRawPromptTokens(enhanced.payload());
-            if (estimatedPrompt > model.contextWindowTokens() - effectiveMax) {
+        if (properties.getOpenAiCompatibility().isEnabled()) {
+            validateCompatibleModelAccess(principal, model);
+            LooseOpenAiRequestNormalization normalized = normalizerRegistry
+                    .getRequired(OpenAiCompatibilityProtocol.CHAT_COMPLETIONS)
+                    .normalize(new LooseOpenAiRequestContext(
+                            request, model, OpenAiCompatibilityProtocol.CHAT_COMPLETIONS));
+            long estimatedPrompt = estimateRawPromptTokens(normalized.normalizedPayload());
+            if (estimatedPrompt > model.contextWindowTokens()
+                    - normalized.effectiveMaxOutputTokens()) {
                 throw new ApiChatException(
                         ApiChatErrorCode.CONTEXT_LENGTH_EXCEEDED,
                         "The request exceeds the model context window.",
                         "messages");
             }
-            return ValidatedApiChatRequest.openAiEnhanced(
+            return ValidatedApiChatRequest.compatible(
                     model,
-                    effectiveMax,
+                    normalized.effectiveMaxOutputTokens(),
                     estimatedPrompt,
-                    enhanced.includeUsage(),
-                    enhanced.stream(),
-                    enhanced.payload());
+                    normalized.includeUsage(),
+                    normalized.stream(),
+                    normalized.normalizedPayload(),
+                    normalized.payloadMode(),
+                    normalized.droppedFieldCount());
         }
         try {
             return validate(principal, objectMapper.treeToValue(request, ApiChatRequest.class));
@@ -120,7 +123,7 @@ public final class ApiChatRequestValidatorImpl implements ApiChatRequestValidato
         }
     }
 
-    private void validateEnhancedModelAccess(
+    private void validateCompatibleModelAccess(
             ApiKeyPrincipal principal,
             AiModelCacheEntry model) {
         if (!principal.modelIds().contains(model.id())) {

@@ -11,6 +11,7 @@ import com.example.temperate.service.user.apichat.ApiChatRequest;
 import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.provider.ApiChatPayloadFactory;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapter;
+import com.example.temperate.service.user.openaicompatibility.OpenAiRequestPayloadMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
@@ -108,6 +109,31 @@ final class ApiChatProviderAdapterContractTest {
     }
 
     @Test
+    void looseModeFiltersUnsupportedKnownFieldsAndPassthroughKeepsUnknownExtensions()
+            throws Exception {
+        ObjectNode normalized = (ObjectNode) objectMapper.readTree("""
+                {"model":"xai-test","messages":[{"role":"user","content":"hello"}],
+                 "stream":false,"store":false,"max_completion_tokens":128,
+                 "verbosity":"high","vendor_extension":{"mode":"fast"}}
+                """);
+        for (AiModelProvider provider : List.of(
+                AiModelProvider.XAI, AiModelProvider.ANTHROPIC, AiModelProvider.GOOGLE)) {
+            ApiChatProviderAdapter adapter = adapter(provider, payloadFactory);
+            ObjectNode loose = adapter.adapt(compatible(
+                    normalized, provider, OpenAiRequestPayloadMode.LOOSE_NORMALIZED));
+            ObjectNode passthrough = adapter.adapt(compatible(
+                    normalized, provider,
+                    OpenAiRequestPayloadMode.CONTROLLED_PASSTHROUGH));
+
+            assertThat(loose.has("verbosity")).as(provider.name()).isFalse();
+            assertThat(loose.has("vendor_extension")).as(provider.name()).isFalse();
+            assertThat(passthrough.has("verbosity")).as(provider.name()).isFalse();
+            assertThat(passthrough.at("/vendor_extension/mode").textValue())
+                    .as(provider.name()).isEqualTo("fast");
+        }
+    }
+
+    @Test
     void providerRejectsAModelOwnedByAnotherVendor() throws Exception {
         ApiChatRequest request = objectMapper.readValue("""
                 {"model":"client-model","messages":[{"role":"user","content":"hello"}],"stream":true}
@@ -150,5 +176,32 @@ final class ApiChatProviderAdapterContractTest {
                 128,
                 16,
                 false);
+    }
+
+    private static ValidatedApiChatRequest compatible(
+            ObjectNode payload,
+            AiModelProvider provider,
+            OpenAiRequestPayloadMode mode) {
+        return ValidatedApiChatRequest.compatible(
+                new AiModelCacheEntry(
+                        provider.ordinal() + 1L,
+                        provider.vendor() + "-test",
+                        provider.vendor(),
+                        "test",
+                        null,
+                        List.of(),
+                        BigDecimal.ONE,
+                        BigDecimal.ONE,
+                        BigDecimal.ONE,
+                        8_192,
+                        1_024,
+                        List.of(AiModelCapabilityCode.CHAT_COMPLETIONS)),
+                128,
+                16,
+                false,
+                false,
+                payload,
+                mode,
+                0);
     }
 }
