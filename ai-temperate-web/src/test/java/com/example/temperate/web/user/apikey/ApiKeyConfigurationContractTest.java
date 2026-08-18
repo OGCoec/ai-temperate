@@ -46,7 +46,10 @@ final class ApiKeyConfigurationContractTest {
             throws IOException {
         String yaml = Files.readString(
                 Path.of("src/main/resources/application.yml"),
-                StandardCharsets.UTF_8);
+                StandardCharsets.UTF_8)
+                // Git 可能按 Windows 设置检出 CRLF；注释契约只关心相邻行内容，不应绑定工作树换行格式。
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
 
         assertThat(yaml).contains(
                 "    # 默认启用公开 API Key 管理与认证；启动前必须完成数据库迁移、固定 Secret 和 Bloom 重建准备。\n"

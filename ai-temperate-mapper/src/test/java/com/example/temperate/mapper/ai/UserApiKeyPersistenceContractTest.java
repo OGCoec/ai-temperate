@@ -164,7 +164,10 @@ final class UserApiKeyPersistenceContractTest {
     }
 
     private static String read(String relativePath) throws IOException {
-        return Files.readString(PROJECT_ROOT.resolve(relativePath), StandardCharsets.UTF_8);
+        // Git 在 Windows 工作树中可能把 LF 转为 CRLF；契约只比较 SQL 结构，不应依赖检出平台的换行格式。
+        return Files.readString(PROJECT_ROOT.resolve(relativePath), StandardCharsets.UTF_8)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
     }
 
     private static int countOccurrences(String source, String expected) {
