@@ -6,6 +6,10 @@ import com.example.temperate.service.user.aiinference.api.ApiInferenceLifecycleS
 import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceSettlementPendingException;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
+import com.example.temperate.service.user.apichat.ApiChatCompletionCreation;
+import com.example.temperate.service.user.apichat.ApiChatCompletionCreation.HttpJson;
+import com.example.temperate.service.user.apichat.ApiChatCompletionCreation.HttpStream;
 import com.example.temperate.service.user.apichat.ApiChatCompletionService;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
@@ -27,6 +31,9 @@ import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Norm
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedChunk;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedEvent;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
+import com.example.temperate.service.user.apichat.upstream.ApiChatJsonParser;
+import com.example.temperate.service.user.apichat.upstream.ApiChatJsonResult;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamJson;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,6 +59,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
     private final ApiChatProviderAdapterRegistry adapterRegistry;
     private final ApiChatUpstreamClient upstreamClient;
     private final ApiChatSseParser sseParser;
+    private final ApiChatJsonParser jsonParser;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
     private final ApiChatStreamDiagnosticService diagnostics;
@@ -62,6 +70,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
             ApiChatProviderAdapterRegistry adapterRegistry,
             ApiChatUpstreamClient upstreamClient,
             ApiChatSseParser sseParser,
+            ApiChatJsonParser jsonParser,
             ObjectMapper objectMapper,
             MeterRegistry meterRegistry,
             ApiChatStreamDiagnosticService diagnostics) {
@@ -70,6 +79,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         this.adapterRegistry = Objects.requireNonNull(adapterRegistry);
         this.upstreamClient = Objects.requireNonNull(upstreamClient);
         this.sseParser = Objects.requireNonNull(sseParser);
+        this.jsonParser = Objects.requireNonNull(jsonParser);
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
         this.diagnostics = Objects.requireNonNull(diagnostics);
@@ -77,12 +87,59 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
 
     @Override
     @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.COMPLETION_SERVICE)
+    public ApiChatCompletionCreation create(
+            ApiKeyPrincipal principal,
+            ObjectNode request,
+            String clientRequestId) {
+        PreparedRequest prepared = prepare(
+                principal,
+                requestValidator.validate(principal, request),
+                clientRequestId);
+        if (prepared.validated().stream()) {
+            Mono<HttpStream> response = upstreamClient
+                    .stream(prepared.payload(), prepared.upstreamRequest())
+                    .map(upstream -> new HttpStream(
+                            streamReserved(
+                                    prepared.validated(),
+                                    prepared.session(),
+                                    upstream.body()),
+                            upstream.headers()))
+                    .onErrorResume(failure -> failBeforeBody(
+                            prepared.session(), failure))
+                    .doOnCancel(() -> cancelBeforeBody(prepared.session()));
+            return new ApiChatCompletionCreation.Stream(response);
+        }
+        Mono<HttpJson> response = jsonReserved(
+                prepared.session(),
+                prepared.payload(),
+                prepared.upstreamRequest());
+        return new ApiChatCompletionCreation.Json(response);
+    }
+
+    @Override
+    @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.COMPLETION_SERVICE)
     public Flux<String> stream(ApiKeyPrincipal principal, ApiChatRequest request) {
-        ValidatedApiChatRequest validated;
+        PreparedRequest prepared = prepare(
+                principal,
+                requestValidator.validate(principal, request),
+                null);
+        return upstreamClient.stream(
+                        prepared.payload(), prepared.upstreamRequest())
+                .onErrorResume(failure -> failBeforeBody(
+                        prepared.session(), failure))
+                .flatMapMany(upstream -> streamReserved(
+                        prepared.validated(),
+                        prepared.session(),
+                        upstream.body()));
+    }
+
+    private PreparedRequest prepare(
+            ApiKeyPrincipal principal,
+            ValidatedApiChatRequest validated,
+            String clientRequestId) {
         ObjectNode payload;
         try {
-            validated = requestValidator.validate(principal, request);
-            // 适配失败必须发生在并发租约和额度预扣之前，避免纯请求校验错误占用资源或遗留 RESERVED 账单。
+            // 适配失败必须发生在并发租约和额度预扣之前，避免纯请求错误占用资源或遗留 RESERVED 账单。
             payload = adapterRegistry
                     .getRequired(validated.model().vendor())
                     .adapt(validated);
@@ -97,16 +154,21 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                         validated.model(),
                         validated.effectiveMaxOutputTokens(),
                         validated.estimatedPromptTokens(),
-                        true,
+                        validated.stream(),
                         ApiInferenceProtocol.CHAT_COMPLETIONS));
-
-        return Flux.defer(() -> streamReserved(validated, session, payload));
+        return new PreparedRequest(
+                validated,
+                payload,
+                session,
+                new ApiInferenceUpstreamRequest(
+                        clientRequestId,
+                        validated.openAiEnhanced()));
     }
 
     private Flux<String> streamReserved(
             ValidatedApiChatRequest validated,
             ApiInferenceLifecycleSession session,
-            ObjectNode payload) {
+            Flux<String> upstreamBody) {
         AtomicReference<ApiInferenceUsage> usage = new AtomicReference<>();
         AtomicLong emittedBytes = new AtomicLong();
         AtomicReference<String> finishReason = new AtomicReference<>("STOP");
@@ -114,7 +176,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         AtomicBoolean sseStarted = new AtomicBoolean();
 
         Flux<String> rawUpstream = diagnostics.observeBoundary(
-                lifecycleService.withLeaseRenewal(upstreamClient.stream(payload), session),
+                lifecycleService.withLeaseRenewal(upstreamBody, session),
                 ApiChatDiagnosticBoundary.UPSTREAM_RAW,
                 data -> data.getBytes(StandardCharsets.UTF_8).length,
                 data -> "[DONE]".equals(data)
@@ -228,13 +290,13 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                     });
         }
         if (parsed.usage() != null) {
-            // CAS 是唯一重复 Usage 判据；合并终态已在解析边界拆分，不能再靠帧形状推断重复。
+            // CAS 是唯一重复 Usage 判据；同一原始帧可以同时包含 choice 和 Usage，客户端可见性不能影响结算事实。
             if (!usage.compareAndSet(null, parsed.usage())) {
                 return Mono.error(protocolError(
                         ApiChatProtocolViolation.DUPLICATE_USAGE));
             }
             diagnosticSession.recordUsage(parsed.usage(), validated.includeUsage());
-            if (!validated.includeUsage()) {
+            if (!validated.includeUsage() && parsed.usageOnly()) {
                 return Mono.empty();
             }
         } else if (usage.get() != null) {
@@ -250,12 +312,84 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         }
         return Mono.fromSupplier(() -> {
             sseStarted.set(true);
+            String clientData = parsed.usage() != null && !validated.includeUsage()
+                    ? parsed.serializedDataWithoutUsage()
+                    : parsed.serializedData();
             diagnosticSession.recordBoundary(
                     ApiChatDiagnosticBoundary.AFTER_BUSINESS_GATE,
-                    parsed.serializedData().getBytes(StandardCharsets.UTF_8).length,
+                    clientData.getBytes(StandardCharsets.UTF_8).length,
                     frameKind);
-            return parsed.serializedData();
+            return clientData;
         });
+    }
+
+    private Mono<HttpJson> jsonReserved(
+            ApiInferenceLifecycleSession session,
+            ObjectNode payload,
+            ApiInferenceUpstreamRequest upstreamRequest) {
+        AtomicReference<ApiInferenceUsage> usage = new AtomicReference<>();
+        return lifecycleService
+                .withLeaseRenewal(
+                        upstreamClient.create(payload, upstreamRequest).flux(),
+                        session)
+                .single()
+                .map(upstream -> new ParsedJsonUpstream(
+                        jsonParser.parse(upstream.body()), upstream))
+                .flatMap(parsed -> {
+                    ApiChatJsonResult result = parsed.result();
+                    usage.set(result.usage());
+                    // 非流式 HTTP 200 必须等待结算完成，避免客户端成功但账单仍停留在 RESERVED。
+                    return lifecycleService.settle(
+                                    session,
+                                    result.usage(),
+                                    result.finishReason())
+                            .thenReturn(new HttpJson(
+                                    result.response(),
+                                    parsed.upstream().headers()));
+                })
+                .onErrorResume(failure -> {
+                    if (hasCause(failure, ApiInferenceSettlementPendingException.class)) {
+                        return Mono.error(failure);
+                    }
+                    return lifecycleService.refundSystemFailure(
+                                    session, failureCode(failure))
+                            .then(Mono.error(failure));
+                })
+                .doFinally(signal -> {
+                    lifecycleService.release(session);
+                    if (signal == reactor.core.publisher.SignalType.CANCEL) {
+                        lifecycleService.scheduleCancellation(session, usage.get(), 0L);
+                    }
+                });
+    }
+
+    private <T> Mono<T> failBeforeBody(
+            ApiInferenceLifecycleSession session,
+            Throwable failure) {
+        Mono<Void> terminal = hasCause(
+                failure, ApiInferenceSettlementPendingException.class)
+                ? Mono.empty()
+                : lifecycleService.refundSystemFailure(
+                        session, failureCode(failure));
+        return terminal.then(Mono.<T>error(failure))
+                .doFinally(signal -> lifecycleService.release(session));
+    }
+
+    private void cancelBeforeBody(ApiInferenceLifecycleSession session) {
+        // 响应头到达前取消时尚无正文 Flux 接管终态，必须在此释放租约并进入既有取消恢复流程。
+        lifecycleService.release(session);
+        lifecycleService.scheduleCancellation(session, null, 0L);
+    }
+
+    private static String failureCode(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ApiChatException controlled) {
+                return controlled.code().name();
+            }
+            current = current.getCause();
+        }
+        return ApiChatErrorCode.UPSTREAM_UNAVAILABLE.name();
     }
 
     private String errorData(ApiChatException exception) {
@@ -346,5 +480,19 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
 
     private void count(String result) {
         meterRegistry.counter("api.chat.completion", "result", result).increment();
+    }
+
+    /** 该内部结果冻结验证、适配、预扣和上游错误资格，后续 JSON/SSE 分支共享同一组事实。 */
+    private record PreparedRequest(
+            ValidatedApiChatRequest validated,
+            ObjectNode payload,
+            ApiInferenceLifecycleSession session,
+            ApiInferenceUpstreamRequest upstreamRequest) {
+    }
+
+    /** 该内部结果确保非流式原始响应和其安全头来自同一次上游交换。 */
+    private record ParsedJsonUpstream(
+            ApiChatJsonResult result,
+            ApiChatUpstreamJson upstream) {
     }
 }

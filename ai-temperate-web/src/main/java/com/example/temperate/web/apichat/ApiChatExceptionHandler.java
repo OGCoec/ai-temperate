@@ -1,11 +1,13 @@
 package com.example.temperate.web.apichat;
 
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamException;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticParameter;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticParameter;
 import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter.PayloadTooLargeException;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Locale;
@@ -15,7 +17,7 @@ import org.slf4j.MDC;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -34,6 +36,21 @@ public final class ApiChatExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(
             ApiChatExceptionHandler.class);
+
+    @ExceptionHandler(
+            value = ApiInferenceUpstreamException.class,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<ObjectNode> upstreamOpenAiError(
+            ApiInferenceUpstreamException exception) {
+        HttpHeaders headers = exception.headers().toHttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setCacheControl(CacheControl.noStore().cachePrivate().noTransform());
+        headers.set("CDN-Cache-Control", "no-store");
+        return new ResponseEntity<>(
+                exception.envelope(),
+                headers,
+                HttpStatusCode.valueOf(exception.status()));
+    }
 
     @ExceptionHandler(value = ApiChatException.class, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiChatErrorResponse> handle(
@@ -182,7 +199,7 @@ public final class ApiChatExceptionHandler {
         }
         ApiChatErrorResponse body = new ApiChatErrorResponse(
                 new ApiChatErrorResponse.Error(message, code.type(), parameter, code.code()));
-        return new ResponseEntity<>(body, headers, HttpStatus.valueOf(code.status()));
+        return new ResponseEntity<>(body, headers, HttpStatusCode.valueOf(code.status()));
     }
 
     private static String jsonParameter(HttpMessageNotReadableException exception) {

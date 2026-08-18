@@ -12,7 +12,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来把已验证的纯文本 content parts 无分隔符规范化为上游字符串、保留其余白名单 JSON 类型，并强制 stream=true 与 include_usage=true。
+ * 该实现是来让旧厂商路径继续扁平化文本块，并让 OpenAI 增强路径保留原始结构后只覆盖授权、Token 与结算所需字段。
  */
 @Service
 public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
@@ -25,18 +25,39 @@ public final class ApiChatPayloadFactoryImpl implements ApiChatPayloadFactory {
 
     @Override
     public ObjectNode create(ValidatedApiChatRequest validated) {
-        JsonNode tree = objectMapper.valueToTree(validated.request());
+        JsonNode tree = validated.normalizedPayload() == null
+                ? objectMapper.valueToTree(validated.request())
+                : validated.normalizedPayload().deepCopy();
         if (!(tree instanceof ObjectNode payload)) {
             throw new IllegalStateException("Validated API chat request must encode to an object");
         }
-        pruneNulls(payload);
-        flattenTextContentParts(payload);
+        if (!validated.openAiEnhanced()) {
+            pruneNulls(payload);
+            flattenTextContentParts(payload);
+        }
         payload.put("model", validated.model().modelName());
-        payload.put("stream", true);
-        payload.remove(List.of("max_tokens", "max_completion_tokens"));
-        payload.put("max_completion_tokens", validated.effectiveMaxOutputTokens());
-        ObjectNode streamOptions = payload.with("stream_options");
-        streamOptions.put("include_usage", true);
+        payload.put("stream", validated.stream());
+        if (validated.openAiEnhanced() && payload.hasNonNull("max_tokens")) {
+            payload.remove("max_completion_tokens");
+            payload.put("max_tokens", validated.effectiveMaxOutputTokens());
+        } else {
+            payload.remove(List.of("max_tokens", "max_completion_tokens"));
+            payload.put("max_completion_tokens", validated.effectiveMaxOutputTokens());
+        }
+        if (validated.stream()) {
+            JsonNode existingOptions = payload.get("stream_options");
+            ObjectNode streamOptions;
+            if (existingOptions instanceof ObjectNode object) {
+                streamOptions = object;
+            } else {
+                // 校验器只允许缺省、null 或对象；显式 null 在这里规范化为服务端结算所需对象。
+                payload.remove("stream_options");
+                streamOptions = payload.putObject("stream_options");
+            }
+            streamOptions.put("include_usage", true);
+        } else {
+            payload.remove("stream_options");
+        }
         return payload;
     }
 

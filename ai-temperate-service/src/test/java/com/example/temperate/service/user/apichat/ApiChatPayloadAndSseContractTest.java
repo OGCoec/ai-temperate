@@ -204,7 +204,7 @@ final class ApiChatPayloadAndSseContractTest {
     }
 
     @Test
-    void parserSplitsCombinedChoicesAndUsageIntoCanonicalOrderedFrames()
+    void parserPreservesCombinedChoicesAndUsageWhileProvidingAHiddenUsageView()
             throws Exception {
         ApiChatSseParserImpl parser = new ApiChatSseParserImpl(objectMapper);
 
@@ -217,24 +217,21 @@ final class ApiChatPayloadAndSseContractTest {
                 """);
 
         assertThat(event.normalization())
-                .isEqualTo(Normalization.COMBINED_CHOICES_AND_USAGE);
-        assertThat(event.chunks()).hasSize(2);
-        ParsedChunk choices = event.chunks().get(0);
-        ParsedChunk usage = event.chunks().get(1);
-        JsonNode choicesJson = objectMapper.readTree(choices.serializedData());
-        JsonNode usageJson = objectMapper.readTree(usage.serializedData());
-        assertThat(choicesJson.has("usage")).isFalse();
-        assertThat(choicesJson.at("/choices/0/delta/content").textValue()).isEqualTo("芝");
-        assertThat(choices.finishReason()).isEqualTo("STOP");
-        assertThat(usageJson.path("choices").isArray()).isTrue();
-        assertThat(usageJson.path("choices").isEmpty()).isTrue();
-        assertThat(usageJson.at("/usage/prompt_tokens").longValue()).isEqualTo(20);
-        assertThat(usage.usage()).isEqualTo(new ApiInferenceUsage(20, 5, 7));
-        assertThat(usage.output()).isFalse();
+                .isEqualTo(Normalization.NONE);
+        assertThat(event.chunks()).hasSize(1);
+        ParsedChunk combined = event.chunks().getFirst();
+        JsonNode original = objectMapper.readTree(combined.serializedData());
+        JsonNode hidden = objectMapper.readTree(combined.serializedDataWithoutUsage());
+        assertThat(original.at("/choices/0/delta/content").textValue()).isEqualTo("芝");
+        assertThat(original.at("/usage/prompt_tokens").longValue()).isEqualTo(20);
+        assertThat(hidden.has("usage")).isFalse();
+        assertThat(combined.finishReason()).isEqualTo("STOP");
+        assertThat(combined.usage()).isEqualTo(new ApiInferenceUsage(20, 5, 7));
+        assertThat(combined.output()).isTrue();
     }
 
     @Test
-    void parserSplitsToolDeltaFromCombinedUsageWithoutChangingArguments()
+    void parserKeepsToolDeltaAndCombinedUsageInTheSameOriginalFrame()
             throws Exception {
         ApiChatSseParserImpl parser = new ApiChatSseParserImpl(objectMapper);
 
@@ -246,15 +243,15 @@ final class ApiChatPayloadAndSseContractTest {
                  "usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25}}
                 """);
 
-        assertThat(event.chunks()).hasSize(2);
+        assertThat(event.chunks()).hasSize(1);
         assertThat(objectMapper.readTree(event.chunks().get(0).serializedData())
                 .at("/choices/0/delta/tool_calls/0/function/arguments").textValue())
                 .isEqualTo("{\"city\":\"芝加哥\"}");
-        assertThat(event.chunks().get(1).usage()).isNotNull();
+        assertThat(event.chunks().get(0).usage()).isNotNull();
     }
 
     @Test
-    void parserRejectsInvalidUsageAndMultipleChoices() {
+    void parserRejectsInvalidUsageButAcceptsMultipleChoices() throws Exception {
         ApiChatSseParserImpl parser = new ApiChatSseParserImpl(objectMapper);
 
         for (String invalidUsage : List.of(
@@ -272,13 +269,17 @@ final class ApiChatPayloadAndSseContractTest {
                     .isInstanceOf(ApiChatException.class);
         }
 
-        assertThatThrownBy(() -> parser.parse("""
+        ParsedEvent multiple = parser.parse("""
                 {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,
                  "model":"gpt-test","choices":[
                    {"index":0,"delta":{},"finish_reason":null},
                    {"index":1,"delta":{},"finish_reason":null}]}
-                """))
-                .isInstanceOf(ApiChatException.class);
+                """);
+
+        assertThat(multiple.chunks()).hasSize(1);
+        assertThat(objectMapper.readTree(
+                multiple.chunks().getFirst().serializedData()).path("choices"))
+                .hasSize(2);
     }
 
     @Test

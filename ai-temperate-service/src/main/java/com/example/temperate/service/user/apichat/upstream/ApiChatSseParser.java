@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 该解析器是来验证并重新序列化 8317 的 OpenAI SSE 事件，并把非标准的 choices/Usage 合并终态拆成有序标准帧。
+ * 该解析器是来验证 8317 的 OpenAI SSE 最小计费结构并保留原始 data 字段，未知成功字段不得在此边界被裁剪。
  */
 public interface ApiChatSseParser {
 
@@ -40,13 +40,26 @@ public interface ApiChatSseParser {
         }
     }
 
-    /** serializedData 不含 `data:` 前缀，Controller 负责标准 SSE 编码。 */
+    /** serializedData 不含 `data:` 前缀，serializedDataWithoutUsage 只供客户端未请求 Usage 时使用。 */
     record ParsedChunk(
             String serializedData,
+            String serializedDataWithoutUsage,
             ApiInferenceUsage usage,
             boolean done,
             boolean output,
             long outputUtf8Bytes,
-            String finishReason) {
+            String finishReason,
+            boolean usageOnly) {
+
+        public ParsedChunk(
+                String serializedData,
+                ApiInferenceUsage usage,
+                boolean done,
+                boolean output,
+                long outputUtf8Bytes,
+                String finishReason) {
+            this(serializedData, serializedData, usage, done, output,
+                    outputUtf8Bytes, finishReason, false);
+        }
     }
 }

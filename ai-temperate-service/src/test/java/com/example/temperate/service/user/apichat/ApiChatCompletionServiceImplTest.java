@@ -18,6 +18,8 @@ import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionR
 import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceReservation;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamHeaders;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
 import com.example.temperate.service.user.aiinference.api.impl.ApiInferenceLifecycleServiceImpl;
 import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyPermit;
 import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyService;
@@ -30,6 +32,9 @@ import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Norm
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedChunk;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.ParsedEvent;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamJson;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamStream;
+import com.example.temperate.service.user.apichat.upstream.impl.ApiChatJsonParserImpl;
 import com.example.temperate.service.user.apichat.diagnostic.impl.ApiChatStreamDiagnosticServiceImpl;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
@@ -45,6 +50,7 @@ import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 该测试是来约束公开流的最终 Usage、结算失败保留 RESERVED、系统退款和并发租约释放边界。
@@ -205,6 +211,100 @@ final class ApiChatCompletionServiceImplTest {
         verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
     }
 
+    @Test
+    void nonStreamingChatSettlesUsageBeforeReturningTheOriginalJson() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ObjectNode raw = objectMapper.createObjectNode();
+        raw.put("model", "gpt-test");
+        raw.putArray("messages").addObject()
+                .put("role", "user").put("content", "hello");
+        raw.put("stream", false);
+        AiModelCacheEntry model = new AiModelCacheEntry(
+                23L, "gpt-test", "openai", null, null, List.of(),
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
+                8_192, 512,
+                List.of(AiModelCapabilityCode.CHAT_COMPLETIONS));
+        ValidatedApiChatRequest validated = ValidatedApiChatRequest.openAiEnhanced(
+                model, 128, 32, false, false, raw);
+        ApiKeyPrincipal principal = new ApiKeyPrincipal(
+                11L, 17L, new byte[32], "B".repeat(43), Set.of(23L));
+        ApiChatRequestValidator validator = mock(ApiChatRequestValidator.class);
+        when(validator.validate(principal, raw)).thenReturn(validated);
+        ApiChatProviderAdapter adapter = mock(ApiChatProviderAdapter.class);
+        when(adapter.type()).thenReturn(AiModelProvider.OPENAI);
+        ObjectNode payload = raw.deepCopy();
+        when(adapter.adapt(validated)).thenReturn(payload);
+        ApiChatProviderAdapterRegistry registry =
+                new ApiChatProviderAdapterRegistry(Map.of("openai", adapter));
+
+        AiInferenceConcurrencyService concurrency = mock(
+                AiInferenceConcurrencyService.class);
+        AiInferenceConcurrencyPermit permit = new AiInferenceConcurrencyPermit(
+                HmacIdentifier.fromProtectedValue("A".repeat(43)),
+                HmacIdentifier.fromProtectedValue("B".repeat(43)),
+                "owner", (short) 1);
+        when(concurrency.tryAcquireApiKey(17L, "B".repeat(43), (short) 1))
+                .thenReturn(new AiInferenceConcurrencyService.AcquireResult(
+                        AiInferenceConcurrencyService.Result.ACQUIRED, permit));
+        ApiChatBillingService billing = mock(ApiChatBillingService.class);
+        ApiInferenceReservation reservation = new ApiInferenceReservation(
+                29L, 17L, 11L, 2L, 32L,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
+                ApiInferenceProtocol.CHAT_COMPLETIONS);
+        when(billing.reserve(any(ApiKeyPrincipal.class),
+                any(ApiInferenceExecutionRequest.class))).thenReturn(reservation);
+        ObjectNode upstreamBody = objectMapper.createObjectNode();
+        upstreamBody.put("object", "chat.completion");
+        upstreamBody.putArray("choices").addObject()
+                .put("index", 0)
+                .putObject("message").put("role", "assistant").put("content", "ok");
+        ((ObjectNode) upstreamBody.path("choices").get(0)).put("finish_reason", "stop");
+        upstreamBody.putObject("usage")
+                .put("prompt_tokens", 12)
+                .put("completion_tokens", 3)
+                .put("total_tokens", 15);
+        ApiChatUpstreamClient upstream = new ApiChatUpstreamClient() {
+            @Override
+            public Mono<ApiChatUpstreamStream> stream(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return Mono.error(new AssertionError(
+                        "The JSON request must not open an SSE upstream."));
+            }
+
+            @Override
+            public Mono<ApiChatUpstreamJson> create(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return Mono.just(new ApiChatUpstreamJson(
+                        upstreamBody, ApiInferenceUpstreamHeaders.empty()));
+            }
+        };
+        ApiKeyProperties diagnosticProperties = new ApiKeyProperties();
+        diagnosticProperties.getStreamDiagnostics().setEnabled(false);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        ApiChatCompletionService service = new ApiChatCompletionServiceImpl(
+                validator,
+                new ApiInferenceLifecycleServiceImpl(
+                        concurrency, billing, Runnable::run, meterRegistry),
+                registry,
+                upstream,
+                mock(ApiChatSseParser.class),
+                new ApiChatJsonParserImpl(),
+                objectMapper,
+                meterRegistry,
+                new ApiChatStreamDiagnosticServiceImpl(diagnosticProperties));
+
+        ApiChatCompletionCreation.Json creation =
+                (ApiChatCompletionCreation.Json) service.create(principal, raw, null);
+        var returned = creation.response().block();
+
+        assertThat(returned.body()).isSameAs(upstreamBody);
+        verify(billing).settle(
+                reservation, new ApiInferenceUsage(12, 3, 0), "STOP");
+        verify(concurrency).release(permit);
+    }
+
     private static Fixture fixture(Flux<String> upstreamData) {
         return fixture(upstreamData, false);
     }
@@ -290,7 +390,23 @@ final class ApiChatCompletionServiceImplTest {
                 ApiInferenceProtocol.CHAT_COMPLETIONS);
         when(billing.reserve(any(ApiKeyPrincipal.class), any(ApiInferenceExecutionRequest.class)))
                 .thenReturn(reservation);
-        ApiChatUpstreamClient upstream = ignored -> upstreamData;
+        ApiChatUpstreamClient upstream = new ApiChatUpstreamClient() {
+            @Override
+            public Mono<ApiChatUpstreamStream> stream(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return Mono.just(new ApiChatUpstreamStream(
+                        upstreamData, ApiInferenceUpstreamHeaders.empty()));
+            }
+
+            @Override
+            public Mono<ApiChatUpstreamJson> create(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return Mono.error(new AssertionError(
+                        "The streaming fixture must not call the JSON upstream."));
+            }
+        };
         ApiChatSseParser parser = data -> switch (data) {
             case "output" -> event(new ParsedChunk(
                     OUTPUT_FRAME, null, false, true, 3, "stop"));
@@ -320,6 +436,7 @@ final class ApiChatCompletionServiceImplTest {
                 registry,
                 upstream,
                 parser,
+                new ApiChatJsonParserImpl(),
                 new ObjectMapper(),
                 meterRegistry,
                 new ApiChatStreamDiagnosticServiceImpl(diagnosticProperties));
@@ -341,11 +458,13 @@ final class ApiChatCompletionServiceImplTest {
     private static ParsedChunk usageChunk() {
         return new ParsedChunk(
                 USAGE_FRAME,
+                "{}",
                 new ApiInferenceUsage(12, 3, 2),
                 false,
                 false,
                 0,
-                null);
+                null,
+                true);
     }
 
     private static void assertProtocolViolation(

@@ -11,6 +11,8 @@ import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheService;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheSnapshot;
 import com.example.temperate.service.user.apichat.impl.ApiChatRequestValidatorImpl;
+import com.example.temperate.service.user.apichat.provider.impl.ApiChatPayloadFactoryImpl;
+import com.example.temperate.service.user.apichat.openai.impl.OpenAiApiChatRequestValidatorImpl;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,15 +29,59 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * 该测试是来约束公开请求的 JSON 强类型、唯一 Token 上限、stream=true、模型授权与上下文窗口，错误必须在连接 8317 前产生。
+ * 该测试是来约束旧 Chat 严格路径与 OpenAI 原始 JSON 增强路径的分流、Token 上限、授权和上下文边界。
  */
 final class ApiChatRequestValidatorContractTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ApiChatRequestValidator validator = new ApiChatRequestValidatorImpl(
-            cacheService(model()), new ApiKeyProperties(), objectMapper);
+            cacheService(model()),
+            new ApiKeyProperties(),
+            objectMapper,
+            new OpenAiApiChatRequestValidatorImpl(
+                    objectMapper, new ApiKeyProperties()));
     private final ApiKeyPrincipal principal = new ApiKeyPrincipal(
             1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+
+    @Test
+    void routesOnlyOpenAiModelsThroughTheRawCompatibilityValidator() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getOpenAiCompatibility().setEnabled(true);
+        ObjectNode raw = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-test","messages":[{"role":"developer",
+                 "content":"policy"},{"role":"user","content":"hello"}],
+                 "stream":false,"verbosity":"low","logprobs":true}
+                """);
+
+        ValidatedApiChatRequest validated = validator(properties, model())
+                .validate(principal, raw);
+
+        assertThat(validated.openAiEnhanced()).isTrue();
+        assertThat(validated.stream()).isFalse();
+        assertThat(validated.normalizedPayload().path("verbosity").textValue())
+                .isEqualTo("low");
+        ObjectNode payload = new ApiChatPayloadFactoryImpl(objectMapper)
+                .create(validated);
+        assertThat(payload.path("verbosity").textValue()).isEqualTo("low");
+        assertThat(payload.path("logprobs").booleanValue()).isTrue();
+        assertThat(payload.at("/messages/0/role").textValue())
+                .isEqualTo("developer");
+    }
+
+    @Test
+    void keepsNonOpenAiModelsOnTheLegacyStreamingContract() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getOpenAiCompatibility().setEnabled(true);
+        ObjectNode raw = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-test","messages":[{"role":"user",
+                 "content":"hello"}],"stream":false}
+                """);
+
+        assertThatThrownBy(() -> validator(properties, model(4_096, "xai"))
+                .validate(principal, raw))
+                .isInstanceOf(ApiChatException.class)
+                .hasMessageContaining("stream=true");
+    }
 
     @Test
     void appliesClientAndModelTokenMinimumToValidationAndBillingInput() throws Exception {
@@ -659,8 +705,14 @@ final class ApiChatRequestValidatorContractTest {
     }
 
     private static AiModelCacheEntry model(int contextWindowTokens) {
+        return model(contextWindowTokens, "openai");
+    }
+
+    private static AiModelCacheEntry model(
+            int contextWindowTokens,
+            String vendor) {
         return new AiModelCacheEntry(
-                7L, "gpt-test", "openai", "test", null, List.of(),
+                7L, "gpt-test", vendor, "test", null, List.of(),
                 BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
                 contextWindowTokens, 512,
                 List.of(AiModelCapabilityCode.CHAT_COMPLETIONS));
@@ -670,7 +722,10 @@ final class ApiChatRequestValidatorContractTest {
             ApiKeyProperties properties,
             AiModelCacheEntry model) {
         return new ApiChatRequestValidatorImpl(
-                cacheService(model), properties, objectMapper);
+                cacheService(model),
+                properties,
+                objectMapper,
+                new OpenAiApiChatRequestValidatorImpl(objectMapper, properties));
     }
 
     private static AiModelCacheService cacheService(AiModelCacheEntry model) {

@@ -6,10 +6,13 @@ import com.example.temperate.service.user.aiinference.api.ApiInferenceLifecycleS
 import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceSettlementPendingException;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apiresponse.ApiResponseCreation;
+import com.example.temperate.service.user.apiresponse.ApiResponseCreation.HttpJson;
+import com.example.temperate.service.user.apiresponse.ApiResponseCreation.HttpStream;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequestValidator;
 import com.example.temperate.service.user.apiresponse.ApiResponseService;
@@ -27,6 +30,7 @@ import com.example.temperate.service.user.apiresponse.upstream.ApiResponseProtoc
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseSseFrame;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseSseFrame.TerminalKind;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseUpstreamClient;
+import com.example.temperate.service.user.apiresponse.upstream.ApiResponseUpstreamJson;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -87,12 +91,31 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
     @ApiResponseStreamDiagnostic(stage = ApiResponseDiagnosticStage.RESPONSE_SERVICE)
     public ApiResponseCreation create(
             ApiKeyPrincipal principal,
+            ObjectNode request,
+            String clientRequestId) {
+        return createValidated(
+                principal,
+                requestValidator.validate(principal, request),
+                clientRequestId);
+    }
+
+    @Override
+    public ApiResponseCreation create(
+            ApiKeyPrincipal principal,
             ApiResponseRequest request) {
+        return createValidated(
+                principal,
+                requestValidator.validate(principal, request),
+                null);
+    }
+
+    private ApiResponseCreation createValidated(
+            ApiKeyPrincipal principal,
+            ValidatedApiResponseRequest validated,
+            String clientRequestId) {
         ApiResponseDiagnosticSession diagnosticSession = diagnostics.currentSession();
-        ValidatedApiResponseRequest validated;
         ObjectNode payload;
         try {
-            validated = requestValidator.validate(principal, request);
             // 供应商适配仍属于纯校验阶段，必须在并发准入和 PostgreSQL 预扣之前完成。
             payload = adapterRegistry
                     .getRequired(validated.model().vendor())
@@ -123,17 +146,27 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
         }
         String traceId = safeTraceId(MDC.get("apiChatTraceId"));
         log(traceId, "start", validated.stream() ? "sse" : "json", "accepted");
+        ApiInferenceUpstreamRequest upstreamRequest = new ApiInferenceUpstreamRequest(
+                clientRequestId,
+                validated.openAiEnhanced());
         if (validated.stream()) {
-            return new ApiResponseCreation.Stream(stream(
-                    session, payload, traceId, diagnosticSession));
+            Mono<HttpStream> response = upstreamClient
+                    .stream(payload, upstreamRequest)
+                    .map(upstream -> new HttpStream(
+                            stream(session, upstream.body(), traceId, diagnosticSession),
+                            upstream.headers()))
+                    .onErrorResume(failure -> failBeforeBody(session, failure))
+                    .doOnCancel(() -> cancelBeforeBody(session));
+            return new ApiResponseCreation.Stream(response);
         }
         return new ApiResponseCreation.Json(json(
-                session, payload, traceId, diagnosticSession));
+                session, payload, upstreamRequest, traceId, diagnosticSession));
     }
 
     private Flux<ApiResponseSseFrame> stream(
             ApiInferenceLifecycleSession session,
-            ObjectNode payload,
+            Flux<com.example.temperate.service.user.aiinference.sse.ApiInferenceSseEvent>
+                    upstreamBody,
             String traceId,
             ApiResponseDiagnosticSession diagnosticSession) {
         AtomicLong lastSequence = new AtomicLong(-1L);
@@ -143,7 +176,7 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
         AtomicBoolean sseStarted = new AtomicBoolean();
 
         Flux<ApiResponseSseFrame> parsed = lifecycleService
-                .withLeaseRenewal(upstreamClient.stream(payload), session)
+                .withLeaseRenewal(upstreamBody, session)
                 .doOnNext(event -> diagnostics.observeBoundary(
                         diagnosticSession,
                         ApiResponseDiagnosticBoundary.UPSTREAM_RAW,
@@ -289,14 +322,16 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
         };
     }
 
-    private Mono<JsonNode> json(
+    private Mono<HttpJson> json(
             ApiInferenceLifecycleSession session,
             ObjectNode payload,
+            ApiInferenceUpstreamRequest upstreamRequest,
             String traceId,
             ApiResponseDiagnosticSession diagnosticSession) {
         AtomicReference<ApiInferenceUsage> usage = new AtomicReference<>();
-        Mono<JsonNode> source = lifecycleService
-                .withLeaseRenewal(upstreamClient.create(payload).flux(), session)
+        Mono<HttpJson> source = lifecycleService
+                .withLeaseRenewal(
+                        upstreamClient.create(payload, upstreamRequest).flux(), session)
                 .doOnNext(ignored -> diagnostics.observeBoundary(
                         diagnosticSession,
                         ApiResponseDiagnosticBoundary.UPSTREAM_RAW,
@@ -308,28 +343,29 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
                 .doOnError(failure -> diagnostics.recordFailure(
                         diagnosticSession, ApiResponseFailureStage.UPSTREAM, failure))
                 .single()
-                .map(response -> parseJson(response, diagnosticSession))
-                .flatMap(result -> processJsonResult(session, result, usage)
+                .map(response -> new ParsedResponseJson(
+                        parseJson(response.body(), diagnosticSession), response))
+                .flatMap(parsed -> processJsonResult(session, parsed.result(), usage)
+                        .map(body -> new HttpJson(body, parsed.upstream().headers()))
                         .doOnSuccess(ignored -> diagnostics.observeBoundary(
                                 diagnosticSession,
                                 ApiResponseDiagnosticBoundary.AFTER_BUSINESS_GATE,
                                 0L,
                                 ApiResponseFrameClass.TERMINAL,
                                 -1L,
-                                jsonTerminal(result),
-                                result.usage() != null))
+                                jsonTerminal(parsed.result()),
+                                parsed.result().usage() != null))
                         .doOnError(failure -> diagnostics.recordFailure(
                                 diagnosticSession,
                                 ApiResponseFailureStage.BUSINESS_GATE,
                                 failure)))
                 .onErrorResume(failure -> {
-                    ApiChatException controlled = controlled(failure);
                     if (hasCause(failure, ApiInferenceSettlementPendingException.class)) {
-                        return Mono.error(controlled);
+                        return Mono.error(failure);
                     }
                     return lifecycleService.refundSystemFailure(
-                                    session, controlled.code().name())
-                            .then(Mono.error(controlled));
+                                    session, failureCode(failure))
+                            .then(Mono.error(failure));
                 });
         return source
                 .doOnSuccess(ignored -> count("json", "completed"))
@@ -337,6 +373,35 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
                         traceId, "terminal", "json", controlled(failure).code().code()))
                 .doFinally(signal -> finish(
                         session, signal, usage.get(), 0L, "json", traceId));
+    }
+
+    private <T> Mono<T> failBeforeBody(
+            ApiInferenceLifecycleSession session,
+            Throwable failure) {
+        Mono<Void> terminal = hasCause(
+                failure, ApiInferenceSettlementPendingException.class)
+                ? Mono.empty()
+                : lifecycleService.refundSystemFailure(
+                        session, failureCode(failure));
+        return terminal.then(Mono.<T>error(failure))
+                .doFinally(signal -> lifecycleService.release(session));
+    }
+
+    private void cancelBeforeBody(ApiInferenceLifecycleSession session) {
+        // 响应头前取消不会订阅 SSE 正文，必须由准备阶段主动释放并交给统一取消补偿收敛账单。
+        lifecycleService.release(session);
+        lifecycleService.scheduleCancellation(session, null, 0L);
+    }
+
+    private static String failureCode(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ApiChatException controlled) {
+                return controlled.code().name();
+            }
+            current = current.getCause();
+        }
+        return ApiChatErrorCode.UPSTREAM_UNAVAILABLE.name();
     }
 
     private ApiResponseJsonResult parseJson(
@@ -381,8 +446,8 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
                         .thenReturn(result.response());
             }
             case FAILED -> lifecycleService.refundSystemFailure(session, "FAILED")
-                    .then(Mono.error(protocol(
-                            "The model upstream reported a failed response.")));
+                    // failed 仍是合法 Responses 终态；退款完成后必须保留原始对象供 SDK 读取 error 字段。
+                    .thenReturn(result.response());
         };
     }
 
@@ -560,5 +625,11 @@ public final class ApiResponseServiceImpl implements ApiResponseService {
                 ApiChatErrorCode.INFRASTRUCTURE_UNAVAILABLE,
                 message,
                 null);
+    }
+
+    /** 该内部结果确保 Responses 非流式协议事实和安全头来自同一次上游交换。 */
+    private record ParsedResponseJson(
+            ApiResponseJsonResult result,
+            ApiResponseUpstreamJson upstream) {
     }
 }

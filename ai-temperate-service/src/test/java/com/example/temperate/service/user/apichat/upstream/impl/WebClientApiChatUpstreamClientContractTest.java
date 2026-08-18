@@ -3,6 +3,9 @@ package com.example.temperate.service.user.apichat.upstream.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.temperate.service.user.aiconversation.config.AiInferenceProperties;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
+import com.example.temperate.service.user.aiinference.upstream.impl.OpenAiUpstreamErrorDecoderImpl;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamStream;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -61,7 +64,8 @@ final class WebClientApiChatUpstreamClientContractTest {
                                     "http://127.0.0.1:" + server.port(),
                                     upstreamKey,
                                     Duration.ofSeconds(5)),
-                            new SimpleMeterRegistry());
+                            new SimpleMeterRegistry(),
+                            new OpenAiUpstreamErrorDecoderImpl());
             ObjectMapper objectMapper = new ObjectMapper();
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("model", "gpt-test");
@@ -73,7 +77,11 @@ final class WebClientApiChatUpstreamClientContractTest {
             payload.put("max_completion_tokens", 128);
             payload.put("temperature", 0.5D);
 
-            assertThat(client.stream(payload).blockFirst(Duration.ofSeconds(5)))
+            assertThat(client.stream(
+                            payload,
+                            new ApiInferenceUpstreamRequest(null, false))
+                    .flatMapMany(ApiChatUpstreamStream::body)
+                    .blockFirst(Duration.ofSeconds(5)))
                     .isEqualTo("[DONE]");
 
             JsonNode captured = objectMapper.readTree(body.get());

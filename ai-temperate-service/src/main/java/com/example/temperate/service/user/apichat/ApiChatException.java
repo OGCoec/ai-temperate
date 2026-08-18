@@ -71,4 +71,11 @@ public final class ApiChatException extends RuntimeException {
                 null,
                 validationReason);
     }
+
+    public static ApiChatException unsupported(String parameter) {
+        return new ApiChatException(
+                ApiChatErrorCode.UNSUPPORTED_PARAMETER,
+                "Unsupported parameter: " + parameter,
+                parameter);
+    }
 }

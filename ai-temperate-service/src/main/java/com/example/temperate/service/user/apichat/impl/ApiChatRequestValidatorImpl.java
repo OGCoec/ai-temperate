@@ -15,11 +15,14 @@ import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticParameter;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatValidationFailureRule;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatValidationRejection;
+import com.example.temperate.service.user.apichat.openai.OpenAiApiChatRequestValidation;
+import com.example.temperate.service.user.apichat.openai.OpenAiApiChatRequestValidator;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
@@ -56,14 +59,94 @@ public final class ApiChatRequestValidatorImpl implements ApiChatRequestValidato
     private final AiModelCacheService modelCacheService;
     private final ApiKeyProperties properties;
     private final ObjectMapper objectMapper;
+    private final OpenAiApiChatRequestValidator openAiRequestValidator;
 
     public ApiChatRequestValidatorImpl(
             AiModelCacheService modelCacheService,
             ApiKeyProperties properties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            OpenAiApiChatRequestValidator openAiRequestValidator) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
         this.properties = Objects.requireNonNull(properties);
         this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.openAiRequestValidator = Objects.requireNonNull(openAiRequestValidator);
+    }
+
+    @Override
+    public ValidatedApiChatRequest validate(
+            ApiKeyPrincipal principal,
+            ObjectNode request) {
+        if (principal == null || request == null) {
+            throw ApiChatException.invalid("Request is required.", null);
+        }
+        JsonNode modelNode = request.get("model");
+        if (modelNode == null || !modelNode.isTextual()
+                || modelNode.textValue().isBlank()
+                || modelNode.textValue().length() > 128) {
+            throw ApiChatException.invalid("Model is required.", "model");
+        }
+        AiModelCacheEntry model = findModel(modelNode.textValue());
+        if (properties.getOpenAiCompatibility().isEnabled()
+                && "openai".equalsIgnoreCase(model.vendor())) {
+            OpenAiApiChatRequestValidation enhanced = openAiRequestValidator.validate(request);
+            validateEnhancedModelAccess(principal, model);
+            long effectiveMax = enhanced.requestedMaxOutputTokens() == null
+                    ? model.maxOutputTokens()
+                    : Math.min(enhanced.requestedMaxOutputTokens(), model.maxOutputTokens());
+            long estimatedPrompt = estimateRawPromptTokens(enhanced.payload());
+            if (estimatedPrompt > model.contextWindowTokens() - effectiveMax) {
+                throw new ApiChatException(
+                        ApiChatErrorCode.CONTEXT_LENGTH_EXCEEDED,
+                        "The request exceeds the model context window.",
+                        "messages");
+            }
+            return ValidatedApiChatRequest.openAiEnhanced(
+                    model,
+                    effectiveMax,
+                    estimatedPrompt,
+                    enhanced.includeUsage(),
+                    enhanced.stream(),
+                    enhanced.payload());
+        }
+        try {
+            return validate(principal, objectMapper.treeToValue(request, ApiChatRequest.class));
+        } catch (JsonProcessingException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof ApiChatException controlled) {
+                throw controlled;
+            }
+            throw ApiChatException.invalid(
+                    "The request body contains an invalid field type.", null);
+        }
+    }
+
+    private void validateEnhancedModelAccess(
+            ApiKeyPrincipal principal,
+            AiModelCacheEntry model) {
+        if (!principal.modelIds().contains(model.id())) {
+            throw new ApiChatException(
+                    ApiChatErrorCode.MODEL_NOT_ALLOWED,
+                    "The API Key is not authorized for this model.",
+                    "model");
+        }
+        if (!model.capabilities().contains(AiModelCapabilityCode.CHAT_COMPLETIONS)
+                || model.contextWindowTokens() <= 0
+                || model.maxOutputTokens() <= 0) {
+            throw new ApiChatException(
+                    ApiChatErrorCode.MODEL_NOT_FOUND,
+                    "The requested model is unavailable.",
+                    "model");
+        }
+    }
+
+    private long estimateRawPromptTokens(ObjectNode payload) {
+        try {
+            // 原始增强负载包含工具 Schema 和结构化输出约束；按完整 UTF-8 字节保守估算可避免漏算新增字段。
+            return Math.max(1L,
+                    Math.ceilDiv(5L + objectMapper.writeValueAsBytes(payload).length, 3L));
+        } catch (JsonProcessingException failure) {
+            throw ApiChatException.invalid("Request body cannot be encoded.", null);
+        }
     }
 
     @Override

@@ -2,6 +2,8 @@ package com.example.temperate.service.user.apiresponse.diagnostic.impl;
 
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticBoundary;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticClock;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticInvocation;
@@ -195,6 +197,14 @@ public final class ApiResponseStreamDiagnosticServiceImpl
                         return request.stream().booleanValue() ? "sse" : "json";
                     }
                     return "unknown";
+                } else if (argument instanceof ObjectNode request) {
+                    JsonNode stream = request.get("stream");
+                    if (stream == null || stream.isNull()) {
+                        return "json";
+                    }
+                    return stream.isBoolean()
+                            ? (stream.booleanValue() ? "sse" : "json")
+                            : "unknown";
                 }
             }
         }

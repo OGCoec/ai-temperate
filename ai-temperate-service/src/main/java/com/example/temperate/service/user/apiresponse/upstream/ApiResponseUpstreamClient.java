@@ -1,9 +1,7 @@
 package com.example.temperate.service.user.apiresponse.upstream;
 
-import com.example.temperate.service.user.aiinference.sse.ApiInferenceSseEvent;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -11,7 +9,11 @@ import reactor.core.publisher.Mono;
  */
 public interface ApiResponseUpstreamClient {
 
-    Flux<ApiInferenceSseEvent> stream(ObjectNode payload);
+    Mono<ApiResponseUpstreamStream> stream(
+            ObjectNode payload,
+            ApiInferenceUpstreamRequest request);
 
-    Mono<JsonNode> create(ObjectNode payload);
+    Mono<ApiResponseUpstreamJson> create(
+            ObjectNode payload,
+            ApiInferenceUpstreamRequest request);
 }

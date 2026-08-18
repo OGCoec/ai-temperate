@@ -1,10 +1,10 @@
 package com.example.temperate.web.apiresponse;
 
+import com.example.temperate.service.user.aiinference.api.ApiInferenceClientRequestId;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apiresponse.ApiResponseCreation;
-import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
 import com.example.temperate.service.user.apiresponse.ApiResponseService;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticBoundary;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticSession;
@@ -14,6 +14,7 @@ import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseFram
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseStreamDiagnostic;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseStreamDiagnosticService;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseSseFrame;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,12 +25,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.reactivestreams.Subscription;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.BaseSubscriber;
@@ -40,15 +43,15 @@ import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.SignalType;
 
 /**
- * 该 Controller 是来提供精确的 Codex 核心 Responses 子集入口，只编排 API Key 主体、动态 JSON/SSE 返回类型和安全缓存头。
+ * 该 Controller 是来提供 OpenAI Responses 常用无状态子集入口，只编排原始 JSON、API Key 主体、动态 JSON/SSE 与安全响应头。
  */
 @RestController
 @RequestMapping("/v1")
 @Tag(
         name = "开放接口-Responses",
-        description = "供 Codex、OpenAI SDK 与服务端应用调用的无状态 Responses 核心子集。"
-                + "仅接受 Worker 验签和 Bearer API Key，固定 store=false；支持文本、推理回放和函数工具，"
-                + "不负责保存 Response、后台任务、托管工具、多模态或结构化输出。")
+        description = "供 Codex、OpenAI SDK 与服务端应用调用的无状态 Responses 常用文本子集。"
+                + "仅接受 Worker 验签和 Bearer API Key，固定 store=false；支持函数工具和结构化输出，"
+                + "不负责保存 Response、后台任务、托管工具或多模态。")
 public class ApiResponsesController {
 
     private final ApiResponseService responseService;
@@ -73,35 +76,61 @@ public class ApiResponsesController {
     @ApiResponseStreamDiagnostic(stage = ApiResponseDiagnosticStage.HTTP_CONTROLLER)
     public Mono<ResponseEntity<?>> create(
             @AuthenticationPrincipal(errorOnInvalidType = true) ApiKeyPrincipal principal,
-            @RequestBody ApiResponseRequest request) {
+            @RequestHeader(
+                    value = ApiInferenceClientRequestId.HEADER_NAME,
+                    required = false) String clientRequestId,
+            @RequestBody ObjectNode request) {
         ApiResponseDiagnosticSession diagnosticSession = diagnostics.currentSession();
-        ApiResponseCreation creation = responseService.create(principal, request);
+        ApiResponseCreation creation = responseService.create(
+                principal,
+                request,
+                ApiInferenceClientRequestId.validate(clientRequestId));
         if (creation instanceof ApiResponseCreation.Stream stream) {
-            return prepareSseResponse(stream.body(), diagnosticSession);
+            return stream.response().flatMap(result -> prepareSseResponse(
+                    result.body(), result.headers().toHttpHeaders(), diagnosticSession));
         }
         ApiResponseCreation.Json json = (ApiResponseCreation.Json) creation;
         // Mono 完成前不会建立 HTTP 200，Service 因而可以先完成权威 Usage 结算。
-        return json.body().map(body -> {
-            ResponseEntity<?> response = ResponseEntity.ok()
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .cacheControl(CacheControl.noStore().cachePrivate().noTransform())
-                    .header("CDN-Cache-Control", "no-store")
-                    .body(body);
-            return response;
-        });
+        return json.response().map(result -> new ResponseEntity<>(
+                result.body(),
+                responseHeaders(
+                        result.headers().toHttpHeaders(), MediaType.APPLICATION_JSON),
+                org.springframework.http.HttpStatus.OK));
+    }
+
+    /** 该重载仅供同进程调用和契约测试复用，不声明额外 HTTP 路由。 */
+    public Mono<ResponseEntity<?>> create(
+            ApiKeyPrincipal principal,
+            ObjectNode request) {
+        return create(principal, null, request);
     }
 
     private static Mono<ResponseEntity<?>> prepareSseResponse(
             Flux<ApiResponseSseFrame> frames,
+            HttpHeaders safeUpstreamHeaders,
             ApiResponseDiagnosticSession diagnosticSession) {
         return Mono.create(responseSink -> {
             SseResponseGate gate = new SseResponseGate(
-                    responseSink, diagnosticSession);
+                    responseSink, safeUpstreamHeaders, diagnosticSession);
             // 在首帧前取消 HTTP 请求必须取消唯一的上游订阅，避免预扣请求失去客户端后继续产生输出。
             responseSink.onCancel(() -> gate.cancelFrom(
                     CancellationSource.CONTROLLER_MONO_CANCEL));
             frames.subscribe(gate);
         });
+    }
+
+    private static HttpHeaders responseHeaders(
+            HttpHeaders safeUpstreamHeaders,
+            MediaType contentType) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.putAll(safeUpstreamHeaders);
+        headers.setContentType(contentType);
+        headers.setCacheControl(CacheControl.noStore().cachePrivate().noTransform());
+        headers.set("CDN-Cache-Control", "no-store");
+        if (MediaType.TEXT_EVENT_STREAM.equals(contentType)) {
+            headers.set("X-Accel-Buffering", "no");
+        }
+        return headers;
     }
 
     /**
@@ -111,6 +140,7 @@ public class ApiResponsesController {
             extends BaseSubscriber<ApiResponseSseFrame> {
 
         private final MonoSink<ResponseEntity<?>> responseSink;
+        private final HttpHeaders safeUpstreamHeaders;
         private final ApiResponseDiagnosticSession diagnostics;
         private final AtomicReference<FluxSink<ServerSentEvent<String>>> bodySink =
                 new AtomicReference<>();
@@ -130,8 +160,11 @@ public class ApiResponsesController {
 
         private SseResponseGate(
                 MonoSink<ResponseEntity<?>> responseSink,
+                HttpHeaders safeUpstreamHeaders,
                 ApiResponseDiagnosticSession diagnostics) {
             this.responseSink = Objects.requireNonNull(responseSink);
+            this.safeUpstreamHeaders = new HttpHeaders();
+            this.safeUpstreamHeaders.putAll(Objects.requireNonNull(safeUpstreamHeaders));
             this.diagnostics = Objects.requireNonNull(diagnostics);
         }
 
@@ -163,7 +196,7 @@ public class ApiResponsesController {
                             }
                         });
                 safeDiagnostic(diagnostics::recordResponsePrepared);
-                responseSink.success(sseResponse(body));
+                responseSink.success(sseResponse(body, safeUpstreamHeaders));
                 return;
             }
             FluxSink<ServerSentEvent<String>> sink = bodySink.get();
@@ -444,13 +477,12 @@ public class ApiResponsesController {
         }
 
         private static ResponseEntity<?> sseResponse(
-                Flux<ServerSentEvent<String>> body) {
-            return ResponseEntity.ok()
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .cacheControl(CacheControl.noStore().cachePrivate().noTransform())
-                    .header("CDN-Cache-Control", "no-store")
-                    .header("X-Accel-Buffering", "no")
-                    .body(body);
+                Flux<ServerSentEvent<String>> body,
+                HttpHeaders safeUpstreamHeaders) {
+            return new ResponseEntity<>(
+                    body,
+                    responseHeaders(safeUpstreamHeaders, MediaType.TEXT_EVENT_STREAM),
+                    org.springframework.http.HttpStatus.OK);
         }
 
         private static ServerSentEvent<String> toEvent(ApiResponseSseFrame frame) {

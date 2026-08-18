@@ -19,6 +19,8 @@ import com.example.temperate.service.user.aiinference.api.ApiInferenceLifecycleS
 import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceReservation;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamHeaders;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
 import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyPermit;
 import com.example.temperate.service.user.aiinference.sse.ApiInferenceSseEvent;
 import com.example.temperate.service.user.apichat.ApiChatException;
@@ -32,6 +34,8 @@ import com.example.temperate.service.user.apiresponse.provider.ApiResponseProvid
 import com.example.temperate.service.user.apiresponse.provider.ApiResponseProviderAdapterRegistry;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseSseFrame.TerminalKind;
 import com.example.temperate.service.user.apiresponse.upstream.ApiResponseUpstreamClient;
+import com.example.temperate.service.user.apiresponse.upstream.ApiResponseUpstreamJson;
+import com.example.temperate.service.user.apiresponse.upstream.ApiResponseUpstreamStream;
 import com.example.temperate.service.user.apiresponse.upstream.impl.ApiResponseProtocolParserImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,7 +70,7 @@ final class ApiResponseServiceImplTest {
 
         ApiResponseCreation.Stream creation = (ApiResponseCreation.Stream)
                 fixture.service().create(fixture.principal(), fixture.request());
-        var frames = creation.body().collectList().block();
+        var frames = creation.response().block().body().collectList().block();
 
         assertThat(frames).hasSize(2);
         assertThat(frames.get(0).eventName()).isEqualTo("response.output_text.delta");
@@ -89,7 +93,7 @@ final class ApiResponseServiceImplTest {
 
         ApiResponseCreation.Stream creation = (ApiResponseCreation.Stream)
                 fixture.service().create(fixture.principal(), fixture.request());
-        var frames = creation.body().collectList().block();
+        var frames = creation.response().block().body().collectList().block();
 
         assertThat(frames).hasSize(2);
         assertThat(frames.get(1).eventName()).isEqualTo("error");
@@ -109,7 +113,7 @@ final class ApiResponseServiceImplTest {
         ApiResponseCreation.Stream creation = (ApiResponseCreation.Stream)
                 fixture.service().create(fixture.principal(), fixture.request());
 
-        StepVerifier.create(creation.body(), 1L)
+        StepVerifier.create(creation.response().block().body(), 1L)
                 .expectNextMatches(frame ->
                         "response.output_text.delta".equals(frame.eventName()))
                 .thenCancel()
@@ -133,12 +137,31 @@ final class ApiResponseServiceImplTest {
 
         ApiResponseCreation.Json creation = (ApiResponseCreation.Json)
                 fixture.service().create(fixture.principal(), fixture.request());
-        JsonNode returned = creation.body().block();
+        JsonNode returned = creation.response().block().body();
 
         assertThat(returned).isSameAs(response);
         assertThat(fixture.lifecycle().settled.get()).isEqualTo(1);
         assertThat(fixture.lifecycle().finishReason).isEqualTo("MAX_OUTPUT_TOKENS");
         assertThat(fixture.lifecycle().released.get()).isEqualTo(1);
+    }
+
+    @Test
+    void nonStreamingFailedRefundsBeforeReturningOriginalFailureObject()
+            throws Exception {
+        ObjectNode response = (ObjectNode) objectMapper.readTree("""
+                {"object":"response","status":"failed","output":[],
+                 "error":{"code":"model_error","message":"Generation failed."}}
+                """);
+        Fixture fixture = fixture(Flux.empty(), Mono.just(response), false);
+
+        ApiResponseCreation.Json creation = (ApiResponseCreation.Json)
+                fixture.service().create(fixture.principal(), fixture.request());
+        JsonNode returned = creation.response().block().body();
+
+        assertThat(returned).isSameAs(response);
+        assertThat(fixture.lifecycle().refunded).hasValue(1);
+        assertThat(fixture.lifecycle().settled).hasValue(0);
+        assertThat(fixture.lifecycle().released).hasValue(1);
     }
 
     @Test
@@ -154,7 +177,7 @@ final class ApiResponseServiceImplTest {
         try (LogCapture logs = LogCapture.start()) {
             ApiResponseCreation.Stream creation = (ApiResponseCreation.Stream)
                     fixture.service().create(fixture.principal(), fixture.request());
-            creation.body().collectList().block();
+            creation.response().block().body().collectList().block();
             invocation.session().summarize(SignalType.ON_COMPLETE, false);
 
             assertThat(logs.joined())
@@ -235,13 +258,19 @@ final class ApiResponseServiceImplTest {
                 new ApiResponseProviderAdapterRegistry(Map.of("openai", adapter));
         ApiResponseUpstreamClient upstream = new ApiResponseUpstreamClient() {
             @Override
-            public Flux<ApiInferenceSseEvent> stream(ObjectNode ignored) {
-                return stream;
+            public Mono<ApiResponseUpstreamStream> stream(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return Mono.just(new ApiResponseUpstreamStream(
+                        stream, ApiInferenceUpstreamHeaders.empty()));
             }
 
             @Override
-            public Mono<JsonNode> create(ObjectNode ignored) {
-                return json;
+            public Mono<ApiResponseUpstreamJson> create(
+                    ObjectNode ignored,
+                    ApiInferenceUpstreamRequest upstreamRequest) {
+                return json.map(body -> new ApiResponseUpstreamJson(
+                        body, ApiInferenceUpstreamHeaders.empty()));
             }
         };
         TestLifecycle lifecycle = new TestLifecycle(model, streaming);

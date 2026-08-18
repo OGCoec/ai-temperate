@@ -11,6 +11,8 @@ import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequest.Tool;
 import com.example.temperate.service.user.apiresponse.ApiResponseRequestValidator;
 import com.example.temperate.service.user.apiresponse.ValidatedApiResponseRequest;
+import com.example.temperate.service.user.apiresponse.openai.OpenAiApiResponseRequestValidation;
+import com.example.temperate.service.user.apiresponse.openai.OpenAiApiResponseRequestValidator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,14 +59,90 @@ public final class ApiResponseRequestValidatorImpl
     private final AiModelCacheService modelCacheService;
     private final ApiKeyProperties properties;
     private final ObjectMapper objectMapper;
+    private final OpenAiApiResponseRequestValidator openAiRequestValidator;
 
     public ApiResponseRequestValidatorImpl(
             AiModelCacheService modelCacheService,
             ApiKeyProperties properties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            OpenAiApiResponseRequestValidator openAiRequestValidator) {
         this.modelCacheService = Objects.requireNonNull(modelCacheService);
         this.properties = Objects.requireNonNull(properties);
         this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.openAiRequestValidator = Objects.requireNonNull(openAiRequestValidator);
+    }
+
+    @Override
+    public ValidatedApiResponseRequest validate(
+            ApiKeyPrincipal principal,
+            ObjectNode request) {
+        if (principal == null || request == null) {
+            throw invalid("Request is required.", null);
+        }
+        JsonNode modelNode = request.get("model");
+        if (modelNode == null || !modelNode.isTextual()
+                || modelNode.textValue().isBlank()
+                || modelNode.textValue().length() > 128) {
+            throw invalid("Model is required.", "model");
+        }
+        AiModelCacheEntry model = findModel(modelNode.textValue());
+        if (properties.getOpenAiCompatibility().isEnabled()
+                && "openai".equalsIgnoreCase(model.vendor())) {
+            OpenAiApiResponseRequestValidation enhanced =
+                    openAiRequestValidator.validate(request);
+            validateEnhancedModelAccess(principal, model);
+            long effectiveMax = enhanced.requestedMaxOutputTokens() == null
+                    ? model.maxOutputTokens()
+                    : Math.min(enhanced.requestedMaxOutputTokens(), model.maxOutputTokens());
+            long estimatedInput = estimateRawInputTokens(enhanced.payload());
+            if (estimatedInput > model.contextWindowTokens() - effectiveMax) {
+                throw new ApiChatException(
+                        ApiChatErrorCode.CONTEXT_LENGTH_EXCEEDED,
+                        "The request exceeds the model context window.",
+                        "input");
+            }
+            return ValidatedApiResponseRequest.openAiEnhanced(
+                    model, effectiveMax, estimatedInput,
+                    enhanced.stream(), enhanced.payload());
+        }
+        try {
+            return validate(principal,
+                    objectMapper.treeToValue(request, ApiResponseRequest.class));
+        } catch (JsonProcessingException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof ApiChatException controlled) {
+                throw controlled;
+            }
+            throw invalid("The request body contains an invalid field type.", null);
+        }
+    }
+
+    private void validateEnhancedModelAccess(
+            ApiKeyPrincipal principal,
+            AiModelCacheEntry model) {
+        if (!model.capabilities().contains(AiModelCapabilityCode.RESPONSES)
+                || model.contextWindowTokens() <= 0
+                || model.maxOutputTokens() <= 0) {
+            throw new ApiChatException(
+                    ApiChatErrorCode.MODEL_NOT_FOUND,
+                    "The requested model is unavailable.",
+                    "model");
+        }
+        if (!principal.modelIds().contains(model.id())) {
+            throw new ApiChatException(
+                    ApiChatErrorCode.MODEL_NOT_ALLOWED,
+                    "The API Key is not authorized for this model.",
+                    "model");
+        }
+    }
+
+    private long estimateRawInputTokens(ObjectNode payload) {
+        try {
+            return Math.max(1L,
+                    Math.ceilDiv(5L + objectMapper.writeValueAsBytes(payload).length, 3L));
+        } catch (JsonProcessingException failure) {
+            throw invalid("Request body cannot be encoded.", null);
+        }
     }
 
     @Override

@@ -39,6 +39,9 @@ public class ApiKeyProperties {
     private StreamDiagnostics streamDiagnostics = new StreamDiagnostics();
     @Valid
     @NotNull
+    private OpenAiCompatibility openAiCompatibility = new OpenAiCompatibility();
+    @Valid
+    @NotNull
     private Bloom bloom = new Bloom();
 
     /**
@@ -120,6 +123,14 @@ public class ApiKeyProperties {
 
     public void setStreamDiagnostics(StreamDiagnostics streamDiagnostics) {
         this.streamDiagnostics = streamDiagnostics;
+    }
+
+    public OpenAiCompatibility getOpenAiCompatibility() {
+        return openAiCompatibility;
+    }
+
+    public void setOpenAiCompatibility(OpenAiCompatibility openAiCompatibility) {
+        this.openAiCompatibility = openAiCompatibility;
     }
 
     public Bloom getBloom() {
@@ -378,6 +389,21 @@ public class ApiKeyProperties {
 
         public void setStackFrameLimit(int stackFrameLimit) {
             this.stackFrameLimit = stackFrameLimit;
+        }
+    }
+
+    /**
+     * 该配置组是来隔离 OpenAI 厂商的常用协议增强路径，关闭时其他厂商和旧严格路径均不受影响。
+     */
+    public static class OpenAiCompatibility {
+        private boolean enabled;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

@@ -23,6 +23,7 @@ import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 该实现是来按采样率建立诊断会话，并通过 Reactor Context 把同一会话传递到异步流而不增加订阅、不缓存帧或改变信号顺序。
@@ -102,6 +103,38 @@ public final class ApiChatStreamDiagnosticServiceImpl
                     safeDiagnostic(() -> session.recordFailure(failure));
                 })
                 .doFinally(signal -> safeDiagnostic(() -> session.summarize(signal)))
+                .contextWrite(context -> context.put(
+                        ApiChatDiagnosticContext.SESSION_KEY, session));
+    }
+
+    @Override
+    public <T> Mono<T> observeLifecycle(
+            Mono<T> source,
+            ApiChatDiagnosticInvocation invocation) {
+        ApiChatDiagnosticSession session = invocation.session();
+        if (!properties.getStreamDiagnostics().isEnabled()) {
+            return source;
+        }
+        return observePreparation(source, invocation)
+                .doFinally(signal -> safeDiagnostic(() -> session.summarize(signal)));
+    }
+
+    @Override
+    public <T> Mono<T> observePreparation(
+            Mono<T> source,
+            ApiChatDiagnosticInvocation invocation) {
+        ApiChatDiagnosticSession session = invocation.session();
+        if (!properties.getStreamDiagnostics().isEnabled()) {
+            return source;
+        }
+        // SSE 的响应头 Mono 与正文 Flux 分两次订阅；准备阶段只传递上下文和错误，不抢先关闭正文诊断。
+        return source
+                .doOnSubscribe(ignored -> safeDiagnostic(session::recordSubscribed))
+                .doOnError(failure -> {
+                    recordStageFailure(invocation, failure);
+                    safeDiagnostic(() -> session.recordStageFailure(invocation.stage()));
+                    safeDiagnostic(() -> session.recordFailure(failure));
+                })
                 .contextWrite(context -> context.put(
                         ApiChatDiagnosticContext.SESSION_KEY, session));
     }

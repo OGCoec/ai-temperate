@@ -85,7 +85,10 @@ final class ApiChatExceptionHandlerTest {
     @Test
     void invalidRequestNegotiatesJsonWhenWorkerAcceptsSseAndJson() throws Exception {
         ApiChatCompletionService service = mock(ApiChatCompletionService.class);
-        when(service.stream(any(), any())).thenThrow(
+        when(service.create(
+                any(),
+                any(com.fasterxml.jackson.databind.node.ObjectNode.class),
+                org.mockito.ArgumentMatchers.nullable(String.class))).thenThrow(
                 ApiChatException.invalid(
                         "Only text content parts are supported.",
                         "messages[1].content[0].type"));
@@ -116,7 +119,10 @@ final class ApiChatExceptionHandlerTest {
     void oversizedToolDescriptionKeepsPreciseJsonParameterAndNoStoreHeaders()
             throws Exception {
         ApiChatCompletionService service = mock(ApiChatCompletionService.class);
-        when(service.stream(any(), any())).thenThrow(
+        when(service.create(
+                any(),
+                any(com.fasterxml.jackson.databind.node.ObjectNode.class),
+                org.mockito.ArgumentMatchers.nullable(String.class))).thenThrow(
                 ApiChatException.invalid(
                         "Function tool description exceeds the allowed UTF-8 size.",
                         "tools[0].function.description"));

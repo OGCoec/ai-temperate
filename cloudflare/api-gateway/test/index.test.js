@@ -389,6 +389,40 @@ test('Responses adaptive route forwards JSON without SSE buffering headers', asy
 		'no-store, private, no-transform')
 })
 
+test('Chat adaptive route forwards JSON without requiring an SSE Accept header', async () => {
+	const apiKey = `sk-${'C'.repeat(86)}`
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/chat/completions', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'application/json',
+				'Content-Type': 'application/json'
+			},
+			body: '{"model":"gpt-test","messages":[],"stream":false}'
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return Response.json({
+				object: 'chat.completion',
+				choices: [],
+				usage: { prompt_tokens: 1, completion_tokens: 1 }
+			})
+		})
+	)
+
+	assert.equal(captured.url,
+		'https://api.niko000o.site/v1/chat/completions')
+	assert.equal(response.status, 200)
+	assert.equal(response.headers.get('Content-Type'), 'application/json')
+	assert.equal(response.headers.get('X-Accel-Buffering'), null)
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+})
+
 test('Responses adaptive route preserves SSE and enables no-buffer headers', async () => {
 	const apiKey = `sk-${'S'.repeat(86)}`
 	const body = new ReadableStream({

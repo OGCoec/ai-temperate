@@ -56,6 +56,8 @@ const EXACT_ROOT_ROUTES = new Map([
 		clientPlatforms: ['API_KEY_CLIENT'],
 		errorResponseType: 'OPENAI_JSON',
 		streaming: true,
+		responseMode: 'adaptive',
+		protocol: 'chat_completions',
 		apiKeySdk: true,
 		routeTemplate: '/v1/chat/completions'
 	}),

@@ -1,6 +1,10 @@
 package com.example.temperate.service.user.apichat.upstream.impl;
 
 import com.example.temperate.service.user.aiconversation.config.AiInferenceProperties;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceClientRequestId;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamHeaders;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUpstreamRequest;
+import com.example.temperate.service.user.aiinference.upstream.OpenAiUpstreamErrorDecoder;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticContext;
@@ -9,9 +13,14 @@ import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViol
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatUpstreamFailure;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatUpstreamFailureException;
 import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamClient;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamJson;
+import com.example.temperate.service.user.apichat.upstream.ApiChatUpstreamStream;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,7 +36,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 该实现是来以专用 WebClient 非阻塞调用 `127.0.0.1:8317/v1/chat/completions`，限制总流时长并把所有上游失败收敛为受控错误。
+ * 该实现是来调用 8317 Chat JSON/SSE 端点，在响应提交前确定 Content-Type、安全响应头和可控 OpenAI 错误。
  */
 @Service
 public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClient {
@@ -38,122 +47,186 @@ public final class WebClientApiChatUpstreamClient implements ApiChatUpstreamClie
     private final WebClient webClient;
     private final AiInferenceProperties properties;
     private final MeterRegistry meterRegistry;
+    private final OpenAiUpstreamErrorDecoder errorDecoder;
 
     public WebClientApiChatUpstreamClient(
             @Qualifier("apiChatUpstreamWebClient") WebClient webClient,
             AiInferenceProperties properties,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            OpenAiUpstreamErrorDecoder errorDecoder) {
         this.webClient = Objects.requireNonNull(webClient);
         this.properties = Objects.requireNonNull(properties);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
+        this.errorDecoder = Objects.requireNonNull(errorDecoder);
     }
 
     @Override
-    public Flux<String> stream(ObjectNode payload) {
+    public Mono<ApiChatUpstreamStream> stream(
+            ObjectNode payload,
+            ApiInferenceUpstreamRequest request) {
         if (!properties.enabled()) {
-            return Flux.error(new ApiChatException(
-                    ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
-                    "The model upstream is not enabled.",
-                    null));
+            return Mono.error(unavailable("The model upstream is not enabled."));
         }
-        return Flux.deferContextual(subscriptionContext -> {
-            // 连接异常可能发生在收到任何响应头之前，因此必须在真正发起 8317 请求前记录边界。
-            ApiChatDiagnosticContext.session(subscriptionContext)
-                    .recordUpstreamAttempted();
+        return Mono.deferContextual(context -> {
+            ApiChatDiagnosticContext.session(context).recordUpstreamAttempted();
             long startedNanos = System.nanoTime();
             AtomicBoolean firstChunk = new AtomicBoolean();
             return webClient.post()
-                .uri("/v1/chat/completions")
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .bodyValue(payload)
-                .exchangeToFlux(response -> Flux.deferContextual(context -> {
-                    MediaType contentType = response.headers().contentType().orElse(null);
-                    boolean sse = contentType != null
-                            && MediaType.TEXT_EVENT_STREAM.isCompatibleWith(contentType);
-                    ApiChatDiagnosticContext.session(context).recordUpstreamHeaders(
-                            response.statusCode().value(),
-                            contentType == null ? "unknown" : contentType.toString(),
-                            sse);
-                    if (!response.statusCode().is2xxSuccessful()) {
-                        // 必须释放但不读取或转发原始错误正文，防止供应商细节和内部配置泄露。
-                        return response.releaseBody().thenMany(Flux.error(
-                                protocolFailure(
-                                        response.statusCode().is5xxServerError()
-                                                ? ApiChatErrorCode.UPSTREAM_UNAVAILABLE
-                                                : ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
-                                        "The model upstream rejected the request.",
-                                        ApiChatProtocolViolation.UPSTREAM_REJECTED)));
-                    }
-                    if (!sse) {
-                        return response.releaseBody().thenMany(Flux.error(
-                                protocolFailure(
-                                        ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
-                                        "The model upstream did not return an SSE response.",
-                                        ApiChatProtocolViolation.NON_SSE_CONTENT_TYPE)));
-                    }
-                    return response.bodyToFlux(SSE_TYPE)
-                            .map(ServerSentEvent::data)
-                            .filter(Objects::nonNull);
-                }))
-                // `Flux.timeout(Duration)` 只限制相邻 chunk 空闲时间；这里使用独立总时钟保证整条流绝不超过十五分钟恢复边界。
-                .transform(source -> enforceMaximumDuration(
-                        source, properties.maxStreamDuration()))
-                .onErrorMap(WebClientRequestException.class, exception ->
-                        new ApiChatException(
-                                ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
-                                "The model upstream is unavailable.",
-                                null,
-                                new ApiChatUpstreamFailureException(
-                                        ApiChatUpstreamFailure.CONNECTION_FAILURE)))
-                .onErrorMap(CodecException.class, exception ->
-                        protocolFailure(
-                                ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
-                                "The model upstream returned an invalid SSE body.",
-                                ApiChatProtocolViolation.INVALID_SSE_BODY))
-                .doOnNext(ignored -> {
-                    if (firstChunk.compareAndSet(false, true)) {
+                    .uri("/v1/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .headers(headers -> forwardClientRequestId(headers, request))
+                    .bodyValue(payload)
+                    .retrieve()
+                    .onStatus(status -> !status.is2xxSuccessful(),
+                            response -> errorDecoder.decode(response, request))
+                    .toEntityFlux(SSE_TYPE)
+                    .flatMap(entity -> {
+                        MediaType contentType = entity.getHeaders().getContentType();
+                        boolean sse = contentType != null
+                                && MediaType.TEXT_EVENT_STREAM.isCompatibleWith(contentType);
+                        ApiChatDiagnosticContext.session(context).recordUpstreamHeaders(
+                                entity.getStatusCode().value(),
+                                contentType == null ? "unknown" : contentType.toString(),
+                                sse);
+                        if (!sse) {
+                            return Mono.error(protocolFailure(
+                                    "The model upstream did not return an SSE response.",
+                                    ApiChatProtocolViolation.NON_SSE_CONTENT_TYPE));
+                        }
+                        Flux<String> body = entity.getBody()
+                                .map(ServerSentEvent::data)
+                                .filter(Objects::nonNull)
+                                .transform(source -> enforceMaximumDuration(
+                                        source, properties.maxStreamDuration()))
+                                .onErrorMap(CodecException.class, failure -> protocolFailure(
+                                        "The model upstream returned an invalid SSE body.",
+                                        ApiChatProtocolViolation.INVALID_SSE_BODY))
+                                .doOnNext(ignored -> {
+                                    if (firstChunk.compareAndSet(false, true)) {
+                                        Timer.builder("api.chat.upstream.first.byte")
+                                                .register(meterRegistry)
+                                                .record(System.nanoTime() - startedNanos,
+                                                        TimeUnit.NANOSECONDS);
+                                    }
+                                })
+                                .doOnError(failure -> countOutcome("sse", failure))
+                                .doFinally(signal -> recordDuration(
+                                        "sse", signal.name(), startedNanos));
+                        return Mono.just(new ApiChatUpstreamStream(
+                                body,
+                                ApiInferenceUpstreamHeaders.from(entity.getHeaders())));
+                    })
+                    .onErrorMap(WebClientRequestException.class, failure -> unavailable(
+                            "The model upstream is unavailable.") );
+        });
+    }
+
+    @Override
+    public Mono<ApiChatUpstreamJson> create(
+            ObjectNode payload,
+            ApiInferenceUpstreamRequest request) {
+        if (!properties.enabled()) {
+            return Mono.error(unavailable("The model upstream is not enabled."));
+        }
+        return Mono.deferContextual(context -> {
+            ApiChatDiagnosticContext.session(context).recordUpstreamAttempted();
+            long startedNanos = System.nanoTime();
+            return webClient.post()
+                    .uri("/v1/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .headers(headers -> forwardClientRequestId(headers, request))
+                    .bodyValue(payload)
+                    .retrieve()
+                    .onStatus(status -> !status.is2xxSuccessful(),
+                            response -> errorDecoder.decode(response, request))
+                    .toEntity(JsonNode.class)
+                    .timeout(properties.maxStreamDuration(),
+                            Mono.error(unavailable(
+                                    "The model upstream exceeded the maximum duration.")))
+                    .flatMap(entity -> {
+                        MediaType contentType = entity.getHeaders().getContentType();
+                        if (contentType == null
+                                || !MediaType.APPLICATION_JSON.isCompatibleWith(contentType)
+                                || entity.getBody() == null) {
+                            return Mono.error(protocolFailure(
+                                    "The model upstream did not return application/json.",
+                                    ApiChatProtocolViolation.INVALID_FIELD_TYPE));
+                        }
                         Timer.builder("api.chat.upstream.first.byte")
                                 .register(meterRegistry)
-                                .record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS);
-                    }
-                })
-                .doOnError(failure -> meterRegistry.counter(
-                        "api.chat.upstream.outcome",
-                        "result",
-                        failure instanceof ApiChatException controlled
-                                ? controlled.code().code() : "unexpected_error").increment())
-                .doFinally(signal -> Timer.builder("api.chat.upstream.duration")
-                        .tag("ending", signal.name().toLowerCase(java.util.Locale.ROOT))
-                        .register(meterRegistry)
-                        .record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS));
+                                .record(System.nanoTime() - startedNanos,
+                                        TimeUnit.NANOSECONDS);
+                        return Mono.just(new ApiChatUpstreamJson(
+                                entity.getBody(),
+                                ApiInferenceUpstreamHeaders.from(entity.getHeaders())));
+                    })
+                    .onErrorMap(WebClientRequestException.class, failure -> unavailable(
+                            "The model upstream is unavailable."))
+                    .onErrorMap(CodecException.class, failure -> protocolFailure(
+                            "The model upstream returned invalid JSON.",
+                            ApiChatProtocolViolation.INVALID_FIELD_TYPE))
+                    .doOnError(failure -> countOutcome("json", failure))
+                    .doFinally(signal -> recordDuration(
+                            "json", signal.name(), startedNanos));
         });
+    }
+
+    private static void forwardClientRequestId(
+            org.springframework.http.HttpHeaders headers,
+            ApiInferenceUpstreamRequest request) {
+        if (request != null && request.clientRequestId() != null) {
+            headers.set(ApiInferenceClientRequestId.HEADER_NAME,
+                    request.clientRequestId());
+        }
     }
 
     private static Flux<String> enforceMaximumDuration(
             Flux<String> source,
-            java.time.Duration maximumDuration) {
+            Duration maximumDuration) {
         return source.publish(shared -> {
             Flux<String> deadline = Mono.delay(maximumDuration)
-                    .thenMany(Flux.<String>error(new ApiChatException(
-                            ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
-                            "The model upstream exceeded the maximum stream duration.",
-                            null,
-                            new ApiChatUpstreamFailureException(
-                                    ApiChatUpstreamFailure.MAXIMUM_DURATION_EXCEEDED))))
+                    .thenMany(Flux.<String>error(unavailable(
+                            "The model upstream exceeded the maximum stream duration.")))
                     .takeUntilOther(shared.then(Mono.just(Boolean.TRUE)));
             return Flux.merge(shared, deadline);
         });
     }
 
+    private void countOutcome(String mode, Throwable failure) {
+        String result = failure instanceof ApiChatException controlled
+                ? controlled.code().code() : "unexpected_error";
+        meterRegistry.counter(
+                "api.chat.upstream.outcome",
+                "mode", mode,
+                "result", result).increment();
+    }
+
+    private void recordDuration(String mode, String ending, long startedNanos) {
+        Timer.builder("api.chat.upstream.duration")
+                .tag("mode", mode)
+                .tag("ending", ending.toLowerCase(Locale.ROOT))
+                .register(meterRegistry)
+                .record(System.nanoTime() - startedNanos, TimeUnit.NANOSECONDS);
+    }
+
     private static ApiChatException protocolFailure(
-            ApiChatErrorCode code,
             String message,
             ApiChatProtocolViolation violation) {
         return new ApiChatException(
-                code,
+                ApiChatErrorCode.UPSTREAM_PROTOCOL_ERROR,
                 message,
                 null,
                 new ApiChatProtocolViolationException(violation));
+    }
+
+    private static ApiChatException unavailable(String message) {
+        return new ApiChatException(
+                ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
+                message,
+                null,
+                new ApiChatUpstreamFailureException(
+                        ApiChatUpstreamFailure.CONNECTION_FAILURE));
     }
 }

@@ -14,9 +14,10 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
- * 该测试是来验证 API Chat AOP 只惰性包装 Flux，不建立内部订阅，也不会改变信号顺序。
+ * 该测试是来验证 API Chat AOP 惰性包装 Flux/Mono，不建立内部订阅，也不会改变信号顺序。
  */
 final class ApiChatStreamDiagnosticAspectTest {
 
@@ -32,6 +33,20 @@ final class ApiChatStreamDiagnosticAspectTest {
 
         assertThat(proxy.stream().collectList().block())
                 .containsExactly("a", "b");
+        assertThat(target.subscriptions).isEqualTo(1);
+    }
+
+    @Test
+    void wrapsAnnotatedMonoWithoutChangingItsValue() {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        ApiChatStreamDiagnosticService diagnostics =
+                new ApiChatStreamDiagnosticServiceImpl(properties, System::nanoTime);
+        Target target = new Target();
+        AspectJProxyFactory factory = new AspectJProxyFactory(target);
+        factory.addAspect(new ApiChatStreamDiagnosticAspect(diagnostics));
+        Target proxy = factory.getProxy();
+
+        assertThat(proxy.mono().block()).isEqualTo("json");
         assertThat(target.subscriptions).isEqualTo(1);
     }
 
@@ -117,6 +132,14 @@ final class ApiChatStreamDiagnosticAspectTest {
             return Flux.defer(() -> {
                 subscriptions++;
                 return Flux.just("a", "b");
+            });
+        }
+
+        @ApiChatStreamDiagnostic(ApiChatDiagnosticStage.HTTP_CONTROLLER)
+        public Mono<String> mono() {
+            return Mono.defer(() -> {
+                subscriptions++;
+                return Mono.just("json");
             });
         }
 

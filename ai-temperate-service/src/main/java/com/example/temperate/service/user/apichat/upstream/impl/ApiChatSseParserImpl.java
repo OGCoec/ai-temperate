@@ -1,8 +1,8 @@
 package com.example.temperate.service.user.apichat.upstream.impl;
 
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
-import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser;
@@ -13,11 +13,12 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来对白名单 SSE 字段执行类型校验、重新编码和合并终态拆分，工具 arguments 增量始终保持字符串，任何协议偏差返回 502。
+ * 该实现是来原样保留 Chat SSE JSON，同时验证 choices/Usage 的最小可信结构并计算取消补偿所需的有界输出字节。
  */
 @Service
 public final class ApiChatSseParserImpl implements ApiChatSseParser {
@@ -33,7 +34,8 @@ public final class ApiChatSseParserImpl implements ApiChatSseParser {
         if ("[DONE]".equals(data)) {
             return new ParsedEvent(
                     List.of(new ParsedChunk(
-                            "[DONE]", null, true, false, 0, null)),
+                            "[DONE]", "[DONE]", null,
+                            true, false, 0L, null, false)),
                     Normalization.NONE);
         }
         try {
@@ -41,244 +43,152 @@ public final class ApiChatSseParserImpl implements ApiChatSseParser {
             if (!(parsed instanceof ObjectNode source)) {
                 throw protocol(ApiChatProtocolViolation.NON_OBJECT_JSON);
             }
-            ObjectNode choicesOutput = objectMapper.createObjectNode();
-            copyResponseMetadata(source, choicesOutput);
-
-            long outputBytes = 0;
-            String finishReason = null;
             JsonNode choicesNode = source.get("choices");
-            ArrayNode choices = choicesOutput.putArray("choices");
-            if (choicesNode == null || !choicesNode.isArray() || choicesNode.size() > 1) {
+            if (!(choicesNode instanceof ArrayNode choices)) {
                 throw protocol(ApiChatProtocolViolation.INVALID_CHOICES);
             }
-            for (JsonNode choiceNode : choicesNode) {
-                if (!(choiceNode instanceof ObjectNode choiceSource)) {
+            long outputBytes = 0L;
+            String finishReason = null;
+            for (JsonNode rawChoice : choices) {
+                if (!(rawChoice instanceof ObjectNode choice)) {
                     throw protocol(ApiChatProtocolViolation.INVALID_CHOICES);
                 }
-                ObjectNode choice = choices.addObject();
-                copyIntegral(choiceSource, choice, "index", false);
-                if (choice.path("index").longValue() != 0L) {
-                    throw protocol(ApiChatProtocolViolation.UNSUPPORTED_CHOICE_INDEX);
-                }
-                JsonNode deltaNode = choiceSource.get("delta");
-                if (!(deltaNode instanceof ObjectNode deltaSource)) {
+                requireNonNegativeInteger(choice.get("index"),
+                        ApiChatProtocolViolation.INVALID_CHOICES);
+                JsonNode deltaNode = choice.get("delta");
+                if (!(deltaNode instanceof ObjectNode delta)) {
                     throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
                 }
-                ObjectNode delta = choice.putObject("delta");
-                copyText(deltaSource, delta, "role", true);
-                JsonNode content = deltaSource.get("content");
-                if (content != null && !content.isNull()) {
-                    if (!content.isTextual()) {
+                outputBytes = Math.addExact(outputBytes, visibleDeltaBytes(delta));
+                JsonNode finish = choice.get("finish_reason");
+                if (finish != null && !finish.isNull()) {
+                    if (!finish.isTextual()) {
                         throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
                     }
-                    delta.put("content", content.textValue());
-                    outputBytes = Math.addExact(outputBytes,
-                            content.textValue().getBytes(StandardCharsets.UTF_8).length);
-                }
-                JsonNode reasoningContent = deltaSource.get("reasoning_content");
-                if (reasoningContent != null && !reasoningContent.isNull()) {
-                    if (!reasoningContent.isTextual()) {
-                        throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
-                    }
-                    // 推理片段与普通文本同属可见 SSE 协议字段；只转发白名单内容，不向日志泄露正文。
-                    delta.put("reasoning_content", reasoningContent.textValue());
-                    outputBytes = Math.addExact(outputBytes,
-                            reasoningContent.textValue().getBytes(StandardCharsets.UTF_8).length);
-                }
-                JsonNode toolCalls = deltaSource.get("tool_calls");
-                if (toolCalls != null) {
-                    outputBytes = Math.addExact(outputBytes,
-                            copyToolCallDeltas(toolCalls, delta.putArray("tool_calls")));
-                }
-                JsonNode finish = choiceSource.get("finish_reason");
-                if (finish == null || finish.isNull()) {
-                    choice.putNull("finish_reason");
-                } else if (finish.isTextual()) {
-                    choice.put("finish_reason", finish.textValue());
-                    finishReason = finish.textValue().toUpperCase(java.util.Locale.ROOT);
-                } else {
-                    throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
+                    finishReason = safeFinishReason(finish.textValue());
                 }
             }
-            ParsedUsage parsedUsage = parseUsage(source.get("usage"));
-            ParsedChunk choicesChunk = new ParsedChunk(
-                    objectMapper.writeValueAsString(choicesOutput),
-                    null,
-                    false,
-                    outputBytes > 0,
-                    outputBytes,
-                    finishReason);
-            if (parsedUsage == null) {
-                return new ParsedEvent(List.of(choicesChunk), Normalization.NONE);
+            ApiInferenceUsage usage = parseUsage(source.get("usage"));
+            String withoutUsage = data;
+            if (usage != null) {
+                ObjectNode clientVisible = source.deepCopy();
+                clientVisible.remove("usage");
+                withoutUsage = objectMapper.writeValueAsString(clientVisible);
             }
-
-            if (choices.isEmpty()) {
-                choicesOutput.set("usage", parsedUsage.normalized());
-                return new ParsedEvent(
-                        List.of(new ParsedChunk(
-                                objectMapper.writeValueAsString(choicesOutput),
-                                parsedUsage.billingUsage(),
-                                false,
-                                false,
-                                0,
-                                null)),
-                        Normalization.NONE);
-            }
-
-            // 8317 会把最终 choice 与 Usage 合并；边界层必须拆成 OpenAI 标准顺序，避免业务状态机把同一事件误判为重复 Usage。
-            ObjectNode usageOutput = objectMapper.createObjectNode();
-            copyResponseMetadata(source, usageOutput);
-            usageOutput.putArray("choices");
-            usageOutput.set("usage", parsedUsage.normalized());
-            ParsedChunk usageChunk = new ParsedChunk(
-                    objectMapper.writeValueAsString(usageOutput),
-                    parsedUsage.billingUsage(),
-                    false,
-                    false,
-                    0,
-                    null);
             return new ParsedEvent(
-                    List.of(choicesChunk, usageChunk),
-                    Normalization.COMBINED_CHOICES_AND_USAGE);
-        } catch (JsonProcessingException exception) {
+                    List.of(new ParsedChunk(
+                            data,
+                            withoutUsage,
+                            usage,
+                            false,
+                            outputBytes > 0L,
+                            outputBytes,
+                            finishReason,
+                            usage != null && choices.isEmpty())),
+                    Normalization.NONE);
+        } catch (JsonProcessingException failure) {
             throw protocol(ApiChatProtocolViolation.MALFORMED_JSON);
-        } catch (ArithmeticException exception) {
+        } catch (ArithmeticException failure) {
             throw protocol(ApiChatProtocolViolation.ARITHMETIC_OVERFLOW);
         }
     }
 
-    private long copyToolCallDeltas(JsonNode source, ArrayNode target) {
-        if (!source.isArray()) {
-            throw protocol(ApiChatProtocolViolation.INVALID_TOOL_CALLS);
-        }
-        long bytes = 0;
-        for (JsonNode raw : source) {
-            if (!(raw instanceof ObjectNode callSource)) {
+    private static long visibleDeltaBytes(ObjectNode delta) {
+        long bytes = 0L;
+        bytes = Math.addExact(bytes, optionalTextBytes(delta.get("content")));
+        bytes = Math.addExact(bytes, optionalTextBytes(delta.get("reasoning_content")));
+        bytes = Math.addExact(bytes, optionalTextBytes(delta.get("refusal")));
+        JsonNode toolCalls = delta.get("tool_calls");
+        if (toolCalls != null && !toolCalls.isNull()) {
+            if (!(toolCalls instanceof ArrayNode calls)) {
                 throw protocol(ApiChatProtocolViolation.INVALID_TOOL_CALLS);
             }
-            ObjectNode call = target.addObject();
-            copyIntegral(callSource, call, "index", false);
-            copyText(callSource, call, "id", true);
-            copyText(callSource, call, "type", true);
-            JsonNode functionNode = callSource.get("function");
-            if (functionNode != null) {
-                if (!(functionNode instanceof ObjectNode functionSource)) {
+            for (JsonNode rawCall : calls) {
+                if (!(rawCall instanceof ObjectNode call)) {
                     throw protocol(ApiChatProtocolViolation.INVALID_TOOL_CALLS);
                 }
-                ObjectNode function = call.putObject("function");
-                copyText(functionSource, function, "name", true);
-                JsonNode arguments = functionSource.get("arguments");
-                if (arguments != null) {
-                    if (!arguments.isTextual()) {
+                JsonNode functionNode = call.get("function");
+                if (functionNode != null && !functionNode.isNull()) {
+                    if (!(functionNode instanceof ObjectNode function)) {
                         throw protocol(ApiChatProtocolViolation.INVALID_TOOL_CALLS);
                     }
-                    function.put("arguments", arguments.textValue());
                     bytes = Math.addExact(bytes,
-                            arguments.textValue().getBytes(StandardCharsets.UTF_8).length);
+                            optionalTextBytes(function.get("arguments")));
                 }
             }
         }
         return bytes;
     }
 
-    private ParsedUsage parseUsage(JsonNode usageNode) {
+    private static long optionalTextBytes(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return 0L;
+        }
+        if (!node.isTextual()) {
+            throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
+        }
+        return node.textValue().getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private static ApiInferenceUsage parseUsage(JsonNode usageNode) {
         if (usageNode == null || usageNode.isNull()) {
             return null;
         }
-        if (!(usageNode instanceof ObjectNode source)) {
+        if (!(usageNode instanceof ObjectNode usage)) {
             throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
         }
-        long prompt = requiredNonNegative(source, "prompt_tokens");
-        long completion = requiredNonNegative(source, "completion_tokens");
-        long cached = 0;
-        long reasoning = 0;
-        JsonNode detailsNode = source.get("prompt_tokens_details");
-        ObjectNode usage = objectMapper.createObjectNode();
-        usage.put("prompt_tokens", prompt);
-        usage.put("completion_tokens", completion);
-        JsonNode total = source.get("total_tokens");
-        if (total == null || total.isNull()) {
-            usage.put("total_tokens", Math.addExact(prompt, completion));
+        long prompt = requiredNonNegative(usage, "prompt_tokens");
+        long completion = requiredNonNegative(usage, "completion_tokens");
+        long cached = optionalDetail(usage.get("prompt_tokens_details"), "cached_tokens");
+        long reasoning = optionalDetail(
+                usage.get("completion_tokens_details"), "reasoning_tokens");
+        JsonNode total = usage.get("total_tokens");
+        if (total != null && !total.isNull()) {
+            requiredNonNegative(usage, "total_tokens");
         } else {
-            usage.put("total_tokens", requiredNonNegative(source, "total_tokens"));
+            Math.addExact(prompt, completion);
         }
-        if (detailsNode != null && !detailsNode.isNull()) {
-            if (!(detailsNode instanceof ObjectNode details)) {
-                throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
-            }
-            cached = requiredNonNegative(details, "cached_tokens");
-            usage.putObject("prompt_tokens_details").put("cached_tokens", cached);
-        }
-        JsonNode completionDetailsNode = source.get("completion_tokens_details");
-        if (completionDetailsNode != null && !completionDetailsNode.isNull()) {
-            if (!(completionDetailsNode instanceof ObjectNode details)) {
-                throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
-            }
-            reasoning = requiredNonNegative(details, "reasoning_tokens");
-            usage.putObject("completion_tokens_details").put("reasoning_tokens", reasoning);
-        }
-        if (cached > prompt) {
+        if (cached > prompt || reasoning > completion) {
             throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
         }
-        if (reasoning > completion) {
-            throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
-        }
-        return new ParsedUsage(new ApiInferenceUsage(prompt, completion, cached), usage);
+        return new ApiInferenceUsage(prompt, completion, cached);
     }
 
-    private static void copyResponseMetadata(
-            ObjectNode source,
-            ObjectNode target) {
-        copyText(source, target, "id", false);
-        copyText(source, target, "object", false);
-        copyIntegral(source, target, "created", false);
-        copyText(source, target, "model", false);
-        copyText(source, target, "system_fingerprint", true);
+    private static long optionalDetail(JsonNode detailsNode, String field) {
+        if (detailsNode == null || detailsNode.isNull()) {
+            return 0L;
+        }
+        if (!(detailsNode instanceof ObjectNode details)) {
+            throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
+        }
+        JsonNode value = details.get(field);
+        if (value == null || value.isNull()) {
+            return 0L;
+        }
+        return requiredNonNegative(details, field);
     }
 
     private static long requiredNonNegative(ObjectNode node, String field) {
         JsonNode value = node.get(field);
         if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()
-                || value.longValue() < 0) {
+                || value.longValue() < 0L) {
             throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
         }
         return value.longValue();
     }
 
-    private static void copyText(
-            ObjectNode source,
-            ObjectNode target,
-            String field,
-            boolean optional) {
-        JsonNode value = source.get(field);
-        if (value == null || value.isNull()) {
-            if (!optional) {
-                throw protocol(ApiChatProtocolViolation.REQUIRED_FIELD_MISSING);
-            }
-            return;
+    private static void requireNonNegativeInteger(
+            JsonNode value,
+            ApiChatProtocolViolation violation) {
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()
+                || value.longValue() < 0L) {
+            throw protocol(violation);
         }
-        if (!value.isTextual()) {
-            throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
-        }
-        target.put(field, value.textValue());
     }
 
-    private static void copyIntegral(
-            ObjectNode source,
-            ObjectNode target,
-            String field,
-            boolean optional) {
-        JsonNode value = source.get(field);
-        if (value == null || value.isNull()) {
-            if (!optional) {
-                throw protocol(ApiChatProtocolViolation.REQUIRED_FIELD_MISSING);
-            }
-            return;
-        }
-        if (!value.isIntegralNumber() || !value.canConvertToLong()) {
-            throw protocol(ApiChatProtocolViolation.INVALID_FIELD_TYPE);
-        }
-        target.put(field, value.longValue());
+    private static String safeFinishReason(String value) {
+        String normalized = value.toUpperCase(Locale.ROOT);
+        return normalized.matches("[A-Z0-9_]{1,64}") ? normalized : "UNKNOWN";
     }
 
     private static ApiChatException protocol(ApiChatProtocolViolation violation) {
@@ -287,11 +197,5 @@ public final class ApiChatSseParserImpl implements ApiChatSseParser {
                 "The model upstream returned an invalid streaming protocol.",
                 null,
                 new ApiChatProtocolViolationException(violation));
-    }
-
-    /** Usage 的计费事实与白名单 JSON 必须由同一次校验产生，禁止二次读取不可信上游节点。 */
-    private record ParsedUsage(
-            ApiInferenceUsage billingUsage,
-            ObjectNode normalized) {
     }
 }

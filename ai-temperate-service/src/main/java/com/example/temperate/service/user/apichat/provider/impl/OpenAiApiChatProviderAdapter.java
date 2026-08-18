@@ -19,7 +19,10 @@ public final class OpenAiApiChatProviderAdapter implements ApiChatProviderAdapte
             "max_completion_tokens", "temperature", "top_p",
             "reasoning_effort", "prompt_cache_key", "store", "service_tier",
             "presence_penalty", "frequency_penalty", "stop", "seed", "n",
-            "tools", "tool_choice", "parallel_tool_calls");
+            "tools", "tool_choice", "parallel_tool_calls", "verbosity",
+            "safety_identifier", "user", "logprobs", "top_logprobs",
+            "prediction", "prompt_cache_options", "functions", "function_call",
+            "response_format", "max_tokens");
     private final ApiChatPayloadFactory payloadFactory;
 
     public OpenAiApiChatProviderAdapter(ApiChatPayloadFactory payloadFactory) {

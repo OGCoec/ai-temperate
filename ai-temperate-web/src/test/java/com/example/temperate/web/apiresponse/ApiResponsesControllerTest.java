@@ -11,7 +11,6 @@ import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apiresponse.ApiResponseCreation;
-import com.example.temperate.service.user.apiresponse.ApiResponseRequest;
 import com.example.temperate.service.user.apiresponse.ApiResponseService;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticInvocation;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticSession;
@@ -41,10 +40,11 @@ final class ApiResponsesControllerTest {
 
     @Test
     void returnsJsonWithoutSseHeadersAfterServiceCompletion() throws Exception {
-        ApiResponseRequest request = request(false);
+        ObjectNode request = request(false);
         ObjectNode body = objectMapper.createObjectNode().put("object", "response");
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Json(Mono.just(body)),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Json(body),
                 diagnostics(false));
 
         var response = controller.create(principal(), request).block();
@@ -59,7 +59,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void returnsSseWithNativeEventNameAndNoChatDone() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame delta = new ApiResponseSseFrame(
                 "response.output_text.delta",
                 "{\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}",
@@ -77,7 +77,7 @@ final class ApiResponsesControllerTest {
                 new ApiInferenceUsage(1, 1, 0),
                 "STOP");
         AtomicLong maximumUpstreamRequest = new AtomicLong();
-        ApiResponseService service = (principal, ignored) ->
+        ApiResponseService service = (principal, ignored, clientRequestId) ->
                 new ApiResponseCreation.Stream(Flux.just(delta, frame)
                         .doOnRequest(requested -> maximumUpstreamRequest
                                 .accumulateAndGet(requested, Math::max)));
@@ -102,13 +102,13 @@ final class ApiResponsesControllerTest {
 
     @Test
     void propagatesFailureBeforeFirstSseEventWithoutCreatingSuccessResponse() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiChatException failure = new ApiChatException(
                 ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
                 "The model upstream is unavailable.",
                 null);
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(
+                (principal, ignored, clientRequestId) -> new ApiResponseCreation.Stream(
                         Flux.error(failure)),
                 diagnostics(false));
 
@@ -118,9 +118,10 @@ final class ApiResponsesControllerTest {
 
     @Test
     void rejectsAnEmptyUpstreamBeforeCreatingSuccessResponse() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(Flux.empty()),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(Flux.empty()),
                 diagnostics(false));
 
         assertThatThrownBy(() -> controller.create(principal(), request).block())
@@ -130,7 +131,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void emitsATerminalFirstFrameThenCompletesWithoutCancellingUpstream() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame terminal = new ApiResponseSseFrame(
                 "response.completed",
                 "{\"type\":\"response.completed\"}",
@@ -141,7 +142,7 @@ final class ApiResponsesControllerTest {
                 "STOP");
         AtomicInteger upstreamCancellations = new AtomicInteger();
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(
+                (principal, ignored, clientRequestId) -> new ApiResponseCreation.Stream(
                         Flux.just(terminal)
                                 .doOnCancel(upstreamCancellations::incrementAndGet)),
                 diagnostics(false));
@@ -160,7 +161,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void emitsTheFirstFrameBeforeCompletingWhenUpstreamAlreadyCompleted() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame first = new ApiResponseSseFrame(
                 "response.created",
                 "{\"type\":\"response.created\"}",
@@ -170,7 +171,8 @@ final class ApiResponsesControllerTest {
                 null,
                 null);
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(Flux.just(first)),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(Flux.just(first)),
                 diagnostics(false));
 
         var response = controller.create(principal(), request).block();
@@ -186,7 +188,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void emitsTheFirstFrameBeforePropagatingAStoredUpstreamFailure() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame first = new ApiResponseSseFrame(
                 "response.created",
                 "{\"type\":\"response.created\"}",
@@ -199,7 +201,8 @@ final class ApiResponsesControllerTest {
         Flux<ApiResponseSseFrame> upstream = Flux.concat(
                 Flux.just(first), Flux.error(failure));
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(upstream),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(upstream),
                 diagnostics(false));
 
         var response = controller.create(principal(), request).block();
@@ -215,12 +218,13 @@ final class ApiResponsesControllerTest {
 
     @Test
     void cancelsUpstreamWhenTheHttpMonoIsCancelledBeforeTheFirstFrame() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         AtomicInteger upstreamCancellations = new AtomicInteger();
         Flux<ApiResponseSseFrame> upstream = Flux.<ApiResponseSseFrame>never()
                 .doOnCancel(upstreamCancellations::incrementAndGet);
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(upstream),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(upstream),
                 diagnostics(false));
 
         StepVerifier.create(controller.create(principal(), request))
@@ -232,7 +236,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void streamsOneFramePerDemandWithoutOverflow() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame first = new ApiResponseSseFrame(
                 "response.created",
                 "{\"type\":\"response.created\",\"secret\":\"secret-created\"}",
@@ -262,7 +266,7 @@ final class ApiResponsesControllerTest {
                 ApiResponseDiagnosticStage.HTTP_CONTROLLER,
                 new Object[] {request});
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(
+                (principal, ignored, clientRequestId) -> new ApiResponseCreation.Stream(
                         Flux.just(first, second, third)),
                 diagnostics);
 
@@ -302,7 +306,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void waitsForBodyDemandBeforeRequestingTheNextUpstreamFrame() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame first = new ApiResponseSseFrame(
                 "response.created",
                 "{\"type\":\"response.created\"}",
@@ -323,7 +327,8 @@ final class ApiResponsesControllerTest {
         Flux<ApiResponseSseFrame> upstream = Flux.just(first, terminal)
                 .doOnRequest(upstreamRequested::addAndGet);
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(upstream),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(upstream),
                 diagnostics(false));
 
         var response = controller.create(principal(), request).block();
@@ -346,7 +351,7 @@ final class ApiResponsesControllerTest {
 
     @Test
     void cancelsTheUpstreamOnceWhenTheBodySubscriberCancels() throws Exception {
-        ApiResponseRequest request = request(true);
+        ObjectNode request = request(true);
         ApiResponseSseFrame first = new ApiResponseSseFrame(
                 "response.created",
                 "{\"type\":\"response.created\"}",
@@ -364,7 +369,8 @@ final class ApiResponsesControllerTest {
                 ApiResponseDiagnosticStage.HTTP_CONTROLLER,
                 new Object[] {request});
         ApiResponsesController controller = new ApiResponsesController(
-                (principal, ignored) -> new ApiResponseCreation.Stream(upstream),
+                (principal, ignored, clientRequestId) ->
+                        new ApiResponseCreation.Stream(upstream),
                 diagnostics);
 
         try (LogCapture logs = LogCapture.start()) {
@@ -391,11 +397,10 @@ final class ApiResponsesControllerTest {
         }
     }
 
-    private ApiResponseRequest request(boolean stream) throws Exception {
-        return objectMapper.readValue(
+    private ObjectNode request(boolean stream) throws Exception {
+        return (ObjectNode) objectMapper.readTree(
                 "{\"model\":\"gpt-test\",\"input\":\"hello\",\"stream\":"
-                        + stream + "}",
-                ApiResponseRequest.class);
+                        + stream + "}");
     }
 
     private static ApiKeyPrincipal principal() {

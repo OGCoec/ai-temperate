@@ -6,6 +6,7 @@ package com.example.temperate.service.user.apichat;
 public enum ApiChatErrorCode {
     INVALID_API_KEY(401, "authentication_error", "invalid_api_key"),
     INVALID_REQUEST(400, "invalid_request_error", "invalid_request"),
+    UNSUPPORTED_PARAMETER(400, "invalid_request_error", "unsupported_parameter"),
     STREAM_REQUIRED(400, "invalid_request_error", "stream_required"),
     CONTEXT_LENGTH_EXCEEDED(400, "invalid_request_error", "context_length_exceeded"),
     MODEL_NOT_FOUND(404, "invalid_request_error", "model_not_found"),

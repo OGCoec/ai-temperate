@@ -25,18 +25,22 @@ public final class ApiResponsePayloadFactoryImpl implements ApiResponsePayloadFa
 
     @Override
     public ObjectNode create(ValidatedApiResponseRequest request) {
-        ObjectNode payload = objectMapper.valueToTree(request.request());
-        removeNulls(payload);
-        removeEmptyNestedObject(payload, "text", "format");
-        removeEmptyObject(payload, "reasoning");
-        removeEmptyObject(payload, "text");
-        boolean hasTools = hasNonEmptyArray(payload, "tools");
-        removeEmptyArray(payload, "tools");
-        removeEmptyArray(payload, "include");
-        if (!hasTools) {
-            // 没有可调用工具时这些控制字段不产生语义，删除后可兼容会无条件序列化默认值的 SDK。
-            payload.remove("tool_choice");
-            payload.remove("parallel_tool_calls");
+        ObjectNode payload = request.normalizedPayload() == null
+                ? objectMapper.valueToTree(request.request())
+                : request.normalizedPayload().deepCopy();
+        if (!request.openAiEnhanced()) {
+            removeNulls(payload);
+            removeEmptyNestedObject(payload, "text", "format");
+            removeEmptyObject(payload, "reasoning");
+            removeEmptyObject(payload, "text");
+            boolean hasTools = hasNonEmptyArray(payload, "tools");
+            removeEmptyArray(payload, "tools");
+            removeEmptyArray(payload, "include");
+            if (!hasTools) {
+                // 旧 DTO 会无条件序列化默认工具控制值；只在旧路径删除，增强路径保留所有已验证字段。
+                payload.remove("tool_choice");
+                payload.remove("parallel_tool_calls");
+            }
         }
         // 这些字段是授权、上下文校验和账单预扣共同使用的规范值，禁止保留客户端原始取值。
         payload.put("model", request.model().modelName());

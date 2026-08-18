@@ -1,6 +1,8 @@
 package com.example.temperate.service.user.apiresponse.diagnostic;
 
 import com.example.temperate.service.user.apiresponse.ApiResponseCreation;
+import com.example.temperate.service.user.apiresponse.ApiResponseCreation.HttpJson;
+import com.example.temperate.service.user.apiresponse.ApiResponseCreation.HttpStream;
 import java.util.Objects;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -40,11 +42,17 @@ public final class ApiResponseStreamDiagnosticAspect {
             }
             if (result instanceof ApiResponseCreation.Stream stream) {
                 return new ApiResponseCreation.Stream(
-                        diagnostics.observeLifecycle(stream.body(), invocation));
+                        diagnostics.observeLifecycle(stream.response(), invocation)
+                                .map(response -> new HttpStream(
+                                        diagnostics.observeLifecycle(
+                                                response.body(), invocation),
+                                        response.headers())));
             }
             if (result instanceof ApiResponseCreation.Json json) {
                 return new ApiResponseCreation.Json(
-                        diagnostics.observeLifecycle(json.body(), invocation));
+                        diagnostics.observeLifecycle(json.response(), invocation)
+                                .map(response -> new HttpJson(
+                                        response.body(), response.headers())));
             }
             if (invocation.owner()) {
                 invocation.session().summarize(
