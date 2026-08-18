@@ -22,8 +22,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/v1")
 @Tag(
         name = "开放接口-模型发现",
-        description = "供 OpenAI 兼容 SDK 与 CC Switch 在调用 Chat Completions 前读取当前 Bearer API Key 可使用的模型。"
-                + "只返回已授权、已启用且支持 Chat Completions 的模型；不提供模型详情、计费信息或上游全量目录。")
+        description = "供 OpenAI 兼容 SDK、Codex 与 CC Switch 在调用 Chat Completions 或 Responses 前读取当前 Bearer API Key 可使用的模型。"
+                + "只返回已授权、已启用且支持至少一种公开推理协议的模型；不添加非标准 capability 字段，"
+                + "也不提供模型详情、计费信息或上游全量目录。")
 public final class ApiKeyModelDiscoveryController {
 
     private final ApiKeyModelDiscoveryService modelDiscoveryService;
@@ -34,7 +35,7 @@ public final class ApiKeyModelDiscoveryController {
 
     @GetMapping(path = "/models", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-            summary = "列出当前 API Key 可调用的 Chat 模型",
+            summary = "列出当前 API Key 可调用的公开推理模型",
             description = "Authorization 使用 Bearer sk-***。返回为空表示 Key 有效但当前没有可调用模型。"
                     + "模型 ID 可直接作为 POST /v1/chat/completions 的 model 字段。",
             security = @SecurityRequirement(name = "apiKeyBearer"))

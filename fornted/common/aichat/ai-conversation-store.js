@@ -70,7 +70,18 @@ export function selectConversation(conversationPublicId) {
 
 export function setConversationPage(page, append = false) {
 	const incoming = page.conversations || []
-	state.conversations = append ? [...state.conversations, ...incoming] : [...incoming]
+	if (append) {
+		const conversationsById = new Map(state.conversations.map(item => [
+			item.conversationPublicId,
+			item
+		]))
+		incoming.forEach(item => {
+			conversationsById.set(item.conversationPublicId, item)
+		})
+		state.conversations = [...conversationsById.values()]
+	} else {
+		state.conversations = [...incoming]
+	}
 	state.nextCursor = page.nextCursor || null
 	state.hasMoreConversations = page.hasMore === true
 	state.conversationsLoaded = true

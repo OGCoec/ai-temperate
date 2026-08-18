@@ -198,6 +198,7 @@ public final class WebRtcEdgeController {
                     null,
                     null,
                     null,
+                    null,
                     false,
                     Instant.now())));
         }
@@ -223,6 +224,7 @@ public final class WebRtcEdgeController {
                             null,
                             null,
                             null,
+                            null,
                             false,
                             Instant.now())));
         }
@@ -234,12 +236,14 @@ public final class WebRtcEdgeController {
         recordReportTransition(scope, platform, access, decision);
         HttpStatus status = reportStatus(decision.outcome(), properties.mode());
         String httpIp = switch (decision.outcome()) {
-            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH ->
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE, IP_MISMATCH ->
                     observation.clientIp();
             default -> null;
         };
         List<String> ips = switch (decision.outcome()) {
-            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH ->
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE, IP_MISMATCH ->
                     decision.webRtcIps();
             default -> null;
         };
@@ -250,6 +254,7 @@ public final class WebRtcEdgeController {
                                 ? null
                                 : message(decision.outcome()),
                         decision.webRtcStatus(),
+                        decision.verificationState(),
                         httpIp,
                         ips,
                         decision.outcome() == WebRtcVerificationOutcome.NETWORK_CHANGED
@@ -323,6 +328,7 @@ public final class WebRtcEdgeController {
             case VERIFIED -> HttpStatus.OK;
             case IP_MISMATCH -> HttpStatus.FORBIDDEN;
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE,
                     VERIFICATION_REQUIRED, VERIFICATION_PENDING ->
                     HttpStatus.PRECONDITION_REQUIRED;
             case NETWORK_CHANGED, STALE_REPORT -> HttpStatus.CONFLICT;
@@ -334,6 +340,7 @@ public final class WebRtcEdgeController {
         return switch (outcome) {
             case VERIFIED -> "matched";
             case VERIFICATION_PENDING -> "pending";
+            case IP_FAMILY_INCOMPLETE -> "family_incomplete";
             case IP_MISMATCH -> "mismatch";
             case VERIFICATION_FAILED, VERIFICATION_REQUIRED -> "empty";
             case VERIFICATION_TIMEOUT -> "timeout";
@@ -390,6 +397,7 @@ public final class WebRtcEdgeController {
         if (access.state().webRtcPhase() == PreAuthWebRtcPhase.PENDING
                 && (decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_FAILED
                 || decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_TIMEOUT
+                || decision.outcome() == WebRtcVerificationOutcome.IP_FAMILY_INCOMPLETE
                 || decision.outcome() == WebRtcVerificationOutcome.IP_MISMATCH)) {
             metrics.transition(
                     scope,
@@ -420,6 +428,7 @@ public final class WebRtcEdgeController {
             case VERIFICATION_REQUIRED -> "WEBRTC_VERIFICATION_REQUIRED";
             case VERIFICATION_FAILED -> "WEBRTC_VERIFICATION_FAILED";
             case VERIFICATION_TIMEOUT -> "WEBRTC_VERIFICATION_TIMEOUT";
+            case IP_FAMILY_INCOMPLETE -> "WEBRTC_IP_FAMILY_INCOMPLETE";
             case IP_MISMATCH -> "WEBRTC_IP_MISMATCH";
             case NETWORK_CHANGED -> "WEBRTC_NETWORK_CHANGED";
             case STALE_REPORT -> "WEBRTC_REPORT_STALE";
@@ -435,6 +444,8 @@ public final class WebRtcEdgeController {
             case VERIFICATION_FAILED ->
                     "未获取到可用于校验的 WebRTC 公网 IP，当前会话已停止访问。";
             case VERIFICATION_TIMEOUT -> "WebRTC 网络一致性校验已超时，当前会话已停止访问。";
+            case IP_FAMILY_INCOMPLETE ->
+                    "未获取到与当前 HTTP 连接同协议族的 WebRTC 公网候选，当前会话已停止访问。";
             case IP_MISMATCH ->
                     "检测到 WebRTC IP 与当前 HTTP IP 不一致，当前会话已停止访问。";
             case NETWORK_CHANGED -> "检测期间网络环境发生变化，请读取最新探测状态。";
@@ -458,7 +469,7 @@ public final class WebRtcEdgeController {
     }
 
     /**
-     * 接收客户端一次性上报的公网 srflx 候选集合，不允许携带 HTTP IP 或匹配状态。
+     * 接收客户端一次性上报的公网 host/srflx 候选集合，不允许携带 HTTP IP 或匹配状态。
      */
     public static final class WebRtcReportRequest {
 
@@ -527,6 +538,7 @@ public final class WebRtcEdgeController {
             String code,
             String message,
             Boolean webRtcStatus,
+            String verificationState,
             String httpIp,
             List<String> webRtcIps,
             boolean retryable,

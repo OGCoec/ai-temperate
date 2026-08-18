@@ -160,6 +160,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", code(decision.outcome()));
         body.put("message", message(decision.outcome()));
+        body.put("verificationState", decision.verificationState());
         body.put("webRtcStatus", decision.webRtcStatus());
         body.put("retryable", decision.outcome() == WebRtcVerificationOutcome.NETWORK_CHANGED
                 || decision.outcome() == WebRtcVerificationOutcome.STALE_REPORT);
@@ -243,6 +244,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case IP_MISMATCH -> HttpStatus.FORBIDDEN;
             case NETWORK_CHANGED, STALE_REPORT -> HttpStatus.CONFLICT;
             case VERIFICATION_REQUIRED, VERIFICATION_FAILED,
+                    IP_FAMILY_INCOMPLETE,
                     VERIFICATION_TIMEOUT, VERIFICATION_PENDING ->
                     HttpStatus.PRECONDITION_REQUIRED;
             case STATE_INVALID -> HttpStatus.SERVICE_UNAVAILABLE;
@@ -257,6 +259,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case VERIFICATION_REQUIRED -> "WEBRTC_VERIFICATION_REQUIRED";
             case VERIFICATION_FAILED -> "WEBRTC_VERIFICATION_FAILED";
             case VERIFICATION_TIMEOUT -> "WEBRTC_VERIFICATION_TIMEOUT";
+            case IP_FAMILY_INCOMPLETE -> "WEBRTC_IP_FAMILY_INCOMPLETE";
             case IP_MISMATCH -> "WEBRTC_IP_MISMATCH";
             case NETWORK_CHANGED -> "WEBRTC_NETWORK_CHANGED";
             case STALE_REPORT -> "WEBRTC_REPORT_STALE";
@@ -272,6 +275,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case VERIFICATION_FAILED ->
                     "未获取到可用于校验的 WebRTC 公网 IP，当前会话已停止访问。";
             case VERIFICATION_TIMEOUT -> "WebRTC 网络一致性校验已超时，当前会话已停止访问。";
+            case IP_FAMILY_INCOMPLETE ->
+                    "未获取到与当前 HTTP 连接同协议族的 WebRTC 公网候选，当前会话已停止访问。";
             case IP_MISMATCH ->
                     "检测到 WebRTC IP 与当前 HTTP IP 不一致，当前会话已停止访问。";
             case NETWORK_CHANGED -> "检测期间网络环境发生变化，请读取最新探测状态。";
@@ -286,7 +291,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case VERIFICATION_PENDING -> "pending_allowed";
             case VERIFICATION_REQUIRED -> "required_allowed";
             case NETWORK_CHANGED, STALE_REPORT -> "required";
-            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT -> "failed";
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE -> "failed";
             case IP_MISMATCH -> "blocked";
             case STATE_INVALID -> "invalid";
         };

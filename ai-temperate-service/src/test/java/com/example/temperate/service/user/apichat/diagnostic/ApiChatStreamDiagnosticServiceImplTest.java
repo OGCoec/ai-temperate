@@ -6,7 +6,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.service.user.apichat.ApiChatRequest;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.diagnostic.impl.ApiChatStreamDiagnosticServiceImpl;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Normalization;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
@@ -49,7 +49,7 @@ final class ApiChatStreamDiagnosticServiceImplTest {
                     ApiChatDiagnosticBoundary.AFTER_PROTOCOL_PARSE,
                     17,
                     ApiChatFrameKind.OUTPUT);
-            session.recordUsage(new Usage(12, 3, 2), true);
+            session.recordUsage(new ApiInferenceUsage(12, 3, 2), true);
             session.recordDone();
             diagnostics.returned(invocation, Flux.just("chunk"));
             diagnostics.close(invocation);

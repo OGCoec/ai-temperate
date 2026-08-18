@@ -3,6 +3,7 @@ package com.example.temperate.service.risk.webrtc.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -33,7 +34,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 WebRTC v6 完全异步门禁的 begin、临时放行、Redis 截止时间和 generation 写入语义。
+ * 验证 WebRTC v7 完全异步门禁、双栈同族判定、Redis 截止时间和 generation 写入语义。
  */
 class WebRtcVerificationServiceImplTest {
 
@@ -234,7 +235,7 @@ class WebRtcVerificationServiceImplTest {
     }
 
     @Test
-    void reportRejectsMultipleDistinctIpv4Candidates() {
+    void reportAcceptsMultipleIpv4CandidatesInsideTheSameSlash24() {
         Fixture fixture = fixture();
         PreAuthAccess access = access(
                 fixture,
@@ -243,22 +244,18 @@ class WebRtcVerificationServiceImplTest {
                 DEADLINE,
                 null,
                 null);
-        expectWritten(
-                fixture,
-                17L,
-                false,
-                PreAuthWebRtcFailureReason.IP_MISMATCH);
+        expectWritten(fixture, 17L, true, null);
 
         assertThat(fixture.service().report(
                 access,
                 HTTP_IP,
                 "17",
                 List.of("8.8.8.8", "8.8.8.9")).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+                .isEqualTo(WebRtcVerificationOutcome.VERIFIED);
     }
 
     @Test
-    void reportRejectsMultipleDistinctIpv6Candidates() {
+    void reportAcceptsMultipleIpv6CandidatesInsideTheSameSlash64() {
         String httpIpv6 = "2606:4700:4700::1111";
         Fixture fixture = fixture(httpIpv6);
         PreAuthAccess access = access(
@@ -268,11 +265,7 @@ class WebRtcVerificationServiceImplTest {
                 DEADLINE,
                 null,
                 null);
-        expectWritten(
-                fixture,
-                18L,
-                false,
-                PreAuthWebRtcFailureReason.IP_MISMATCH);
+        expectWritten(fixture, 18L, true, null);
 
         assertThat(fixture.service().report(
                 access,
@@ -281,11 +274,11 @@ class WebRtcVerificationServiceImplTest {
                 List.of(
                         "2606:4700:4700::1111",
                         "2606:4700:4700::2222")).outcome())
-                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+                .isEqualTo(WebRtcVerificationOutcome.VERIFIED);
     }
 
     @Test
-    void reportRejectsWhenOnlyTheOtherIpVersionIsPresent() {
+    void ipv4HttpReportReturnsFamilyIncompleteWhenOnlyIpv6IsPresent() {
         Fixture fixture = fixture();
         PreAuthAccess access = access(
                 fixture, PreAuthWebRtcPhase.PENDING, 19L, DEADLINE, null, null);
@@ -293,7 +286,7 @@ class WebRtcVerificationServiceImplTest {
                 fixture,
                 19L,
                 false,
-                PreAuthWebRtcFailureReason.IP_MISMATCH);
+                PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE);
 
         var decision = fixture.service().report(
                 access,
@@ -301,19 +294,118 @@ class WebRtcVerificationServiceImplTest {
                 "19",
                 List.of("2606:4700:4700::1111"));
 
-        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_FAMILY_INCOMPLETE);
+    }
+
+    @Test
+    void emptyReportReturnsNoPublicCandidateWithoutEncryptedEvidence() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 26L, DEADLINE, null, null);
+        when(fixture.store().writeWebRtcResult(
+                eq(RiskScope.USER),
+                eq(TOKEN),
+                eq(DEVICE),
+                eq(fixture.httpIpDigest()),
+                eq(26L),
+                eq(false),
+                eq(PreAuthWebRtcFailureReason.NO_PUBLIC_CANDIDATE),
+                isNull(),
+                eq(false),
+                eq(Duration.ofMinutes(30))))
+                .thenReturn(PreAuthWebRtcWriteResult.UPDATED);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "26",
+                List.of());
+
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.VERIFICATION_FAILED);
+        assertThat(decision.webRtcIps()).isEmpty();
+    }
+
+    @Test
+    void ipv6HttpReportReturnsFamilyIncompleteWhenOnlyIpv4IsPresent() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 20L, DEADLINE, null, null);
+        expectWritten(
+                fixture,
+                20L,
+                false,
+                PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE);
+
+        var decision = fixture.service().report(
+                access,
+                httpIpv6,
+                "20",
+                List.of("8.8.8.8"));
+
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_FAMILY_INCOMPLETE);
+        assertThat(decision.webRtcIps()).containsExactly("8.8.8.8");
+    }
+
+    @Test
+    void ipv6HttpReportUsesAllSameFamilyCandidatesAndKeepsIpv4AsEvidence() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 21L, DEADLINE, null, null);
+        expectWritten(fixture, 21L, true, null);
+
+        var decision = fixture.service().report(
+                access,
+                httpIpv6,
+                "21",
+                List.of(
+                        "8.8.8.8",
+                        "2606:4700:4700::2222",
+                        "2606:4700:4700::3333"));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+        assertThat(decision.webRtcIps()).containsExactly(
+                "8.8.8.8",
+                "2606:4700:4700::2222",
+                "2606:4700:4700::3333");
+    }
+
+    @Test
+    void oneMismatchedSameFamilyCandidateCannotBeHiddenByAMatchingCandidate() {
+        String httpIpv6 = "2606:4700:4700::1111";
+        Fixture fixture = fixture(httpIpv6);
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 22L, DEADLINE, null, null);
+        expectWritten(
+                fixture,
+                22L,
+                false,
+                PreAuthWebRtcFailureReason.IP_MISMATCH);
+
+        assertThat(fixture.service().report(
+                access,
+                httpIpv6,
+                "22",
+                List.of(
+                        "2606:4700:4700::2222",
+                        "2606:4700:4701::3333")).outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
     }
 
     @Test
     void reportCannotImplicitlyStartARequiredGeneration() {
         Fixture fixture = fixture();
         PreAuthAccess access = access(
-                fixture, PreAuthWebRtcPhase.REQUIRED, 20L, DEADLINE, null, null);
+                fixture, PreAuthWebRtcPhase.REQUIRED, 23L, DEADLINE, null, null);
 
         assertThat(fixture.service().report(
                 access,
                 HTTP_IP,
-                "20",
+                "23",
                 List.of(HTTP_IP)).outcome())
                 .isEqualTo(WebRtcVerificationOutcome.STALE_REPORT);
     }
@@ -329,13 +421,36 @@ class WebRtcVerificationServiceImplTest {
         PreAuthAccess access = access(
                 fixture,
                 PreAuthWebRtcPhase.FAILED,
-                21L,
+                24L,
                 null,
                 PreAuthWebRtcFailureReason.IP_MISMATCH,
                 ciphertext);
 
         assertThat(fixture.service().inspect(access, HTTP_IP).outcome())
                 .isEqualTo(WebRtcVerificationOutcome.IP_MISMATCH);
+    }
+
+    @Test
+    void familyIncompleteFailureRetainsEncryptedCandidatesWithoutADeadline() {
+        Fixture fixture = fixture();
+        String ciphertext = fixture.protector().encrypt(
+                List.of("2606:4700:4700::1111"),
+                RiskScope.USER,
+                TOKEN,
+                fixture.httpIpDigest());
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.FAILED,
+                25L,
+                null,
+                PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE,
+                ciphertext);
+
+        var decision = fixture.service().inspect(access, HTTP_IP);
+
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.IP_FAMILY_INCOMPLETE);
+        assertThat(decision.webRtcIps()).containsExactly("2606:4700:4700::1111");
     }
 
     private static Fixture fixture() {

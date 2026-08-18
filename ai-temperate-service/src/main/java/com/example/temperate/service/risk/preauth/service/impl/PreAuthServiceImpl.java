@@ -27,7 +27,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
- * 使用 256 位随机 Token 和单个 Redis Hash 实现普通与管理员隔离的 PreAuth v6 生命周期。
+ * 使用 256 位随机 Token 和单个 Redis Hash 实现普通与管理员隔离的 PreAuth v7 生命周期。
  *
  * <p>IP 信用快照、事件计数和活动 Challenge 都通过 Store 的 Lua 边界写入同一个 Hash；原始
  * PreAuth Token、明文 IP 和原始会话 Token 从不写入 Redis、日志或异常。</p>
@@ -379,7 +379,7 @@ public final class PreAuthServiceImpl implements PreAuthService {
                     oldAccess.tokenDigest(),
                     oldAccess.state().currentIpDigest());
             if (ips.isEmpty()) {
-                // VERIFIED 却解密为空说明旧证据已不满足 v6 不变量；轮换后重新探测，不能继承伪成功。
+                // VERIFIED 却解密为空说明旧证据已不满足 v7 不变量；轮换后重新探测，不能继承伪成功。
                 return new WebRtcRotationState(
                         PreAuthWebRtcPhase.REQUIRED,
                         nextGeneration(oldAccess.state().webRtcGeneration()),

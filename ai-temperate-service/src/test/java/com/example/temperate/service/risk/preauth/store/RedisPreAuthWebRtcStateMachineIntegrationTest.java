@@ -46,7 +46,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * 在临时 Redis 7.4 中验证 PreAuth v6 WebRTC 四态 Lua 以及普通、管理员会话绑定。
+ * 在临时 Redis 7.4 中验证 PreAuth v7 WebRTC 四态 Lua 以及普通、管理员会话绑定。
  *
  * <p>测试只写容器 Redis，不连接 PostgreSQL、生产 Redis 或外部服务；deadline 断言统一读取 Redis
  * TIME，避免 Java 节点时钟成为状态机的隐式输入。</p>
@@ -182,6 +182,30 @@ class RedisPreAuthWebRtcStateMachineIntegrationTest {
         assertThat(failed.webRtcFailureReason())
                 .isEqualTo(PreAuthWebRtcFailureReason.IP_MISMATCH);
         assertThat(failed.webRtcIps()).isEqualTo("encrypted-mismatch-candidates");
+
+        Identifiers familyIncomplete = identifiers("family-incomplete");
+        create(RiskScope.USER, familyIncomplete, START_GRACE);
+        begin(RiskScope.USER, familyIncomplete, 1L);
+        assertThat(store.writeWebRtcResult(
+                        RiskScope.USER,
+                        familyIncomplete.token(),
+                        familyIncomplete.device(),
+                        familyIncomplete.ip(),
+                        1L,
+                        false,
+                        PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE,
+                        "encrypted-opposite-family-candidates",
+                        true,
+                        TTL))
+                .isEqualTo(PreAuthWebRtcWriteResult.UPDATED);
+        PreAuthState incomplete = requiredState(
+                RiskScope.USER,
+                familyIncomplete.token());
+        assertThat(incomplete.webRtcPhase()).isEqualTo(PreAuthWebRtcPhase.FAILED);
+        assertThat(incomplete.webRtcFailureReason())
+                .isEqualTo(PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE);
+        assertThat(incomplete.webRtcIps())
+                .isEqualTo("encrypted-opposite-family-candidates");
     }
 
     @Test

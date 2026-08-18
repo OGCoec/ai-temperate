@@ -17,14 +17,14 @@ import java.util.Objects;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 该过滤器是来在 JSON 反序列化期间强制执行公开 Chat Completions 请求体字节上限，覆盖 Content-Length 和分块传输两种情况。
+ * 该过滤器是来对公开 Chat Completions 与 Responses 请求强制统一字节上限，覆盖 Content-Length 和分块传输且不读取业务 JSON。
  */
-public final class ApiChatBodyLimitFilter extends OncePerRequestFilter {
+public final class ApiInferenceBodyLimitFilter extends OncePerRequestFilter {
 
     private final ApiKeyProperties properties;
     private final OpenAiErrorResponseWriter errorWriter;
 
-    public ApiChatBodyLimitFilter(
+    public ApiInferenceBodyLimitFilter(
             ApiKeyProperties properties,
             OpenAiErrorResponseWriter errorWriter) {
         this.properties = Objects.requireNonNull(properties);
@@ -33,7 +33,10 @@ public final class ApiChatBodyLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"/v1/chat/completions".equals(request.getRequestURI());
+        String uri = request.getRequestURI();
+        return !"POST".equalsIgnoreCase(request.getMethod())
+                || !(ApiKeyV1Paths.CHAT_COMPLETIONS.equals(uri)
+                || ApiKeyV1Paths.RESPONSES.equals(uri));
     }
 
     @Override
@@ -56,10 +59,10 @@ public final class ApiChatBodyLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(new LimitedRequest(request, maximumBytes), response);
     }
 
-    /** 该异常只携带固定消息，避免把请求内容或容器内部状态带入错误响应。 */
+    /** 该异常只携带固定消息，供两个公开推理 Controller 映射为一致的 OpenAI JSON 错误。 */
     public static final class PayloadTooLargeException extends IOException {
         public PayloadTooLargeException() {
-            super("API chat request body exceeds the configured byte limit");
+            super("Public inference request body exceeds the configured byte limit");
         }
     }
 

@@ -17,7 +17,7 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
-import com.example.temperate.web.apikey.ApiChatBodyLimitFilter;
+import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter;
 import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
 import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
 import com.example.temperate.web.apikey.OpenAiErrorResponseWriter;
@@ -117,7 +117,7 @@ final class ApiChatSecurityAsyncDispatchRegressionTest {
                 riskProperties,
                 errorWriter,
                 new SimpleMeterRegistry());
-        ApiChatBodyLimitFilter bodyFilter = new ApiChatBodyLimitFilter(
+        ApiInferenceBodyLimitFilter bodyFilter = new ApiInferenceBodyLimitFilter(
                 apiKeyProperties,
                 errorWriter);
 

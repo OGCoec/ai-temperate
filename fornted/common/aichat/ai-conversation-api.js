@@ -15,6 +15,8 @@ const GENERATION_STATES = new Set([
 const OBSERVER_STATES = new Set(['ATTACHED', 'DETACHED'])
 const COMPACTION_STATES = new Set(['IDLE', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'])
 
+export const CONVERSATION_LIST_PAGE_SIZE = 18
+
 function error(code, message) {
 	const value = new Error(message)
 	value.code = code
@@ -269,7 +271,10 @@ function pageSize(value, maximum) {
 }
 
 export const aiConversationApi = Object.freeze({
-	async listConversations({ cursor = '', pageSize: size = 20 } = {}) {
+	async listConversations({
+		cursor = '',
+		pageSize: size = CONVERSATION_LIST_PAGE_SIZE
+	} = {}) {
 		pageSize(size, 50)
 		if (cursor && !CURSOR.test(cursor)) throw error('AI_CONVERSATION_CURSOR_INVALID', '会话游标无效。')
 		const entries = [['pageSize', size]]

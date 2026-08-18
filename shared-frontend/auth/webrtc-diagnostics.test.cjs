@@ -49,6 +49,14 @@ test('explicitly enabled diagnostics emit one complete console argument without 
 			hasChannel: true,
 			hasIv: true,
 			hasPayload: true,
+			hostCount: 2,
+			srflxCount: 2,
+			acceptedHostCount: 1,
+			acceptedSrflxCount: 1,
+			ignoredRelayCount: 1,
+			rejectedNonPublicCount: 2,
+			ipv4Count: 1,
+			ipv6Count: 1,
 			unknownField: 'must-not-appear'
 		})
 
@@ -70,7 +78,15 @@ test('explicitly enabled diagnostics emit one complete console argument without 
 			timerActive: true,
 			hasChannel: true,
 			hasIv: true,
-			hasPayload: true
+			hasPayload: true,
+			hostCount: 2,
+			srflxCount: 2,
+			acceptedHostCount: 1,
+			acceptedSrflxCount: 1,
+			ignoredRelayCount: 1,
+			rejectedNonPublicCount: 2,
+			ipv4Count: 1,
+			ipv6Count: 1
 		})
 		assert.doesNotMatch(sourceText, /typeof process|process\.env/)
 	} finally {

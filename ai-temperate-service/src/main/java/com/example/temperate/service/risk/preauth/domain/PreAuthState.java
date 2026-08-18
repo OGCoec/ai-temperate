@@ -57,7 +57,7 @@ public record PreAuthState(
         PreAuthWebRtcFailureReason webRtcFailureReason,
         String webRtcIps) {
 
-    public static final int CURRENT_SCHEMA_VERSION = 6;
+    public static final int CURRENT_SCHEMA_VERSION = 7;
 
     public PreAuthState {
         if (schemaVersion != CURRENT_SCHEMA_VERSION
@@ -77,7 +77,7 @@ public record PreAuthState(
                 || impossibleTravelCount < 0
                 || challengeIssuedCount < 0
                 || challengePassedCount < 0) {
-            throw new IllegalArgumentException("PreAuth v6 state is invalid.");
+            throw new IllegalArgumentException("PreAuth v7 state is invalid.");
         }
         if (webRtcPhase == null || webRtcGeneration <= 0) {
             throw new IllegalArgumentException(
@@ -93,9 +93,9 @@ public record PreAuthState(
                     && !webRtcIps.isBlank();
             case FAILED -> webRtcFailureReason != null
                     && webRtcDeadlineAt == null
-                    && (webRtcFailureReason == PreAuthWebRtcFailureReason.IP_MISMATCH
-                    ? webRtcIps != null && !webRtcIps.isBlank()
-                    : webRtcIps == null);
+                    && (retainsWebRtcEvidence(webRtcFailureReason)
+                            ? webRtcIps != null && !webRtcIps.isBlank()
+                            : webRtcIps == null);
         };
         if (!validWebRtcState) {
             throw new IllegalArgumentException("WebRTC state is inconsistent.");
@@ -108,6 +108,12 @@ public record PreAuthState(
 
     public boolean authenticated() {
         return sessionType != RiskSessionType.NONE;
+    }
+
+    private static boolean retainsWebRtcEvidence(
+            PreAuthWebRtcFailureReason failureReason) {
+        return failureReason == PreAuthWebRtcFailureReason.IP_MISMATCH
+                || failureReason == PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE;
     }
 
     /**

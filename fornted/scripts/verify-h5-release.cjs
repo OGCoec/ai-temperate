@@ -4,7 +4,7 @@ const {
 	collectPublicAssetPaths
 } = require('./generate-h5-edge-assets.cjs')
 
-const REQUIRED_FILES = ['index.html', '_headers', '_redirects']
+const REQUIRED_FILES = ['index.html', '404.html', '_headers', '_redirects']
 const DEFAULT_ASSET_MANIFEST = path.resolve(
 	__dirname,
 	'..',
@@ -157,7 +157,7 @@ function verifyIndexAssetReferences(indexSource, assetPaths, errors) {
 }
 
 function verifyH5ReleaseArtifacts(options = {}) {
-	const root = path.resolve(options.root || path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'h5'))
+	const root = path.resolve(options.root || path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'web'))
 	const errors = []
 
 	if (!fs.existsSync(root)) {

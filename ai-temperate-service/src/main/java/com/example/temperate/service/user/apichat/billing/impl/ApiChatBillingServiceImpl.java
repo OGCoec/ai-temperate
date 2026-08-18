@@ -11,9 +11,12 @@ import com.example.temperate.model.ai.enums.AiModelBillingStatus;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.user.aiconversation.billing.impl.AiConversationQuotaCalculator;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionRequest;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceReservation;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
-import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.membership.MembershipQuotaPlan;
@@ -71,9 +74,9 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
 
     @Override
     @Transactional
-    public Reservation reserve(
+    public ApiInferenceReservation reserve(
             ApiKeyPrincipal principal,
-            ValidatedApiChatRequest request) {
+            ApiInferenceExecutionRequest request) {
         OffsetDateTime now = now();
         ApiKeyReservationAuthorization authorization =
                 apiKeyMapper.findReservationAuthorizationForUpdate(
@@ -87,18 +90,18 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         }
 
         long reservedMinor = quotaCalculator.reservedQuota(
-                request.estimatedPromptTokens(),
+                request.estimatedInputTokens(),
                 request.effectiveMaxOutputTokens(),
                 authorization.getInputRatio(),
                 authorization.getOutputRatio());
         UserMembershipQuota quota = quotaMapper.findByLoginIdentityIdForUpdate(
                 principal.loginIdentityId());
         if (quota == null) {
-            throw insufficient();
+            throw insufficient(request.protocol());
         }
         activateExpiredPeriod(quota, now);
         if (quota.getQuotaBalanceMinor() < reservedMinor) {
-            throw insufficient();
+            throw insufficient(request.protocol());
         }
         quota.setQuotaBalanceMinor(Math.subtractExact(
                 quota.getQuotaBalanceMinor(), reservedMinor));
@@ -116,42 +119,40 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         AiModelApiUsageDetail detail = new AiModelApiUsageDetail();
         detail.setUsageId(usage.getId());
         detail.setVendorSnapshot(request.model().vendor());
-        detail.setStream(true);
+        detail.setStream(request.stream());
         detail.setReservedQuotaMinor(reservedMinor);
         if (detailMapper.insert(detail) != 1) {
             throw new IllegalStateException("API model usage detail insert did not affect one row");
         }
         cacheInvalidationExecutor.evictAfterCommit(principal.loginIdentityId());
-        count("reserve", "success");
-        return new Reservation(
+        count(request.protocol(), "reserve", "success");
+        return new ApiInferenceReservation(
                 usage.getId(),
                 principal.loginIdentityId(),
                 principal.apiKeyId(),
                 reservedMinor,
-                request.estimatedPromptTokens(),
+                request.estimatedInputTokens(),
                 authorization.getInputRatio(),
                 authorization.getCachedInputRatio(),
-                authorization.getOutputRatio());
+                authorization.getOutputRatio(),
+                request.protocol());
     }
 
     @Override
     @Transactional
-    public void settle(Reservation reservation, Usage usage, String finishReason) {
-        if (usage.promptTokens() < 0
-                || usage.completionTokens() < 0
-                || usage.cachedPromptTokens() < 0
-                || usage.cachedPromptTokens() > usage.promptTokens()) {
-            throw new IllegalArgumentException("API chat Usage is invalid");
-        }
+    public void settle(
+            ApiInferenceReservation reservation,
+            ApiInferenceUsage usage,
+            String finishReason) {
         AiModelApiUsage persisted = usageMapper.findByIdForUpdate(reservation.usageId());
         if (persisted == null
                 || persisted.getBillingStatus() != AiModelBillingStatus.RESERVED.code()) {
             return;
         }
         long actualMinor = quotaCalculator.actualQuota(
-                usage.promptTokens(),
-                usage.cachedPromptTokens(),
-                usage.completionTokens(),
+                usage.inputTokens(),
+                usage.cachedInputTokens(),
+                usage.outputTokens(),
                 reservation.inputRatio(),
                 reservation.cachedInputRatio(),
                 reservation.outputRatio());
@@ -161,7 +162,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
     @Override
     @Transactional
     public void settleCancellationEstimate(
-            Reservation reservation,
+            ApiInferenceReservation reservation,
             long emittedUtf8Bytes) {
         if (emittedUtf8Bytes <= 0) {
             AiModelApiUsage persisted = usageMapper.findByIdForUpdate(reservation.usageId());
@@ -177,11 +178,12 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             return;
         }
         long estimatedCompletion = Math.ceilDiv(emittedUtf8Bytes, 3L);
-        Usage usage = new Usage(reservation.estimatedPromptTokens(), estimatedCompletion, 0);
+        ApiInferenceUsage usage = new ApiInferenceUsage(
+                reservation.estimatedInputTokens(), estimatedCompletion, 0);
         long actualMinor = quotaCalculator.actualQuota(
-                usage.promptTokens(),
+                usage.inputTokens(),
                 0,
-                usage.completionTokens(),
+                usage.outputTokens(),
                 reservation.inputRatio(),
                 reservation.cachedInputRatio(),
                 reservation.outputRatio());
@@ -195,7 +197,9 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
 
     @Override
     @Transactional
-    public void refundSystemFailure(Reservation reservation, String failureCode) {
+    public void refundSystemFailure(
+            ApiInferenceReservation reservation,
+            String failureCode) {
         AiModelApiUsage persisted = usageMapper.findByIdForUpdate(reservation.usageId());
         if (persisted == null
                 || persisted.getBillingStatus() != AiModelBillingStatus.RESERVED.code()) {
@@ -204,7 +208,9 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         refundLocked(reservation, failureCode);
     }
 
-    private void refundLocked(Reservation reservation, String failureCode) {
+    private void refundLocked(
+            ApiInferenceReservation reservation,
+            String failureCode) {
         UserMembershipQuota quota = quotaMapper.findByLoginIdentityIdForUpdate(
                 reservation.loginIdentityId());
         if (quota == null) {
@@ -229,12 +235,12 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             throw new IllegalStateException("API system failure refund did not fully apply");
         }
         cacheInvalidationExecutor.evictAfterCommit(reservation.loginIdentityId());
-        count("refund", "failed_refunded");
+        count(reservation.protocol(), "refund", "failed_refunded");
     }
 
     private void settleLocked(
-            Reservation reservation,
-            Usage usage,
+            ApiInferenceReservation reservation,
+            ApiInferenceUsage usage,
             String finishReason,
             long actualMinor,
             String failureCode) {
@@ -260,9 +266,9 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
                 reservation.usageId(),
                 AiModelBillingStatus.RESERVED.code(),
                 finalStatus,
-                usage.promptTokens(),
-                usage.completionTokens(),
-                usage.cachedPromptTokens(),
+                usage.inputTokens(),
+                usage.outputTokens(),
+                usage.cachedInputTokens(),
                 chargedMinor,
                 safeFinishReason(finishReason),
                 failureCode,
@@ -271,14 +277,15 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             throw new IllegalStateException("API usage settlement did not fully apply");
         }
         cacheInvalidationExecutor.evictAfterCommit(reservation.loginIdentityId());
-        count("settle", finalStatus == AiModelBillingStatus.RECONCILE_REQUIRED.code()
+        count(reservation.protocol(), "settle",
+                finalStatus == AiModelBillingStatus.RECONCILE_REQUIRED.code()
                 ? "reconcile_required" : "settled");
     }
 
     private void validateAuthorization(
             ApiKeyReservationAuthorization authorization,
             ApiKeyPrincipal principal,
-            ValidatedApiChatRequest request,
+            ApiInferenceExecutionRequest request,
             OffsetDateTime now) {
         if (authorization == null
                 || !Objects.equals(authorization.getApiKeyId(), principal.apiKeyId())
@@ -315,7 +322,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
                 || authorization.getMaxOutputTokens() <= 0
                 || request.effectiveMaxOutputTokens()
                 > authorization.getMaxOutputTokens()
-                || request.estimatedPromptTokens()
+                || request.estimatedInputTokens()
                 > authorization.getContextWindowTokens()
                 - request.effectiveMaxOutputTokens()) {
             throw new ApiChatException(
@@ -357,8 +364,8 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
     }
 
-    private ApiChatException insufficient() {
-        count("reserve", "insufficient_quota");
+    private ApiChatException insufficient(ApiInferenceProtocol protocol) {
+        count(protocol, "reserve", "insufficient_quota");
         return new ApiChatException(
                 ApiChatErrorCode.INSUFFICIENT_QUOTA,
                 "Insufficient quota to start this request.",
@@ -374,7 +381,19 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
                 ? value : "SYSTEM_FAILURE";
     }
 
-    private void count(String operation, String result) {
+    private void count(
+            ApiInferenceProtocol protocol,
+            String operation,
+            String result) {
+        meterRegistry.counter(
+                "api.inference.billing",
+                "protocol", protocol.name().toLowerCase(java.util.Locale.ROOT),
+                "operation", operation,
+                "result", result).increment();
+        if (protocol != ApiInferenceProtocol.CHAT_COMPLETIONS) {
+            return;
+        }
+        // 旧 Chat 指标继续只统计 Chat 请求，避免 Responses 上线改变现有告警基线。
         meterRegistry.counter(
                 "api.chat.billing",
                 "operation", operation,

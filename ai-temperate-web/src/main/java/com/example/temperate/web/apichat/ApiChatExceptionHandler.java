@@ -3,7 +3,8 @@ package com.example.temperate.web.apichat;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticParameter;
-import com.example.temperate.web.apikey.ApiChatBodyLimitFilter.PayloadTooLargeException;
+import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticParameter;
+import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter.PayloadTooLargeException;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,10 +24,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * 该异常处理器是来把 `/v1/chat/completions` 在 SSE 响应开始前发生的校验、额度和并发错误转换为 OpenAI JSON，且不暴露 Jackson 或上游异常细节。
+ * 该异常处理器是来把公开 Chat 与 Responses 在响应提交前的校验、额度和并发错误转换为 OpenAI JSON，且不暴露 Jackson 或上游异常细节。
  */
 @Order(-100)
-@RestControllerAdvice(assignableTypes = ApiChatCompletionController.class)
+@RestControllerAdvice(assignableTypes = {
+        ApiChatCompletionController.class,
+        com.example.temperate.web.apiresponse.ApiResponsesController.class})
 public final class ApiChatExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(
@@ -43,6 +46,7 @@ public final class ApiChatExceptionHandler {
                 exception.code(),
                 exception.getMessage(),
                 exception.parameter(),
+                exception.validationReason(),
                 request,
                 servletResponse);
     }
@@ -62,6 +66,7 @@ public final class ApiChatExceptionHandler {
                         apiChatException.code(),
                         apiChatException.getMessage(),
                         apiChatException.parameter(),
+                        apiChatException.validationReason(),
                         request,
                         servletResponse);
             }
@@ -72,6 +77,7 @@ public final class ApiChatExceptionHandler {
                         ApiChatErrorCode.INVALID_REQUEST,
                         "The request body is too large.",
                         null,
+                        ApiChatException.ValidationReason.UNSPECIFIED,
                         request,
                         servletResponse);
             }
@@ -83,6 +89,7 @@ public final class ApiChatExceptionHandler {
                 ApiChatErrorCode.INVALID_REQUEST,
                 "The request body is not valid JSON or contains an invalid field type.",
                 jsonParameter(exception),
+                ApiChatException.ValidationReason.WRONG_JSON_TYPE,
                 request,
                 servletResponse);
     }
@@ -99,6 +106,7 @@ public final class ApiChatExceptionHandler {
                 ApiChatErrorCode.INVALID_REQUEST,
                 "Content-Type must be application/json.",
                 null,
+                ApiChatException.ValidationReason.WRONG_JSON_TYPE,
                 request,
                 servletResponse);
     }
@@ -109,34 +117,51 @@ public final class ApiChatExceptionHandler {
             ApiChatErrorCode code,
             String message,
             String parameter,
+            ApiChatException.ValidationReason validationReason,
             HttpServletRequest request,
             HttpServletResponse servletResponse) {
         boolean committed = servletResponse != null && servletResponse.isCommitted();
         String traceId = safeTraceId(MDC.get("apiChatTraceId"));
+        boolean responses = request != null
+                && "/v1/responses".equals(request.getRequestURI());
+        String safeParameter = responses
+                ? ApiResponseDiagnosticParameter.sanitize(parameter)
+                : ApiChatDiagnosticParameter.sanitize(parameter);
+        String safeValidationReason = validationReason == null
+                ? ApiChatException.ValidationReason.UNSPECIFIED.name()
+                : validationReason.name();
         if (!"absent".equals(traceId)) {
-            safeLog(
-                    "event=api_chat_error_handler_enter diagnosticSchema=chat-diag-v1 traceId={} handler={} exceptionType={} apiErrorCode={} parameter={} targetStatus={} requestAcceptClass={} committedBeforeMapping={}",
-                    traceId,
-                    handler,
-                    safeType(exceptionType),
-                    code.code(),
-                    ApiChatDiagnosticParameter.sanitize(parameter),
-                    code.status(),
-                    acceptClass(request),
-                    committed);
+            if (responses) {
+                safeLog(
+                        "event=api_responses_error_handler_enter diagnosticSchema=responses-diag-v1 traceId={} handler={} exceptionType={} apiErrorCode={} parameter={} validationReason={} targetStatus={} requestAcceptClass={} committedBeforeMapping={}",
+                        traceId, handler, safeType(exceptionType), code.code(),
+                        safeParameter, safeValidationReason, code.status(),
+                        acceptClass(request), committed);
+            } else {
+                safeLog(
+                        "event=api_chat_error_handler_enter diagnosticSchema=chat-diag-v1 traceId={} handler={} exceptionType={} apiErrorCode={} parameter={} targetStatus={} requestAcceptClass={} committedBeforeMapping={}",
+                        traceId, handler, safeType(exceptionType), code.code(),
+                        safeParameter, code.status(),
+                        acceptClass(request), committed);
+            }
         }
         ResponseEntity<ApiChatErrorResponse> result = response(code, message, parameter);
         if (!"absent".equals(traceId)) {
-            safeLog(
-                    "event=api_chat_error_handler_response diagnosticSchema=chat-diag-v1 traceId={} handler={} apiErrorCode={} parameter={} targetStatus={} requestAcceptClass={} responseContentType={} committedBeforeMapping={}",
-                    traceId,
-                    handler,
-                    code.code(),
-                    ApiChatDiagnosticParameter.sanitize(parameter),
-                    code.status(),
-                    acceptClass(request),
-                    safeContentType(result.getHeaders().getContentType()),
-                    committed);
+            if (responses) {
+                safeLog(
+                        "event=api_responses_error_handler_response diagnosticSchema=responses-diag-v1 traceId={} handler={} apiErrorCode={} parameter={} validationReason={} targetStatus={} requestAcceptClass={} responseContentType={} committedBeforeMapping={}",
+                        traceId, handler, code.code(),
+                        safeParameter, safeValidationReason, code.status(),
+                        acceptClass(request),
+                        safeContentType(result.getHeaders().getContentType()), committed);
+            } else {
+                safeLog(
+                        "event=api_chat_error_handler_response diagnosticSchema=chat-diag-v1 traceId={} handler={} apiErrorCode={} parameter={} targetStatus={} requestAcceptClass={} responseContentType={} committedBeforeMapping={}",
+                        traceId, handler, code.code(),
+                        safeParameter, code.status(),
+                        acceptClass(request),
+                        safeContentType(result.getHeaders().getContentType()), committed);
+            }
         }
         return result;
     }
@@ -146,7 +171,7 @@ public final class ApiChatExceptionHandler {
             String message,
             String parameter) {
         HttpHeaders headers = new HttpHeaders();
-        // 成功路径是 SSE，但同步失败必须明确是 JSON，Worker 才能把客户端 4xx 原样返回而不是包装成上游协议 502。
+        // 无论成功路径选择 SSE 还是 JSON，同步失败都必须明确为 JSON，Worker 才能原样转发客户端错误。
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setCacheControl(CacheControl.noStore().cachePrivate().noTransform());
         headers.set("CDN-Cache-Control", "no-store");

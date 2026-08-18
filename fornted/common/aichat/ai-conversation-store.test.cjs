@@ -59,3 +59,36 @@ test('keeps the accepted conversation id while stale transient output is discard
 	assert.equal(snapshot.messages.length, 0)
 	assert.equal(snapshot.currentConversationPublicId, 'AAAAAAAAAAAAAAAAAAAAAQ')
 })
+
+test('appends cursor pages without duplicating conversations', async () => {
+	const store = await loadStore()
+	const firstId = 'AAAAAAAAAAAAAAAAAAAAAQ'
+	const secondId = 'AAAAAAAAAAAAAAAAAAAAAg'
+	const thirdId = 'AAAAAAAAAAAAAAAAAAAAAw'
+	store.setConversationPage({
+		conversations: [
+			{ conversationPublicId: firstId, title: 'first' },
+			{ conversationPublicId: secondId, title: 'old second' }
+		],
+		nextCursor: 'first-cursor',
+		hasMore: true
+	})
+
+	const snapshot = store.setConversationPage({
+		conversations: [
+			{ conversationPublicId: secondId, title: 'updated second' },
+			{ conversationPublicId: thirdId, title: 'third' }
+		],
+		nextCursor: 'second-cursor',
+		hasMore: false
+	}, true)
+
+	assert.deepEqual(
+		snapshot.conversations.map(item => [item.conversationPublicId, item.title]),
+		[
+			[firstId, 'first'],
+			[secondId, 'updated second'],
+			[thirdId, 'third']
+		]
+	)
+})

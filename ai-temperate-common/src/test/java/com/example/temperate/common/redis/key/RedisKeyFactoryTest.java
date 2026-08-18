@@ -270,10 +270,10 @@ final class RedisKeyFactoryTest {
                 .identify("preauth-token");
 
         assertEquals(
-                "ait:prod:risk:preauth-user:v6:token:" + hmac.value(),
+                "ait:prod:risk:preauth-user:v7:token:" + hmac.value(),
                 factory.userPreAuthKey(hmac));
         assertEquals(
-                "ait:prod:risk:preauth-admin:v6:token:" + hmac.value(),
+                "ait:prod:risk:preauth-admin:v7:token:" + hmac.value(),
                 factory.adminPreAuthKey(hmac));
         assertThrows(NoSuchMethodException.class, () ->
                 RedisKeyFactory.class.getMethod(

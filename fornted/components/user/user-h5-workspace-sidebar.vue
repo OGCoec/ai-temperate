@@ -223,7 +223,7 @@
 	.workspace-sidebar-close { width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: 0 0 44px; border-radius: 12px; }
 	.workspace-new-chat, .workspace-account-action { width: 100%; min-height: 48px; margin: 8px 0 0; padding: 0 12px; display: flex; align-items: center; justify-content: flex-start; gap: 10px; border-radius: 12px; color: #dce5e0; font-size: 14px; font-weight: 680; text-align: left; }
 	.workspace-rail-chat { display: flex; align-items: center; justify-content: center; }
-	.workspace-sidebar-conversations { min-height: 0; margin: 10px -12px 0 0; flex: 1; overflow: hidden; --sidebar-inline-padding: 12px; }
+	.workspace-sidebar-conversations { min-height: 0; margin: 10px -12px 0 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; --sidebar-inline-padding: 12px; }
 	.workspace-sidebar-conversations :deep(.conversation-copy) { width: 44px; height: 44px; min-height: 44px; flex-basis: 44px; }
 	.workspace-sidebar-conversations :deep(.recent-error button),
 	.workspace-sidebar-conversations :deep(.recent-more) { min-height: 44px; }

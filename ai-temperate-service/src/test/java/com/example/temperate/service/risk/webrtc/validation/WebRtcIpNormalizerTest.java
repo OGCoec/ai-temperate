@@ -35,7 +35,14 @@ class WebRtcIpNormalizerTest {
                 "fe80::1%eth0",
                 "127.0.0.1",
                 "10.0.0.1",
-                "fe80::1")) {
+                "100.64.0.1",
+                "192.0.2.1",
+                "198.51.100.1",
+                "203.0.113.1",
+                "fe80::1",
+                "fd00::1",
+                "::8.8.8.8",
+                "2001:db8::1")) {
             assertThatThrownBy(() -> normalizer.normalizeReported(
                             List.of(invalid),
                             8))

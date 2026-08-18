@@ -42,7 +42,7 @@ class PreAuthSessionAtomicityContractTest {
     }
 
     @Test
-    void eventAndChallengeStateUseOnlyThePreAuthV6Hash()
+    void eventAndChallengeStateUseOnlyThePreAuthV7Hash()
             throws Exception {
         String event = Files.readString(Path.of(
                 "src/main/resources/lua/network-risk/"

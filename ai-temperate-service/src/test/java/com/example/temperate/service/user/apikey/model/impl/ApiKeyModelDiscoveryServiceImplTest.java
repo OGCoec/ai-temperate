@@ -18,33 +18,40 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该测试是来约束公开模型发现只暴露当前 API Key 已授权、仍启用且可用于 Chat Completions 的模型。
+ * 该测试是来约束公开模型发现只暴露当前 API Key 已授权、仍启用且支持 Chat Completions 或 Responses 的模型。
  */
 final class ApiKeyModelDiscoveryServiceImplTest {
 
     @Test
-    void listsOnlyAuthorizedChatModelsInStableNameOrder() {
+    void listsAuthorizedChatResponsesAndDualProtocolModelsInStableNameOrder() {
         ApiKeyModelDiscoveryService service = new ApiKeyModelDiscoveryServiceImpl(
                 cacheService(List.of(
                         model(11L, "zeta-chat", LocalDate.of(2026, 8, 15),
                                 AiModelCapabilityCode.CHAT_COMPLETIONS),
                         model(12L, "alpha-chat", LocalDate.of(2026, 8, 14),
                                 AiModelCapabilityCode.CHAT_COMPLETIONS),
+                        model(15L, "beta-responses", LocalDate.of(2026, 8, 16),
+                                AiModelCapabilityCode.RESPONSES),
+                        model(16L, "dual", LocalDate.of(2026, 8, 17),
+                                AiModelCapabilityCode.CHAT_COMPLETIONS,
+                                AiModelCapabilityCode.RESPONSES),
                         model(13L, "ungranted-chat", LocalDate.of(2026, 8, 13),
                                 AiModelCapabilityCode.CHAT_COMPLETIONS),
                         model(14L, "granted-image", LocalDate.of(2026, 8, 12),
                                 AiModelCapabilityCode.IMAGE_GENERATION))));
 
         List<ApiKeyModelDiscoveryService.AuthorizedModel> result = service.list(
-                principal(Set.of(11L, 12L, 14L)));
+                principal(Set.of(11L, 12L, 14L, 15L, 16L)));
 
         assertThat(result)
                 .extracting(ApiKeyModelDiscoveryService.AuthorizedModel::modelName)
-                .containsExactly("alpha-chat", "zeta-chat");
+                .containsExactly("alpha-chat", "beta-responses", "dual", "zeta-chat");
         assertThat(result)
                 .extracting(ApiKeyModelDiscoveryService.AuthorizedModel::createdEpochSeconds)
                 .containsExactly(
                         LocalDate.of(2026, 8, 14).atStartOfDay().toEpochSecond(java.time.ZoneOffset.UTC),
+                        LocalDate.of(2026, 8, 16).atStartOfDay().toEpochSecond(java.time.ZoneOffset.UTC),
+                        LocalDate.of(2026, 8, 17).atStartOfDay().toEpochSecond(java.time.ZoneOffset.UTC),
                         LocalDate.of(2026, 8, 15).atStartOfDay().toEpochSecond(java.time.ZoneOffset.UTC));
     }
 
@@ -90,7 +97,7 @@ final class ApiKeyModelDiscoveryServiceImplTest {
             long id,
             String name,
             LocalDate createdAt,
-            AiModelCapabilityCode capability) {
+            AiModelCapabilityCode... capabilities) {
         return new AiModelCacheEntry(
                 id,
                 name,
@@ -104,7 +111,7 @@ final class ApiKeyModelDiscoveryServiceImplTest {
                 BigDecimal.ONE,
                 4_096,
                 512,
-                List.of(capability));
+                List.of(capabilities));
     }
 
     private static AiModelCacheService cacheService(List<AiModelCacheEntry> models) {

@@ -27,7 +27,8 @@ public record WebRtcVerificationDecision(
         }
         boolean stateful = switch (outcome) {
             case VERIFIED, VERIFICATION_PENDING, VERIFICATION_REQUIRED,
-                    VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH -> true;
+                    VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE, IP_MISMATCH -> true;
             case NETWORK_CHANGED, STALE_REPORT, STATE_INVALID -> false;
         };
         if (stateful && probeGeneration <= 0) {
@@ -54,6 +55,10 @@ public record WebRtcVerificationDecision(
                     && pendingRemainingMillis == 0
                     && failureReason == PreAuthWebRtcFailureReason.IP_MISMATCH
                     && !webRtcIps.isEmpty();
+            case IP_FAMILY_INCOMPLETE -> pendingUntil == null
+                    && pendingRemainingMillis == 0
+                    && failureReason == PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE
+                    && !webRtcIps.isEmpty();
             case NETWORK_CHANGED, STALE_REPORT, STATE_INVALID -> probeGeneration == 0
                     && pendingUntil == null && pendingRemainingMillis == 0
                     && failureReason == null && webRtcIps.isEmpty();
@@ -68,7 +73,8 @@ public record WebRtcVerificationDecision(
             case VERIFIED -> Boolean.TRUE;
             case VERIFICATION_PENDING, VERIFICATION_REQUIRED, NETWORK_CHANGED,
                     STALE_REPORT, STATE_INVALID -> null;
-            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH -> Boolean.FALSE;
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE, IP_MISMATCH -> Boolean.FALSE;
         };
     }
 
@@ -77,7 +83,8 @@ public record WebRtcVerificationDecision(
             case VERIFIED -> "VERIFIED";
             case VERIFICATION_PENDING -> "PENDING";
             case VERIFICATION_REQUIRED -> "REQUIRED";
-            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_MISMATCH -> "FAILED";
+            case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
+                    IP_FAMILY_INCOMPLETE, IP_MISMATCH -> "FAILED";
             case NETWORK_CHANGED -> "NETWORK_CHANGED";
             case STALE_REPORT -> "STALE";
             case STATE_INVALID -> "INVALID";
@@ -137,6 +144,8 @@ public record WebRtcVerificationDecision(
             List<String> ips) {
         WebRtcVerificationOutcome outcome = switch (reason) {
             case IP_MISMATCH -> WebRtcVerificationOutcome.IP_MISMATCH;
+            case IP_FAMILY_INCOMPLETE ->
+                    WebRtcVerificationOutcome.IP_FAMILY_INCOMPLETE;
             case START_TIMEOUT, REPORT_TIMEOUT ->
                     WebRtcVerificationOutcome.VERIFICATION_TIMEOUT;
             case NO_PUBLIC_CANDIDATE ->

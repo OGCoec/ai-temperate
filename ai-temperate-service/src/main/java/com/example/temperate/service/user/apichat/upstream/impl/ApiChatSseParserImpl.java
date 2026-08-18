@@ -2,7 +2,7 @@ package com.example.temperate.service.user.apichat.upstream.impl;
 
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser;
@@ -223,7 +223,7 @@ public final class ApiChatSseParserImpl implements ApiChatSseParser {
         if (reasoning > completion) {
             throw protocol(ApiChatProtocolViolation.INVALID_USAGE);
         }
-        return new ParsedUsage(new Usage(prompt, completion, cached), usage);
+        return new ParsedUsage(new ApiInferenceUsage(prompt, completion, cached), usage);
     }
 
     private static void copyResponseMetadata(
@@ -291,7 +291,7 @@ public final class ApiChatSseParserImpl implements ApiChatSseParser {
 
     /** Usage 的计费事实与白名单 JSON 必须由同一次校验产生，禁止二次读取不可信上游节点。 */
     private record ParsedUsage(
-            Usage billingUsage,
+            ApiInferenceUsage billingUsage,
             ObjectNode normalized) {
     }
 }

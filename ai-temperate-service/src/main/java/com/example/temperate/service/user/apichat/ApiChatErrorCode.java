@@ -1,7 +1,7 @@
 package com.example.temperate.service.user.apichat;
 
 /**
- * 该枚举是来稳定区分公开 Chat Completions 的协议、模型、授权、并发、额度与上游失败，供 HTTP 和 SSE 使用同一机器码。
+ * 该枚举是来稳定区分公开 Chat Completions 与 Responses 的协议、模型、授权、并发、额度和上游失败，供 JSON 与 SSE 共用机器码。
  */
 public enum ApiChatErrorCode {
     INVALID_API_KEY(401, "authentication_error", "invalid_api_key"),

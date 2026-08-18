@@ -22,6 +22,7 @@ test('Worker H5 page allowlist matches every page declared for the ordinary app'
 test('API route contracts expose methods, platform scope, parameter type, and error envelope', () => {
 	const login = matchRootApiRoute('/api/auth/login/password')
 	const apiKeySdk = matchRootApiRoute('/v1/models')
+	const responses = matchRootApiRoute('/v1/responses')
 	const model = matchRootApiRoute('/api/ai-models/AAABi0VWeJ8')
 
 	assert.deepEqual(login.allowedMethods, ['POST'])
@@ -29,6 +30,10 @@ test('API route contracts expose methods, platform scope, parameter type, and er
 	assert.equal(login.errorResponseType, 'API_JSON')
 	assert.deepEqual(apiKeySdk.clientPlatforms, ['API_KEY_CLIENT'])
 	assert.equal(apiKeySdk.errorResponseType, 'OPENAI_JSON')
+	assert.deepEqual(responses.allowedMethods, ['POST'])
+	assert.equal(responses.responseMode, 'adaptive')
+	assert.equal(responses.protocol, 'responses')
+	assert.equal(responses.apiKeySdk, true)
 	assert.equal(model.parameterType, 'PUBLIC_LONG_BASE64URL_11')
 })
 

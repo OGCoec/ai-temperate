@@ -252,7 +252,8 @@ export async function handleRequest(request, env, runtime = {}) {
 			upstreamAttempted,
 			returnedStatus: route.apiKeySdk ? 503 : 502
 		})
-		logSseRequest(sseDiagnostic, null)
+		// adaptive Responses 在取得成功 Content-Type 前不能被误记为 SSE。
+		logSseRequest(route.responseMode === 'adaptive' ? null : sseDiagnostic, null)
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_UPSTREAM_UNAVAILABLE',
 			exceptionType: safeVoiceExceptionType(error)
@@ -280,16 +281,23 @@ export async function handleRequest(request, env, runtime = {}) {
 		return guardedWebSocketResponse(
 			upstreamResponse, transport, voiceDiagnostic)
 	}
-	logSseRequest(sseDiagnostic, upstreamResponse)
+	const responseMode = route.responseMode === 'adaptive'
+		? 'adaptive' : (route.streaming === true ? 'sse' : 'json')
+	const actualStreaming = isSuccessfulSseResponse(upstreamResponse)
+		&& (responseMode === 'sse' || responseMode === 'adaptive')
+	logSseRequest(actualStreaming ? sseDiagnostic : null, upstreamResponse)
 	const response = guardedResponse(
 		upstreamResponse,
 		route.surface,
-		route.streaming === true,
+		responseMode,
 		transport,
 		route.apiKeyManagement === true,
 		requiresApiKeyStrongEtag(request.method, url.pathname),
 		apiKeyDiagnostic)
-	return instrumentSseResponse(response, sseDiagnostic, runtime)
+	return instrumentSseResponse(
+		response,
+		actualStreaming ? sseDiagnostic : null,
+		runtime)
 }
 
 function classifyRoute(url) {
@@ -561,7 +569,8 @@ function logRouteRejection(request, route, env, runtime) {
 		try {
 			logger.warn(JSON.stringify({
 				event: 'api_key_sdk_edge_summary',
-				diagnosticSchema: 'chat-diag-v1',
+				diagnosticSchema: route.protocol === 'responses'
+					? 'responses-diag-v1' : 'chat-diag-v1',
 				cfRay: safeApiKeyDiagnosticIdentifier(
 					headerValue(request.headers, 'CF-Ray')),
 				springTraceId: 'ABSENT',
@@ -573,7 +582,9 @@ function logRouteRejection(request, route, env, runtime) {
 				upstreamContentType: 'unknown',
 				expectedContentType: 'application/json',
 				edgeOutcome: 'EDGE_ROUTE_REJECTED',
-				returnedStatus: route.status
+				returnedStatus: route.status,
+				...(route.protocol === 'responses'
+					? { protocol: 'responses', mode: 'json' } : {})
 			}))
 		} catch {
 			// API Key 路由诊断失败不得改变既有拒绝响应。
@@ -607,6 +618,8 @@ function createApiKeySdkDiagnostic(
 		route: route.routeTemplate,
 		method: request.method,
 		streaming: route.streaming === true,
+		responseMode: route.responseMode || null,
+		protocol: route.protocol || null,
 		successSampled,
 		logged: false
 	}
@@ -623,12 +636,15 @@ function finishApiKeySdkDiagnostic(diagnostic, values) {
 	const upstreamContentType = normalizedApiKeyContentType(upstream?.headers)
 	const expectedContentType = values.expectedContentType
 		|| (upstreamStatus >= 200 && upstreamStatus < 300
-			? (diagnostic.streaming
+			? (diagnostic.responseMode === 'adaptive'
+				? 'application/json|text/event-stream'
+				: diagnostic.streaming
 				? 'text/event-stream' : 'application/json')
 			: 'application/json')
 	const entry = {
 		event: 'api_key_sdk_edge_summary',
-		diagnosticSchema: 'chat-diag-v1',
+		diagnosticSchema: diagnostic.protocol === 'responses'
+			? 'responses-diag-v1' : 'chat-diag-v1',
 		cfRay: diagnostic.cfRay,
 		springTraceId: safeApiKeyDiagnosticIdentifier(
 			upstream?.headers
@@ -643,6 +659,11 @@ function finishApiKeySdkDiagnostic(diagnostic, values) {
 		expectedContentType,
 		edgeOutcome: values.edgeOutcome,
 		returnedStatus: values.returnedStatus
+	}
+	if (diagnostic.protocol === 'responses') {
+		entry.protocol = 'responses'
+		entry.mode = values.mode
+			|| (upstreamContentType === 'text/event-stream' ? 'sse' : 'json')
 	}
 	try {
 		const log = success ? diagnostic.logger.info : diagnostic.logger.warn
@@ -1135,7 +1156,7 @@ function androidClearancePage(nonce) {
 function guardedResponse(
 	response,
 	surface,
-	streaming = false,
+	responseMode = 'json',
 	transport = null,
 	apiKeyManagement = false,
 	requiresStrongEtag = false,
@@ -1166,9 +1187,19 @@ function guardedResponse(
 	if (transport?.kind === API_KEY_SDK_TRANSPORT) {
 		const contentType = headerValue(response.headers, 'Content-Type')
 			.split(';', 1)[0].trim().toLowerCase()
-		const expected = response.status >= 200 && response.status < 300
-			? (streaming ? 'text/event-stream' : 'application/json') : 'application/json'
-		if (contentType !== expected) {
+		const success = response.status >= 200 && response.status < 300
+		const allowedSuccess = responseMode === 'adaptive'
+			? new Set(['application/json', 'text/event-stream'])
+			: new Set([responseMode === 'sse'
+				? 'text/event-stream' : 'application/json'])
+		const validContentType = success
+			? allowedSuccess.has(contentType)
+			: contentType === 'application/json'
+		if (!validContentType) {
+			const expected = success && responseMode === 'adaptive'
+				? 'application/json|text/event-stream'
+				: (success && responseMode === 'sse'
+					? 'text/event-stream' : 'application/json')
 			finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
 				edgeOutcome: 'UPSTREAM_CONTENT_TYPE_INVALID',
 				upstreamAttempted: true,
@@ -1208,7 +1239,10 @@ function guardedResponse(
 		// API Key 管理与公开 SDK 协议都不得被边缘压缩或重写；前者还依赖强 ETag 作为乐观锁版本。
 		headers.set('Cache-Control', 'no-store, private, no-transform')
 	}
-	if (streaming) {
+	const actualStreaming = response.status >= 200 && response.status < 300
+		&& normalizedApiKeyContentType(response.headers) === 'text/event-stream'
+		&& (responseMode === 'sse' || responseMode === 'adaptive')
+	if (actualStreaming) {
 		headers.set('Cache-Control', 'no-store, private, no-transform')
 		headers.set('X-Accel-Buffering', 'no')
 	}
@@ -1221,16 +1255,23 @@ function guardedResponse(
 		const success = response.status >= 200 && response.status < 300
 		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
 			edgeOutcome: success
-				? (streaming ? 'SSE_SUCCESS' : 'JSON_SUCCESS')
+				? (actualStreaming ? 'SSE_SUCCESS' : 'JSON_SUCCESS')
 				: 'JSON_ERROR_FORWARDED',
 			upstreamAttempted: true,
 			upstreamResponse: response,
-			expectedContentType: success && streaming
+			expectedContentType: success && actualStreaming
 				? 'text/event-stream' : 'application/json',
+			mode: actualStreaming ? 'sse' : 'json',
 			returnedStatus: guarded.status
 		})
 	}
 	return guarded
+}
+
+function isSuccessfulSseResponse(response) {
+	return response.status >= 200
+		&& response.status < 300
+		&& normalizedApiKeyContentType(response.headers) === 'text/event-stream'
 }
 
 function guardedWebSocketResponse(response, transport, diagnostic) {

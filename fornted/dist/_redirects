@@ -1,0 +1,1 @@
+# H5 页面路由由主站 Cloudflare Worker 精确解析，Pages 禁止提供全局 SPA 回退。

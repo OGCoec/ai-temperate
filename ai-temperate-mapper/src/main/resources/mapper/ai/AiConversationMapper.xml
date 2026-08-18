@@ -16,6 +16,14 @@
         <result property="createdAt" column="created_at"/>
     </resultMap>
 
+    <resultMap id="AiConversationSidebarRowResultMap"
+               type="com.example.temperate.model.ai.entity.AiConversationSidebarRow">
+        <id property="id" column="id"/>
+        <result property="title" column="title"/>
+        <result property="lastMessageId" column="last_message_id"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
     <sql id="ConversationColumns">
         id,
         login_identity_id,
@@ -65,9 +73,12 @@
         WHERE id = #{conversationId,jdbcType=BINARY}
     </select>
 
-    <select id="findActivePage" resultMap="AiConversationResultMap">
+    <select id="findActivePage" resultMap="AiConversationSidebarRowResultMap">
         SELECT
-            <include refid="ConversationColumns"/>
+            id,
+            title,
+            last_message_id,
+            created_at
         FROM ai_conversation
         WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND is_active = TRUE

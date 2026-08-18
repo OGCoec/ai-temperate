@@ -1,7 +1,7 @@
 package com.example.temperate.service.user.apichat.diagnostic;
 
 import com.example.temperate.service.user.apichat.ApiChatRequest;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.upstream.ApiChatSseParser.Normalization;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
@@ -311,7 +311,7 @@ public final class ApiChatDiagnosticSession {
         }
     }
 
-    public synchronized void recordUsage(Usage usage, boolean forwarded) {
+    public synchronized void recordUsage(ApiInferenceUsage usage, boolean forwarded) {
         if (!enabled) {
             return;
         }
@@ -321,9 +321,9 @@ public final class ApiChatDiagnosticSession {
             safeInfo(
                     "event=api_chat_usage_seen traceId={} promptTokens={} completionTokens={} cachedTokens={} forwarded={}",
                     traceId,
-                    usage.promptTokens(),
-                    usage.completionTokens(),
-                    usage.cachedPromptTokens(),
+                usage.inputTokens(),
+                usage.outputTokens(),
+                usage.cachedInputTokens(),
                     forwarded);
         }
     }

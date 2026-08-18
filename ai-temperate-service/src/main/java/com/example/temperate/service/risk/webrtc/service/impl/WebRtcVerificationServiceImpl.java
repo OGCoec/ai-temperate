@@ -22,7 +22,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 使用 PreAuth v6 与 Redis 时间实现 WebRTC 完全异步四态门禁。
+ * 使用 PreAuth v7 与 Redis 时间实现 WebRTC 完全异步四态门禁及双栈同族校验。
  *
  * <p>业务请求读取 REQUIRED/PENDING 后立即放行；只有 GET start 能把 REQUIRED 原子转换为
  * PENDING，report 只能完成当前 PENDING generation，任何终态都不能被迟到结果覆盖。</p>
@@ -124,23 +124,24 @@ public final class WebRtcVerificationServiceImpl
                 reportedWebRtcIps,
                 properties.webRtc().maxReportedIps());
         String canonicalHttpIp = normalizer.normalizeTrustedHttpIp(currentHttpIp);
-        long ipv4CandidateCount = normalized.stream()
-                .filter(normalizer::isIpv4)
-                .count();
-        long ipv6CandidateCount = normalized.size() - ipv4CandidateCount;
-        // 同一类型出现多个不同公网候选意味着出口不一致；IPv4 与 IPv6 各一个时，
-        // 只使用与 HTTP IP 同类型的候选按 /24 或 /64 前缀完成一致性校验。
-        boolean candidateCountAllowed = ipv4CandidateCount <= 1
-                && ipv6CandidateCount <= 1;
-        boolean matched = candidateCountAllowed
-                && normalized.stream().anyMatch(candidate ->
+        List<String> sameFamilyCandidates = sameFamilyCandidates(
+                canonicalHttpIp,
+                normalized);
+        // 另一协议族只作为证据保留；同族候选必须全部落在可信前缀内，防止异常出口被一个匹配项掩盖。
+        boolean matched = !sameFamilyCandidates.isEmpty()
+                && sameFamilyCandidates.stream().allMatch(candidate ->
                         normalizer.matchesTrustedPrefix(canonicalHttpIp, candidate));
-        PreAuthWebRtcFailureReason failureReason = matched
-                ? null
-                : normalized.isEmpty()
-                        ? PreAuthWebRtcFailureReason.NO_PUBLIC_CANDIDATE
-                        : PreAuthWebRtcFailureReason.IP_MISMATCH;
-        // 只有成功或 IP 不一致需要保留候选证据；空候选失败禁止产生无意义密文。
+        PreAuthWebRtcFailureReason failureReason;
+        if (matched) {
+            failureReason = null;
+        } else if (normalized.isEmpty()) {
+            failureReason = PreAuthWebRtcFailureReason.NO_PUBLIC_CANDIDATE;
+        } else if (sameFamilyCandidates.isEmpty()) {
+            failureReason = PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE;
+        } else {
+            failureReason = PreAuthWebRtcFailureReason.IP_MISMATCH;
+        }
+        // 成功、同族证据不完整或真实不一致都保存完整候选；空候选失败禁止产生无意义密文。
         String encrypted = normalized.isEmpty()
                 ? null
                 : protector.encrypt(
@@ -226,7 +227,10 @@ public final class WebRtcVerificationServiceImpl
             return WebRtcVerificationDecision.stateInvalid();
         }
         String canonicalHttpIp = normalizer.normalizeTrustedHttpIp(currentHttpIp);
-        return ips.contains(canonicalHttpIp)
+        List<String> sameFamilyCandidates = sameFamilyCandidates(canonicalHttpIp, ips);
+        return !sameFamilyCandidates.isEmpty()
+                && sameFamilyCandidates.stream().allMatch(candidate ->
+                        normalizer.matchesTrustedPrefix(canonicalHttpIp, candidate))
                 ? WebRtcVerificationDecision.verified(state.webRtcGeneration(), ips)
                 : WebRtcVerificationDecision.stateInvalid();
     }
@@ -256,6 +260,15 @@ public final class WebRtcVerificationServiceImpl
         } catch (WebRtcIpProtectionException | WebRtcInvalidReportException exception) {
             return null;
         }
+    }
+
+    private List<String> sameFamilyCandidates(
+            String canonicalHttpIp,
+            List<String> candidates) {
+        boolean httpUsesIpv4 = normalizer.isIpv4(canonicalHttpIp);
+        return candidates.stream()
+                .filter(candidate -> normalizer.isIpv4(candidate) == httpUsesIpv4)
+                .toList();
     }
 
     private WebRtcVerificationDecision reloadAndInspect(

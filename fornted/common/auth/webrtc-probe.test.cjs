@@ -28,6 +28,7 @@ function base64Decode(value) {
 
 function createHarness(options = {}) {
 	const entries = []
+	const encryptedPayloads = []
 	const timers = new Map()
 	let nextTimerId = 1
 	let connection = null
@@ -77,7 +78,8 @@ function createHarness(options = {}) {
 			importKey() {
 				return Promise.resolve({})
 			},
-			encrypt() {
+			encrypt(_algorithm, _key, plaintext) {
+				encryptedPayloads.push(JSON.parse(Buffer.from(plaintext).toString('utf8')))
 				return Promise.resolve(new Uint8Array(32).buffer)
 			}
 		}
@@ -150,7 +152,8 @@ function createHarness(options = {}) {
 				prefix: entry.args[0],
 				...JSON.parse(entry.args[1])
 			}))
-		}
+		},
+		payloads() { return encryptedPayloads }
 	}
 }
 
@@ -202,11 +205,14 @@ test('hidden probe aggregates candidate metadata without logging candidate addre
 		hostCount: 1,
 		srflxCount: 3,
 		acceptedCount: 1,
-		rejectedCount: 1,
+		rejectedCount: 2,
 		ipv4Count: 1,
 		sourceIndexes: [1],
 		reason: 'null_candidate'
 	})
+	assert.equal(finished.acceptedHostCount, 0)
+	assert.equal(finished.acceptedSrflxCount, 1)
+	assert.equal(finished.rejectedNonPublicCount, 2)
 	assert.equal(
 		harness.events().find(event => event.stage === 'result_dispatched')?.candidateCount,
 		1
@@ -215,6 +221,63 @@ test('hidden probe aggregates candidate metadata without logging candidate addre
 	assert.doesNotMatch(
 		harness.entries.map(entry => entry.args.join(' ')).join('\n'),
 		/203\.10\.97\.121|192\.168\.1\.20|candidate:public|stun\.cloudflare/
+	)
+})
+
+test('hidden probe keeps public IPv4 and IPv6 host/srflx candidates without leaking raw addresses', async () => {
+	const harness = createHarness({
+		candidates: [
+			{
+				type: 'srflx',
+				address: '203.10.97.121',
+				candidate: 'candidate:1 1 udp 1 203.10.97.121 3478 typ srflx'
+			},
+			{
+				type: 'host',
+				address: '[240e:37a:3cf1:bd00:6433:70b6:cbcb:c2eb]',
+				candidate: 'candidate:2 1 udp 1 240e:37a:3cf1:bd00:6433:70b6:cbcb:c2eb 3478 typ host'
+			},
+			{
+				type: 'srflx',
+				address: '::ffff:203.10.97.121',
+				candidate: 'candidate:3 1 udp 1 ::ffff:203.10.97.121 3478 typ srflx'
+			},
+			{ type: 'host', address: '192.168.1.20', candidate: 'candidate:4 1 udp 1 192.168.1.20 3478 typ host' },
+			{ type: 'host', address: 'fd00::1', candidate: 'candidate:5 1 udp 1 fd00::1 3478 typ host' },
+			{ type: 'host', address: 'device.local', candidate: 'candidate:6 1 udp 1 device.local 3478 typ host' },
+			{ type: 'relay', address: '198.51.100.30', candidate: 'candidate:7 1 udp 1 198.51.100.30 3478 typ relay' },
+			{ type: 'prflx', address: '198.51.100.31', candidate: 'candidate:8 1 udp 1 198.51.100.31 3478 typ prflx' }
+		]
+	})
+
+	harness.start()
+	await flushMicrotasks()
+
+	const finished = harness.events().find(event => event.stage === 'ice_finished')
+	assert.deepEqual({
+		acceptedCount: finished.acceptedCount,
+		acceptedHostCount: finished.acceptedHostCount,
+		acceptedSrflxCount: finished.acceptedSrflxCount,
+		ignoredRelayCount: finished.ignoredRelayCount,
+		rejectedNonPublicCount: finished.rejectedNonPublicCount,
+		ipv4Count: finished.ipv4Count,
+		ipv6Count: finished.ipv6Count
+	}, {
+		acceptedCount: 2,
+		acceptedHostCount: 1,
+		acceptedSrflxCount: 1,
+		ignoredRelayCount: 1,
+		rejectedNonPublicCount: 3,
+		ipv4Count: 1,
+		ipv6Count: 1
+	})
+	assert.deepEqual(harness.payloads()[0].webRtcIps, [
+		'203.10.97.121',
+		'240e:37a:3cf1:bd00:6433:70b6:cbcb:c2eb'
+	])
+	assert.doesNotMatch(
+		harness.entries.map(entry => entry.args.join(' ')).join('\n'),
+		/203\.10\.97\.121|240e:37a|192\.168\.1\.20|fd00::1|device\.local|candidate:/
 	)
 })
 

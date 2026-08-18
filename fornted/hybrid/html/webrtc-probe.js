@@ -38,12 +38,15 @@
 			var timer
 			var settled = false
 			var addresses = Object.create(null)
+			var acceptedTypes = Object.create(null)
 			var stats = {
 				hostCount: 0,
 				srflxCount: 0,
 				relayCount: 0,
 				prflxCount: 0,
 				unknownCount: 0,
+				ignoredRelayCount: 0,
+				rejectedNonPublicCount: 0,
 				rejectedCount: 0,
 				sourceIndexes: Object.create(null)
 			}
@@ -57,7 +60,7 @@
 					connection.removeEventListener('icegatheringstatechange', onGatheringState)
 					connection.close()
 				}
-				var values = Object.keys(addresses).sort(stableOrder)
+				var values = Object.keys(addresses).sort(stableOrder).slice(0, 8)
 				var families = candidateFamilyCounts(values)
 				var fields = {
 					reason: reason,
@@ -67,6 +70,10 @@
 					prflxCount: stats.prflxCount,
 					unknownCount: stats.unknownCount,
 					acceptedCount: values.length,
+					acceptedHostCount: countAcceptedTypes(values, acceptedTypes, 'host'),
+					acceptedSrflxCount: countAcceptedTypes(values, acceptedTypes, 'srflx'),
+					ignoredRelayCount: stats.ignoredRelayCount,
+					rejectedNonPublicCount: stats.rejectedNonPublicCount,
 					rejectedCount: stats.rejectedCount,
 					ipv4Count: families.ipv4Count,
 					ipv6Count: families.ipv6Count,
@@ -83,15 +90,23 @@
 					finish('null_candidate')
 					return
 				}
-				var type = candidate.type || candidateType(candidate.candidate)
+				var type = String(candidate.type || candidateType(candidate.candidate)).toLowerCase()
 				incrementCandidateType(stats, type)
-				if (type !== 'srflx') return
+				if (type === 'relay') {
+					stats.ignoredRelayCount += 1
+					return
+				}
+				if (type !== 'host' && type !== 'srflx') return
 				var value = normalizePublicIp(candidate.address || candidateAddress(candidate.candidate))
 				if (!value) {
+					stats.rejectedNonPublicCount += 1
 					stats.rejectedCount += 1
 					return
 				}
-				addresses[value] = true
+				if (!addresses[value]) {
+					addresses[value] = true
+					acceptedTypes[value] = type
+				}
 				var sourceIndex = matchingSourceIndex(config.stunUrls, candidate.url)
 				if (sourceIndex > 0) stats.sourceIndexes[sourceIndex] = true
 			}
@@ -242,7 +257,9 @@
 		var numberFields = [
 			'stunCount', 'timeoutMillis', 'candidateCount',
 			'hostCount', 'srflxCount', 'relayCount', 'prflxCount', 'unknownCount',
-			'acceptedCount', 'rejectedCount', 'ipv4Count', 'ipv6Count'
+			'acceptedCount', 'acceptedHostCount', 'acceptedSrflxCount',
+			'ignoredRelayCount', 'rejectedNonPublicCount',
+			'rejectedCount', 'ipv4Count', 'ipv6Count'
 		]
 		numberFields.forEach(function (field) {
 			var value = fields[field]
@@ -308,17 +325,13 @@
 
 	function normalizePublicIp(value) {
 		if (typeof value !== 'string') return ''
-		var candidate = value.trim().toLowerCase()
-		if (!candidate || candidate.length > 64 || /[%/\s\[\]]/.test(candidate)) return ''
+		if (value !== value.trim() || /[%/\s]/.test(value)) return ''
+		var candidate = value.toLowerCase()
+		if (/^\[[0-9a-f:.]+\]$/.test(candidate)) candidate = candidate.slice(1, -1)
+		if (!candidate || candidate.length > 64 || /[\[\]]/.test(candidate)) return ''
 		if (candidate.endsWith('.local') || candidate.indexOf('.local.') >= 0) return ''
 		if (candidate.indexOf(':') >= 0) {
-			var mapped = candidate.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/)
-			if (mapped) return normalizePublicIpv4(mapped[1])
-			if (!/^[0-9a-f:]+$/.test(candidate) || candidate === '::' || candidate === '::1') return ''
-			var firstGroup = candidate.split(':').filter(Boolean)[0] || '0'
-			var first = parseInt((firstGroup + '0000').slice(0, 2), 16)
-			if ((first & 0xfe) === 0xfc || first === 0xfe || first === 0xff) return ''
-			return candidate
+			return normalizePublicIpv6(candidate)
 		}
 		return normalizePublicIpv4(candidate)
 	}
@@ -335,18 +348,119 @@
 		})) return ''
 		var first = octets[0]
 		var second = octets[1]
+		var third = octets[2]
+		var fourth = octets[3]
 		if (first === 0 || first === 10 || first === 127 || first >= 224) return ''
 		if (first === 100 && second >= 64 && second <= 127) return ''
 		if (first === 169 && second === 254) return ''
 		if (first === 172 && second >= 16 && second <= 31) return ''
 		if (first === 192 && second === 168) return ''
+		if (first === 192 && second === 0 && third === 0
+				&& fourth !== 9 && fourth !== 10) return ''
+		if (first === 192 && second === 0 && third === 2) return ''
+		if (first === 192 && second === 88 && third === 99) return ''
 		if (first === 198 && (second === 18 || second === 19)) return ''
+		if (first === 198 && second === 51 && third === 100) return ''
+		if (first === 203 && second === 0 && third === 113) return ''
 		return octets.join('.')
+	}
+
+	function normalizePublicIpv6(value) {
+		var candidate = value
+		if (candidate.indexOf('.') >= 0) {
+			var separator = candidate.lastIndexOf(':')
+			if (separator < 0) return ''
+			var ipv4 = normalizeIpv4Syntax(candidate.slice(separator + 1))
+			if (!ipv4) return ''
+			var octets = ipv4.split('.').map(Number)
+			candidate = candidate.slice(0, separator)
+				+ ':' + ((octets[0] << 8) | octets[1]).toString(16)
+				+ ':' + ((octets[2] << 8) | octets[3]).toString(16)
+		}
+		var groups = expandIpv6(candidate)
+		if (!groups) return ''
+		var mapped = groups.slice(0, 5).every(function (group) { return group === 0 })
+			&& groups[5] === 0xffff
+		if (mapped) {
+			return normalizePublicIpv4([
+				groups[6] >> 8,
+				groups[6] & 0xff,
+				groups[7] >> 8,
+				groups[7] & 0xff
+			].join('.'))
+		}
+		if (groups.slice(0, 6).every(function (group) { return group === 0 })) return ''
+		if (groups.every(function (group) { return group === 0 })) return ''
+		if (groups.slice(0, 7).every(function (group) { return group === 0 })
+				&& groups[7] === 1) return ''
+		if ((groups[0] & 0xfe00) === 0xfc00) return ''
+		if ((groups[0] & 0xffc0) === 0xfe80) return ''
+		if ((groups[0] & 0xff00) === 0xff00) return ''
+		if (groups[0] === 0x2001 && groups[1] === 0x0db8) return ''
+		return compressIpv6(groups)
+	}
+
+	function normalizeIpv4Syntax(value) {
+		var parts = String(value).split('.')
+		if (parts.length !== 4) return ''
+		var octets = parts.map(function (part) {
+			return /^\d{1,3}$/.test(part)
+				&& (part.length === 1 || part.charAt(0) !== '0') ? Number(part) : NaN
+		})
+		return octets.every(function (octet) {
+			return Number.isInteger(octet) && octet >= 0 && octet <= 255
+		}) ? octets.join('.') : ''
+	}
+
+	function expandIpv6(value) {
+		if (!/^[0-9a-f:]+$/.test(value) || value.indexOf('::') !== value.lastIndexOf('::')) return null
+		var compressed = value.indexOf('::') >= 0
+		var halves = compressed ? value.split('::') : [value]
+		var left = halves[0] ? halves[0].split(':') : []
+		var right = compressed && halves[1] ? halves[1].split(':') : []
+		if (left.concat(right).some(function (group) {
+			return !/^[0-9a-f]{1,4}$/.test(group)
+		})) return null
+		var missing = 8 - left.length - right.length
+		if ((!compressed && missing !== 0) || (compressed && missing < 1)) return null
+		return left.map(function (group) { return parseInt(group, 16) })
+			.concat(Array(missing).fill(0))
+			.concat(right.map(function (group) { return parseInt(group, 16) }))
+	}
+
+	function compressIpv6(groups) {
+		var bestStart = -1
+		var bestLength = 0
+		for (var index = 0; index < groups.length;) {
+			if (groups[index] !== 0) {
+				index += 1
+				continue
+			}
+			var end = index
+			while (end < groups.length && groups[end] === 0) end += 1
+			if (end - index > bestLength && end - index >= 2) {
+				bestStart = index
+				bestLength = end - index
+			}
+			index = end
+		}
+		var values = groups.map(function (group) { return group.toString(16) })
+		if (bestStart < 0) return values.join(':')
+		var left = values.slice(0, bestStart).join(':')
+		var right = values.slice(bestStart + bestLength).join(':')
+		return left + '::' + right
+	}
+
+	function countAcceptedTypes(values, acceptedTypes, type) {
+		return values.filter(function (value) {
+			return acceptedTypes[value] === type
+		}).length
 	}
 
 	function stableOrder(left, right) {
 		var family = Number(left.indexOf(':') >= 0) - Number(right.indexOf(':') >= 0)
-		return family || left.localeCompare(right)
+		if (family) return family
+		return left === right ? 0 : left < right ? -1 : 1
 	}
 
 	function toBase64Url(bytes) {

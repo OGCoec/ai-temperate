@@ -11,7 +11,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来把认证主体内的有效授权 ID 与启用模型快照求交集，确保公开模型列表和 Chat 请求使用同一授权事实。
+ * 该实现是来把认证主体内的有效授权 ID 与启用模型快照求交集，确保 Chat 与 Responses 模型发现使用同一授权事实。
  */
 @Service
 public final class ApiKeyModelDiscoveryServiceImpl implements ApiKeyModelDiscoveryService {
@@ -30,7 +30,9 @@ public final class ApiKeyModelDiscoveryServiceImpl implements ApiKeyModelDiscove
             return modelCacheService.getOrLoadEnabledSnapshot().models().stream()
                     .filter(model -> principal.modelIds().contains(model.id()))
                     .filter(model -> model.capabilities().contains(
-                            AiModelCapabilityCode.CHAT_COMPLETIONS))
+                            AiModelCapabilityCode.CHAT_COMPLETIONS)
+                            || model.capabilities().contains(
+                            AiModelCapabilityCode.RESPONSES))
                     .map(model -> new AuthorizedModel(
                             model.modelName(), model.createdEpochSeconds()))
                     .sorted(Comparator.comparing(AuthorizedModel::modelName))

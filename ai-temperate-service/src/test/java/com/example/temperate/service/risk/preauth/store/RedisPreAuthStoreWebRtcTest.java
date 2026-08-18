@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 PreAuth v6 WebRTC phase、generation 和截止时间全部通过专用 Lua 原子维护。
+ * 验证 PreAuth v7 WebRTC phase、generation、证据保留和截止时间全部通过专用 Lua 原子维护。
  */
 class RedisPreAuthStoreWebRtcTest {
 
@@ -62,6 +62,8 @@ class RedisPreAuthStoreWebRtcTest {
                         "webRtcGeneration",
                         "webRtcDeadlineAt",
                         "REPORT_TIMEOUT",
+                        "IP_FAMILY_INCOMPLETE",
+                        "retainsEvidence",
                         "redis.call('TIME')",
                         "return -2",
                         "return 4")
@@ -108,7 +110,7 @@ class RedisPreAuthStoreWebRtcTest {
     }
 
     @Test
-    void v6HashRequiresExplicitPhaseGenerationAndGenericDeadline() throws Exception {
+    void v7HashRequiresExplicitPhaseGenerationAndGenericDeadline() throws Exception {
         String store = Files.readString(Path.of(
                 "src/main/java/com/example/temperate/service/risk/preauth/"
                         + "store/impl/RedisPreAuthStore.java"));

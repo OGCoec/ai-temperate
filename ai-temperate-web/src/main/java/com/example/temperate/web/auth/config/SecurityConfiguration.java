@@ -6,11 +6,13 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
-import com.example.temperate.web.apikey.ApiChatBodyLimitFilter;
+import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter;
 import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
 import com.example.temperate.web.apikey.ApiKeyV1Paths;
 import com.example.temperate.web.apikey.OpenAiErrorResponseWriter;
 import com.example.temperate.web.apichat.diagnostic.ApiChatStreamDiagnosticFilter;
+import com.example.temperate.web.apiresponse.ApiResponsesTraceFilter;
+import com.example.temperate.web.apiresponse.diagnostic.ApiResponsesStreamDiagnosticFilter;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
@@ -115,10 +117,10 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    ApiChatBodyLimitFilter apiChatBodyLimitFilter(
+    ApiInferenceBodyLimitFilter apiInferenceBodyLimitFilter(
             ApiKeyProperties properties,
             OpenAiErrorResponseWriter errorWriter) {
-        return new ApiChatBodyLimitFilter(properties, errorWriter);
+        return new ApiInferenceBodyLimitFilter(properties, errorWriter);
     }
 
     /**
@@ -158,6 +160,69 @@ public class SecurityConfiguration {
         return registration;
     }
 
+    /** Responses 使用独立轻量 Trace 过滤器，不复用或改变现有 chat-diag-v1 诊断契约。 */
+    @Bean
+    ApiResponsesTraceFilter apiResponsesTraceFilter() {
+        return new ApiResponsesTraceFilter();
+    }
+
+    @Bean
+    FilterRegistrationBean<ApiResponsesTraceFilter>
+            apiResponsesTraceFilterRegistration(ApiResponsesTraceFilter filter) {
+        FilterRegistrationBean<ApiResponsesTraceFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setName("apiResponsesTraceFilter");
+        registration.setUrlPatterns(List.of("/v1/responses"));
+        registration.setDispatcherTypes(
+                DispatcherType.REQUEST,
+                DispatcherType.ASYNC,
+                DispatcherType.ERROR);
+        registration.setAsyncSupported(true);
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 11);
+        return registration;
+    }
+
+    /**
+     * Responses 流诊断复用 Trace 过滤器已经建立的请求标识，只观察 Servlet 异步生命周期，
+     * 不生成新 Trace、不读取请求体，也不参与 SSE 内容和背压控制。
+     */
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "app.api-key.stream-diagnostics",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    ApiResponsesStreamDiagnosticFilter apiResponsesStreamDiagnosticFilter(
+            ApiKeyProperties properties) {
+        return new ApiResponsesStreamDiagnosticFilter(properties, System::nanoTime);
+    }
+
+    /**
+     * 诊断过滤器必须紧跟 Responses Trace 过滤器，以便 REQUEST、ASYNC 与 ERROR 分派共享同一个
+     * X-Trace-Id；它只精确覆盖 `/v1/responses`，其他 `/v1/**` 路径不进入该诊断链路。
+     */
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "app.api-key.stream-diagnostics",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    FilterRegistrationBean<ApiResponsesStreamDiagnosticFilter>
+            apiResponsesStreamDiagnosticFilterRegistration(
+                    ApiResponsesStreamDiagnosticFilter filter) {
+        FilterRegistrationBean<ApiResponsesStreamDiagnosticFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setName("apiResponsesStreamDiagnosticFilter");
+        registration.setUrlPatterns(List.of("/v1/responses"));
+        registration.setDispatcherTypes(
+                DispatcherType.REQUEST,
+                DispatcherType.ASYNC,
+                DispatcherType.ERROR);
+        registration.setAsyncSupported(true);
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 12);
+        return registration;
+    }
+
     /**
      * 三个 `/v1` 过滤器只允许由 Spring Security 按既定顺序执行，禁止 Servlet 容器再次自动注册造成双重认证、风控或请求体读取。
      */
@@ -174,8 +239,8 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    FilterRegistrationBean<ApiChatBodyLimitFilter>
-            apiChatBodyLimitFilterRegistration(ApiChatBodyLimitFilter filter) {
+    FilterRegistrationBean<ApiInferenceBodyLimitFilter>
+            apiInferenceBodyLimitFilterRegistration(ApiInferenceBodyLimitFilter filter) {
         return securityOnlyFilter(filter);
     }
 
@@ -246,7 +311,7 @@ public class SecurityConfiguration {
     /**
      * 为公开 API Key v1 接口建立不含 Cookie、Session、CORS 和 CSRF 的精确无状态安全链。
      *
-     * <p>该链依次完成 Edge HMAC、Bearer API Key 和权威 IP 风险；Chat Completions 再额外经过请求体大小门禁。
+     * <p>该链依次完成 Edge HMAC、Bearer API Key 和权威 IP 风险；Chat Completions 与 Responses 再经过统一请求体大小门禁。
      * 普通 H5、Android 与语音请求仍进入各自既有安全链。</p>
      */
     @Bean
@@ -256,7 +321,7 @@ public class SecurityConfiguration {
             EdgeProxySignatureFilter edgeProxySignatureFilter,
             ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
             ApiKeyIpRiskFilter apiKeyIpRiskFilter,
-            ApiChatBodyLimitFilter apiChatBodyLimitFilter,
+            ApiInferenceBodyLimitFilter apiInferenceBodyLimitFilter,
             OpenAiErrorResponseWriter errorWriter) throws Exception {
         // 公开 API 不创建 Session、不读取 Cookie、不启用 CORS，所有身份只来自当前 Bearer 和 Worker 签名。
         return http
@@ -287,7 +352,7 @@ public class SecurityConfiguration {
                         apiKeyIpRiskFilter,
                         ApiKeyAuthenticationFilter.class)
                 .addFilterAfter(
-                        apiChatBodyLimitFilter,
+                        apiInferenceBodyLimitFilter,
                         ApiKeyIpRiskFilter.class)
                 .build();
     }

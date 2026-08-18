@@ -692,7 +692,7 @@ public final class RedisKeyFactory {
         return create(
                 "risk",
                 "preauth-user",
-                "v6",
+                "v7",
                 IdentifierType.PRE_AUTH,
                 requireHmacIdentifier(identifier));
     }
@@ -704,7 +704,7 @@ public final class RedisKeyFactory {
         return create(
                 "risk",
                 "preauth-admin",
-                "v6",
+                "v7",
                 IdentifierType.PRE_AUTH,
                 requireHmacIdentifier(identifier));
     }

@@ -6,6 +6,7 @@ package com.example.temperate.web.apikey;
 public final class ApiKeyV1Paths {
 
     public static final String CHAT_COMPLETIONS = "/v1/chat/completions";
+    public static final String RESPONSES = "/v1/responses";
     public static final String MODELS = "/v1/models";
 
     private ApiKeyV1Paths() {
@@ -13,6 +14,7 @@ public final class ApiKeyV1Paths {
 
     public static boolean isApiKeyEndpoint(String method, String requestUri) {
         return ("POST".equals(method) && CHAT_COMPLETIONS.equals(requestUri))
+                || ("POST".equals(method) && RESPONSES.equals(requestUri))
                 || ("GET".equals(method) && MODELS.equals(requestUri));
     }
 }

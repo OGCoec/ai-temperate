@@ -6,6 +6,7 @@ import { collectH5WebRtcIps } from '@shared-auth/h5-webrtc-probe.js'
 export function collectAdminH5VerificationIps(options = {}) {
 	return collectH5WebRtcIps(
 		options.stunUrls,
-		options.timeoutMillis
+		options.timeoutMillis,
+		options.diagnosticTrace
 	)
 }

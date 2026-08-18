@@ -4,7 +4,7 @@ import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import java.util.List;
 
 /**
- * 该服务是来为已认证 API Key 列出可用于公开 Chat Completions 的模型，不参与 Key 认证或上游模型发现。
+ * 该服务是来为已认证 API Key 列出可用于公开 Chat Completions 或 Responses 的模型，不参与 Key 认证或上游模型发现。
  */
 public interface ApiKeyModelDiscoveryService {
 

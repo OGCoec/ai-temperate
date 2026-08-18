@@ -91,8 +91,44 @@ class WebRtcEdgeControllerTest {
         assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("WEBRTC_IP_MISMATCH");
+        assertThat(response.getBody().verificationState()).isEqualTo("FAILED");
         assertThat(response.getBody().httpIp()).isEqualTo("8.8.8.8");
         assertThat(response.getBody().webRtcIps()).containsExactly("1.1.1.1");
+    }
+
+    @Test
+    void reportReturns428AndCompleteEvidenceWhenHttpFamilyIsMissing() {
+        Fixture fixture = fixture();
+        when(fixture.service().report(
+                        any(),
+                        eq("8.8.8.8"),
+                        eq("13"),
+                        eq(List.of("2606:4700:4700::1111"))))
+                .thenReturn(WebRtcVerificationDecision.failed(
+                        13L,
+                        com.example.temperate.service.risk.preauth.domain
+                                .PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE,
+                        List.of("2606:4700:4700::1111")));
+
+        var response = fixture.controller().reportUser(
+                "device-installation-0001",
+                "H5",
+                new WebRtcEdgeController.WebRtcReportRequest(
+                        "13",
+                        List.of("2606:4700:4700::1111")),
+                request("POST", "/api/_edge/webrtc/report"));
+
+        assertThat(response.getStatusCode())
+                .isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code())
+                .isEqualTo("WEBRTC_IP_FAMILY_INCOMPLETE");
+        assertThat(response.getBody().verificationState()).isEqualTo("FAILED");
+        assertThat(response.getBody().webRtcStatus()).isFalse();
+        assertThat(response.getBody().retryable()).isFalse();
+        assertThat(response.getBody().httpIp()).isEqualTo("8.8.8.8");
+        assertThat(response.getBody().webRtcIps())
+                .containsExactly("2606:4700:4700::1111");
     }
 
     @Test

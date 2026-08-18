@@ -254,7 +254,8 @@ async function verify(attempt, allowGenerationRefresh) {
 			attemptId: `${activeAttempt.epoch}:${generation}`,
 			probeRunId: attempt.probeRunId,
 			stunUrls: start?.stunUrls,
-			timeoutMillis: probeMillis
+			timeoutMillis: probeMillis,
+			diagnosticTrace: webRtcDiagnostics
 		})
 		trace('platform_probe_completed', {
 			candidateCount: webRtcIps.length

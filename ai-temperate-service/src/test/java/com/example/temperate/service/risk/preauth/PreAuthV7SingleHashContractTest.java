@@ -7,9 +7,20 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 PreAuth v6 的信用快照、Challenge 与四态 WebRTC 门禁都保存在单个 Redis Hash 中。
+ * 验证 PreAuth v7 的信用快照、Challenge 与四态 WebRTC 门禁都保存在单个 Redis Hash 中。
  */
-class PreAuthV6SingleHashContractTest {
+class PreAuthV7SingleHashContractTest {
+
+    @Test
+    void stateSchemaIsV7AndOldV6StateIsNotAccepted() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/com/example/temperate/service/risk/preauth/"
+                        + "domain/PreAuthState.java"));
+
+        assertThat(source)
+                .contains("CURRENT_SCHEMA_VERSION = 7")
+                .doesNotContain("CURRENT_SCHEMA_VERSION = 6");
+    }
 
     @Test
     void storeUsesRequiredPhaseAndGenericRedisDeadline() throws Exception {
@@ -42,7 +53,8 @@ class PreAuthV6SingleHashContractTest {
                         .doesNotContain(
                                 "schemaVersion') ~= '4'",
                                 "schemaVersion') ~= '5'",
-                                "schemaVersion') ~= '6'");
+                                "schemaVersion') ~= '6'",
+                                "schemaVersion') ~= '7'");
             }
         }
     }

@@ -13,6 +13,20 @@ function parseUniPages(source) {
 	return JSON.parse(source.replace(/^\s*\/\/\s*#(?:ifn?def|endif).*$/gm, ''))
 }
 
+test('H5 entry explicitly publishes the uni-icons font instead of relying on component style discovery', () => {
+	const app = read('App.vue')
+	const entry = read('main.js')
+
+	assert.match(app,
+		/@import\s+['"]@\/uni_modules\/uni-icons\/components\/uni-icons\/uniicons\.css['"]/)
+	assert.match(app,
+		/@font-face\s*\{[\s\S]*?font-family:\s*uniicons[\s\S]*?src:\s*url\(['"]@\/uni_modules\/uni-icons\/components\/uni-icons\/uniicons\.ttf['"]\)/)
+	assert.match(app, /\.uni-icons\s*\{[\s\S]*?font-family:\s*uniicons/)
+	assert.match(entry,
+		/import\s+UniIcons\s+from\s+['"]@\/uni_modules\/uni-icons\/components\/uni-icons\/uni-icons\.vue['"]/)
+	assert.match(entry, /app\.component\(['"]uni-icons['"],\s*UniIcons\)/)
+})
+
 test('chat page creates a conversation only on first send and refreshes the sidebar only after completed', () => {
 	const entry = read('pages/ai-chat/index.vue')
 	const page = read('components/user/workspace/user-chat-panel.vue')
@@ -151,6 +165,7 @@ test('H5 workspace restructuring leaves the Android navigation and generation st
 
 test('recent conversations are expanded in the focused sidebar and loaded on demand', () => {
 	const page = read('components/user/user-workspace.vue')
+	const api = read('common/aichat/ai-conversation-api.js')
 	const sidebar = read('components/user/user-h5-workspace-sidebar.vue')
 	const recent = read('components/user/user-recent-conversations.vue')
 	const recentUsages = sidebar.match(/<user-recent-conversations\b/g) || []
@@ -161,11 +176,75 @@ test('recent conversations are expanded in the focused sidebar and loaded on dem
 	assert.match(page, /toggleRecentConversations\(\)[\s\S]*this\.recentExpanded = !this\.recentExpanded[\s\S]*ensureRecentConversations\(\)/)
 	assert.match(page, /sidebarPreferenceTouched:\s*false/)
 	assert.match(page, /handleWorkspaceResize/)
+	assert.match(api, /export const CONVERSATION_LIST_PAGE_SIZE\s*=\s*18/)
+	assert.match(page,
+		/import\s*\{[\s\S]*CONVERSATION_LIST_PAGE_SIZE[\s\S]*\}\s*from\s*['"]@\/common\/aichat\/ai-conversation-api\.js['"]/)
+	assert.equal((page.match(/pageSize:\s*CONVERSATION_LIST_PAGE_SIZE/g) || []).length, 2)
+	assert.match(page,
+		/const requestedCursor = this\.nextCursor[\s\S]*await aiConversationApi\.listConversations\([\s\S]*if \(this\.nextCursor !== requestedCursor\) return/)
 	assert.equal(recentUsages.length, 1)
 	assert.match(recent, /:aria-expanded="String\(expanded\)"/)
 	assert.match(recent, /:aria-controls="contentId"/)
 	assert.match(recent, /:id="contentId"/)
 	assert.match(recent, /v-if="expanded"/)
+})
+
+test('recent conversations request the next cursor page when the shared list reaches its threshold', () => {
+	const recent = read('components/user/user-recent-conversations.vue')
+
+	assert.match(recent,
+		/<scroll-view[\s\S]*:lower-threshold="96"[\s\S]*@scrolltolower="requestLoadMore"/)
+	assert.match(recent,
+		/requestLoadMore\(\)\s*\{[\s\S]*this\.recentBottomZoneEntered[\s\S]*!this\.hasMore[\s\S]*this\.loading[\s\S]*return[\s\S]*this\.recentBottomZoneEntered\s*=\s*true[\s\S]*\$emit\('load-more'\)/)
+	assert.match(recent, /RECENT_LOAD_MORE_THRESHOLD_PX\s*=\s*96/)
+	assert.match(recent,
+		/distanceToBottom[\s\S]*>\s*RECENT_LOAD_MORE_THRESHOLD_PX[\s\S]*recentBottomZoneEntered\s*=\s*false/)
+	assert.match(recent, /正在加载更多/)
+	assert.match(recent, /已加载全部会话/)
+	assert.doesNotMatch(recent, /class="recent-more"/)
+})
+
+test('recent conversations expose a visible draggable scrollbar that stays synchronized with the shared scroll view', () => {
+	const recent = read('components/user/user-recent-conversations.vue')
+	const androidSidebar = read('components/user/user-workspace-sidebar.vue')
+	const h5Sidebar = read('components/user/user-h5-workspace-sidebar.vue')
+
+	assert.match(recent,
+		/:scroll-top="recentScrollTarget"[\s\S]*:show-scrollbar="false"[\s\S]*@scroll="handleRecentScroll"/)
+	assert.match(recent, /class="recent-scrollbar-thumb"[\s\S]*role="scrollbar"/)
+	assert.match(recent, /@mousedown\.stop\.prevent="startRecentScrollbarDrag"/)
+	assert.match(recent, /@touchmove\.stop\.prevent="moveRecentScrollbarDrag"/)
+	assert.match(recent, /recentScrollbarThumbStyle\(\)[\s\S]*transform/)
+	assert.match(recent, /handleRecentScrollbarKeydown\(event\)/)
+	assert.match(recent,
+		/\.recent-scroll-content\s*\{[^}]*padding-right:\s*13px[^}]*box-sizing:\s*border-box/)
+	assert.match(recent,
+		/\.recent-scrollbar\s*\{[^}]*width:\s*12px[^}]*right:\s*0/)
+	assert.match(recent,
+		/\.recent-scrollbar-thumb\s*\{[^}]*width:\s*12px[^}]*background:\s*transparent/)
+	assert.match(recent,
+		/\.recent-scrollbar-thumb::before\s*\{[^}]*inset:\s*0 3px/)
+	assert.match(recent,
+		/\.conversation-row\s*\{[^}]*margin:\s*2px 0 2px 6px/)
+	assert.doesNotMatch(recent,
+		/\.recent-scrollbar\s*\{[^}]*right:\s*calc\(2px \+ var\(--sidebar-inline-padding/)
+	assert.doesNotMatch(recent,
+		/\.conversation-row\s*\{[^}]*margin-right:\s*calc\(/)
+	assert.match(h5Sidebar,
+		/\.workspace-sidebar\s*\{[^}]*padding:\s*12px 12px[^}]*border-right:/)
+	assert.match(h5Sidebar,
+		/\.workspace-sidebar-conversations\s*\{[^}]*margin:\s*10px -12px 0 0/)
+	assert.match(androidSidebar,
+		/\.workspace-history-drawer\.is-android-drawer\s*\{[^}]*padding:[^}]*8px/)
+	assert.match(androidSidebar,
+		/\.is-android-drawer\s+:deep\(\.recent-conversations\)\s*\{[^}]*width:\s*calc\(100% \+ 8px\)[^}]*margin-right:\s*-8px/)
+})
+
+test('H5 recent conversations keep a constrained column flex height chain', () => {
+	const h5Sidebar = read('components/user/user-h5-workspace-sidebar.vue')
+
+	assert.match(h5Sidebar,
+		/\.workspace-sidebar-conversations\s*\{[^}]*min-height:\s*0[^}]*flex:\s*1[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*overflow:\s*hidden/)
 })
 
 test('conversation public IDs are never rendered as body text and copy through the platform clipboard', () => {

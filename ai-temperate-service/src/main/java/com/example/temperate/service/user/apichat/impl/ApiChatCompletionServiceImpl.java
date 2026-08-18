@@ -1,16 +1,17 @@
 package com.example.temperate.service.user.apichat.impl;
 
-import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyPermit;
-import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyService;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionRequest;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceLifecycleService;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceLifecycleSession;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceSettlementPendingException;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.ApiChatCompletionService;
 import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.ApiChatRequest;
 import com.example.temperate.service.user.apichat.ApiChatRequestValidator;
 import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Reservation;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticBoundary;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticContext;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticSession;
@@ -32,17 +33,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Objects;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 /**
  * 该实现是来确保“并发准入→短事务预扣→连接 8317”的顺序，并在所有完成、错误与取消路径上幂等结算和释放租约。
@@ -50,38 +47,30 @@ import reactor.core.scheduler.Schedulers;
 @Service
 public final class ApiChatCompletionServiceImpl implements ApiChatCompletionService {
 
-    private static final Duration RENEW_INTERVAL = Duration.ofSeconds(15);
-
     private final ApiChatRequestValidator requestValidator;
-    private final AiInferenceConcurrencyService concurrencyService;
-    private final ApiChatBillingService billingService;
+    private final ApiInferenceLifecycleService lifecycleService;
     private final ApiChatProviderAdapterRegistry adapterRegistry;
     private final ApiChatUpstreamClient upstreamClient;
     private final ApiChatSseParser sseParser;
     private final ObjectMapper objectMapper;
-    private final Executor finalizerExecutor;
     private final MeterRegistry meterRegistry;
     private final ApiChatStreamDiagnosticService diagnostics;
 
     public ApiChatCompletionServiceImpl(
             ApiChatRequestValidator requestValidator,
-            AiInferenceConcurrencyService concurrencyService,
-            ApiChatBillingService billingService,
+            ApiInferenceLifecycleService lifecycleService,
             ApiChatProviderAdapterRegistry adapterRegistry,
             ApiChatUpstreamClient upstreamClient,
             ApiChatSseParser sseParser,
             ObjectMapper objectMapper,
-            @Qualifier("aiConversationFinalizerExecutor") Executor finalizerExecutor,
             MeterRegistry meterRegistry,
             ApiChatStreamDiagnosticService diagnostics) {
         this.requestValidator = Objects.requireNonNull(requestValidator);
-        this.concurrencyService = Objects.requireNonNull(concurrencyService);
-        this.billingService = Objects.requireNonNull(billingService);
+        this.lifecycleService = Objects.requireNonNull(lifecycleService);
         this.adapterRegistry = Objects.requireNonNull(adapterRegistry);
         this.upstreamClient = Objects.requireNonNull(upstreamClient);
         this.sseParser = Objects.requireNonNull(sseParser);
         this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.finalizerExecutor = Objects.requireNonNull(finalizerExecutor);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
         this.diagnostics = Objects.requireNonNull(diagnostics);
     }
@@ -102,43 +91,30 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         } catch (RuntimeException exception) {
             throw infrastructure("Request validation is temporarily unavailable.");
         }
-        AiInferenceConcurrencyService.AcquireResult acquired =
-                concurrencyService.tryAcquireApiKey(
-                        principal.loginIdentityId(),
-                        principal.digestIdentifier(),
-                        (short) 1);
-        if (acquired.result() != AiInferenceConcurrencyService.Result.ACQUIRED) {
-            throw concurrencyException(acquired.result());
-        }
-        AiInferenceConcurrencyPermit permit = acquired.permit();
-        Reservation reservation;
-        try {
-            reservation = billingService.reserve(principal, validated);
-        } catch (ApiChatException exception) {
-            concurrencyService.release(permit);
-            throw exception;
-        } catch (RuntimeException exception) {
-            concurrencyService.release(permit);
-            throw infrastructure("Billing is temporarily unavailable.");
-        }
+        ApiInferenceLifecycleSession session = lifecycleService.start(
+                principal,
+                new ApiInferenceExecutionRequest(
+                        validated.model(),
+                        validated.effectiveMaxOutputTokens(),
+                        validated.estimatedPromptTokens(),
+                        true,
+                        ApiInferenceProtocol.CHAT_COMPLETIONS));
 
-        return Flux.defer(() -> streamReserved(validated, reservation, permit, payload));
+        return Flux.defer(() -> streamReserved(validated, session, payload));
     }
 
     private Flux<String> streamReserved(
             ValidatedApiChatRequest validated,
-            Reservation reservation,
-            AiInferenceConcurrencyPermit permit,
+            ApiInferenceLifecycleSession session,
             ObjectNode payload) {
-        AtomicReference<Usage> usage = new AtomicReference<>();
+        AtomicReference<ApiInferenceUsage> usage = new AtomicReference<>();
         AtomicLong emittedBytes = new AtomicLong();
         AtomicReference<String> finishReason = new AtomicReference<>("STOP");
         AtomicBoolean done = new AtomicBoolean();
         AtomicBoolean sseStarted = new AtomicBoolean();
-        AtomicBoolean finalized = new AtomicBoolean();
 
         Flux<String> rawUpstream = diagnostics.observeBoundary(
-                withLeaseRenewal(upstreamClient.stream(payload), permit),
+                lifecycleService.withLeaseRenewal(upstreamClient.stream(payload), session),
                 ApiChatDiagnosticBoundary.UPSTREAM_RAW,
                 data -> data.getBytes(StandardCharsets.UTF_8).length,
                 data -> "[DONE]".equals(data)
@@ -160,14 +136,13 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                             .concatMap(parsed -> processParsedChunk(
                                     parsed,
                                     validated,
-                                    reservation,
+                                    session,
                                     diagnosticSession,
                                     usage,
                                     emittedBytes,
                                     finishReason,
                                     done,
-                                    sseStarted,
-                                    finalized));
+                                    sseStarted));
                 }))
                 .concatWith(Mono.defer(() -> done.get()
                         ? Mono.empty()
@@ -179,7 +154,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                     var diagnosticSession = ApiChatDiagnosticContext.session(context);
                     diagnosticSession.recordFailure(exception);
                     boolean settlementPending =
-                            hasCause(exception, SettlementPendingException.class);
+                            hasCause(exception, ApiInferenceSettlementPendingException.class);
                     ApiChatException controlled = settlementPending
                             ? infrastructure("Billing settlement is pending recovery.")
                             : controlled(exception);
@@ -190,10 +165,9 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                         }
                         return Flux.just(errorData(controlled), "[DONE]");
                     }
-                    // 系统失败退款先原子占有终态；客户端同时断开时不得再以取消估算抢先收费。
-                    boolean refundOwned = finalized.compareAndSet(false, true);
-                    Mono<Void> refund = refundSystemFailure(
-                            reservation, controlled, refundOwned);
+                    // 生命周期服务以请求级 CAS 决定退款、取消或结算的唯一终态，避免并发回调重复扣费。
+                    Mono<Void> refund = lifecycleService.refundSystemFailure(
+                            session, controlled.code().name());
                     if (!sseStarted.get()) {
                         // 首个 SSE 数据尚未写出时保留同步 HTTP 错误语义；异常处理器仍可返回 502/503 JSON。
                         return refund.thenMany(Flux.error(controlled));
@@ -207,26 +181,11 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                         data -> data.getBytes(StandardCharsets.UTF_8).length,
                         ApiChatCompletionServiceImpl::outgoingFrameKind)
                 .doFinally(signal -> {
-                    concurrencyService.release(permit);
-                    if (signal == reactor.core.publisher.SignalType.CANCEL
-                            && finalized.compareAndSet(false, true)) {
-                        // Servlet/Worker 断开不会等待数据库；有界终态执行器异步按 Usage、输出字节或零输出退款收敛。
-                        try {
-                            finalizerExecutor.execute(() -> runFinalizerWithRetry(() -> {
-                                Usage finalUsage = usage.get();
-                                if (finalUsage != null) {
-                                    billingService.settle(
-                                            reservation, finalUsage, "CLIENT_CANCELLED");
-                                } else {
-                                    billingService.settleCancellationEstimate(
-                                            reservation, emittedBytes.get());
-                                }
-                                count("client_cancelled");
-                            }));
-                        } catch (RuntimeException schedulingFailure) {
-                            // 执行器饱和时保留 RESERVED，恢复任务会在安全截止时间后退款，禁止在 I/O 回调线程执行数据库事务。
-                            count("client_cancel_finalizer_rejected");
-                        }
+                    lifecycleService.release(session);
+                    if (signal == reactor.core.publisher.SignalType.CANCEL) {
+                        // 取消终态由有界执行器异步收敛；若已有权威终态，生命周期 CAS 会让此调用成为空操作。
+                        lifecycleService.scheduleCancellation(
+                                session, usage.get(), emittedBytes.get());
                     }
                 });
     }
@@ -234,14 +193,13 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
     private Mono<String> processParsedChunk(
             ParsedChunk parsed,
             ValidatedApiChatRequest validated,
-            Reservation reservation,
+            ApiInferenceLifecycleSession session,
             ApiChatDiagnosticSession diagnosticSession,
-            AtomicReference<Usage> usage,
+            AtomicReference<ApiInferenceUsage> usage,
             AtomicLong emittedBytes,
             AtomicReference<String> finishReason,
             AtomicBoolean done,
-            AtomicBoolean sseStarted,
-            AtomicBoolean finalized) {
+            AtomicBoolean sseStarted) {
         ApiChatFrameKind frameKind = frameKind(parsed);
         diagnosticSession.recordBoundary(
                 ApiChatDiagnosticBoundary.AFTER_PROTOCOL_PARSE,
@@ -251,23 +209,17 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
             return Mono.error(protocolError(ApiChatProtocolViolation.DATA_AFTER_DONE));
         }
         if (parsed.done()) {
-            Usage finalUsage = usage.get();
+            ApiInferenceUsage finalUsage = usage.get();
             if (finalUsage == null) {
                 return Mono.error(protocolError(
                         ApiChatProtocolViolation.DONE_WITHOUT_USAGE));
             }
             done.set(true);
             diagnosticSession.recordDone();
-            return Mono.fromRunnable(() -> billingService.settle(
-                            reservation, finalUsage, finishReason.get()))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .retry(2)
-                    // 结算 I/O 失败与上游系统失败不是同一种终态；保留 RESERVED 让恢复任务处理，禁止给已完整输出的请求立即免单。
-                    .onErrorMap(SettlementPendingException::new)
+            return lifecycleService.settle(session, finalUsage, finishReason.get())
                     .thenReturn("[DONE]")
                     .doOnSuccess(ignored -> {
                         sseStarted.set(true);
-                        finalized.set(true);
                         diagnosticSession.recordBoundary(
                                 ApiChatDiagnosticBoundary.AFTER_BUSINESS_GATE,
                                 "[DONE]".length(),
@@ -306,49 +258,6 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         });
     }
 
-    private Mono<Void> refundSystemFailure(
-            Reservation reservation,
-            ApiChatException controlled,
-            boolean refundOwned) {
-        if (!refundOwned) {
-            return Mono.empty();
-        }
-        return Mono.fromRunnable(() -> {
-                    billingService.refundSystemFailure(
-                            reservation,
-                            controlled.code().name());
-                    count("system_failure_refunded");
-                })
-                .subscribeOn(Schedulers.boundedElastic())
-                .retry(2)
-                // 三次退款失败时保留 RESERVED 给恢复任务；客户端仍必须收到原始受控失败而非内部退款异常。
-                .onErrorResume(refundFailure -> {
-                    count("system_failure_refund_retry_exhausted");
-                    return Mono.empty();
-                })
-                .then();
-    }
-
-    private Flux<String> withLeaseRenewal(
-            Flux<String> source,
-            AiInferenceConcurrencyPermit permit) {
-        return source.publish(shared -> {
-            // takeUntilOther 依赖 onNext 终止；then(Mono) 显式发出完成信号，避免上游正常结束后续租时钟继续存活。
-            Mono<Boolean> completed = shared.then(Mono.just(Boolean.TRUE));
-            Flux<String> renewalGuard = Flux.interval(RENEW_INTERVAL)
-                    .takeUntilOther(completed)
-                    .<String>handle((tick, sink) -> {
-                        if (!concurrencyService.renew(permit)) {
-                            sink.error(new ApiChatException(
-                                    ApiChatErrorCode.INFRASTRUCTURE_UNAVAILABLE,
-                                    "The concurrency lease could not be renewed.",
-                                    null));
-                        }
-                    });
-            return Flux.merge(shared, renewalGuard);
-        });
-    }
-
     private String errorData(ApiChatException exception) {
         ObjectNode envelope = objectMapper.createObjectNode();
         ObjectNode error = envelope.putObject("error");
@@ -367,22 +276,6 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
                     + "\"type\":\"server_error\",\"param\":null,"
                     + "\"code\":\"streaming_failed\"}}";
         }
-    }
-
-    private static ApiChatException concurrencyException(
-            AiInferenceConcurrencyService.Result result) {
-        ApiChatErrorCode code = switch (result) {
-            case API_KEY_LIMIT_EXCEEDED -> ApiChatErrorCode.API_KEY_LIMIT_EXCEEDED;
-            case ACCOUNT_LIMIT_EXCEEDED -> ApiChatErrorCode.ACCOUNT_LIMIT_EXCEEDED;
-            case GLOBAL_LIMIT_EXCEEDED -> ApiChatErrorCode.GLOBAL_LIMIT_EXCEEDED;
-            default -> ApiChatErrorCode.INFRASTRUCTURE_UNAVAILABLE;
-        };
-        return new ApiChatException(code, switch (code) {
-            case API_KEY_LIMIT_EXCEEDED -> "The API Key concurrency limit was exceeded.";
-            case ACCOUNT_LIMIT_EXCEEDED -> "The account concurrency limit was exceeded.";
-            case GLOBAL_LIMIT_EXCEEDED -> "The global concurrency limit was exceeded.";
-            default -> "Concurrency control is temporarily unavailable.";
-        }, null);
     }
 
     private static ApiChatException controlled(Throwable failure) {
@@ -451,28 +344,7 @@ public final class ApiChatCompletionServiceImpl implements ApiChatCompletionServ
         return normalized.matches("[A-Z0-9_]{1,64}") ? normalized : "UNKNOWN";
     }
 
-    private void runFinalizerWithRetry(Runnable finalizer) {
-        RuntimeException lastFailure = null;
-        // 三次有界尝试只重放同一幂等终态事务；全部失败时保留 RESERVED，由十七分钟恢复任务退款。
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                finalizer.run();
-                return;
-            } catch (RuntimeException exception) {
-                lastFailure = exception;
-            }
-        }
-        count(lastFailure == null ? "finalizer_failed" : "finalizer_retry_exhausted");
-    }
-
     private void count(String result) {
         meterRegistry.counter("api.chat.completion", "result", result).increment();
-    }
-
-    /** 该内部异常只标记终态结算尚未持久化，调用链必须保留 RESERVED 而不能执行系统失败退款。 */
-    private static final class SettlementPendingException extends RuntimeException {
-        private SettlementPendingException(Throwable cause) {
-            super("API chat settlement remains pending", cause);
-        }
     }
 }

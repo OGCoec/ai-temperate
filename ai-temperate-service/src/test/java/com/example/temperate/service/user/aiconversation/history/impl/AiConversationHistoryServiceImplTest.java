@@ -11,6 +11,7 @@ import com.example.temperate.mapper.ai.AiConversationMapper;
 import com.example.temperate.mapper.ai.AiConversationMessageMapper;
 import com.example.temperate.model.ai.entity.AiConversation;
 import com.example.temperate.model.ai.entity.AiConversationMessageHistoryRow;
+import com.example.temperate.model.ai.entity.AiConversationSidebarRow;
 import com.example.temperate.service.user.aiconversation.history.AiConversationCursorCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.OffsetDateTime;
@@ -26,9 +27,9 @@ final class AiConversationHistoryServiceImplTest {
     void conversationPageUsesLimitPlusOneAndCompositeCursor() {
         AiConversationMapper conversations = mock(AiConversationMapper.class);
         AiConversationMessageMapper messages = mock(AiConversationMessageMapper.class);
-        AiConversation first = conversation((byte) 1, 30L, "first");
-        AiConversation second = conversation((byte) 2, 20L, null);
-        AiConversation overflow = conversation((byte) 3, 10L, "overflow");
+        AiConversationSidebarRow first = sidebarRow((byte) 1, 30L, "first");
+        AiConversationSidebarRow second = sidebarRow((byte) 2, 20L, null);
+        AiConversationSidebarRow overflow = sidebarRow((byte) 3, 10L, "overflow");
         when(conversations.findActivePage(7L, null, null, 3))
                 .thenReturn(List.of(first, second, overflow));
         AiConversationHistoryServiceImpl service = service(conversations, messages);
@@ -40,6 +41,21 @@ final class AiConversationHistoryServiceImplTest {
         assertThat(page.nextCursor()).hasSize(32);
         assertThat(page.hasMore()).isTrue();
         verify(conversations).findActivePage(7L, null, null, 3);
+    }
+
+    @Test
+    void eighteenItemConversationPageReadsOneOverflowRow() {
+        AiConversationMapper conversations = mock(AiConversationMapper.class);
+        AiConversationMessageMapper messages = mock(AiConversationMessageMapper.class);
+        when(conversations.findActivePage(7L, null, null, 19))
+                .thenReturn(List.of());
+        AiConversationHistoryServiceImpl service = service(conversations, messages);
+
+        var page = service.list(7L, null, 18);
+
+        assertThat(page.conversations()).isEmpty();
+        assertThat(page.hasMore()).isFalse();
+        verify(conversations).findActivePage(7L, null, null, 19);
     }
 
     @Test
@@ -85,6 +101,18 @@ final class AiConversationHistoryServiceImplTest {
         value.setId(id(suffix));
         value.setLoginIdentityId(7L);
         value.setActive(true);
+        value.setTitle(title);
+        value.setLastMessageId(lastMessageId);
+        value.setCreatedAt(OffsetDateTime.parse("2026-07-30T12:00:00Z"));
+        return value;
+    }
+
+    private static AiConversationSidebarRow sidebarRow(
+            byte suffix,
+            long lastMessageId,
+            String title) {
+        AiConversationSidebarRow value = new AiConversationSidebarRow();
+        value.setId(id(suffix));
         value.setTitle(title);
         value.setLastMessageId(lastMessageId);
         value.setCreatedAt(OffsetDateTime.parse("2026-07-30T12:00:00Z"));

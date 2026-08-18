@@ -80,6 +80,19 @@
 	@import './common/app-theme.scss';
 	/* #ifndef APP-PLUS-NVUE */
 	/* #ifdef H5 */
+	@import '@/uni_modules/uni-icons/components/uni-icons/uniicons.css';
+
+	/* HBuilderX 导出 Web 时可能漏掉按需组件样式；在应用入口固定声明图标字体。 */
+	@font-face {
+		font-family: uniicons;
+		src: url('@/uni_modules/uni-icons/components/uni-icons/uniicons.ttf') format('truetype');
+		font-display: block;
+	}
+
+	.uni-icons {
+		font-family: uniicons;
+	}
+
 	@media screen and (min-width: 768px) {
 		body {
 			overflow-y: scroll;

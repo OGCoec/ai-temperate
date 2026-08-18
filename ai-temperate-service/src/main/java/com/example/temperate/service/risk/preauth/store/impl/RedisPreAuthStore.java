@@ -34,7 +34,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 
 /**
- * 使用普通与管理员独立的单个 Redis Hash 保存 PreAuth v6 全部有界风险状态。
+ * 使用普通与管理员独立的单个 Redis Hash 保存 PreAuth v7 全部有界风险状态。
  *
  * <p>设备校验、事件窗口维护、WebRTC generation/截止时间迁移、Challenge 复用/消费、登录旋转和
  * TTL 刷新均由 Lua 保证各自原子边界，不再创建独立 Travel ZSet 或 Challenge 引用 Key。</p>

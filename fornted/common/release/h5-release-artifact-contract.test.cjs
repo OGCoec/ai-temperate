@@ -12,7 +12,12 @@ const {
 function withFixture(files, run) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ait-h5-release-'))
 	try {
-		for (const [relativePath, content] of Object.entries(files)) {
+		const fixtureFiles = {
+			'404.html': '<!doctype html><title>页面不存在</title>',
+			...files
+		}
+		for (const [relativePath, content] of Object.entries(fixtureFiles)) {
+			if (content == null) continue
 			const target = path.join(root, relativePath)
 			fs.mkdirSync(path.dirname(target), { recursive: true })
 			fs.writeFileSync(target, content)
@@ -68,6 +73,21 @@ test('accepts bundled Vue syntax-highlighting grammar scope names', () => {
 		'assets/vue-grammar.js': 'const grammar={scopeName:"text.html.vue",patterns:[{name:"source.directive.vue"},{name:"entity.name.tag.html.vue"}]}'
 	}, root => {
 		assert.deepEqual(verifyFixture(root).errors, [])
+	})
+})
+
+test('rejects an H5 artifact without a top-level 404 page that disables the Pages SPA fallback', () => {
+	withFixture({
+		'404.html': null,
+		'index.html': '<!doctype html><meta http-equiv="Content-Security-Policy" content="frame-src https://ai-temperate-html-preview.pages.dev"><script type="module" src="/assets/index-a1b2c3.js"></script>',
+		'_headers': headers,
+		'_redirects': '# SPA routes are resolved by the main-site Worker.\n',
+		'assets/index-a1b2c3.js': 'const previewOrigin="https://ai-temperate-html-preview.pages.dev"'
+	}, root => {
+		assert.match(
+			verifyFixture(root).errors.join('\n'),
+			/Missing required release file: 404\.html/
+		)
 	})
 })
 

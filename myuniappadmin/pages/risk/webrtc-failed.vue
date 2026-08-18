@@ -19,7 +19,9 @@
 				<text class="failure-banner" role="alert" aria-live="assertive">
 					{{ mismatch
 						? 'WebRTC 公网 IP 与当前访问 IP 不一致'
-						: '未获取到 WebRTC 公网 IP' }}
+						: familyIncomplete
+							? 'WebRTC 同协议族检测证据不完整'
+							: '未获取到 WebRTC 公网 IP' }}
 				</text>
 				<text class="panel-title">访问已暂停</text>
 				<text class="panel-copy">{{ details.message || fallbackMessage }}</text>
@@ -80,6 +82,7 @@
 	const ADMIN_SAFE_ENTRY = '/pages/index/index'
 	const FAILURE_CODES = new Set([
 		'WEBRTC_IP_MISMATCH',
+		'WEBRTC_IP_FAMILY_INCOMPLETE',
 		'WEBRTC_VERIFICATION_FAILED',
 		'WEBRTC_VERIFICATION_TIMEOUT'
 	])
@@ -105,10 +108,15 @@
 			mismatch() {
 				return this.details.code === 'WEBRTC_IP_MISMATCH'
 			},
+			familyIncomplete() {
+				return this.details.code === 'WEBRTC_IP_FAMILY_INCOMPLETE'
+			},
 			fallbackMessage() {
-				return this.mismatch
-					? '当前 HTTP IP 不在 WebRTC 公网候选集合中。'
-					: '当前环境没有返回可用于一致性校验的公网 WebRTC IP。'
+				if (this.mismatch) return '当前 HTTP IP 不在 WebRTC 公网候选集合中。'
+				if (this.familyIncomplete) {
+					return '未获取到与当前 HTTP 连接同协议族的 WebRTC 公网候选，当前会话已停止访问。'
+				}
+				return '当前环境没有返回可用于一致性校验的公网 WebRTC IP。'
 			}
 		},
 		onLoad() {
@@ -182,13 +190,16 @@
 			mergeDetails(current, incoming) {
 				const next = incoming || {}
 				const incomingIps = Array.isArray(next.webRtcIps) ? next.webRtcIps : []
-				const preserveMismatchIps = next.code === 'WEBRTC_IP_MISMATCH'
+				const preserveFailureIps = [
+					'WEBRTC_IP_MISMATCH',
+					'WEBRTC_IP_FAMILY_INCOMPLETE'
+				].includes(next.code)
 					&& incomingIps.length === 0
 				return {
 					code: next.code || current.code || 'WEBRTC_VERIFICATION_FAILED',
 					message: next.message || current.message || '',
 					httpIp: next.httpIp || current.httpIp || '',
-					webRtcIps: preserveMismatchIps
+					webRtcIps: preserveFailureIps
 						? [...(current.webRtcIps || [])]
 						: [...incomingIps],
 					retryable: false

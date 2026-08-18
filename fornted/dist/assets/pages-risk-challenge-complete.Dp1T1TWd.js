@@ -1,0 +1,1 @@
+import{_ as a,c as s,b7 as o,A as e,o as n,i as c}from"./index-Cnovmixj.js";const t=a({onLoad(){o(e.login)}},[["render",function(a,o,e,t,d,r){const l=c;return n(),s(l,{class:"challenge-complete"})}],["__scopeId","data-v-57cdd1b0"]]);export{t as default};

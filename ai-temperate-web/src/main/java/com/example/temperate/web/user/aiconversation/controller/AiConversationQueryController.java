@@ -51,7 +51,7 @@ public class AiConversationQueryController {
             @RequestParam(required = false)
             @Pattern(regexp = "^[A-Za-z0-9_-]{32}$")
             String cursor,
-            @RequestParam(defaultValue = "20")
+            @RequestParam(defaultValue = "18")
             @Min(1) @Max(50)
             int pageSize) {
         return noStore(historyService.list(principal.userId(), cursor, pageSize));

@@ -1,6 +1,7 @@
 package com.example.temperate.web.apikey;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -25,7 +26,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 /**
- * 该测试是来保证 Models 与 Chat 共用 API Key 认证及统一错误边界，而 Chat 请求体限制不会错误读取无请求体的 Models GET。
+ * 该测试是来保证 Models、Chat 与 Responses 共用 API Key 认证及统一错误边界，而推理请求体限制不会读取 Models GET。
  */
 final class ApiKeyV1FiltersTest {
 
@@ -202,7 +203,8 @@ final class ApiKeyV1FiltersTest {
     private static Stream<Arguments> apiKeyEndpoints() {
         return Stream.of(
                 Arguments.of("GET", "/v1/models"),
-                Arguments.of("POST", "/v1/chat/completions"));
+                Arguments.of("POST", "/v1/chat/completions"),
+                Arguments.of("POST", "/v1/responses"));
     }
 
     @Test
@@ -227,7 +229,7 @@ final class ApiKeyV1FiltersTest {
     @Test
     void chatBodyLimitFilterLeavesModelsGetRequestUntouched() throws Exception {
         ApiKeyProperties properties = new ApiKeyProperties();
-        ApiChatBodyLimitFilter filter = new ApiChatBodyLimitFilter(
+        ApiInferenceBodyLimitFilter filter = new ApiInferenceBodyLimitFilter(
                 properties, new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/models");
         AtomicReference<Object> forwardedRequest = new AtomicReference<>();
@@ -236,5 +238,47 @@ final class ApiKeyV1FiltersTest {
                 forwardedRequest.set(wrappedRequest));
 
         assertThat(forwardedRequest.get()).isSameAs(request);
+    }
+
+    @Test
+    void responsesBodyLimitRejectsOversizedContentLengthBeforeController() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getRequest().setMaxBodyBytes(4);
+        ApiInferenceBodyLimitFilter filter = new ApiInferenceBodyLimitFilter(
+                properties, new OpenAiErrorResponseWriter(new ObjectMapper()));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses");
+        request.setContent("12345".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<Boolean> chainCalled = new AtomicReference<>(false);
+
+        filter.doFilter(request, response, (ignoredRequest, ignoredResponse) ->
+                chainCalled.set(true));
+
+        assertThat(response.getStatus()).isEqualTo(400);
+        assertThat(chainCalled.get()).isFalse();
+    }
+
+    @Test
+    void responsesBodyLimitCountsChunkedBytesWhileJacksonReads() {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getRequest().setMaxBodyBytes(4);
+        ApiInferenceBodyLimitFilter filter = new ApiInferenceBodyLimitFilter(
+                properties, new OpenAiErrorResponseWriter(new ObjectMapper()));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses") {
+            @Override
+            public long getContentLengthLong() {
+                return -1L;
+            }
+        };
+        request.setContent("12345".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> filter.doFilter(
+                request,
+                new MockHttpServletResponse(),
+                (wrapped, ignoredResponse) -> wrapped.getInputStream().readAllBytes()))
+                .isInstanceOf(
+                        ApiInferenceBodyLimitFilter.PayloadTooLargeException.class);
     }
 }

@@ -1,6 +1,6 @@
 package com.example.temperate.service.user.apichat.upstream;
 
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import java.util.List;
 import java.util.Objects;
 
@@ -43,7 +43,7 @@ public interface ApiChatSseParser {
     /** serializedData 不含 `data:` 前缀，Controller 负责标准 SSE 编码。 */
     record ParsedChunk(
             String serializedData,
-            Usage usage,
+            ApiInferenceUsage usage,
             boolean done,
             boolean output,
             long outputUtf8Bytes,

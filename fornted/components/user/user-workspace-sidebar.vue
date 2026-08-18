@@ -299,6 +299,10 @@
 		width: min(70vw, 288px);
 		padding: max(8px, env(safe-area-inset-top)) 8px calc(12px + env(safe-area-inset-bottom));
 	}
+	.is-android-drawer :deep(.recent-conversations) {
+		width: calc(100% + 8px);
+		margin-right: -8px;
+	}
 	.is-android-drawer .workspace-icon-button { @include user-android-compact-control(30px, 30px, 9px); width: 44px; height: 44px; min-height: 44px; }
 	.is-android-drawer .workspace-drawer-heading { min-height: 44px; padding: 0 2px; }
 	.is-android-drawer .workspace-drawer-title { font-size: 15px; }

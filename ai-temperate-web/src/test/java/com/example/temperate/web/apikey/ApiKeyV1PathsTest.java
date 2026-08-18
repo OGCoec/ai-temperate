@@ -10,8 +10,9 @@ import org.junit.jupiter.api.Test;
 final class ApiKeyV1PathsTest {
 
     @Test
-    void matchesOnlyChatCompletionsAndModelsEndpoints() {
+    void matchesOnlyChatResponsesAndModelsEndpoints() {
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("POST", "/v1/chat/completions")).isTrue();
+        assertThat(ApiKeyV1Paths.isApiKeyEndpoint("POST", "/v1/responses")).isTrue();
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("GET", "/v1/models")).isTrue();
 
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("POST", "/v1/models")).isFalse();
@@ -19,6 +20,6 @@ final class ApiKeyV1PathsTest {
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("GET", "/v1/models/")).isFalse();
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("GET", "/v1/models/gpt-test")).isFalse();
         assertThat(ApiKeyV1Paths.isApiKeyEndpoint("GET", "/v1/responses")).isFalse();
-        assertThat(ApiKeyV1Paths.isApiKeyEndpoint("POST", "/v1/responses")).isFalse();
+        assertThat(ApiKeyV1Paths.isApiKeyEndpoint("POST", "/v1/responses/")).isFalse();
     }
 }

@@ -6,6 +6,7 @@ import com.example.temperate.mapper.ai.AiConversationMapper;
 import com.example.temperate.mapper.ai.AiConversationMessageMapper;
 import com.example.temperate.model.ai.entity.AiConversation;
 import com.example.temperate.model.ai.entity.AiConversationMessageHistoryRow;
+import com.example.temperate.model.ai.entity.AiConversationSidebarRow;
 import com.example.temperate.service.user.aiconversation.attachment.AiConversationAttachment;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
@@ -67,13 +68,13 @@ public final class AiConversationHistoryServiceImpl
     public AiConversationPage list(long userId, String cursor, int pageSize) {
         requirePageSize(pageSize, MAX_CONVERSATION_PAGE_SIZE);
         AiConversationCursorCodec.Cursor decoded = decodeCursor(cursor);
-        List<AiConversation> rows = conversationMapper.findActivePage(
+        List<AiConversationSidebarRow> rows = conversationMapper.findActivePage(
                 userId,
                 decoded == null ? null : decoded.lastMessageId(),
                 decoded == null ? null : decoded.conversationId(),
                 pageSize + 1);
         boolean hasMore = rows.size() > pageSize;
-        List<AiConversation> selected = hasMore
+        List<AiConversationSidebarRow> selected = hasMore
                 ? rows.subList(0, pageSize)
                 : rows;
         List<AiConversationSummary> conversations = selected.stream()
@@ -124,7 +125,7 @@ public final class AiConversationHistoryServiceImpl
                 hasMore);
     }
 
-    private AiConversationSummary summary(AiConversation conversation) {
+    private AiConversationSummary summary(AiConversationSidebarRow conversation) {
         return new AiConversationSummary(
                 hybridPublicIds.encode(conversation.getId()),
                 conversation.getTitle(),

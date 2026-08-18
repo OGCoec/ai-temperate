@@ -65,7 +65,7 @@ public class ApiKeyConfiguration {
     }
 
     /**
-     * 专用 WebClient 固定指向服务端 8317 配置；客户端 Bearer 永不进入该实例的默认请求头。
+     * 公开 Chat 与 Responses 共用的专用 WebClient 固定指向服务端 8317；客户端 Bearer 永不进入默认请求头。
      */
     @Bean
     @Qualifier("apiChatUpstreamWebClient")
@@ -75,7 +75,7 @@ public class ApiKeyConfiguration {
             ApiKeyProperties apiKeyProperties) {
         if (apiKeyProperties.isEnabled() && !isApprovedLoopbackUpstream(properties.baseUrl())) {
             throw new IllegalStateException(
-                    "Public API chat requires the fixed 127.0.0.1:8317 upstream");
+                    "Public inference APIs require the fixed 127.0.0.1:8317 upstream");
         }
         WebClient.Builder dedicated = builder.clone().baseUrl(properties.baseUrl());
         if (properties.apiKey() != null && !properties.apiKey().isBlank()) {

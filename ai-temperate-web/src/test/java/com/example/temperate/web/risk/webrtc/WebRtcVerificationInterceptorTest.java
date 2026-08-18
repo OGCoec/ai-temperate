@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.observability.WebRtcMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
@@ -163,6 +164,33 @@ class WebRtcVerificationInterceptorTest {
                         new MockHttpServletResponse(),
                         new Object()))
                 .isTrue();
+    }
+
+    @Test
+    void enforceModeReturns428WithoutLeakWordingForIncompleteIpFamily()
+            throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.failed(
+                        9L,
+                        PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE,
+                        List.of("2606:4700:4700::1111")));
+        MockHttpServletRequest request = request();
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isFalse();
+        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getContentAsString())
+                .contains(
+                        "WEBRTC_IP_FAMILY_INCOMPLETE",
+                        "同协议族",
+                        "\"verificationState\":\"FAILED\"",
+                        "2606:4700:4700::1111")
+                .doesNotContain("泄漏", "WEBRTC_IP_MISMATCH");
     }
 
     @Test

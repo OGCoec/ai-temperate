@@ -98,7 +98,10 @@
 </template>
 
 <script>
-	import { aiConversationApi } from '@/common/aichat/ai-conversation-api.js'
+	import {
+		aiConversationApi,
+		CONVERSATION_LIST_PAGE_SIZE
+	} from '@/common/aichat/ai-conversation-api.js'
 	import {
 		readAiConversationStore,
 		setConversationError,
@@ -371,7 +374,9 @@
 				this.applyConversationState(setConversationLoading(true))
 				try {
 					this.applyConversationState(setConversationPage(
-						await aiConversationApi.listConversations(),
+						await aiConversationApi.listConversations({
+							pageSize: CONVERSATION_LIST_PAGE_SIZE
+						}),
 						false
 					))
 					this.syncChatStore()
@@ -385,13 +390,17 @@
 				}
 			},
 			async loadMoreConversations() {
-				if (!this.nextCursor || this.conversationLoading) return
+				const requestedCursor = this.nextCursor
+				if (!requestedCursor || this.conversationLoading) return
 				this.applyConversationState(setConversationLoading(true))
 				try {
+					const page = await aiConversationApi.listConversations({
+						cursor: requestedCursor,
+						pageSize: CONVERSATION_LIST_PAGE_SIZE
+					})
+					if (this.nextCursor !== requestedCursor) return
 					this.applyConversationState(setConversationPage(
-						await aiConversationApi.listConversations({
-							cursor: this.nextCursor
-						}),
+						page,
 						true
 					))
 				} catch (error) {

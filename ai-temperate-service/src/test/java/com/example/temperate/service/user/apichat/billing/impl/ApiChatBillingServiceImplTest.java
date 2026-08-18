@@ -23,10 +23,12 @@ import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.billing.impl.AiConversationQuotaCalculator;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionRequest;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceReservation;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.ApiChatRequest;
 import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Reservation;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
@@ -96,7 +98,7 @@ final class ApiChatBillingServiceImplTest {
         }).when(usageMapper).insert(any(AiModelApiUsage.class));
         when(detailMapper.insert(any(AiModelApiUsageDetail.class))).thenReturn(1);
 
-        Reservation reservation = service.reserve(principal, request);
+        ApiInferenceReservation reservation = service.reserve(principal, request);
 
         assertThat(reservation.usageId()).isEqualTo(501L);
         assertThat(reservation.reservedMinor()).isEqualTo(2L);
@@ -112,7 +114,7 @@ final class ApiChatBillingServiceImplTest {
     @Test
     void settlementNeverMakesBalanceNegativeAndUsesReconcileRequired()
             throws Exception {
-        Reservation reservation = reservation();
+        ApiInferenceReservation reservation = reservation();
         AiModelApiUsage persisted = persisted(AiModelBillingStatus.RESERVED);
         UserMembershipQuota quota = quota(0L);
         when(usageMapper.findByIdForUpdate(501L)).thenReturn(persisted);
@@ -131,7 +133,7 @@ final class ApiChatBillingServiceImplTest {
                 any())).thenReturn(1);
         when(detailMapper.finalizeDetail(501L, 1L)).thenReturn(1);
 
-        service.settle(reservation, new Usage(0, 2_400, 0), "STOP");
+        service.settle(reservation, new ApiInferenceUsage(0, 2_400, 0), "STOP");
 
         assertThat(quota.getQuotaBalanceMinor()).isZero();
         verify(usageMapper).settle(
@@ -148,8 +150,37 @@ final class ApiChatBillingServiceImplTest {
     }
 
     @Test
+    void responsesReservationPersistsActualNonStreamingMode() throws Exception {
+        ApiKeyPrincipal principal = principal();
+        AiModelCacheEntry model = validatedRequest().model();
+        UserMembershipQuota quota = quota(10L);
+        when(apiKeyMapper.findReservationAuthorizationForUpdate(11L, 23L))
+                .thenReturn(authorization());
+        when(apiKeyMapper.touchLastUsed(eq(11L), any())).thenReturn(1);
+        when(quotaMapper.findByLoginIdentityIdForUpdate(17L)).thenReturn(quota);
+        when(quotaMapper.updateBalanceAndPeriod(quota)).thenReturn(1);
+        doAnswer(invocation -> {
+            AiModelApiUsage usage = invocation.getArgument(0);
+            usage.setId(502L);
+            return 1;
+        }).when(usageMapper).insert(any(AiModelApiUsage.class));
+        when(detailMapper.insert(any(AiModelApiUsageDetail.class))).thenReturn(1);
+
+        ApiInferenceReservation reservation = service.reserve(
+                principal,
+                new ApiInferenceExecutionRequest(
+                        model, 300, 800, false, ApiInferenceProtocol.RESPONSES));
+
+        ArgumentCaptor<AiModelApiUsageDetail> detail =
+                ArgumentCaptor.forClass(AiModelApiUsageDetail.class);
+        verify(detailMapper).insert(detail.capture());
+        assertThat(detail.getValue().getStream()).isFalse();
+        assertThat(reservation.protocol()).isEqualTo(ApiInferenceProtocol.RESPONSES);
+    }
+
+    @Test
     void systemFailureRefundsTheReservationExactlyOnce() {
-        Reservation reservation = reservation();
+        ApiInferenceReservation reservation = reservation();
         UserMembershipQuota quota = quota(5L);
         when(usageMapper.findByIdForUpdate(501L))
                 .thenReturn(persisted(AiModelBillingStatus.RESERVED));
@@ -189,8 +220,8 @@ final class ApiChatBillingServiceImplTest {
         return new ApiKeyPrincipal(11L, 17L, DIGEST, "B".repeat(43), Set.of(23L));
     }
 
-    private static Reservation reservation() {
-        return new Reservation(
+    private static ApiInferenceReservation reservation() {
+        return new ApiInferenceReservation(
                 501L,
                 17L,
                 11L,
@@ -198,7 +229,8 @@ final class ApiChatBillingServiceImplTest {
                 800L,
                 BigDecimal.ONE,
                 BigDecimal.ONE,
-                BigDecimal.ONE);
+                BigDecimal.ONE,
+                ApiInferenceProtocol.CHAT_COMPLETIONS);
     }
 
     private static UserMembershipQuota quota(long balance) {

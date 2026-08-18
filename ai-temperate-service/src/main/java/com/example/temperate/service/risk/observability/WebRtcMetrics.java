@@ -16,7 +16,7 @@ public final class WebRtcMetrics {
 
     private static final Set<String> VERIFICATION_OUTCOMES = Set.of(
             "matched", "mismatch", "empty", "pending", "timeout", "stale",
-            "invalid", "network_changed");
+            "invalid", "network_changed", "family_incomplete");
     private static final Set<String> INTERCEPTOR_DECISIONS = Set.of(
             "allowed", "pending_allowed", "required_allowed", "required",
             "failed", "blocked", "invalid");
@@ -26,7 +26,7 @@ public final class WebRtcMetrics {
             "generation_changed");
     private static final Set<String> TRANSITION_REASONS = Set.of(
             "none", "start_timeout", "report_timeout", "no_public_candidate",
-            "ip_mismatch", "stale", "network_changed");
+            "ip_family_incomplete", "ip_mismatch", "stale", "network_changed");
     private static final Set<String> PLATFORMS = Set.of("h5", "android");
 
     private final MeterRegistry meterRegistry;
@@ -64,7 +64,7 @@ public final class WebRtcMetrics {
     }
 
     /**
-     * 记录 WebRTC v6 状态迁移；事件与原因均使用固定白名单，避免 generation 或敏感标识形成高基数标签。
+     * 记录 WebRTC v7 状态迁移；事件与原因均使用固定白名单，避免 generation 或敏感标识形成高基数标签。
      */
     public void transition(
             RiskScope scope,

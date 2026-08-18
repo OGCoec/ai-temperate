@@ -79,7 +79,7 @@ function argument(name) {
 
 function main() {
 	const root = path.resolve(argument('--dir')
-		|| path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'h5'))
+		|| path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'web'))
 	const output = path.resolve(argument('--out')
 		|| path.join(
 			__dirname,

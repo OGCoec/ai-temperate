@@ -1332,6 +1332,10 @@ logging:
     com.example.temperate.service.user.apichat.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
     # API Chat Servlet 诊断默认记录请求、异步和错误分派，便于关联 Tomcat 二次分派。
     com.example.temperate.web.apichat.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # Responses Service、协议边界与 AOP 诊断默认只记录安全元数据，禁止输出请求和模型正文。
+    com.example.temperate.service.user.apiresponse.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # Responses Servlet 诊断默认关联 REQUEST、ASYNC 与 ERROR 分派，禁止记录凭据和响应正文。
+    com.example.temperate.web.apiresponse.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
 
 # 普通用户头像对象存储只保存 Bucket 位置和非敏感行为参数，OSS 凭据由 SDK 标准环境变量读取。
 user-avatar:

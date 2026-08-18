@@ -14,11 +14,14 @@ import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionRequest;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceReservation;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
+import com.example.temperate.service.user.aiinference.api.impl.ApiInferenceLifecycleServiceImpl;
 import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyPermit;
 import com.example.temperate.service.user.aiinference.concurrency.AiInferenceConcurrencyService;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Reservation;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
 import com.example.temperate.service.user.apichat.impl.ApiChatCompletionServiceImpl;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapter;
 import com.example.temperate.service.user.apichat.provider.ApiChatProviderAdapterRegistry;
@@ -64,7 +67,7 @@ final class ApiChatCompletionServiceImplTest {
 
         assertThat(output).containsExactly("{\"chunk\":1}", "[DONE]");
         verify(fixture.billingService()).settle(
-                fixture.reservation(), new Usage(12, 3, 2), "STOP");
+                fixture.reservation(), new ApiInferenceUsage(12, 3, 2), "STOP");
         verify(fixture.billingService(), never()).refundSystemFailure(any(), any());
         verify(fixture.concurrencyService()).release(fixture.permit());
     }
@@ -82,7 +85,7 @@ final class ApiChatCompletionServiceImplTest {
                 USAGE_FRAME,
                 "[DONE]");
         verify(fixture.billingService(), times(1)).settle(
-                fixture.reservation(), new Usage(12, 3, 2), "STOP");
+                fixture.reservation(), new ApiInferenceUsage(12, 3, 2), "STOP");
         verify(fixture.billingService(), never()).refundSystemFailure(any(), any());
         verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
         assertThat(fixture.meterRegistry()
@@ -103,7 +106,7 @@ final class ApiChatCompletionServiceImplTest {
 
         assertThat(output).containsExactly(COMBINED_CHOICES_FRAME, "[DONE]");
         verify(fixture.billingService(), times(1)).settle(
-                fixture.reservation(), new Usage(12, 3, 2), "STOP");
+                fixture.reservation(), new ApiInferenceUsage(12, 3, 2), "STOP");
         verify(fixture.concurrencyService(), times(1)).release(fixture.permit());
     }
 
@@ -275,7 +278,7 @@ final class ApiChatCompletionServiceImplTest {
                         permit));
 
         ApiChatBillingService billing = mock(ApiChatBillingService.class);
-        Reservation reservation = new Reservation(
+        ApiInferenceReservation reservation = new ApiInferenceReservation(
                 29L,
                 17L,
                 11L,
@@ -283,8 +286,10 @@ final class ApiChatCompletionServiceImplTest {
                 32L,
                 BigDecimal.ONE,
                 BigDecimal.ONE,
-                BigDecimal.ONE);
-        when(billing.reserve(principal, validated)).thenReturn(reservation);
+                BigDecimal.ONE,
+                ApiInferenceProtocol.CHAT_COMPLETIONS);
+        when(billing.reserve(any(ApiKeyPrincipal.class), any(ApiInferenceExecutionRequest.class)))
+                .thenReturn(reservation);
         ApiChatUpstreamClient upstream = ignored -> upstreamData;
         ApiChatSseParser parser = data -> switch (data) {
             case "output" -> event(new ParsedChunk(
@@ -310,13 +315,12 @@ final class ApiChatCompletionServiceImplTest {
         SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         ApiChatCompletionService service = new ApiChatCompletionServiceImpl(
                 validator,
-                concurrency,
-                billing,
+                new ApiInferenceLifecycleServiceImpl(
+                        concurrency, billing, Runnable::run, meterRegistry),
                 registry,
                 upstream,
                 parser,
                 new ObjectMapper(),
-                Runnable::run,
                 meterRegistry,
                 new ApiChatStreamDiagnosticServiceImpl(diagnosticProperties));
         return new Fixture(
@@ -337,7 +341,7 @@ final class ApiChatCompletionServiceImplTest {
     private static ParsedChunk usageChunk() {
         return new ParsedChunk(
                 USAGE_FRAME,
-                new Usage(12, 3, 2),
+                new ApiInferenceUsage(12, 3, 2),
                 false,
                 false,
                 0,
@@ -360,7 +364,7 @@ final class ApiChatCompletionServiceImplTest {
             ApiChatRequest request,
             ApiChatBillingService billingService,
             AiInferenceConcurrencyService concurrencyService,
-            Reservation reservation,
+            ApiInferenceReservation reservation,
             AiInferenceConcurrencyPermit permit,
             SimpleMeterRegistry meterRegistry) {
     }

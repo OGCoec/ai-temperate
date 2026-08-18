@@ -176,6 +176,47 @@ final class ApiChatExceptionHandlerTest {
         }
     }
 
+    @Test
+    void responsesUsesItsOwnSafeParameterAndValidationReason() {
+        ApiChatExceptionHandler handler = new ApiChatExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses");
+        request.addHeader(HttpHeaders.ACCEPT,
+                "text/event-stream, application/json;q=0.9");
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        String previousTrace = MDC.get("apiChatTraceId");
+        MDC.put("apiChatTraceId", "trace-responses-validation");
+
+        try (LogCapture logs = LogCapture.start()) {
+            ResponseEntity<ApiChatErrorResponse> response = handler.handle(
+                    ApiChatException.invalid(
+                            "max_output_tokens is below the supported minimum.",
+                            "max_output_tokens",
+                            ApiChatException.ValidationReason.BELOW_MINIMUM),
+                    request,
+                    servletResponse);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(400);
+            assertThat(response.getHeaders().getContentType())
+                    .isEqualTo(MediaType.APPLICATION_JSON);
+            assertThat(response.getBody().error().param())
+                    .isEqualTo("max_output_tokens");
+            assertThat(logs.joined())
+                    .contains("event=api_responses_error_handler_enter")
+                    .contains("event=api_responses_error_handler_response")
+                    .contains("parameter=max_output_tokens")
+                    .contains("validationReason=BELOW_MINIMUM")
+                    .doesNotContain("parameter=unsupported")
+                    .doesNotContain("max_output_tokens is below the supported minimum.");
+        } finally {
+            if (previousTrace == null) {
+                MDC.remove("apiChatTraceId");
+            } else {
+                MDC.put("apiChatTraceId", previousTrace);
+            }
+        }
+    }
+
     /**
      * 该解析器是来为独立 MockMvc 固定注入已认证 API Key 主体，使测试只覆盖 Chat 错误响应协商而不重复安全链测试。
      */

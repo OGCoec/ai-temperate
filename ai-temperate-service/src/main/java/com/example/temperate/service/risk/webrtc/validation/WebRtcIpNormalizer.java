@@ -50,7 +50,7 @@ public final class WebRtcIpNormalizer {
     }
 
     /**
-     * 判断规范化地址是否为 IPv4，供一致性策略分别限制 IPv4 与 IPv6 的不同候选数量。
+     * 判断规范化地址是否为 IPv4，供一致性策略按当前 HTTP 连接筛选同协议族候选。
      */
     public boolean isIpv4(String normalizedIp) {
         return parseLiteral(normalizedIp).getAddress().length == 4;
@@ -97,13 +97,31 @@ public final class WebRtcIpNormalizer {
         if (bytes.length == 4) {
             int first = Byte.toUnsignedInt(bytes[0]);
             int second = Byte.toUnsignedInt(bytes[1]);
+            int third = Byte.toUnsignedInt(bytes[2]);
+            int fourth = Byte.toUnsignedInt(bytes[3]);
             return first != 0
                     && first < 224
                     && !(first == 100 && second >= 64 && second <= 127)
                     && !(first == 169 && second == 254)
-                    && !(first == 198 && (second == 18 || second == 19));
+                    && !(first == 192 && second == 0 && third == 0
+                            && fourth != 9 && fourth != 10)
+                    && !(first == 192 && second == 0 && third == 2)
+                    && !(first == 192 && second == 88 && third == 99)
+                    && !(first == 198 && (second == 18 || second == 19))
+                    && !(first == 198 && second == 51 && third == 100)
+                    && !(first == 203 && second == 0 && third == 113);
         }
         // fc00::/7 是 IPv6 Unique Local Address，JDK 的 site-local 判定不覆盖该地址段。
-        return (Byte.toUnsignedInt(bytes[0]) & 0xFE) != 0xFC;
+        boolean uniqueLocal = (Byte.toUnsignedInt(bytes[0]) & 0xFE) == 0xFC;
+        boolean documentation = Byte.toUnsignedInt(bytes[0]) == 0x20
+                && Byte.toUnsignedInt(bytes[1]) == 0x01
+                && Byte.toUnsignedInt(bytes[2]) == 0x0D
+                && Byte.toUnsignedInt(bytes[3]) == 0xB8;
+        // 已废弃的 IPv4-compatible ::/96 不属于公网 IPv6 出口；mapped 地址已由字面量解析器归一到 IPv4。
+        boolean ipv4Compatible = true;
+        for (int index = 0; index < 12; index++) {
+            ipv4Compatible = ipv4Compatible && bytes[index] == 0;
+        }
+        return !uniqueLocal && !documentation && !ipv4Compatible;
     }
 }

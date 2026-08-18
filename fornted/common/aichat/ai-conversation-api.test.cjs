@@ -97,6 +97,21 @@ test('reads PostgreSQL conversation history through the authenticated API', asyn
 	delete globalThis.__aiConversationRequest
 })
 
+test('defaults conversation sidebar pagination to eighteen items', async () => {
+	const calls = []
+	const module = await loadApi(async (...args) => {
+		calls.push(args)
+		return { conversations: [], nextCursor: null, hasMore: false }
+	})
+
+	await module.aiConversationApi.listConversations()
+
+	assert.equal(module.CONVERSATION_LIST_PAGE_SIZE, 18)
+	assert.equal(calls[0][0], '/api/ai/conversations?pageSize=18')
+	assert.deepEqual(calls[0][1], { method: 'GET' })
+	delete globalThis.__aiConversationRequest
+})
+
 test('restores generated response image slots from persisted filenames', async () => {
 	const generatedTwo = {
 		...availableAttachment(),
@@ -168,7 +183,7 @@ test('builds conversation and message pagination URLs without URLSearchParams', 
 		})
 
 		await module.aiConversationApi.listConversations({
-			pageSize: 20,
+			pageSize: 18,
 			cursor: conversationCursor
 		})
 		await module.aiConversationApi.messages(conversationId, {
@@ -178,7 +193,7 @@ test('builds conversation and message pagination URLs without URLSearchParams', 
 
 		assert.deepEqual(calls, [
 			[
-				`/api/ai/conversations?pageSize=20&cursor=${conversationCursor}`,
+				`/api/ai/conversations?pageSize=18&cursor=${conversationCursor}`,
 				{ method: 'GET' }
 			],
 			[

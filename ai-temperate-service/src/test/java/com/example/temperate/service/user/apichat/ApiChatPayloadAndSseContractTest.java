@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.temperate.model.ai.enums.AiModelCapabilityCode;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
-import com.example.temperate.service.user.apichat.billing.ApiChatBillingService.Usage;
+import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.provider.impl.ApiChatPayloadFactoryImpl;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolation;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatProtocolViolationException;
@@ -171,7 +171,7 @@ final class ApiChatPayloadAndSseContractTest {
         assertThat(objectMapper.readTree(usage.serializedData())
                 .at("/usage/completion_tokens_details/reasoning_tokens").longValue())
                 .isEqualTo(3);
-        assertThat(usage.usage()).isEqualTo(new Usage(20, 5, 0));
+        assertThat(usage.usage()).isEqualTo(new ApiInferenceUsage(20, 5, 0));
     }
 
     @Test
@@ -195,8 +195,8 @@ final class ApiChatPayloadAndSseContractTest {
         assertThat(tool.output()).isTrue();
         assertThat(objectMapper.readTree(usage.serializedData()).path("choices").isEmpty())
                 .isTrue();
-        assertThat(usage.usage().promptTokens()).isEqualTo(20);
-        assertThat(usage.usage().cachedPromptTokens()).isEqualTo(7);
+        assertThat(usage.usage().inputTokens()).isEqualTo(20);
+        assertThat(usage.usage().cachedInputTokens()).isEqualTo(7);
         ParsedEvent done = parser.parse("[DONE]");
         assertThat(done.normalization()).isEqualTo(Normalization.NONE);
         assertThat(done.chunks()).hasSize(1);
@@ -229,7 +229,7 @@ final class ApiChatPayloadAndSseContractTest {
         assertThat(usageJson.path("choices").isArray()).isTrue();
         assertThat(usageJson.path("choices").isEmpty()).isTrue();
         assertThat(usageJson.at("/usage/prompt_tokens").longValue()).isEqualTo(20);
-        assertThat(usage.usage()).isEqualTo(new Usage(20, 5, 7));
+        assertThat(usage.usage()).isEqualTo(new ApiInferenceUsage(20, 5, 7));
         assertThat(usage.output()).isFalse();
     }
 

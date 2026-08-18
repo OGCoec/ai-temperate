@@ -358,6 +358,118 @@ test('API Key SDK transport preserves Bearer, strips spoofed metadata, signs, an
 	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
 })
 
+test('Responses adaptive route forwards JSON without SSE buffering headers', async () => {
+	const apiKey = `sk-${'R'.repeat(86)}`
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/responses', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'application/json',
+				'Content-Type': 'application/json'
+			},
+			body: '{"model":"gpt-test","input":"hello","stream":false}'
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return Response.json({ object: 'response', status: 'completed' })
+		})
+	)
+
+	assert.equal(captured.url, 'https://api.niko000o.site/v1/responses')
+	assert.equal(captured.headers.get('Accept'),
+		'text/event-stream, application/json;q=0.9')
+	assert.equal(response.status, 200)
+	assert.equal(response.headers.get('Content-Type'), 'application/json')
+	assert.equal(response.headers.get('X-Accel-Buffering'), null)
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+})
+
+test('Responses adaptive route preserves SSE and enables no-buffer headers', async () => {
+	const apiKey = `sk-${'S'.repeat(86)}`
+	const body = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(
+				'event: response.completed\ndata: {"type":"response.completed"}\n\n'))
+			controller.close()
+		}
+	})
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/responses', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: 'text/event-stream, application/json',
+				'Content-Type': 'application/json'
+			},
+			body: '{"model":"gpt-test","input":"hello","stream":true}'
+		}),
+		ENV,
+		runtime(() => new Response(body, {
+			headers: { 'Content-Type': 'text/event-stream' }
+		}))
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+	assert.equal(response.headers.get('Cache-Control'),
+		'no-store, private, no-transform')
+})
+
+test('Responses adaptive route requires JSON for non-2xx origin errors', async () => {
+	const apiKey = `sk-${'T'.repeat(86)}`
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/responses', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: '*/*',
+				'Content-Type': 'application/json'
+			},
+			body: '{"model":"gpt-test","input":"hello"}'
+		}),
+		ENV,
+		runtime(() => new Response('event: error\ndata: {}\n\n', {
+			status: 400,
+			headers: { 'Content-Type': 'text/event-stream' }
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.equal(response.headers.get('Content-Type'),
+		'application/json; charset=utf-8')
+	assert.match(await response.text(), /upstream_protocol_error/)
+})
+
+test('Responses exact route rejects non-POST methods without origin access', async () => {
+	let upstreamCalls = 0
+	const response = await handleRequest(
+		request('niko000o.site', '/v1/responses', {
+			method: 'GET',
+			migrated: false,
+			headers: {
+				Authorization: `Bearer sk-${'U'.repeat(86)}`,
+				Accept: 'application/json'
+			}
+		}),
+		ENV,
+		runtime(() => {
+			upstreamCalls += 1
+			return Response.json({})
+		})
+	)
+
+	assert.equal(response.status, 405)
+	assert.equal(response.headers.get('Allow'), 'POST')
+	assert.equal(upstreamCalls, 0)
+})
+
 test('API Key SDK model discovery forwards a signed GET and requires JSON', async () => {
 	const apiKey = `sk-${'M'.repeat(86)}`
 	let captured
@@ -507,7 +619,7 @@ test('API Key SDK route rejects missing Bearer, invalid Accept, methods, and oth
 			headers: { Authorization: `Bearer ${apiKey}` }
 		}), ENV, noUpstream)
 	const wrongPath = await handleRequest(
-		request('niko000o.site', '/v1/responses', {
+		request('niko000o.site', '/v1/not-a-real-endpoint', {
 			method: 'POST',
 			migrated: false,
 			headers: { Authorization: `Bearer ${apiKey}` }

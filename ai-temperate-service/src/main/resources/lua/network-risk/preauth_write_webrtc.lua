@@ -17,10 +17,12 @@ if (ARGV[6] ~= 'VERIFIED' and ARGV[6] ~= 'FAILED')
         or tonumber(ARGV[10]) == nil or tonumber(ARGV[10]) <= 0 then
     return 0
 end
+local retainsEvidence = ARGV[7] == 'IP_MISMATCH'
+        or ARGV[7] == 'IP_FAMILY_INCOMPLETE'
 if (ARGV[6] == 'VERIFIED' and (ARGV[7] ~= '' or ARGV[8] == '' or ARGV[9] ~= '1'))
         or (ARGV[6] == 'FAILED' and ARGV[7] == '')
-        or (ARGV[7] == 'IP_MISMATCH' and (ARGV[8] == '' or ARGV[9] ~= '1'))
-        or (ARGV[7] ~= 'IP_MISMATCH' and ARGV[6] == 'FAILED'
+        or (retainsEvidence and (ARGV[8] == '' or ARGV[9] ~= '1'))
+        or (not retainsEvidence and ARGV[6] == 'FAILED'
             and (ARGV[8] ~= '' or ARGV[9] ~= '0')) then
     return 0
 end

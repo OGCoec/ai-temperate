@@ -5,6 +5,7 @@ package com.example.temperate.service.risk.preauth.domain;
  */
 public enum PreAuthWebRtcFailureReason {
     NO_PUBLIC_CANDIDATE,
+    IP_FAMILY_INCOMPLETE,
     IP_MISMATCH,
     START_TIMEOUT,
     REPORT_TIMEOUT

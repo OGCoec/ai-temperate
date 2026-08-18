@@ -191,7 +191,7 @@ public class ApiKeyProperties {
     }
 
     /**
-     * 该配置组是来约束公开 Chat Completions 请求的内存和集合上限，校验发生在上游连接之前。
+     * 该配置组是来约束公开 Chat Completions 与 Responses 请求的内存和集合上限，校验发生在上游连接之前。
      */
     public static class Request {
         @Min(1024)
