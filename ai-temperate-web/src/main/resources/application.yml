@@ -554,10 +554,10 @@ app:
     minimum-ip-trust-score: ${API_KEY_MINIMUM_IP_TRUST_SCORE:60}
     # 单个 Key 最多授权五百个不重复且当前启用的模型，限制缓存值和批量 SQL 大小。
     max-model-grants: ${API_KEY_MAX_MODEL_GRANTS:500}
-    # OpenAI 厂商常用协议增强开关默认关闭，测试环境确认 JSON、SSE 与结算后再显式开启。
+    # OpenAI 厂商常用协议增强默认开启，仍可通过环境变量关闭以立即回退到原严格协议路径。
     open-ai-compatibility:
-      # 关闭时立即回退到原严格 DTO 与仅流式 Chat 行为，且不改变其他模型厂商路径。
-      enabled: ${API_KEY_OPENAI_COMPATIBILITY_ENABLED:false}
+      # 仅作用于 OpenAI 厂商请求，其他模型厂商继续使用原有白名单和适配器。
+      enabled: ${API_KEY_OPENAI_COMPATIBILITY_ENABLED:true}
     # API Key 认证 Cache-Aside 的正向和负向随机 TTL 配置。
     auth-cache:
       # 正向缓存最短保存五分钟，实际 TTL 在最小值与最大值之间均匀抖动。
