@@ -1288,6 +1288,193 @@ test('Android Turnstile WebView document navigation is normalized to the Android
 	assert.equal(captured.headers.get('Sec-Fetch-User'), null)
 })
 
+test('Turnstile WebView assets load without Cookie Scope and reach Java without client credentials', async () => {
+	for (const path of [
+		'/api/auth/turnstile/page.css',
+		'/api/auth/turnstile/page.js'
+	]) {
+		let captured
+		const response = await handleRequest(
+			request('niko000o.site', path, {
+				migrated: false,
+				headers: {
+					Cookie: 'access_token=must-not-pass; custom_cookie=must-not-pass',
+					Authorization: 'Bearer must-not-pass',
+					'X-Refresh-Token': 'must-not-pass',
+					'X-CSRF-Token': 'must-not-pass',
+					'X-Register-CSRF': 'must-not-pass',
+					'X-AIT-PreAuth': 'must-not-pass',
+					'X-Device-Installation-Id': ANDROID_DEVICE_ID,
+					Referer: `${turnstilePagePath()}#must-not-pass`,
+					'X-AIT-Edge-Host': 'evil.example',
+					'X-Forwarded-Host': 'evil.example'
+				}
+			}),
+			ENV,
+			runtime(upstream => {
+				captured = upstream
+				return new Response('asset', {
+					status: 200,
+					headers: {
+						'Cache-Control': 'no-store',
+						'Content-Type': path.endsWith('.css')
+							? 'text/css; charset=utf-8'
+							: 'application/javascript; charset=utf-8'
+					}
+				})
+			})
+		)
+
+		assert.equal(response.status, 200, path)
+		assert.equal(captured.url, `https://api.niko000o.site${path}`, path)
+		assert.equal(captured.headers.get('X-Client-Platform'), 'H5', path)
+		assert.equal(captured.headers.get('Origin'), 'https://niko000o.site', path)
+		for (const name of [
+			'Cookie',
+			'Authorization',
+			'X-Refresh-Token',
+			'X-CSRF-Token',
+			'X-Register-CSRF',
+			'X-AIT-PreAuth',
+			'X-Device-Installation-Id',
+			'Referer',
+			'X-Forwarded-Host'
+		]) {
+			assert.equal(captured.headers.get(name), null, `${path} ${name}`)
+		}
+		assert.equal(captured.headers.get('X-AIT-Edge-Host'), 'niko000o.site', path)
+		assert.ok(captured.headers.get('X-AIT-Edge-Signature'), path)
+		assert.match(response.headers.get('Cache-Control'), /no-store/, path)
+	}
+})
+
+test('credentialless Turnstile assets preserve Android transport without adding a browser Origin', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/auth/turnstile/page.js', {
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'ANDROID',
+				Authorization: 'Bearer must-not-pass',
+				'X-AIT-PreAuth': ANDROID_PREAUTH_TOKEN,
+				'X-Device-Installation-Id': ANDROID_DEVICE_ID
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('asset', {
+				status: 200,
+				headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
+			})
+		})
+	)
+
+	assert.equal(response.status, 200)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'ANDROID')
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Authorization'), null)
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), null)
+	assert.equal(captured.headers.get('X-Device-Installation-Id'), null)
+})
+
+test('Turnstile WebView asset exception does not expose the protected document or ordinary H5 APIs', async () => {
+	let upstreamCalls = 0
+	const noUpstream = runtime(() => {
+		upstreamCalls += 1
+		return new Response(null, { status: 204 })
+	})
+	const document = await handleRequest(
+		request('niko000o.site', turnstilePagePath(), { migrated: false }),
+		ENV,
+		noUpstream
+	)
+	const csrf = await handleRequest(
+		request('niko000o.site', '/api/auth/csrf', { migrated: false }),
+		ENV,
+		noUpstream
+	)
+
+	assert.equal(document.status, 428)
+	assert.equal((await document.json()).code, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
+	assert.equal(csrf.status, 428)
+	assert.equal((await csrf.json()).code, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
+	assert.equal(upstreamCalls, 0)
+})
+
+test('Turnstile WebView assets reject non-GET methods before reaching Java', async () => {
+	let upstreamCalls = 0
+	for (const path of [
+		'/api/auth/turnstile/page.css',
+		'/api/auth/turnstile/page.js'
+	]) {
+		const response = await handleRequest(
+			request('niko000o.site', path, {
+				method: 'POST',
+				migrated: false
+			}),
+			ENV,
+			runtime(() => {
+				upstreamCalls += 1
+				return new Response(null, { status: 204 })
+			})
+		)
+
+		assert.equal(response.status, 405, path)
+		assert.equal(response.headers.get('Allow'), 'GET', path)
+	}
+	assert.equal(upstreamCalls, 0)
+})
+
+test('credentialless Turnstile assets discard only the upstream H5 CSRF cookie', async () => {
+	for (const path of [
+		'/api/auth/turnstile/page.css',
+		'/api/auth/turnstile/page.js'
+	]) {
+		const response = await handleRequest(
+			request('niko000o.site', path, { migrated: false }),
+			ENV,
+			runtime(() => new Response('asset', {
+				status: 200,
+				headers: {
+					'Content-Type': path.endsWith('.css')
+						? 'text/css; charset=utf-8'
+						: 'application/javascript; charset=utf-8',
+					'Set-Cookie': 'XSRF-TOKEN=generated-but-discarded; Path=/; Secure; SameSite=Strict'
+				}
+			}))
+		)
+
+		assert.equal(response.status, 200, path)
+		assert.equal(response.headers.get('Set-Cookie'), null, path)
+		assert.equal(await response.text(), 'asset', path)
+	}
+})
+
+test('Turnstile WebView assets reject upstream attempts to create cookies', async () => {
+	for (const path of [
+		'/api/auth/turnstile/page.css',
+		'/api/auth/turnstile/page.js'
+	]) {
+		const response = await handleRequest(
+			request('niko000o.site', path, { migrated: false }),
+			ENV,
+			runtime(() => new Response('asset', {
+				status: 200,
+				headers: {
+					'Content-Type': path.endsWith('.css')
+						? 'text/css; charset=utf-8'
+						: 'application/javascript; charset=utf-8',
+					'Set-Cookie': 'access_token=must-not-pass; Path=/; Secure; HttpOnly; SameSite=Strict'
+				}
+			}))
+		)
+
+		assert.equal(response.status, 502, path)
+		assert.equal((await response.json()).code, 'EDGE_COOKIE_POLICY_VIOLATION', path)
+	}
+})
+
 test('Android Turnstile WebView accepts same-origin document navigation metadata', async () => {
 	let captured
 	const response = await handleRequest(

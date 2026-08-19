@@ -40,6 +40,27 @@ test('API route contracts expose methods, platform scope, parameter type, and er
 	assert.equal(model.parameterType, 'PUBLIC_LONG_BASE64URL_11')
 })
 
+test('only exact Turnstile subresources are credentialless verification assets', () => {
+	const page = matchRootApiRoute('/api/auth/turnstile/page')
+	const config = matchRootApiRoute('/api/auth/turnstile/config')
+	const style = matchRootApiRoute('/api/auth/turnstile/page.css')
+	const script = matchRootApiRoute('/api/auth/turnstile/page.js')
+	const source = readFileSync(
+		new URL('../src/main-site-policy.js', import.meta.url), 'utf8')
+
+	assert.equal(page.credentiallessVerificationAsset, undefined)
+	assert.equal(config.credentiallessVerificationAsset, undefined)
+	assert.equal(style.credentiallessVerificationAsset, true)
+	assert.equal(script.credentiallessVerificationAsset, true)
+	assert.deepEqual(style.allowedMethods, ['GET'])
+	assert.deepEqual(script.allowedMethods, ['GET'])
+	assert.equal(
+		(source.match(/credentiallessVerificationAsset:\s*true/g) || []).length,
+		2
+	)
+	assert.doesNotMatch(source, /turnstile\/\*|turnstile\/page\.\*/)
+})
+
 test('every current ordinary frontend API contract is admitted by an exact edge policy', () => {
 	const longId = 'AAABi0VWeJ8'
 	const publicId = 'AZ-vpV3kfag70-0EMMUETQ'

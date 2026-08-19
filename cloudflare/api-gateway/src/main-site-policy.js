@@ -102,8 +102,12 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/auth/phone-country', ['GET']),
 	route('/api/auth/turnstile/config', ['GET']),
 	route('/api/auth/turnstile/page', ['GET']),
-	route('/api/auth/turnstile/page.css', ['GET']),
-	route('/api/auth/turnstile/page.js', ['GET']),
+	route('/api/auth/turnstile/page.css', ['GET'], {
+		credentiallessVerificationAsset: true
+	}),
+	route('/api/auth/turnstile/page.js', ['GET'], {
+		credentiallessVerificationAsset: true
+	}),
 	route('/api/auth/login/password', ['POST']),
 	route('/api/auth/login/code/start', ['POST']),
 	route('/api/auth/login/code/turnstile', ['POST']),

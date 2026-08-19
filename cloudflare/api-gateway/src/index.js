@@ -36,6 +36,7 @@ const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
 const ANDROID_WEBVIEW_TRANSPORT = 'ANDROID_WEBVIEW_DOCUMENT'
 const H5_TRANSPORT = 'H5_BROWSER'
 const API_KEY_SDK_TRANSPORT = 'API_KEY_SDK'
+const H5_CSRF_COOKIE = 'XSRF-TOKEN'
 const TURNSTILE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{38}$/
 const PREAUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const DEVICE_INSTALLATION_ID_PATTERN =
@@ -205,6 +206,7 @@ export async function handleRequest(request, env, runtime = {}) {
 	}
 	if (transport.kind === H5_TRANSPORT
 		&& !route.riskChallenge
+		&& !route.credentiallessVerificationAsset
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED'
@@ -293,7 +295,8 @@ export async function handleRequest(request, env, runtime = {}) {
 		transport,
 		route.apiKeyManagement === true,
 		requiresApiKeyStrongEtag(request.method, url.pathname),
-		apiKeyDiagnostic)
+		apiKeyDiagnostic,
+		route.credentiallessVerificationAsset === true)
 	return instrumentSseResponse(
 		response,
 		actualStreaming ? sseDiagnostic : null,
@@ -851,7 +854,10 @@ async function signedUpstreamRequest(
 		UPSTREAM_ORIGIN
 	)
 	const edgeNetwork = edgeNetworkContext(request)
-	const headers = new Headers(request.headers)
+	// 验证页面子资源是精确只读公开内容；从空集合重建请求可防止任何会话、设备或挑战上下文被带入 Java。
+	const headers = route.credentiallessVerificationAsset
+		? new Headers()
+		: new Headers(request.headers)
 	for (const name of SPOOFABLE_PROXY_HEADERS) headers.delete(name)
 	for (const name of [...headers.keys()]) {
 		const lowerName = name.toLowerCase()
@@ -1160,7 +1166,8 @@ function guardedResponse(
 	transport = null,
 	apiKeyManagement = false,
 	requiresStrongEtag = false,
-	apiKeyDiagnostic = null) {
+	apiKeyDiagnostic = null,
+	credentiallessVerificationAsset = false) {
 	const setCookies = readSetCookies(response.headers)
 	if (setCookies === null) {
 		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
@@ -1183,6 +1190,17 @@ function guardedResponse(
 		})
 		return openAiError(502, 'upstream_protocol_error',
 			'The upstream response violated the API cookie policy.')
+	}
+	let responseCookies = setCookies
+	if (credentiallessVerificationAsset) {
+		const unexpectedCookie = setCookies.find(
+			cookie => cookieName(cookie) !== H5_CSRF_COOKIE)
+		if (unexpectedCookie) {
+			// 精确资源只能吸收 H5 安全链自动生成的 CSRF Cookie；任何会话或未知 Cookie 都必须失败关闭。
+			return jsonError(502, 'EDGE_COOKIE_POLICY_VIOLATION')
+		}
+		// 静态资源不把自动生成的 CSRF Token 交付给客户端，避免它们隐式创建或改变浏览器状态。
+		responseCookies = []
 	}
 	if (transport?.kind === API_KEY_SDK_TRANSPORT) {
 		const contentType = headerValue(response.headers, 'Content-Type')
@@ -1211,12 +1229,12 @@ function guardedResponse(
 				'The upstream response used an invalid content type.')
 		}
 	}
-	if (isAndroidUpstreamTransport(transport) && setCookies.length > 0) {
+	if (isAndroidUpstreamTransport(transport) && responseCookies.length > 0) {
 		// Android 使用显式 Token 协议；拒绝源站 Cookie，避免与 H5 会话模型发生隐式混用。
 		return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
 	}
 	const allowedNames = surface === 'admin' ? ADMIN_COOKIE_NAMES : ROOT_COOKIE_NAMES
-	for (const cookie of setCookies) {
+	for (const cookie of responseCookies) {
 		const name = cookieName(cookie)
 		if (!allowedNames.has(name) || /(?:^|;)\s*domain\s*=/i.test(cookie)) {
 			return jsonError(502, 'EDGE_COOKIE_POLICY_VIOLATION')
@@ -1233,7 +1251,7 @@ function guardedResponse(
 
 	const headers = new Headers(response.headers)
 	headers.delete('Set-Cookie')
-	for (const cookie of setCookies) headers.append('Set-Cookie', cookie)
+	for (const cookie of responseCookies) headers.append('Set-Cookie', cookie)
 	applyNoStore(headers)
 	if (apiKeyManagement || transport?.kind === API_KEY_SDK_TRANSPORT) {
 		// API Key 管理与公开 SDK 协议都不得被边缘压缩或重写；前者还依赖强 ETag 作为乐观锁版本。
