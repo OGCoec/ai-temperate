@@ -200,7 +200,7 @@ final class ApiResponseServiceImplTest {
                         + "\"max_output_tokens\":15}",
                 ApiResponseRequest.class);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                11L, 17L, new byte[32], "B".repeat(43), Set.of(23L));
+                new byte[16], 17L, new byte[32], "B".repeat(43), Set.of(23L));
         ApiResponseRequestValidator validator = mock(ApiResponseRequestValidator.class);
         ApiChatException failure = ApiChatException.invalid(
                 "max_output_tokens is below the supported minimum.",
@@ -247,7 +247,7 @@ final class ApiResponseServiceImplTest {
         ValidatedApiResponseRequest validated = new ValidatedApiResponseRequest(
                 request, model, 128, 32, streaming);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                11L, 17L, new byte[32], "B".repeat(43), Set.of(23L));
+                new byte[16], 17L, new byte[32], "B".repeat(43), Set.of(23L));
         ApiResponseRequestValidator validator = mock(ApiResponseRequestValidator.class);
         when(validator.validate(principal, request)).thenReturn(validated);
         ApiResponseProviderAdapter adapter = mock(ApiResponseProviderAdapter.class);
@@ -383,7 +383,7 @@ final class ApiResponseServiceImplTest {
                             "owner",
                             (short) 1),
                     new ApiInferenceReservation(
-                            29L, 17L, 11L, 2L, 32L,
+                            new byte[16], 17L, new byte[16], 2L, 32L,
                             BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
                             ApiInferenceProtocol.RESPONSES),
                     request);

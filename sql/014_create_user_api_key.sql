@@ -1,7 +1,7 @@
 BEGIN;
 
 CREATE TABLE user_api_key (
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
+    id BYTEA NOT NULL,
     login_identity_id BIGINT NOT NULL,
     key_digest BYTEA NOT NULL,
     create_idempotency_key UUID,
@@ -16,6 +16,8 @@ CREATE TABLE user_api_key (
 
     CONSTRAINT pk_user_api_key
         PRIMARY KEY (id),
+    CONSTRAINT chk_user_api_key_id_length
+        CHECK (OCTET_LENGTH(id) = 16),
     CONSTRAINT chk_user_api_key_digest_length
         CHECK (OCTET_LENGTH(key_digest) = 32),
     CONSTRAINT chk_user_api_key_hint
@@ -67,7 +69,7 @@ CREATE TRIGGER trg_user_api_key_set_updated_at
 COMMENT ON TABLE user_api_key IS
     '用户创建的外部 API 调用凭证；完整 API Key 只在创建响应中返回一次，本表不保存可恢复的完整凭证';
 COMMENT ON COLUMN user_api_key.id IS
-    'PostgreSQL 自动递增的 BIGINT API Key 记录主键，对外使用 Base64URL 编码';
+    '由 HybridSemaphoreIdWorker 生成的固定16字节 API Key 主键，对外使用26字符规范 ULID编码';
 COMMENT ON COLUMN user_api_key.login_identity_id IS
     '持有该 API Key 的登录身份 ID，逻辑关联 userloginidentity.id，不建立物理外键';
 COMMENT ON COLUMN user_api_key.key_digest IS

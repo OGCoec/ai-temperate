@@ -5023,11 +5023,13 @@
 	.is-android-client .chat-header-subtitle { margin-top: 0; font-size: 11px; }
 	.is-android-client .icon-button { @include user-android-compact-control(32px, 32px, 10px); width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; }
 	.is-android-client .composer-wrap { padding: 6px 12px calc(8px + env(safe-area-inset-bottom)); }
+	// 普通输入与语音输入共用语音态的 94px 外框基准，状态切换只替换内容，不再改变控件高度。
+	.is-android-client .composer { min-height: 94px; box-sizing: border-box; }
 	// 波形占用取消按钮上方的空白列，并在计时器左侧保留 4px；真实宽度仍交给 Canvas 重新计算容量。
 	.is-android-client .voice-inline-status { width: calc(100% + 56px); max-width: none; min-width: 0; height: 28px; min-height: 28px; padding: 2px 0; overflow: hidden; }
 	// 与 28px 波形行共享同一垂直中心，避免计时文字相对中轴线上下漂移。
 	.is-android-client .voice-duration { height: 28px; min-height: 28px; flex: 0 0 28px; }
-	.is-android-client .composer:not(.is-voice-active) { min-height: 76px; padding: 4px 5px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: minmax(28px, auto) 44px; align-items: center; column-gap: 3px; row-gap: 0; border-radius: 16px; }
+	.is-android-client .composer:not(.is-voice-active) { padding: 4px 5px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-rows: minmax(28px, auto) 44px; align-items: center; column-gap: 3px; row-gap: 0; border-radius: 16px; }
 	.is-android-client .composer:not(.is-voice-active) .composer-entry { grid-column: 1 / -1; grid-row: 1; align-self: stretch; }
 	.is-android-client .composer:not(.is-voice-active) .voice-transcript-row { min-height: 28px; }
 	.is-android-client .composer:not(.is-voice-active) .composer-input { min-height: 28px; max-height: 140px; padding: 3px 7px 4px; overflow-y: auto; font-size: 15px; line-height: 1.42; }
@@ -5050,7 +5052,8 @@
 		.is-android-client .chat-header-subtitle { display: none; }
 		.is-android-client .chat-header { min-height: 48px; }
 		.is-android-client .composer-wrap { padding-top: 4px; }
-		.is-android-client .composer:not(.is-voice-active) { min-height: 70px; grid-template-rows: minmax(24px, auto) 42px; }
+		// 横屏只压缩内部行和控件，外框仍沿用统一的 94px 高度，避免切换语音时再次跳高。
+		.is-android-client .composer:not(.is-voice-active) { grid-template-rows: minmax(24px, auto) 42px; }
 		.is-android-client .composer:not(.is-voice-active) .composer-icon,
 		.is-android-client .composer:not(.is-voice-active) .voice-button,
 		.is-android-client .composer:not(.is-voice-active) .send-button,

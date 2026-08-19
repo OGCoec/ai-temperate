@@ -1,5 +1,7 @@
 package com.example.temperate.web.user.apikey;
 
+import com.example.temperate.common.codec.id.HybridUlidCodec;
+import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementModels.Created;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementModels.Detail;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementModels.ModelGrant;
@@ -77,6 +79,11 @@ public final class ApiKeyManagementResponse {
 
     /** 普通详情不可能携带完整 Key。 */
     public record Key(
+            @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A")
             String id,
             String maskedKey,
             String status,
@@ -91,6 +98,11 @@ public final class ApiKeyManagementResponse {
 
     /** 只有创建 201 的响应类型包含一次性 apiKey 字段。 */
     public record CreatedKey(
+            @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A")
             String id,
             String maskedKey,
             String status,
@@ -110,6 +122,11 @@ public final class ApiKeyManagementResponse {
 
     /** 列表项不加载模型授权，保持游标查询为一次有界 SQL。 */
     public record KeySummary(
+            @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A")
             String id,
             String maskedKey,
             String status,
@@ -123,6 +140,11 @@ public final class ApiKeyManagementResponse {
 
     /** 模型公共详情不暴露数据库 ID。 */
     public record Model(
+            @Schema(
+                    minLength = PublicIdCodec.ENCODED_LENGTH,
+                    maxLength = PublicIdCodec.ENCODED_LENGTH,
+                    pattern = PublicIdCodec.ENCODED_PATTERN,
+                    example = "AAAAAAAAABc")
             String modelPublicId,
             String modelName,
             String vendor,
@@ -130,6 +152,13 @@ public final class ApiKeyManagementResponse {
     }
 
     /** 游标为空表示已经到达列表末尾。 */
-    public record KeyPage(List<KeySummary> items, String nextCursor) {
+    public record KeyPage(
+            List<KeySummary> items,
+            @Schema(
+                    nullable = true,
+                    minLength = 38,
+                    maxLength = 38,
+                    pattern = "^[A-Za-z0-9_-]{38}$")
+            String nextCursor) {
     }
 }

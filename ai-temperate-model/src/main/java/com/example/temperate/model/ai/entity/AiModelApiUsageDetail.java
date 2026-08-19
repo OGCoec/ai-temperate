@@ -12,8 +12,8 @@ import lombok.Setter;
 @NoArgsConstructor
 public class AiModelApiUsageDetail {
 
-    private Long id;
-    private Long usageId;
+    private byte[] id;
+    private byte[] usageId;
     private String vendorSnapshot;
     private Boolean stream;
     private Long reservedQuotaMinor;

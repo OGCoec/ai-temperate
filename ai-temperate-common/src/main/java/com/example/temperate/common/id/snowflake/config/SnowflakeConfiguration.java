@@ -1,5 +1,6 @@
 package com.example.temperate.common.id.snowflake.config;
 
+import com.example.temperate.common.codec.id.HybridUlidCodec;
 import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.common.id.snowflake.component.SnowflakeIdWorker;
 import org.springframework.context.annotation.Bean;
@@ -22,5 +23,10 @@ public class SnowflakeConfiguration {
     @Bean
     public HybridSemaphoreIdWorker hybridSemaphoreIdWorker() {
         return new HybridSemaphoreIdWorker(1L, 1L);
+    }
+
+    @Bean
+    public HybridUlidCodec hybridUlidCodec() {
+        return new HybridUlidCodec();
     }
 }

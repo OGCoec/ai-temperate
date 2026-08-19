@@ -13,7 +13,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class UserApiKeyModel {
 
-    private Long userApiKeyId;
+    private byte[] userApiKeyId;
     private Long aiModelId;
     private Integer status;
     private OffsetDateTime createdAt;

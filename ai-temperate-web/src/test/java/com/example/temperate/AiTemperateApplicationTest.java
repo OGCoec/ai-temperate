@@ -23,6 +23,7 @@ import com.example.temperate.mapper.ai.AiModelApiUsageMapper;
 import com.example.temperate.mapper.ai.AiModelUsageDetailMapper;
 import com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper;
 import com.example.temperate.mapper.ai.AiModelUsageMapper;
+import com.example.temperate.mapper.ai.ApiKeyUsageQueryMapper;
 import com.example.temperate.mapper.ai.UserApiKeyMapper;
 import com.example.temperate.mapper.ai.UserApiKeyModelMapper;
 import com.example.temperate.mapper.audit.access.AccessRequestAuditMapper;
@@ -72,6 +73,7 @@ import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 验证 Web 应用 Spring 上下文、认证路由和基础安全装配的集成测试。
@@ -148,10 +150,16 @@ class AiTemperateApplicationTest {
     private AiModelApiUsageDetailMapper aiModelApiUsageDetailMapper;
 
     @MockitoBean
+    private ApiKeyUsageQueryMapper apiKeyUsageQueryMapper;
+
+    @MockitoBean
     private UserApiKeyMapper userApiKeyMapper;
 
     @MockitoBean
     private UserApiKeyModelMapper userApiKeyModelMapper;
+
+    @MockitoBean
+    private TransactionTemplate transactionTemplate;
 
     @MockitoBean
     private UserAvatarMapper userAvatarMapper;

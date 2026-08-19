@@ -23,8 +23,10 @@ const H5_PAGE_SET = new Set(H5_PAGE_PATHS)
 const H5_ASSET_SET = new Set(H5_ASSET_PATHS)
 const PUBLIC_ID_11 = '[A-Za-z0-9_-]{11}'
 const PUBLIC_ID_22 = '[A-Za-z0-9_-]{22}'
+const API_KEY_ULID_26 = '[0-7][0-9A-HJKMNP-TV-Z]{25}'
 const PREUPLOAD_ID_24 = '[A-Za-z0-9_-]{24}'
 const PUBLIC_ID_11_PATTERN = /^[A-Za-z0-9_-]{11}$/
+const API_KEY_ULID_26_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/
 
 function isCanonicalPositiveLongPublicId(value) {
 	// 正 Long 的首位不能带符号位；8 字节 Base64URL 的末位只允许四个有效数据位，且零值必须拒绝。
@@ -32,6 +34,11 @@ function isCanonicalPositiveLongPublicId(value) {
 		&& /^[A-Za-f]/.test(value)
 		&& /[AEIMQUYcgkosw048]$/.test(value)
 		&& value !== 'AAAAAAAAAAA'
+}
+
+function isCanonicalApiKeyUlid(value) {
+	return API_KEY_ULID_26_PATTERN.test(value)
+		&& value !== '00000000000000000000000000'
 }
 
 function route(path, allowedMethods, options = {}) {
@@ -179,22 +186,31 @@ function templateRoute(pattern, invalidPattern, allowedMethods, options = {}) {
 
 const TEMPLATE_ROOT_ROUTES = Object.freeze([
 	templateRoute(
-		new RegExp(`^/api/users/me/api-keys/(${PUBLIC_ID_11})$`),
+		new RegExp(`^/api/users/me/api-keys/(${API_KEY_ULID_26})$`),
 		/^\/api\/users\/me\/api-keys\/[^/]+$/,
 		['GET', 'PUT', 'DELETE'],
 		{
 			apiKeyManagement: true,
-			parameterType: 'PUBLIC_LONG_BASE64URL_11',
-			validateMatch: match => isCanonicalPositiveLongPublicId(match[1])
+			parameterType: 'API_KEY_ULID_26',
+			validateMatch: match => isCanonicalApiKeyUlid(match[1])
 		}),
 	templateRoute(
-		new RegExp(`^/api/users/me/api-keys/(${PUBLIC_ID_11})/models$`),
+		new RegExp(`^/api/users/me/api-keys/(${API_KEY_ULID_26})/models$`),
 		/^\/api\/users\/me\/api-keys\/[^/]+\/models$/,
 		['PUT'],
 		{
 			apiKeyManagement: true,
-			parameterType: 'PUBLIC_LONG_BASE64URL_11',
-			validateMatch: match => isCanonicalPositiveLongPublicId(match[1])
+			parameterType: 'API_KEY_ULID_26',
+			validateMatch: match => isCanonicalApiKeyUlid(match[1])
+		}),
+	templateRoute(
+		new RegExp(`^/api/users/me/api-keys/(${API_KEY_ULID_26})/usage$`),
+		/^\/api\/users\/me\/api-keys\/[^/]+\/usage$/,
+		['GET'],
+		{
+			apiKeyManagement: true,
+			parameterType: 'API_KEY_ULID_26',
+			validateMatch: match => isCanonicalApiKeyUlid(match[1])
 		}),
 	templateRoute(
 		new RegExp(`^/api/users/me/avatar/preuploads/${PREUPLOAD_ID_24}$`),

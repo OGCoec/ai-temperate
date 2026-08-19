@@ -1,6 +1,8 @@
 import { authorizedRequest } from '../auth/http-client.js'
 
-const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
+const API_KEY_PUBLIC_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/
+const MODEL_PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]{38}$/
 const MASKED_KEY_PATTERN = /^sk-…[A-Za-z0-9_-]{4}$/
 const FULL_KEY_PATTERN = /^sk-[A-Za-z0-9_-]{86}$/
 const ROW_VERSION_PATTERN = /^(0|[1-9][0-9]*)$/
@@ -36,9 +38,18 @@ function hasOwn(value, property) {
 	return Object.prototype.hasOwnProperty.call(value, property)
 }
 
-function normalizedPublicId(value, label = 'API Key') {
+function normalizedApiKeyPublicId(value) {
 	const normalized = typeof value === 'string' ? value.trim() : ''
-	if (!PUBLIC_ID_PATTERN.test(normalized)) throw inputError(`${label}公共 ID 无效。`)
+	if (!API_KEY_PUBLIC_ID_PATTERN.test(normalized)
+		|| normalized === '00000000000000000000000000') {
+		throw inputError('API Key 公共 ID 无效。')
+	}
+	return normalized
+}
+
+function normalizedModelPublicId(value) {
+	const normalized = typeof value === 'string' ? value.trim() : ''
+	if (!MODEL_PUBLIC_ID_PATTERN.test(normalized)) throw inputError('模型公共 ID 无效。')
 	return normalized
 }
 
@@ -61,7 +72,8 @@ function normalizedSummary(value, allowSecret = false) {
 	const source = objectValue(value)
 	if (!allowSecret && hasOwn(source, 'apiKey')) throw responseError()
 	if (typeof source.id !== 'string'
-		|| !PUBLIC_ID_PATTERN.test(source.id)
+		|| !API_KEY_PUBLIC_ID_PATTERN.test(source.id)
+		|| source.id === '00000000000000000000000000'
 		|| !MASKED_KEY_PATTERN.test(source.maskedKey)
 		|| !STATUS_VALUES.has(source.status)
 		|| typeof source.expired !== 'boolean') {
@@ -83,7 +95,7 @@ function normalizedSummary(value, allowSecret = false) {
 function normalizedModel(value) {
 	const source = objectValue(value)
 	if (typeof source.modelPublicId !== 'string'
-		|| !PUBLIC_ID_PATTERN.test(source.modelPublicId)
+		|| !MODEL_PUBLIC_ID_PATTERN.test(source.modelPublicId)
 		|| typeof source.modelName !== 'string'
 		|| !source.modelName.trim()
 		|| typeof source.vendor !== 'string'
@@ -119,7 +131,8 @@ function normalizedPage(value) {
 	if (!Array.isArray(source.items)
 		|| source.items.length > 100
 		|| !(source.nextCursor == null
-			|| (typeof source.nextCursor === 'string' && source.nextCursor.length <= 128))) {
+			|| (typeof source.nextCursor === 'string'
+				&& CURSOR_PATTERN.test(source.nextCursor)))) {
 		throw responseError()
 	}
 	return Object.freeze({
@@ -169,7 +182,7 @@ function normalizedModelIds(values, minimum) {
 	if (!Array.isArray(values) || values.length < minimum || values.length > 500) {
 		throw inputError('API Key 模型授权数量无效。')
 	}
-	const ids = values.map(value => normalizedPublicId(value, '模型'))
+	const ids = values.map(normalizedModelPublicId)
 	if (new Set(ids).size !== ids.length) throw inputError('API Key 模型授权不能重复。')
 	return ids
 }
@@ -178,7 +191,8 @@ export const apiKeyApi = Object.freeze({
 	async list(options = {}) {
 		const cursor = options.cursor == null ? '' : String(options.cursor).trim()
 		const pageSize = options.pageSize == null ? 20 : Number(options.pageSize)
-		if (cursor.length > 128 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+		if ((cursor && !CURSOR_PATTERN.test(cursor))
+			|| !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
 			throw inputError('API Key 分页参数无效。')
 		}
 		const cursorQuery = cursor ? `cursor=${encodeURIComponent(cursor)}&` : ''
@@ -203,7 +217,7 @@ export const apiKeyApi = Object.freeze({
 	},
 
 	async detail(apiKeyPublicId) {
-		const id = normalizedPublicId(apiKeyPublicId)
+		const id = normalizedApiKeyPublicId(apiKeyPublicId)
 		return normalizedMetadata(await authorizedRequest(
 			`/api/users/me/api-keys/${encodeURIComponent(id)}`,
 			{ method: 'GET', captureEtag: true }
@@ -211,7 +225,7 @@ export const apiKeyApi = Object.freeze({
 	},
 
 	async update(apiKeyPublicId, etag, command) {
-		const id = normalizedPublicId(apiKeyPublicId)
+		const id = normalizedApiKeyPublicId(apiKeyPublicId)
 		const source = commandValue(command)
 		if (!STATUS_VALUES.has(source.status)) throw inputError('API Key 状态无效。')
 		return normalizedMetadata(await authorizedRequest(
@@ -226,7 +240,7 @@ export const apiKeyApi = Object.freeze({
 	},
 
 	async replaceModels(apiKeyPublicId, etag, modelPublicIds) {
-		const id = normalizedPublicId(apiKeyPublicId)
+		const id = normalizedApiKeyPublicId(apiKeyPublicId)
 		return normalizedMetadata(await authorizedRequest(
 			`/api/users/me/api-keys/${encodeURIComponent(id)}/models`,
 			{
@@ -239,7 +253,7 @@ export const apiKeyApi = Object.freeze({
 	},
 
 	async remove(apiKeyPublicId, etag) {
-		const id = normalizedPublicId(apiKeyPublicId)
+		const id = normalizedApiKeyPublicId(apiKeyPublicId)
 		await authorizedRequest(`/api/users/me/api-keys/${encodeURIComponent(id)}`, {
 			method: 'DELETE',
 			headers: { 'If-Match': normalizedEtag(etag) }

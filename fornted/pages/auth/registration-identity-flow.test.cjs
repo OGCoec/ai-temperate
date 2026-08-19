@@ -10,20 +10,19 @@ function read(relativePath) {
 }
 
 function method(source, start, end) {
-	return source.slice(source.indexOf(start), source.indexOf(end))
+	const startIndex = source.indexOf(start)
+	return source.slice(startIndex, source.indexOf(end, startIndex))
 }
 
-test('registration restores authoritative contacts before revealing verification inputs', () => {
+test('registration applies authoritative contacts before revealing verification inputs', () => {
 	const source = read('pages/auth/register.vue')
-	const restore = method(source, 'async restoreExistingFlow()', 'syncPhoneCountrySelection()')
 	const verifyHuman = method(source, 'async verifyHuman(token)', 'async sendCode(channel)')
 
 	assert.match(source, /registrationIdentity:\s*\{\s*email:\s*'',\s*phoneE164:\s*''\s*\}/)
-	assert.ok(restore.indexOf('applyRegistrationIdentity(status)') < restore.indexOf('this.humanVerified = status.humanVerified'))
 	assert.ok(verifyHuman.indexOf('applyRegistrationIdentity(currentStatus)') < verifyHuman.indexOf('this.humanVerified = true'))
 	assert.ok(verifyHuman.lastIndexOf('applyRegistrationIdentity(status)') < verifyHuman.lastIndexOf('this.humanVerified = true'))
-	assert.match(source, /<registration-identity-summary/)
-	assert.match(source, /<template v-if="canDisplayRegistrationIdentity">[\s\S]*<registration-identity-summary[\s\S]*class="auth-code-row"/)
+	assert.match(source, /<verification-identity-summary/)
+	assert.match(source, /<template v-if="canDisplayRegistrationIdentity">[\s\S]*<verification-identity-summary[\s\S]*class="auth-code-row"/)
 	assert.match(source, /v-else class="auth-banner"[\s\S]*注册联系方式暂时无法恢复，请重新开始注册/)
 })
 

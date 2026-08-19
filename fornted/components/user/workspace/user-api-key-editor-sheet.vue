@@ -1,5 +1,5 @@
 <template>
-	<view v-if="open" class="api-key-editor-layer" role="presentation" @click.self="requestClose" @keydown.esc.stop.prevent="requestClose" @keydown.tab="trapFocus">
+	<view v-if="open" class="api-key-editor-layer" :class="{ 'is-android-client': androidClient }" role="presentation" @click.self="requestClose" @keydown.esc.stop.prevent="requestClose" @keydown.tab="trapFocus">
 		<view ref="editor" class="api-key-editor" role="dialog" aria-modal="true" aria-labelledby="api-key-editor-title" tabindex="-1">
 			<view class="api-key-editor-heading">
 				<view>
@@ -122,7 +122,8 @@
 		props: {
 			open: { type: Boolean, default: false },
 			apiKeyPublicId: { type: String, default: '' },
-			summary: { type: Object, default: null }
+			summary: { type: Object, default: null },
+			androidClient: { type: Boolean, default: false }
 		},
 		data() {
 			return {
@@ -177,7 +178,10 @@
 				else this.clearSensitiveState()
 			},
 			apiKeyPublicId(value, previous) {
-				if (this.open && value && value !== previous) this.loadDetail()
+				if (this.open && value && previous && value !== previous) {
+					this.clearSensitiveState()
+					this.loadDetail()
+				}
 			}
 		},
 		beforeDestroy() {
@@ -199,6 +203,13 @@
 				}
 				this.$emit('close')
 				return true
+			},
+			handlePageHide() {
+				this.requestGeneration += 1
+				this.loading = false
+			},
+			handlePageShow() {
+				if (this.open && !this.detail) this.loadDetail()
 			},
 			focusEditor() {
 				// #ifdef H5
@@ -452,5 +463,8 @@
 	.api-key-delete-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
 	.api-key-delete-actions button { @include user-frosted-control; margin: 0; border-radius: 12px; color: #dce5e0; }
 	.api-key-delete-actions .confirm { border-color: rgba(222, 112, 95, .4); color: #ef9e92; }
+	.api-key-editor-layer.is-android-client { background: #0b0d0c; }
+	.api-key-editor-layer.is-android-client .api-key-editor { width: 100%; border-radius: 0; }
+	.api-key-editor-layer.is-android-client .api-key-editor-heading { padding-top: max(12px, env(safe-area-inset-top)); }
 	@media screen and (max-width: 680px) { .api-key-editor { width: 100%; border-radius: 0; } .api-key-editor-heading { padding: calc(12px + env(safe-area-inset-top)) 16px 16px; } .api-key-editor-body { padding: 0 16px calc(20px + env(safe-area-inset-bottom)); } .api-key-conflict { align-items: stretch; flex-direction: column; } }
 </style>

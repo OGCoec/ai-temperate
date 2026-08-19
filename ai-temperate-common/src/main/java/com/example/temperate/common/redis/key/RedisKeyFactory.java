@@ -413,7 +413,7 @@ public final class RedisKeyFactory {
         return create(
                 "auth",
                 "uak",
-                "v1",
+                "v2",
                 IdentifierType.API_KEY_CREDENTIAL,
                 requireHmacIdentifier(keyIdentifier));
     }

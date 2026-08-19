@@ -16,9 +16,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * 该处理器是来把 API Key 管理的受控异常映射为 400、404、409、412、428 或 503，并保证错误体不包含原始 Key、摘要或数据库细节。
+ * 该处理器是来把 API Key 管理与调用记录查询的受控异常映射为 400、404、409、412、428 或 503，并保证错误体不包含原始 Key、摘要或数据库细节。
  */
-@RestControllerAdvice(assignableTypes = CurrentUserApiKeyController.class)
+@RestControllerAdvice(assignableTypes = {
+        CurrentUserApiKeyController.class,
+        CurrentUserApiKeyUsageController.class
+})
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class ApiKeyManagementExceptionHandler {
 
@@ -33,6 +36,8 @@ public final class ApiKeyManagementExceptionHandler {
         HttpStatus status = switch (exception.code()) {
             case FEATURE_DISABLED -> HttpStatus.SERVICE_UNAVAILABLE;
             case API_KEY_CREATE_COORDINATION_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case USAGE_QUERY_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case USAGE_DATA_INVALID -> HttpStatus.SERVICE_UNAVAILABLE;
             case API_KEY_CREATE_IN_PROGRESS, API_KEY_CREATE_ALREADY_COMPLETED ->
                     HttpStatus.CONFLICT;
             case API_KEY_NOT_FOUND -> HttpStatus.NOT_FOUND;
@@ -78,6 +83,8 @@ public final class ApiKeyManagementExceptionHandler {
             case MODEL_NOT_FOUND_OR_DISABLED -> "选择的模型不存在或当前不可用。";
             case PUBLIC_ID_INVALID -> "API Key 公共 ID 格式无效。";
             case CURSOR_INVALID -> "API Key 游标格式无效。";
+            case USAGE_QUERY_UNAVAILABLE -> "API Key 调用记录查询暂时不可用，请稍后重试。";
+            case USAGE_DATA_INVALID -> "API Key 调用记录暂时不可用，请稍后重试。";
             default -> "API Key 请求参数无效。";
         };
     }

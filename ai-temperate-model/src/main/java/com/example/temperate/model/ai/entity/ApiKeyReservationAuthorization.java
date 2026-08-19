@@ -14,7 +14,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ApiKeyReservationAuthorization {
 
-    private Long apiKeyId;
+    private byte[] apiKeyId;
     private Long loginIdentityId;
     private byte[] keyDigest;
     private Integer keyStatus;
@@ -30,4 +30,20 @@ public class ApiKeyReservationAuthorization {
     private BigDecimal outputRatio;
     private Long contextWindowTokens;
     private Long maxOutputTokens;
+
+    public byte[] getApiKeyId() {
+        return apiKeyId == null ? null : apiKeyId.clone();
+    }
+
+    public void setApiKeyId(byte[] apiKeyId) {
+        this.apiKeyId = apiKeyId == null ? null : apiKeyId.clone();
+    }
+
+    public byte[] getKeyDigest() {
+        return keyDigest == null ? null : keyDigest.clone();
+    }
+
+    public void setKeyDigest(byte[] keyDigest) {
+        this.keyDigest = keyDigest == null ? null : keyDigest.clone();
+    }
 }

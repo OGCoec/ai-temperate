@@ -12,7 +12,15 @@ import lombok.Setter;
 @NoArgsConstructor
 public class AiModelApiUsageRefundCandidate {
 
-    private Long usageId;
+    private byte[] usageId;
     private Long loginIdentityId;
     private Long reservedQuotaMinor;
+
+    public byte[] getUsageId() {
+        return usageId == null ? null : usageId.clone();
+    }
+
+    public void setUsageId(byte[] usageId) {
+        this.usageId = usageId == null ? null : usageId.clone();
+    }
 }

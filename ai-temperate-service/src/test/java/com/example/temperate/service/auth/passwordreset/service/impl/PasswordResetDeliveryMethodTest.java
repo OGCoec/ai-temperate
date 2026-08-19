@@ -35,6 +35,7 @@ import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.enums.VerificationChannel;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
 import com.example.temperate.service.registration.exception.RegistrationException;
+import com.example.temperate.service.registration.verification.delivery.dto.VerificationDeliveryRequest;
 import com.example.temperate.service.registration.verification.delivery.operation.VerificationDeliveryOperationIdGenerator;
 import com.example.temperate.service.registration.verification.delivery.rabbit.VerificationDeliveryPublisher;
 import com.example.temperate.service.registration.verification.generator.VerificationCodeGenerator;
@@ -43,6 +44,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import reactor.core.publisher.Mono;
@@ -178,13 +180,38 @@ class PasswordResetDeliveryMethodTest {
         service.sendCode(access(), VerificationDeliveryMethod.WHATSAPP);
 
         verify(flowStore).issueCode(any(), eq(HMAC), eq(HMAC), eq(NOW));
+        ArgumentCaptor<VerificationDeliveryRequest> requestCaptor =
+                ArgumentCaptor.forClass(VerificationDeliveryRequest.class);
         verify(publisher).publishPasswordReset(
                 any(),
                 eq(VerificationChannel.SMS),
                 eq(VerificationDeliveryMethod.WHATSAPP),
                 eq(HMAC),
-                any(),
+                requestCaptor.capture(),
                 eq(NOW.plusSeconds(300)));
+        assertThat(requestCaptor.getValue().destination())
+                .isEqualTo("+447911123456");
+    }
+
+    @Test
+    void unverifiedRedisFlowNeverGeneratesOrPublishesCode() {
+        when(flowStore.getRequired(any(), eq(NOW))).thenReturn(new PasswordResetFlowSnapshot(
+                VerificationChannel.SMS,
+                "+447911123456",
+                42L,
+                false,
+                NOW.minusSeconds(10),
+                NOW.plusSeconds(300),
+                NOW.plusSeconds(600)));
+
+        assertThatThrownBy(() -> service.sendCode(
+                        access(), VerificationDeliveryMethod.SMS))
+                .isInstanceOfSatisfying(PasswordResetException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                PasswordResetErrorCode.HUMAN_VERIFICATION_REQUIRED));
+
+        verify(codeGenerator, never()).generate();
+        verifyNoInteractions(publisher);
     }
 
     @Test

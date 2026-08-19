@@ -6,7 +6,7 @@
 
     <resultMap id="UsageResultMap"
                type="com.example.temperate.model.ai.entity.AiModelApiUsage">
-        <id property="id" column="id"/>
+        <id property="id" column="id" jdbcType="BINARY"/>
         <result property="keyDigest" column="key_digest"/>
         <result property="aiModelId" column="ai_model_id"/>
         <result property="billingStatus" column="billing_status"/>
@@ -22,7 +22,7 @@
 
     <resultMap id="UsageRefundCandidateResultMap"
                type="com.example.temperate.model.ai.entity.AiModelApiUsageRefundCandidate">
-        <id property="usageId" column="usage_id"/>
+        <id property="usageId" column="usage_id" jdbcType="BINARY"/>
         <result property="loginIdentityId" column="login_identity_id"/>
         <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
     </resultMap>
@@ -43,16 +43,15 @@
     </sql>
 
     <insert id="insert"
-            parameterType="com.example.temperate.model.ai.entity.AiModelApiUsage"
-            useGeneratedKeys="true"
-            keyProperty="id"
-            keyColumn="id">
+            parameterType="com.example.temperate.model.ai.entity.AiModelApiUsage">
         INSERT INTO ai_model_api_usage (
+            id,
             key_digest,
             ai_model_id,
             billing_status
         )
         VALUES (
+            #{id,jdbcType=BINARY},
             #{keyDigest,jdbcType=BINARY},
             #{aiModelId,jdbcType=BIGINT},
             #{billingStatus,jdbcType=SMALLINT}
@@ -62,7 +61,7 @@
     <select id="findByIdForUpdate" resultMap="UsageResultMap">
         SELECT <include refid="UsageColumns"/>
         FROM ai_model_api_usage
-        WHERE id = #{usageId,jdbcType=BIGINT}
+        WHERE id = #{usageId,jdbcType=BINARY}
         FOR UPDATE
     </select>
 
@@ -76,7 +75,7 @@
             finish_reason = #{finishReason,jdbcType=VARCHAR},
             failure_code = #{failureCode,jdbcType=VARCHAR},
             settled_at = #{settledAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
-        WHERE id = #{usageId,jdbcType=BIGINT}
+        WHERE id = #{usageId,jdbcType=BINARY}
           AND billing_status = #{expectedBillingStatus,jdbcType=SMALLINT}
     </update>
 
@@ -100,7 +99,7 @@
         WITH candidate(usage_id) AS (
             VALUES
             <foreach collection="candidates" item="candidate" separator=",">
-                (#{candidate.usageId,jdbcType=BIGINT})
+                (#{candidate.usageId,jdbcType=BINARY})
             </foreach>
         )
         UPDATE ai_model_api_usage usage

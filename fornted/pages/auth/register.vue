@@ -10,7 +10,7 @@
 			</view>
 			<view v-if="error" class="auth-banner" role="alert" aria-live="assertive">{{ error }}</view>
 
-			<view v-if="step === 1">
+			<view v-if="step === 1 || (step === 2 && !humanVerified && !flowSuperseded)">
 				<view class="auth-field">
 					<label class="auth-label" for="auth-register-email">邮箱</label>
 					<view class="auth-control" :class="{ invalid: fieldErrors.email }">
@@ -61,33 +61,39 @@
 					<text id="auth-register-phone-help" class="auth-help">请选择号码所属地区；后端会规范化为 E.164。</text>
 					<text v-if="fieldErrors.phoneNumber" id="auth-register-phone-error" class="auth-error" role="alert">{{ fieldErrors.phoneNumber }}</text>
 				</view>
-				<button type="button" class="auth-button" :loading="busy" :disabled="busy" :aria-busy="busy" @click="start">
+				<button v-if="step === 1" type="button" class="auth-button" :loading="busy" :disabled="busy" :aria-busy="busy" @click="start">
 					{{ busy ? '正在提交…' : '继续' }}
 				</button>
-			</view>
-
-			<view v-else-if="step === 2">
-				<view v-if="flowSuperseded" class="verified-note" role="alert" aria-live="assertive">
-					<text>另一个标签页已开始新的注册流程，请在最新标签页继续。</text>
-				</view>
 				<auth-turnstile
-					v-else-if="!humanVerified"
+					v-else-if="flow && !flowSuperseded"
 					ref="turnstile"
 					action="register"
 					:challenge="flow.challengeHandle"
 					:page-scroll-top="turnstilePageScrollTop"
 					@verified="verifyHuman"
 				/>
-				<template v-else>
+			</view>
+
+			<view v-else-if="step === 2 && flowSuperseded">
+				<view v-if="flowSuperseded" class="verified-note" role="alert" aria-live="assertive">
+					<text>另一个标签页已开始新的注册流程，请在最新标签页继续。</text>
+				</view>
+			</view>
+
+			<view v-else-if="step === 2">
+				<template v-if="humanVerified">
 					<view class="verified-note" role="status">
 						<uni-icons type="checkmarkempty" size="18" color="#37d39a" aria-hidden="true" />
 						<text>安全验证已通过</text>
 					</view>
 					<template v-if="canDisplayRegistrationIdentity">
-						<registration-identity-summary
+						<verification-identity-summary
 							:email="registrationEmail"
 							:phone-presentation="registrationPhonePresentation"
 						/>
+						<view class="auth-links">
+							<button class="auth-link" type="button" :disabled="busy" @click="restartIdentityVerification">重新填写</button>
+						</view>
 						<view class="auth-code-row">
 							<view class="auth-field">
 								<label class="auth-label" for="auth-register-email-code">邮箱验证码</label>
@@ -183,7 +189,7 @@
 	import AuthPasswordFields from '@/components/auth/auth-password-fields.vue'
 	import AuthTurnstile from '@/components/auth/auth-turnstile.vue'
 	import PhoneDeliveryMethod from '@/components/auth/phone-delivery-method.vue'
-	import RegistrationIdentitySummary from '@/components/auth/registration-identity-summary.vue'
+	import VerificationIdentitySummary from '@/components/auth/verification-identity-summary.vue'
 	import { authApi } from '@/common/auth/auth-api.js'
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
 	import { passwordError } from '@shared-auth/password-policy.js'
@@ -246,7 +252,7 @@
 			AuthPasswordFields,
 			AuthTurnstile,
 			PhoneDeliveryMethod,
-			RegistrationIdentitySummary
+			VerificationIdentitySummary
 		},
 		data() {
 			return {
@@ -258,6 +264,7 @@
 				phoneNumber: '',
 				registrationIdentity: { email: '', phoneE164: '' },
 				flow: null,
+				pendingIdentity: null,
 				humanVerified: false,
 				emailCode: '',
 				smsCode: '',
@@ -341,18 +348,25 @@
 			}
 		},
 		watch: {
-			email() { this.fieldErrors.email = '' },
+			email() {
+				this.fieldErrors.email = ''
+				this.invalidatePendingHumanFlow()
+			},
 			countryId() {
 				this.fieldErrors.phoneNumber = ''
 				// 国家变化时不重格式化尚未完成的国际草稿。
 				if (!this.internationalDraft) {
 					this.formatExistingPhoneNumber()
 				}
+				this.invalidatePendingHumanFlow()
 			},
 			phoneSupportsWhatsapp(supported) {
 				if (!supported) this.phoneDeliveryMethod = 'SMS'
 			},
-			phoneNumber() { this.fieldErrors.phoneNumber = '' },
+			phoneNumber() {
+				this.fieldErrors.phoneNumber = ''
+				this.invalidatePendingHumanFlow()
+			},
 			emailCode() { this.fieldErrors.code = '' },
 			smsCode() { this.fieldErrors.code = '' },
 			password() { this.fieldErrors.password = '' },
@@ -407,6 +421,61 @@
 				this.registrationIdentity = { email, phoneE164 }
 				return Boolean(email && phoneE164)
 			},
+			capturePendingIdentity() {
+				return {
+					email: this.email.trim(),
+					countryId: this.country?.id || '',
+					countryIso2: this.country?.iso2?.toUpperCase() || '',
+					phoneNumber: this.phoneNumber
+				}
+			},
+			pendingIdentityMatchesCurrent(identity = this.pendingIdentity) {
+				if (!identity) return false
+				const current = this.capturePendingIdentity()
+				return identity.email === current.email &&
+					identity.countryId === current.countryId &&
+					identity.countryIso2 === current.countryIso2 &&
+					identity.phoneNumber === current.phoneNumber
+			},
+			invalidatePendingHumanFlow() {
+				if (!this.flow || this.humanVerified || !this.pendingIdentity) return
+				if (this.pendingIdentityMatchesCurrent()) return
+
+				// 人机结果只能绑定创建流程时的身份快照；身份变化后旧挑战不得继续锁定新输入。
+				this.$refs.turnstile?.resetAfterServerRejection('联系方式已更改，请重新验证。')
+				this.flow = null
+				this.pendingIdentity = null
+				this.step = 1
+				this.flowSuperseded = false
+				this.registrationIdentity = { email: '', phoneE164: '' }
+				this.emailCode = ''
+				this.smsCode = ''
+				this.emailCooldown = 0
+				this.smsCooldown = 0
+				this.fieldErrors.code = ''
+				clearRegistrationFlowState()
+				this.error = '联系方式已更改，请重新点击继续并完成人机验证。'
+			},
+			restartIdentityVerification() {
+				if (this.busy) return
+				this.flow = null
+				this.pendingIdentity = null
+				this.humanVerified = false
+				this.step = 1
+				this.flowSuperseded = false
+				this.emailCooldown = 0
+				this.smsCooldown = 0
+				this.password = ''
+				this.passwordConfirmation = ''
+				this.passwordValid = false
+				this.passwordTouched = false
+				this.error = ''
+				this.fieldErrors = emptyFieldErrors()
+				this.focusedField = ''
+				this.clearRegistrationIdentityMemory()
+				this.phoneInputKey += 1
+				clearRegistrationFlowState()
+			},
 			clearRegistrationIdentityMemory() {
 				this.email = ''
 				this.phoneNumber = ''
@@ -428,8 +497,11 @@
 					if (!this.flow?.challengeHandle || message.challengeHandle === this.flow.challengeHandle) return
 					this.$refs.turnstile?.resetAfterServerRejection('本页注册流程已被替换。')
 					this.flowSuperseded = true
+					this.flow = null
+					this.pendingIdentity = null
 					this.humanVerified = false
 					this.clearRegistrationIdentityMemory()
+					clearRegistrationFlowState()
 					this.error = '另一个标签页已开始新的注册流程，请在最新标签页继续。'
 				}
 			},
@@ -573,10 +645,11 @@
 					this.focusFirstField(['email', 'phoneNumber'])
 					return
 				}
+				const submittedIdentity = this.capturePendingIdentity()
 				const result = await this.run(() => authApi.registerStart({
-					email: this.email,
-					countryIso2: this.country?.iso2.toUpperCase() || '',
-					phoneNumber: this.phoneNumber
+					email: submittedIdentity.email,
+					countryIso2: submittedIdentity.countryIso2,
+					phoneNumber: submittedIdentity.phoneNumber
 				}))
 				if (!result) return
 				this.registrationIdentity = { email: '', phoneE164: '' }
@@ -591,6 +664,11 @@
 						expiresAt: result.expiresAt
 					}
 				}
+				this.pendingIdentity = submittedIdentity
+				if (!this.pendingIdentityMatchesCurrent(submittedIdentity)) {
+					this.invalidatePendingHumanFlow()
+					return
+				}
 				this.step = 2
 				this.flowSuperseded = false
 				this.broadcastRegistrationFlow()
@@ -598,6 +676,12 @@
 			},
 			async verifyHuman(token) {
 				if (this.turnstileVerifying || this.busy || this.flowSuperseded || !token) return
+				const submittedFlow = this.flow
+				const submittedIdentity = this.pendingIdentity
+				if (!submittedFlow || !submittedIdentity || !this.pendingIdentityMatchesCurrent(submittedIdentity)) {
+					this.invalidatePendingHumanFlow()
+					return
+				}
 				this.$refs.turnstile?.markServerVerificationStarted()
 				const attemptId = createTurnstileAttemptId()
 				let responseDiagnostics = null
@@ -608,13 +692,15 @@
 				try {
 					// H5 Cookie 会被同域标签页共享；提交一次性 Token 前必须确认页面挑战仍对应服务端当前流程。
 					logTurnstileAttempt('PREFLIGHT_REQUEST_STARTED', attemptId)
-					const currentStatus = await authApi.registerStatus(this.flow, {
+					const currentStatus = await authApi.registerStatus(submittedFlow, {
 						attemptId,
 						onResponse: (diagnostics) => {
 							responseDiagnostics = diagnostics
 							logTurnstileAttempt('PREFLIGHT_RESPONSE', attemptId, diagnostics)
 						}
 					})
+					if (this.flow !== submittedFlow) return
+					if (this.pendingIdentity !== submittedIdentity) return
 					if (currentStatus?.humanVerified) {
 						this.applyRegistrationIdentity(currentStatus)
 						this.$refs.turnstile?.markServerAccepted()
@@ -623,19 +709,21 @@
 						return
 					}
 					if (!currentStatus?.challengeHandle ||
-						currentStatus.challengeHandle !== this.flow?.challengeHandle) {
+						currentStatus.challengeHandle !== submittedFlow.challengeHandle) {
 						const flowError = new Error('注册流程已在另一个页面更新，请在最新标签页继续。')
 						flowError.code = 'REGISTRATION_FLOW_REPLACED'
 						throw flowError
 					}
 					logTurnstileAttempt('API_REQUEST_STARTED', attemptId)
-					const status = await authApi.registerTurnstile(this.flow, token, {
+					const status = await authApi.registerTurnstile(submittedFlow, token, {
 						attemptId,
 						onResponse: (diagnostics) => {
 							responseDiagnostics = diagnostics
 							logTurnstileAttempt('HTTP_RESPONSE', attemptId, diagnostics)
 						}
 					})
+					if (this.flow !== submittedFlow) return
+					if (this.pendingIdentity !== submittedIdentity) return
 					if (!status?.humanVerified) {
 						const confirmationError = new Error('验证结果未被服务器确认，请重新验证。')
 						confirmationError.code = 'TURNSTILE_NOT_CONFIRMED'
@@ -646,11 +734,15 @@
 					this.humanVerified = true
 					logTurnstileAttempt('CONFIRMED', attemptId, responseDiagnostics || {})
 				} catch (error) {
+					if (this.flow !== submittedFlow || this.pendingIdentity !== submittedIdentity) return
 					if (isRegistrationRedirectHandled(error)) return
 					if (error?.code === 'REGISTRATION_FLOW_REPLACED') {
 						this.flowSuperseded = true
+						this.flow = null
+						this.pendingIdentity = null
 						this.humanVerified = false
 						this.clearRegistrationIdentityMemory()
+						clearRegistrationFlowState()
 					}
 					this.error = turnstileErrorMessage(error, responseDiagnostics)
 					const resetMessage = error?.code === 'EDGE_CHALLENGE'
@@ -711,6 +803,7 @@
 				this.fieldErrors.password = ''
 				const result = await this.run(() => authApi.registerComplete(this.flow, this.password, this.passwordConfirmation))
 				if (result?.registered) {
+					this.pendingIdentity = null
 					this.clearRegistrationIdentityMemory()
 					this.step = 4
 				}
@@ -718,6 +811,7 @@
 			goLogin() {
 				if (this.busy) return
 				clearRegistrationFlowState()
+				this.pendingIdentity = null
 				this.clearRegistrationIdentityMemory()
 				uni.reLaunch({ url: AUTH_ROUTES.login })
 			}

@@ -35,7 +35,7 @@ public final class ApiKeyAuthenticationDatabaseServiceImpl
             return null;
         }
         return new CachedCredential(
-                1,
+                2,
                 entity.getId(),
                 entity.getLoginIdentityId(),
                 entity.getStatus(),

@@ -65,9 +65,9 @@ final class ApiChatReservationRecoveryServiceImplTest {
     @Test
     void refundsASeventeenMinuteBatchWithThreeBulkUpdates() {
         List<AiModelApiUsageRefundCandidate> candidates = List.of(
-                candidate(501L, 17L, 2L),
-                candidate(502L, 17L, 3L),
-                candidate(503L, 19L, 4L));
+                candidate(501, 17L, 2L),
+                candidate(502, 17L, 3L),
+                candidate(503, 19L, 4L));
         when(usageMapper.findExpiredReservationsForUpdate(
                 AiModelBillingStatus.RESERVED.code(),
                 NOW.minusMinutes(17),
@@ -89,7 +89,7 @@ final class ApiChatReservationRecoveryServiceImplTest {
     @Test
     void incompleteBulkUpdateFailsTheWholeRecoveryTransaction() {
         List<AiModelApiUsageRefundCandidate> candidates = List.of(
-                candidate(501L, 17L, 2L));
+                candidate(501, 17L, 2L));
         when(usageMapper.findExpiredReservationsForUpdate(
                 AiModelBillingStatus.RESERVED.code(),
                 NOW.minusMinutes(17),
@@ -103,15 +103,22 @@ final class ApiChatReservationRecoveryServiceImplTest {
     }
 
     private static AiModelApiUsageRefundCandidate candidate(
-            long usageId,
+            int usageId,
             long loginIdentityId,
             long reservedMinor) {
         AiModelApiUsageRefundCandidate candidate =
                 new AiModelApiUsageRefundCandidate();
-        candidate.setUsageId(usageId);
+        candidate.setUsageId(hybridId(usageId));
         candidate.setLoginIdentityId(loginIdentityId);
         candidate.setReservedQuotaMinor(reservedMinor);
         return candidate;
+    }
+
+    private static byte[] hybridId(int suffix) {
+        byte[] id = new byte[16];
+        id[14] = (byte) (suffix >>> 8);
+        id[15] = (byte) suffix;
+        return id;
     }
 
     private static AiConversationProperties conversationProperties() {

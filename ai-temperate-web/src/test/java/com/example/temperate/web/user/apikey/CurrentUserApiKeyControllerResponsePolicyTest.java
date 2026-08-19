@@ -33,7 +33,12 @@ final class CurrentUserApiKeyControllerResponsePolicyTest {
     private static final OffsetDateTime EXPIRES_AT = CREATED_AT.plusDays(7);
     private static final SessionPrincipal PRINCIPAL =
             new SessionPrincipal(7L, "ARCRqojCEAA", "API Key Test User");
-    private static final ApiKeyPublicId API_KEY_ID = new ApiKeyPublicId("AAAAAAAAAAE");
+    private static final byte[] API_KEY_INTERNAL_ID = {
+            0x01, (byte) 0x9b, 0x12, 0x34, 0x56, 0x78, 0x01, 0x02,
+            0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a
+    };
+    private static final ApiKeyPublicId API_KEY_ID =
+            new ApiKeyPublicId("01KC938NKR041061050R3GG28A", API_KEY_INTERNAL_ID);
     private static final String IDEMPOTENCY_KEY =
             "550e8400-e29b-41d4-a716-446655440000";
 
@@ -113,7 +118,7 @@ final class CurrentUserApiKeyControllerResponsePolicyTest {
 
     private static UserApiKeyService service() {
         Summary summary = new Summary(
-                API_KEY_ID.value(),
+                API_KEY_ID.encoded(),
                 "sk-…TEST",
                 Status.ENABLED,
                 EXPIRES_AT,

@@ -6,8 +6,8 @@
 
     <resultMap id="UsageDetailResultMap"
                type="com.example.temperate.model.ai.entity.AiModelApiUsageDetail">
-        <id property="id" column="id"/>
-        <result property="usageId" column="usage_id"/>
+        <id property="id" column="id" jdbcType="BINARY"/>
+        <result property="usageId" column="usage_id" jdbcType="BINARY"/>
         <result property="vendorSnapshot" column="vendor_snapshot"/>
         <result property="stream" column="is_stream"/>
         <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
@@ -15,11 +15,9 @@
     </resultMap>
 
     <insert id="insert"
-            parameterType="com.example.temperate.model.ai.entity.AiModelApiUsageDetail"
-            useGeneratedKeys="true"
-            keyProperty="id"
-            keyColumn="id">
+            parameterType="com.example.temperate.model.ai.entity.AiModelApiUsageDetail">
         INSERT INTO ai_model_api_usage_detail (
+            id,
             usage_id,
             vendor_snapshot,
             is_stream,
@@ -27,7 +25,8 @@
             settlement_delta_minor
         )
         VALUES (
-            #{usageId,jdbcType=BIGINT},
+            #{id,jdbcType=BINARY},
+            #{usageId,jdbcType=BINARY},
             #{vendorSnapshot,jdbcType=VARCHAR},
             #{stream,jdbcType=BOOLEAN},
             #{reservedQuotaMinor,jdbcType=BIGINT},
@@ -44,13 +43,13 @@
             reserved_quota_minor,
             settlement_delta_minor
         FROM ai_model_api_usage_detail
-        WHERE usage_id = #{usageId,jdbcType=BIGINT}
+        WHERE usage_id = #{usageId,jdbcType=BINARY}
     </select>
 
     <update id="finalizeDetail">
         UPDATE ai_model_api_usage_detail
         SET settlement_delta_minor = #{settlementDeltaMinor,jdbcType=BIGINT}
-        WHERE usage_id = #{usageId,jdbcType=BIGINT}
+        WHERE usage_id = #{usageId,jdbcType=BINARY}
           AND settlement_delta_minor IS NULL
     </update>
 
@@ -59,7 +58,7 @@
             VALUES
             <foreach collection="candidates" item="candidate" separator=",">
                 (
-                    #{candidate.usageId,jdbcType=BIGINT},
+                    #{candidate.usageId,jdbcType=BINARY},
                     #{candidate.reservedQuotaMinor,jdbcType=BIGINT}
                 )
             </foreach>

@@ -13,7 +13,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class AiModelApiUsage {
 
-    private Long id;
+    private byte[] id;
     private byte[] keyDigest;
     private Long aiModelId;
     private Integer billingStatus;

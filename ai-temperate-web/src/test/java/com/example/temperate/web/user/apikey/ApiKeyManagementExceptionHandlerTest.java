@@ -69,4 +69,21 @@ final class ApiKeyManagementExceptionHandlerTest {
                 .contains("完整 API Key 无法再次获取")
                 .doesNotContain("sk-");
     }
+
+    @Test
+    void usageDatabaseFailureReturnsGenericServiceUnavailable() {
+        ApiKeyManagementExceptionHandler handler = new ApiKeyManagementExceptionHandler(
+                Clock.fixed(Instant.parse("2026-08-18T16:00:00Z"), ZoneOffset.UTC));
+
+        var response = handler.handle(new ApiKeyManagementException(
+                ApiKeyManagementErrorCode.USAGE_QUERY_UNAVAILABLE,
+                "SQL with sensitive bind details"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("USAGE_QUERY_UNAVAILABLE");
+        assertThat(response.getBody().message())
+                .doesNotContain("SQL")
+                .doesNotContain("digest");
+    }
 }

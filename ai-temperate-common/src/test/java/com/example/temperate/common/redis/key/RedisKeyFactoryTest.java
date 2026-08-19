@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 Redis Key 的命名空间、敏感标识保护、长度边界和规范化格式。
+ * 该测试是来验证 Redis Key 的命名空间、敏感标识保护、长度边界和规范化格式。
  */
 final class RedisKeyFactoryTest {
 
@@ -65,6 +65,20 @@ final class RedisKeyFactoryTest {
 
         assertEquals("ait:test:bloom:uli:v1:bucket:0007",
                 factory.bucketKey("bloom", "uli", "v1", 7));
+    }
+
+    @Test
+    void apiKeyAuthenticationCacheUsesOnlyTheV2Namespace() {
+        RedisKeyFactory factory = new RedisKeyFactory("prod");
+        HmacIdentifier protectedCredential = new HmacSha256Identifier(new byte[32])
+                .identify("api-key-auth-cache:v2", "credential".getBytes(StandardCharsets.UTF_8));
+
+        String key = factory.apiKeyAuthenticationCacheKey(protectedCredential);
+
+        assertEquals(
+                "ait:prod:auth:uak:v2:credential:" + protectedCredential.value(),
+                key);
+        assertFalse(key.contains(":v1:"));
     }
 
     @Test

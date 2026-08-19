@@ -198,7 +198,7 @@ final class ApiChatStreamDiagnosticServiceImplTest {
 
     private static ApiKeyPrincipal principal() {
         return new ApiKeyPrincipal(
-                11L,
+                new byte[16],
                 17L,
                 new byte[32],
                 "B".repeat(43),

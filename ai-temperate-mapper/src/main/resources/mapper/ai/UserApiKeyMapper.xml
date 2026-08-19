@@ -6,7 +6,7 @@
 
     <resultMap id="UserApiKeyResultMap"
                type="com.example.temperate.model.ai.entity.UserApiKey">
-        <id property="id" column="id"/>
+        <id property="id" column="id" jdbcType="BINARY"/>
         <result property="loginIdentityId" column="login_identity_id"/>
         <result property="createIdempotencyKey"
                 column="create_idempotency_key"
@@ -26,7 +26,7 @@
 
     <resultMap id="ReservationAuthorizationResultMap"
                type="com.example.temperate.model.ai.entity.ApiKeyReservationAuthorization">
-        <id property="apiKeyId" column="api_key_id"/>
+        <id property="apiKeyId" column="api_key_id" jdbcType="BINARY"/>
         <result property="loginIdentityId" column="login_identity_id"/>
         <result property="keyDigest" column="key_digest"/>
         <result property="keyStatus" column="key_status"/>
@@ -60,11 +60,9 @@
     </sql>
 
     <insert id="insert"
-            parameterType="com.example.temperate.model.ai.entity.UserApiKey"
-            useGeneratedKeys="true"
-            keyProperty="id"
-            keyColumn="id">
+            parameterType="com.example.temperate.model.ai.entity.UserApiKey">
         INSERT INTO user_api_key (
+            id,
             login_identity_id,
             create_idempotency_key,
             key_digest,
@@ -73,6 +71,7 @@
             expires_at
         )
         VALUES (
+            #{id,jdbcType=BINARY},
             #{loginIdentityId,jdbcType=BIGINT},
             #{createIdempotencyKey,
               javaType=java.util.UUID,
@@ -106,14 +105,14 @@
     <select id="findOwnedById" resultMap="UserApiKeyResultMap">
         SELECT <include refid="UserApiKeyColumns"/>
         FROM user_api_key
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
     </select>
 
     <select id="findOwnedByIdForUpdate" resultMap="UserApiKeyResultMap">
         SELECT <include refid="UserApiKeyColumns"/>
         FROM user_api_key
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
         FOR UPDATE
     </select>
@@ -126,7 +125,7 @@
         <if test="cursorCreatedAt != null and cursorId != null">
           AND (created_at, id) &lt; (
               #{cursorCreatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
-              #{cursorId,jdbcType=BIGINT}
+              #{cursorId,jdbcType=BINARY}
           )
         </if>
         ORDER BY created_at DESC, id DESC
@@ -136,8 +135,10 @@
     <select id="findBloomBuildPage" resultMap="UserApiKeyResultMap">
         SELECT <include refid="UserApiKeyColumns"/>
         FROM user_api_key
-        WHERE id &gt; #{afterId,jdbcType=BIGINT}
-          AND status = 1
+        WHERE status = 1
+        <if test="afterId != null">
+          AND id &gt; #{afterId,jdbcType=BINARY}
+        </if>
           AND (expires_at IS NULL OR expires_at &gt; #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE})
         ORDER BY id
         LIMIT #{limit,jdbcType=INTEGER}
@@ -148,7 +149,7 @@
         SET status = #{status,jdbcType=SMALLINT},
             expires_at = #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             row_version = row_version + 1
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
           AND status IN (0, 1)
@@ -163,7 +164,7 @@
         SET status = 2,
             deleted_at = #{deletedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             row_version = row_version + 1
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
           AND status IN (0, 1)
@@ -172,14 +173,14 @@
     <update id="touchLastUsed">
         UPDATE user_api_key
         SET last_used_at = #{lastUsedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND status = 1
     </update>
 
     <update id="incrementRowVersion">
         UPDATE user_api_key
         SET row_version = row_version + 1
-        WHERE id = #{id,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BINARY}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND row_version = #{expectedRowVersion,jdbcType=BIGINT}
           AND status IN (0, 1)
@@ -212,7 +213,7 @@
          AND grant_record.ai_model_id = #{aiModelId,jdbcType=BIGINT}
         JOIN ai_model model
           ON model.id = #{aiModelId,jdbcType=BIGINT}
-        WHERE key_record.id = #{apiKeyId,jdbcType=BIGINT}
+        WHERE key_record.id = #{apiKeyId,jdbcType=BINARY}
         FOR UPDATE OF key_record, profile, model
     </select>
 </mapper>

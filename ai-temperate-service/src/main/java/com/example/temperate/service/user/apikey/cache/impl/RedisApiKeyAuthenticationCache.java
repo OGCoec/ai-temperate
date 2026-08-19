@@ -25,7 +25,7 @@ public final class RedisApiKeyAuthenticationCache implements ApiKeyAuthenticatio
 
     private static final Logger LOGGER =
             LoggerFactory.getLogger(RedisApiKeyAuthenticationCache.class);
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
     private static final int WARNING_BYTES = 10 * 1024;
     private static final int ABSOLUTE_BYTES = 64 * 1024;
 

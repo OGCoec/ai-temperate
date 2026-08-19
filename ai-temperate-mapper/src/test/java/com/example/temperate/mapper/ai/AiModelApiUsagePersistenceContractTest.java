@@ -22,7 +22,8 @@ final class AiModelApiUsagePersistenceContractTest {
 
         assertThat(schema)
                 .contains("CREATE TABLE ai_model_api_usage")
-                .contains("id BIGINT GENERATED ALWAYS AS IDENTITY")
+                .contains("id BYTEA NOT NULL")
+                .contains("CHECK (OCTET_LENGTH(id) = 16)")
                 .contains("key_digest BYTEA NOT NULL")
                 .contains("ai_model_id BIGINT NOT NULL")
                 .contains("charged_quota_minor BIGINT")
@@ -43,7 +44,10 @@ final class AiModelApiUsagePersistenceContractTest {
 
         assertThat(schema)
                 .contains("CREATE TABLE ai_model_api_usage_detail")
-                .contains("usage_id BIGINT NOT NULL")
+                .contains("id BYTEA NOT NULL")
+                .contains("usage_id BYTEA NOT NULL")
+                .contains("CHECK (OCTET_LENGTH(id) = 16)")
+                .contains("CHECK (OCTET_LENGTH(usage_id) = 16)")
                 .contains("UNIQUE (usage_id)")
                 .contains("reserved_quota_minor BIGINT NOT NULL")
                 .contains("settlement_delta_minor BIGINT")

@@ -9,9 +9,9 @@ const ADMIN_HOST = 'admin.niko000o.site'
 const UPSTREAM_ORIGIN = 'https://api.niko000o.site'
 const API_KEY_MANAGEMENT_COLLECTION_PATH = '/api/users/me/api-keys'
 const API_KEY_MANAGEMENT_ITEM_PATH =
-	/^\/api\/users\/me\/api-keys\/[A-Za-z0-9_-]{11}$/
+	/^\/api\/users\/me\/api-keys\/[0-7][0-9A-HJKMNP-TV-Z]{25}$/
 const API_KEY_MANAGEMENT_MODELS_PATH =
-	/^\/api\/users\/me\/api-keys\/[A-Za-z0-9_-]{11}\/models$/
+	/^\/api\/users\/me\/api-keys\/[0-7][0-9A-HJKMNP-TV-Z]{25}\/models$/
 const STRONG_API_KEY_ETAG = /^"v(0|[1-9][0-9]*)"$/
 const VOICE_WEBSOCKET_PATH = '/ws/voice'
 const VOICE_WEBSOCKET_PROTOCOL = 'ait-voice-v2'

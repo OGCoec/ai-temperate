@@ -12,19 +12,20 @@ import java.util.Base64;
  */
 public final class ApiKeyCursorCodec {
 
-    private static final int BYTE_LENGTH = Long.BYTES + Integer.BYTES + Long.BYTES;
+    private static final int ID_LENGTH = 16;
+    private static final int BYTE_LENGTH = Long.BYTES + Integer.BYTES + ID_LENGTH;
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
-    public String encode(OffsetDateTime createdAt, long id) {
-        if (createdAt == null || id <= 0) {
+    public String encode(OffsetDateTime createdAt, byte[] id) {
+        if (createdAt == null || id == null || id.length != ID_LENGTH || isZero(id)) {
             throw new IllegalArgumentException("API Key cursor values are invalid");
         }
         Instant instant = createdAt.toInstant();
         return ENCODER.encodeToString(ByteBuffer.allocate(BYTE_LENGTH)
                 .putLong(instant.getEpochSecond())
                 .putInt(instant.getNano())
-                .putLong(id)
+                .put(id)
                 .array());
     }
 
@@ -41,8 +42,9 @@ public final class ApiKeyCursorCodec {
             ByteBuffer buffer = ByteBuffer.wrap(decoded);
             long seconds = buffer.getLong();
             int nanos = buffer.getInt();
-            long id = buffer.getLong();
-            if (nanos < 0 || nanos > 999_999_999 || id <= 0) {
+            byte[] id = new byte[ID_LENGTH];
+            buffer.get(id);
+            if (nanos < 0 || nanos > 999_999_999 || isZero(id)) {
                 throw invalid();
             }
             return new Cursor(
@@ -53,6 +55,14 @@ public final class ApiKeyCursorCodec {
         }
     }
 
+    private static boolean isZero(byte[] value) {
+        int aggregate = 0;
+        for (byte current : value) {
+            aggregate |= current;
+        }
+        return aggregate == 0;
+    }
+
     private static ApiKeyManagementException invalid() {
         return new ApiKeyManagementException(
                 ApiKeyManagementErrorCode.CURSOR_INVALID,
@@ -60,6 +70,15 @@ public final class ApiKeyCursorCodec {
     }
 
     /** 游标内部值只在 Service 与 Mapper 之间流转，不作为资源 ID 暴露。 */
-    public record Cursor(OffsetDateTime createdAt, long id) {
+    public record Cursor(OffsetDateTime createdAt, byte[] id) {
+
+        public Cursor {
+            id = id.clone();
+        }
+
+        @Override
+        public byte[] id() {
+            return id.clone();
+        }
     }
 }

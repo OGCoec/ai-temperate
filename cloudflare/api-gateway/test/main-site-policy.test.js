@@ -63,6 +63,7 @@ test('only exact Turnstile subresources are credentialless verification assets',
 
 test('every current ordinary frontend API contract is admitted by an exact edge policy', () => {
 	const longId = 'AAABi0VWeJ8'
+	const apiKeyId = '01K32S6J00E4Q0H7R9M2N5P8TX'
 	const publicId = 'AZ-vpV3kfag70-0EMMUETQ'
 	const preuploadId = 'A'.repeat(24)
 	const contracts = [
@@ -115,10 +116,11 @@ test('every current ordinary frontend API contract is admitted by an exact edge 
 		['POST', '/api/users/me/security/totp/disable'],
 		['GET', '/api/users/me/api-keys'],
 		['POST', '/api/users/me/api-keys'],
-		['GET', `/api/users/me/api-keys/${longId}`],
-		['PUT', `/api/users/me/api-keys/${longId}`],
-		['DELETE', `/api/users/me/api-keys/${longId}`],
-		['PUT', `/api/users/me/api-keys/${longId}/models`],
+		['GET', `/api/users/me/api-keys/${apiKeyId}`],
+		['PUT', `/api/users/me/api-keys/${apiKeyId}`],
+		['DELETE', `/api/users/me/api-keys/${apiKeyId}`],
+		['PUT', `/api/users/me/api-keys/${apiKeyId}/models`],
+		['GET', `/api/users/me/api-keys/${apiKeyId}/usage`],
 		['GET', '/api/ai-models'],
 		['GET', `/api/ai-models/${longId}`],
 		['GET', '/api/ai/conversations'],
@@ -142,6 +144,27 @@ test('every current ordinary frontend API contract is admitted by an exact edge 
 		const route = matchRootApiRoute(path)
 		assert.ok(route && route.allowed !== false, `${method} ${path}`)
 		assert.ok(route.allowedMethods.includes(method), `${method} ${path}`)
+	}
+})
+
+test('API Key routes accept only canonical non-zero uppercase ULIDs', () => {
+	const valid = '01K32S6J00E4Q0H7R9M2N5P8TX'
+	for (const suffix of ['', '/models', '/usage']) {
+		const route = matchRootApiRoute(`/api/users/me/api-keys/${valid}${suffix}`)
+		assert.ok(route && route.allowed !== false)
+		assert.equal(route.parameterType, 'API_KEY_ULID_26')
+	}
+
+	for (const invalid of [
+		'AAAAAAAAAAE',
+		'01k32s6j00e4q0h7r9m2n5p8tx',
+		'00000000000000000000000000',
+		'01K32S6J00E4Q0H7R9M2N5P8TU'
+	]) {
+		for (const suffix of ['', '/models', '/usage']) {
+			const route = matchRootApiRoute(`/api/users/me/api-keys/${invalid}${suffix}`)
+			assert.ok(route && route.allowed === false, `${invalid}${suffix}`)
+		}
 	}
 })
 

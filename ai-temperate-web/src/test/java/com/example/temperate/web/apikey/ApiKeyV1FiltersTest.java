@@ -39,7 +39,7 @@ final class ApiKeyV1FiltersTest {
     void authenticatesModelDiscoveryWithTheSameBearerFilterAsChatCompletions() throws Exception {
         ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
         when(authenticationService.authenticate("sk-test")).thenReturn(principal);
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);
@@ -67,7 +67,7 @@ final class ApiKeyV1FiltersTest {
     void authenticatesChatCompletionsWhenNodeFetchAddsFetchMetadata() throws Exception {
         ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
         when(authenticationService.authenticate("sk-test")).thenReturn(principal);
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);

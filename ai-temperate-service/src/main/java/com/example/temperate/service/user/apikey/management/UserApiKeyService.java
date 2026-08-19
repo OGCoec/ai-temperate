@@ -19,19 +19,19 @@ public interface UserApiKeyService {
 
     Page list(long loginIdentityId, String cursor, int pageSize);
 
-    Detail detail(long loginIdentityId, String apiKeyPublicId);
+    Detail detail(long loginIdentityId, byte[] apiKeyId);
 
     Detail update(
             long loginIdentityId,
-            String apiKeyPublicId,
+            byte[] apiKeyId,
             long expectedVersion,
             UpdateCommand command);
 
     Detail replaceModels(
             long loginIdentityId,
-            String apiKeyPublicId,
+            byte[] apiKeyId,
             long expectedVersion,
             ReplaceModelsCommand command);
 
-    void delete(long loginIdentityId, String apiKeyPublicId, long expectedVersion);
+    void delete(long loginIdentityId, byte[] apiKeyId, long expectedVersion);
 }

@@ -15,6 +15,7 @@ const DEFAULT_ASSET_MANIFEST = path.resolve(
 	'generated',
 	'h5-assets.js')
 const PUBLIC_HTML_PREVIEW_ORIGIN = 'https://ai-temperate-html-preview.pages.dev'
+const API_KEY_ULID_CONTRACT_SOURCE = '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
 const FORBIDDEN_FILE_PATTERNS = [
 	{ re: /\.vue(?:$|[?#])/, label: 'Vue source module' },
 	{ re: /\.map$/, label: 'source map' },
@@ -186,6 +187,7 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	const files = []
 	walk(root, files)
 	let previewOriginFoundInScript = false
+	let apiKeyUlidContractFoundInScript = false
 	for (const file of files) {
 		const relative = normalizeRelative(path.relative(root, file))
 		for (const pattern of FORBIDDEN_FILE_PATTERNS) {
@@ -197,6 +199,9 @@ function verifyH5ReleaseArtifacts(options = {}) {
 		if (/\.js$/.test(relative) && source.includes(PUBLIC_HTML_PREVIEW_ORIGIN)) {
 			previewOriginFoundInScript = true
 		}
+		if (/\.js$/.test(relative) && source.includes(API_KEY_ULID_CONTRACT_SOURCE)) {
+			apiKeyUlidContractFoundInScript = true
+		}
 		for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
 			if (pattern.re.test(source)) errors.push(`${pattern.label} reference found in ${relative}`)
 		}
@@ -204,6 +209,10 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	if (!previewOriginFoundInScript) {
 		errors.push(
 			`H5 JavaScript bundle must include the public HTML preview origin: ${PUBLIC_HTML_PREVIEW_ORIGIN}`)
+	}
+	if (!apiKeyUlidContractFoundInScript) {
+		errors.push(
+			'H5 JavaScript bundle must include the 26-character API Key ULID contract')
 	}
 
 	return { root, errors }

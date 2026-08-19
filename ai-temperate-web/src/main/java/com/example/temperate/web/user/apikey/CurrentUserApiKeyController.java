@@ -1,5 +1,6 @@
 package com.example.temperate.web.user.apikey;
 
+import com.example.temperate.common.codec.id.HybridUlidCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.user.apikey.management.ApiKeyManagementException;
@@ -106,7 +107,10 @@ public class CurrentUserApiKeyController {
     @Operation(summary = "按稳定游标分页查询当前用户全部未删除 API Key")
     public ResponseEntity<KeyPage> list(
             @AuthenticationPrincipal SessionPrincipal principal,
-            @RequestParam(required = false) @Size(max = 128) String cursor,
+            @RequestParam(required = false)
+            @Size(min = 38, max = 38)
+            @Parameter(description = "上一页返回的固定 38 字符不透明 Base64URL 游标。")
+            String cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
         return ResponseEntity.ok()
                 .cacheControl(apiKeyResponseCacheControl())
@@ -121,13 +125,13 @@ public class CurrentUserApiKeyController {
             @AuthenticationPrincipal SessionPrincipal principal,
             @PathVariable
             @Parameter(schema = @Schema(
-                    minLength = PublicIdCodec.ENCODED_LENGTH,
-                    maxLength = PublicIdCodec.ENCODED_LENGTH,
-                    pattern = PublicIdCodec.ENCODED_PATTERN,
-                    example = "AAAAAAAAAAE"))
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A"))
             ApiKeyPublicId apiKeyPublicId) {
         Key response = ApiKeyManagementResponse.from(
-                apiKeyService.detail(principal.userId(), apiKeyPublicId.value()));
+                apiKeyService.detail(principal.userId(), apiKeyPublicId.internalValue()));
         return ResponseEntity.ok()
                 .eTag(ApiKeyVersionTag.format(response.rowVersion()))
                 .cacheControl(apiKeyResponseCacheControl())
@@ -139,13 +143,19 @@ public class CurrentUserApiKeyController {
     @Operation(summary = "按强 ETag 完整替换 API Key 状态和过期时间")
     public ResponseEntity<Key> update(
             @AuthenticationPrincipal SessionPrincipal principal,
-            @PathVariable ApiKeyPublicId apiKeyPublicId,
+            @PathVariable
+            @Parameter(schema = @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A"))
+            ApiKeyPublicId apiKeyPublicId,
             @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @Valid @RequestBody UpdateRequest request) {
         long version = ApiKeyVersionTag.parseRequired(ifMatch);
         Detail detail = apiKeyService.update(
                 principal.userId(),
-                apiKeyPublicId.value(),
+                apiKeyPublicId.internalValue(),
                 version,
                 new UpdateCommand(request.status(), request.expiresAt()));
         return keyResponse(detail);
@@ -155,13 +165,19 @@ public class CurrentUserApiKeyController {
     @Operation(summary = "按强 ETag 完整替换 API Key 模型授权集合")
     public ResponseEntity<Key> replaceModels(
             @AuthenticationPrincipal SessionPrincipal principal,
-            @PathVariable ApiKeyPublicId apiKeyPublicId,
+            @PathVariable
+            @Parameter(schema = @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A"))
+            ApiKeyPublicId apiKeyPublicId,
             @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @Valid @RequestBody ReplaceModelsRequest request) {
         long version = ApiKeyVersionTag.parseRequired(ifMatch);
         Detail detail = apiKeyService.replaceModels(
                 principal.userId(),
-                apiKeyPublicId.value(),
+                apiKeyPublicId.internalValue(),
                 version,
                 new ReplaceModelsCommand(request.modelPublicIds()));
         return keyResponse(detail);
@@ -171,11 +187,17 @@ public class CurrentUserApiKeyController {
     @Operation(summary = "按强 ETag 软删除 API Key 并批量软撤销模型授权")
     public ResponseEntity<Void> delete(
             @AuthenticationPrincipal SessionPrincipal principal,
-            @PathVariable ApiKeyPublicId apiKeyPublicId,
+            @PathVariable
+            @Parameter(schema = @Schema(
+                    minLength = HybridUlidCodec.ENCODED_LENGTH,
+                    maxLength = HybridUlidCodec.ENCODED_LENGTH,
+                    pattern = HybridUlidCodec.ENCODED_PATTERN,
+                    example = "01KC938NKR041061050R3GG28A"))
+            ApiKeyPublicId apiKeyPublicId,
             @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
         apiKeyService.delete(
                 principal.userId(),
-                apiKeyPublicId.value(),
+                apiKeyPublicId.internalValue(),
                 ApiKeyVersionTag.parseRequired(ifMatch));
         return ResponseEntity.noContent()
                 .cacheControl(apiKeyResponseCacheControl())

@@ -2,6 +2,9 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const API_KEY_ID = '01K32S6J00E4Q0H7R9M2N5P8TX'
+const BEFORE_CURSOR = 'A'.repeat(38)
+const NEXT_CURSOR = 'B'.repeat(38)
 
 function sourceUrl(source) {
 	return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -18,7 +21,7 @@ async function loadApi(request) {
 
 function summary(overrides = {}) {
 	return {
-		id: 'AAAAAAAAAAE',
+		id: API_KEY_ID,
 		maskedKey: 'sk-…Ab3D',
 		status: 'ENABLED',
 		expiresAt: null,
@@ -48,18 +51,18 @@ test('lists masked summaries with stable cursor pagination', async () => {
 	const calls = []
 	const { apiKeyApi } = await loadApi(async (...args) => {
 		calls.push(args)
-		return { items: [summary({ rowVersion: '0' })], nextCursor: 'next/cursor+' }
+		return { items: [summary({ rowVersion: '0' })], nextCursor: NEXT_CURSOR }
 	})
 
-	const page = await apiKeyApi.list({ cursor: 'before/cursor+', pageSize: 20 })
+	const page = await apiKeyApi.list({ cursor: BEFORE_CURSOR, pageSize: 20 })
 
 	assert.deepEqual(calls, [[
-		'/api/users/me/api-keys?cursor=before%2Fcursor%2B&pageSize=20',
+		`/api/users/me/api-keys?cursor=${BEFORE_CURSOR}&pageSize=20`,
 		{ method: 'GET' }
 	]])
 	assert.equal(page.items[0].maskedKey, 'sk-…Ab3D')
 	assert.equal(page.items[0].rowVersion, '0')
-	assert.equal(page.nextCursor, 'next/cursor+')
+	assert.equal(page.nextCursor, NEXT_CURSOR)
 	assert.equal(Object.isFrozen(page.items[0]), true)
 })
 
@@ -114,7 +117,7 @@ test('loads detail with a string rowVersion and matching ETag', async () => {
 		etag: '"v0"'
 	}))
 
-	const result = await apiKeyApi.detail('AAAAAAAAAAE')
+	const result = await apiKeyApi.detail(API_KEY_ID)
 
 	assert.equal(result.value.rowVersion, '0')
 	assert.equal(result.etag, '"v0"')
@@ -130,7 +133,7 @@ test('preserves rowVersion beyond the JavaScript safe integer range across respo
 		return { data: detail({ rowVersion }), etag }
 	})
 
-	const result = await apiKeyApi.update('AAAAAAAAAAE', etag, {
+	const result = await apiKeyApi.update(API_KEY_ID, etag, {
 		status: 'DISABLED',
 		expiresAt: null
 	})
@@ -155,7 +158,7 @@ test('rejects full secrets in list and detail responses', async () => {
 		etag: '"v3"'
 	}))
 	await assert.rejects(
-		() => detailModule.apiKeyApi.detail('AAAAAAAAAAE'),
+		() => detailModule.apiKeyApi.detail(API_KEY_ID),
 		error => error.code === 'API_KEY_RESPONSE_INVALID')
 })
 
@@ -163,7 +166,7 @@ test('rejects missing weak or row-version-mismatched ETags', async () => {
 	for (const etag of ['', 'W/"v3"', '"v4"']) {
 		const { apiKeyApi } = await loadApi(async () => ({ data: detail(), etag }))
 		await assert.rejects(
-			() => apiKeyApi.detail('AAAAAAAAAAE'),
+			() => apiKeyApi.detail(API_KEY_ID),
 			error => error.code === 'API_KEY_RESPONSE_INVALID')
 	}
 })
@@ -188,17 +191,17 @@ test('sends the latest strong ETag for lifecycle model and soft-delete requests'
 		return { data: detail({ rowVersion: '4' }), etag: '"v4"' }
 	})
 
-	const updated = await apiKeyApi.update('AAAAAAAAAAE', '"v3"', {
+	const updated = await apiKeyApi.update(API_KEY_ID, '"v3"', {
 		status: 'DISABLED',
 		expiresAt: null
 	})
-	const replaced = await apiKeyApi.replaceModels('AAAAAAAAAAE', '"v4"', [])
-	await apiKeyApi.remove('AAAAAAAAAAE', '"v5"')
+	const replaced = await apiKeyApi.replaceModels(API_KEY_ID, '"v4"', [])
+	await apiKeyApi.remove(API_KEY_ID, '"v5"')
 
 	assert.equal(updated.value.rowVersion, '4')
 	assert.equal(replaced.value.rowVersion, '4')
 	assert.deepEqual(calls.map(call => call[1].headers['If-Match']), ['"v3"', '"v4"', '"v5"'])
-	assert.equal(calls[1][0], '/api/users/me/api-keys/AAAAAAAAAAE/models')
+	assert.equal(calls[1][0], `/api/users/me/api-keys/${API_KEY_ID}/models`)
 	assert.equal(calls[2][1].method, 'DELETE')
 })
 
@@ -209,7 +212,19 @@ test('rejects malformed public IDs duplicate grants and invalid lifecycle input 
 		return undefined
 	})
 
-	await assert.rejects(() => apiKeyApi.detail('1'), error => error.code === 'API_KEY_INPUT_INVALID')
+	for (const invalidId of [
+		'1',
+		'AAAAAAAAAAE',
+		API_KEY_ID.toLowerCase(),
+		'00000000000000000000000000'
+	]) {
+		await assert.rejects(
+			() => apiKeyApi.detail(invalidId),
+			error => error.code === 'API_KEY_INPUT_INVALID')
+	}
+	await assert.rejects(
+		() => apiKeyApi.list({ cursor: 'short' }),
+		error => error.code === 'API_KEY_INPUT_INVALID')
 	await assert.rejects(() => apiKeyApi.create({
 		expiresAt: null,
 		modelPublicIds: ['AAAAAAAAAAI', 'AAAAAAAAAAI']
@@ -222,7 +237,7 @@ test('rejects malformed public IDs duplicate grants and invalid lifecycle input 
 		expiresAt: null,
 		modelPublicIds: ['AAAAAAAAAAI']
 	}), error => error.code === 'API_KEY_INPUT_INVALID')
-	await assert.rejects(() => apiKeyApi.update('AAAAAAAAAAE', 'W/"v3"', {
+	await assert.rejects(() => apiKeyApi.update(API_KEY_ID, 'W/"v3"', {
 		status: 'DELETED',
 		expiresAt: null
 	}), error => error.code === 'API_KEY_INPUT_INVALID')

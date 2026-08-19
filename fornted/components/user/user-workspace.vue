@@ -2,7 +2,7 @@
 	<view class="user-workspace" :class="workspaceClass" :style="workspaceStyle">
 		<!-- #ifdef H5 -->
 		<user-h5-workspace-sidebar
-			:active-destination="activeDestination"
+			:active-destination="activeNavigationDestination"
 			:recent-expanded="recentExpanded"
 			:open="effectiveSidebarOpen"
 			:mode="sidebarMode"
@@ -37,7 +37,7 @@
 		<!-- #endif -->
 		<!-- #ifndef H5 -->
 		<user-workspace-sidebar
-			:active-destination="activeDestination"
+			:active-destination="activeNavigationDestination"
 			:recent-expanded="recentExpanded"
 			:drawer-open="drawerOpen"
 			:conversations="conversations"
@@ -92,6 +92,16 @@
 				v-show="activeDestination === 'apiKeys'"
 				:authenticated="authenticated"
 				@open-conversation-drawer="openConversationDrawer"
+				@open-usage="openApiKeyUsage"
+			/>
+			<user-api-key-usage-panel
+				ref="apiKeyUsagePanel"
+				v-if="visitedDestinations.apiKeyUsage"
+				v-show="activeDestination === 'apiKeyUsage'"
+				:selected-key="selectedApiKey"
+				:android-client="androidClient"
+				@back="backFromApiKeyUsage"
+				@not-found="handleApiKeyUsageNotFound"
 			/>
 		</view>
 	</view>
@@ -120,8 +130,10 @@
 	import UserModelPanel from './workspace/user-model-panel.vue'
 	import UserProfilePanel from './workspace/user-profile-panel.vue'
 	import UserApiKeyPanel from './workspace/user-api-key-panel.vue'
+	import UserApiKeyUsagePanel from './workspace/user-api-key-usage-panel.vue'
+	import { clientPlatform } from '@/common/auth/config.js'
 
-	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys'])
+	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys', 'apiKeyUsage'])
 	export default {
 		components: {
 			UserH5WorkspaceSidebar,
@@ -129,7 +141,8 @@
 			UserChatPanel,
 			UserModelPanel,
 			UserProfilePanel,
-			UserApiKeyPanel
+			UserApiKeyPanel,
+			UserApiKeyUsagePanel
 		},
 		props: {
 			initialDestination: {
@@ -162,7 +175,8 @@
 					chat: activeDestination === 'chat',
 					models: activeDestination === 'models',
 					profile: activeDestination === 'profile',
-					apiKeys: activeDestination === 'apiKeys'
+					apiKeys: activeDestination === 'apiKeys',
+					apiKeyUsage: activeDestination === 'apiKeyUsage'
 				},
 				recentExpanded,
 				drawerOpen: false,
@@ -171,13 +185,18 @@
 				sidebarWidth: resolveH5SidebarWidth(initialWindowWidth),
 				sidebarPreferenceTouched: false,
 				workspaceResizeListener: null,
-				activeModelPublicId: String(this.initialModelPublicId || '').trim()
+				activeModelPublicId: String(this.initialModelPublicId || '').trim(),
+				selectedApiKey: Object.freeze({})
 			}
 		},
 		computed: {
+			androidClient() { return clientPlatform() === 'ANDROID' },
+			activeNavigationDestination() {
+				return this.activeDestination === 'apiKeyUsage' ? 'apiKeys' : this.activeDestination
+			},
 			sidebarPresentation() {
 				return this.sidebarMode === 'push'
-					&& ['profile', 'apiKeys'].includes(this.activeDestination)
+					&& ['profile', 'apiKeys', 'apiKeyUsage'].includes(this.activeDestination)
 					? 'rail'
 					: 'full'
 			},
@@ -287,6 +306,11 @@
 			},
 			selectDestination(destination) {
 				if (!DESTINATIONS.includes(destination)) return
+				if (this.activeDestination === 'apiKeyUsage' && destination !== 'apiKeyUsage') {
+					if (this.$refs.apiKeyUsagePanel?.closeIfOpen?.()) return
+					this.$refs.apiKeyUsagePanel?.handlePageHide?.()
+					this.selectedApiKey = Object.freeze({})
+				}
 				if (this.activeDestination === 'apiKeys'
 					&& destination !== 'apiKeys'
 					&& this.$refs.apiKeyPanel?.closeIfOpen()) {
@@ -433,6 +457,30 @@
 			closeModelDetail() {
 				this.activeModelPublicId = ''
 			},
+			openApiKeyUsage(key) {
+				if (!key?.id) return
+				this.selectedApiKey = Object.freeze({
+					id: key.id,
+					maskedKey: key.maskedKey,
+					status: key.status
+				})
+				this.visitedDestinations.apiKeyUsage = true
+				this.activeDestination = 'apiKeyUsage'
+				this.drawerOpen = false
+				// #ifdef H5
+				if (this.sidebarMode === 'overlay') this.sidebarOpen = false
+				// #endif
+			},
+			backFromApiKeyUsage() {
+				this.$refs.apiKeyUsagePanel?.handlePageHide?.()
+				this.selectedApiKey = Object.freeze({})
+				this.visitedDestinations.apiKeys = true
+				this.activeDestination = 'apiKeys'
+			},
+			handleApiKeyUsageNotFound(publicId) {
+				this.$refs.apiKeyPanel?.applyEditorRemoval?.(publicId)
+				this.backFromApiKeyUsage()
+			},
 			handleAuthenticated() {
 				if (!this.authenticated) return
 				this.$nextTick(() => {
@@ -445,14 +493,17 @@
 			handlePageShow() {
 				if (!this.authenticated) return
 				if (this.activeDestination === 'apiKeys') this.$refs.apiKeyPanel?.handlePageShow()
+				else if (this.activeDestination === 'apiKeyUsage') this.$refs.apiKeyUsagePanel?.handlePageShow()
 				else this.$refs.chatPanel?.handlePageShow()
 			},
 			handlePageHide() {
 				this.$refs.chatPanel?.handlePageHide()
+				this.$refs.apiKeyUsagePanel?.handlePageHide()
 			},
 			handlePageUnload() {
 				this.$refs.chatPanel?.handlePageUnload()
 				this.$refs.apiKeyPanel?.handlePageUnload()
+				this.$refs.apiKeyUsagePanel?.invalidateRequests?.(true)
 				this.releaseWorkspaceBody()
 			},
 			handleBackPress() {
@@ -466,11 +517,17 @@
 						? this.$refs.modelPanel
 						: this.activeDestination === 'apiKeys'
 							? this.$refs.apiKeyPanel
-							: this.$refs.profilePanel
+							: this.activeDestination === 'apiKeyUsage'
+								? this.$refs.apiKeyUsagePanel
+								: this.$refs.profilePanel
 				if (typeof activePanel?.closeIfOpen === 'function'
 					&& activePanel.closeIfOpen()) return true
 				if (this.activeDestination === 'apiKeys') {
 					this.selectDestination('profile')
+					return true
+				}
+				if (this.activeDestination === 'apiKeyUsage') {
+					this.backFromApiKeyUsage()
 					return true
 				}
 				return false

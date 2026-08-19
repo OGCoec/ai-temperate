@@ -14,7 +14,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class UserApiKey {
 
-    private Long id;
+    private byte[] id;
     private Long loginIdentityId;
     private UUID createIdempotencyKey;
     private byte[] keyDigest;

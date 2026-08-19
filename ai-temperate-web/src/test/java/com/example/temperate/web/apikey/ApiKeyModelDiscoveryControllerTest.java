@@ -72,6 +72,6 @@ final class ApiKeyModelDiscoveryControllerTest {
     }
 
     private static ApiKeyPrincipal principal() {
-        return new ApiKeyPrincipal(1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+        return new ApiKeyPrincipal(new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
     }
 }

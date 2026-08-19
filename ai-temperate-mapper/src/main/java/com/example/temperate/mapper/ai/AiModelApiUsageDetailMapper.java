@@ -14,10 +14,10 @@ public interface AiModelApiUsageDetailMapper {
 
     int insert(AiModelApiUsageDetail detail);
 
-    AiModelApiUsageDetail findByUsageId(@Param("usageId") long usageId);
+    AiModelApiUsageDetail findByUsageId(@Param("usageId") byte[] usageId);
 
     int finalizeDetail(
-            @Param("usageId") long usageId,
+            @Param("usageId") byte[] usageId,
             @Param("settlementDeltaMinor") long settlementDeltaMinor);
 
     int finalizeRefundsBatch(

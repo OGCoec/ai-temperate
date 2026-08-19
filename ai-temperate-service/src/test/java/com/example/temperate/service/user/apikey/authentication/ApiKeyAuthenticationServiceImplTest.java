@@ -10,6 +10,7 @@ import com.example.temperate.service.user.apikey.cache.ApiKeyAuthenticationCache
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apikey.credential.ApiKeyCredentialService;
 import com.example.temperate.service.user.apikey.credential.impl.ApiKeyCredentialServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test;
  */
 final class ApiKeyAuthenticationServiceImplTest {
 
+    private static final byte[] API_KEY_ID = hybridId(11);
     private static final String API_KEY = "sk-" + "A".repeat(86);
     private static final Instant NOW = Instant.parse("2026-08-13T00:00:00Z");
 
@@ -37,7 +39,7 @@ final class ApiKeyAuthenticationServiceImplTest {
         ApiKeyPrincipal first = fixture.service().authenticate(API_KEY);
         ApiKeyPrincipal second = fixture.service().authenticate(API_KEY);
 
-        assertThat(first.apiKeyId()).isEqualTo(11L);
+        assertThat(first.apiKeyId()).containsExactly(API_KEY_ID);
         assertThat(second.modelIds()).containsExactly(23L);
         assertThat(fixture.databaseLoads()).isEqualTo(1);
     }
@@ -132,6 +134,22 @@ final class ApiKeyAuthenticationServiceImplTest {
         assertThat(fixture.databaseLoads()).isZero();
     }
 
+    @Test
+    void v2CacheUsesInternalBase64ForTheDefensivelyCopiedBinaryId() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        CachedCredential original = credential(1, null);
+
+        String json = objectMapper.writeValueAsString(original);
+        CachedCredential restored = objectMapper.readValue(json, CachedCredential.class);
+
+        assertThat(json).contains("\"schemaVersion\":2");
+        assertThat(json).contains(Base64.getEncoder().encodeToString(API_KEY_ID));
+        assertThat(restored.apiKeyId()).containsExactly(API_KEY_ID);
+        byte[] exposed = restored.apiKeyId();
+        exposed[15] = 0;
+        assertThat(restored.apiKeyId()).containsExactly(API_KEY_ID);
+    }
+
     private static Fixture fixture(ApiKeyBloomService.LookupResult result) {
         return fixture(result, credential(1, null));
     }
@@ -163,7 +181,7 @@ final class ApiKeyAuthenticationServiceImplTest {
 
     private static CachedCredential credential(int status, OffsetDateTime expiresAt) {
         return new CachedCredential(
-                1, 11L, 17L, status, expiresAt, Set.of(23L), false);
+                2, API_KEY_ID, 17L, status, expiresAt, Set.of(23L), false);
     }
 
     private static void assertInvalidApiKey(Fixture fixture) {
@@ -198,6 +216,12 @@ final class ApiKeyAuthenticationServiceImplTest {
                 throw new UnsupportedOperationException("authentication test only");
             }
         };
+    }
+
+    private static byte[] hybridId(int suffix) {
+        byte[] id = new byte[16];
+        id[15] = (byte) suffix;
+        return id;
     }
 
     private static final class MemoryCache implements ApiKeyAuthenticationCache {

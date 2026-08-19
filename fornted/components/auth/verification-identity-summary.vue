@@ -1,6 +1,6 @@
 <template>
-	<view class="registration-identity-summary" role="group" aria-label="本次注册的只读联系方式">
-		<view class="identity-row">
+	<view class="verification-identity-summary" role="group" :aria-label="ariaLabel">
+		<view v-if="email" class="identity-row">
 			<view class="identity-leading" aria-hidden="true">
 				<uni-icons type="email" size="20" color="#37d39a" />
 			</view>
@@ -10,9 +10,9 @@
 			</view>
 		</view>
 
-		<view class="identity-divider" />
+		<view v-if="email && phonePresentation" class="identity-divider" />
 
-		<view class="identity-row">
+		<view v-if="phonePresentation" class="identity-row">
 			<view class="identity-leading" aria-hidden="true">
 				<image
 					v-if="hasFlag"
@@ -42,12 +42,12 @@
 
 <script>
 	export default {
-		name: 'RegistrationIdentitySummary',
+		name: 'VerificationIdentitySummary',
 		props: {
-			email: { type: String, required: true },
+			email: { type: String, default: '' },
 			phonePresentation: {
 				type: Object,
-				required: true
+				default: () => null
 			}
 		},
 		data() {
@@ -56,12 +56,17 @@
 			}
 		},
 		computed: {
+			ariaLabel() {
+				if (this.email && this.phonePresentation) return '本次验证的只读邮箱和手机号'
+				if (this.email) return '本次验证的只读邮箱'
+				return '本次验证的只读手机号'
+			},
 			hasFlag() {
 				return Boolean(this.phonePresentation?.flag && !this.flagFailed)
 			}
 		},
 		watch: {
-			'phonePresentation.flag'() {
+			phonePresentation() {
 				this.flagFailed = false
 			}
 		}
@@ -71,7 +76,7 @@
 <style lang="scss" scoped>
 	@import '@/common/ui/user-material.scss';
 
-	.registration-identity-summary {
+	.verification-identity-summary {
 		@include user-frosted-surface;
 		margin: 0 0 22px;
 		border-radius: 14px;

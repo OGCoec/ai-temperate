@@ -405,7 +405,7 @@ final class ApiResponsesControllerTest {
 
     private static ApiKeyPrincipal principal() {
         return new ApiKeyPrincipal(
-                11L, 17L, new byte[32], "B".repeat(43), Set.of(7L));
+                new byte[16], 17L, new byte[32], "B".repeat(43), Set.of(7L));
     }
 
     private static ApiResponseStreamDiagnosticServiceImpl diagnostics(

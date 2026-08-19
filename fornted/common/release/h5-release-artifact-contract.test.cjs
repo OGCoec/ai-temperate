@@ -14,6 +14,7 @@ function withFixture(files, run) {
 	try {
 		const fixtureFiles = {
 			'404.html': '<!doctype html><title>页面不存在</title>',
+			'assets/api-key-id-contract.js': 'const apiKeyIdPattern=/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/',
 			...files
 		}
 		for (const [relativePath, content] of Object.entries(fixtureFiles)) {
@@ -61,6 +62,21 @@ test('accepts a static H5 release artifact with no Vite development modules', ()
 		'assets/index-a1b2c3.js': 'const previewOrigin="https://ai-temperate-html-preview.pages.dev";console.log("release")'
 	}, root => {
 		assert.deepEqual(verifyFixture(root).errors, [])
+	})
+})
+
+test('rejects an H5 artifact that still validates API Key IDs as 11-character Base64URL values', () => {
+	withFixture({
+		'index.html': '<!doctype html><meta http-equiv="Content-Security-Policy" content="frame-src https://ai-temperate-html-preview.pages.dev"><script type="module" src="/assets/index-a1b2c3.js"></script>',
+		'_headers': headers,
+		'_redirects': '# SPA routes are resolved by the main-site Worker.\n',
+		'assets/index-a1b2c3.js': 'const previewOrigin="https://ai-temperate-html-preview.pages.dev"',
+		'assets/api-key-id-contract.js': 'const apiKeyIdPattern=/^[A-Za-z0-9_-]{11}$/'
+	}, root => {
+		assert.match(
+			verifyFixture(root).errors.join('\n'),
+			/26-character API Key ULID contract/
+		)
 	})
 })
 

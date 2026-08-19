@@ -725,6 +725,11 @@ test('root API policy returns 400 for malformed IDs on known templates', async (
 		'/api/ai/conversations/not-a-public-id/messages',
 		'/api/ai/conversations/generations/not-a-public-id/events',
 		'/api/users/me/api-keys/not-a-public-id',
+		'/api/users/me/api-keys/AAAAAAAAAAE',
+		'/api/users/me/api-keys/01k32s6j00e4q0h7r9m2n5p8tx',
+		'/api/users/me/api-keys/00000000000000000000000000',
+		'/api/users/me/api-keys/AAAAAAAAAAE/usage',
+		'/api/users/me/api-keys/01k32s6j00e4q0h7r9m2n5p8tx/models',
 		'/api/users/me/avatar/preuploads/not-a-preupload-id/confirm'
 	]
 
@@ -1798,9 +1803,10 @@ test('root host forwards the ordinary AI model APIs without changing their paths
 test('API Key management preserves strong ETags and disables response transforms', async () => {
 	const cases = [
 		{ method: 'POST', path: '/api/users/me/api-keys', status: 201 },
-		{ method: 'GET', path: '/api/users/me/api-keys/AAAAAAAAAAE', status: 200 },
-		{ method: 'PUT', path: '/api/users/me/api-keys/AAAAAAAAAAE', status: 200 },
-		{ method: 'PUT', path: '/api/users/me/api-keys/AAAAAAAAAAE/models', status: 200 }
+		{ method: 'GET', path: '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX', status: 200 },
+		{ method: 'PUT', path: '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX', status: 200 },
+		{ method: 'PUT', path: '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX/models', status: 200 },
+		{ method: 'GET', path: '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX/usage', status: 200 }
 	]
 
 	for (const item of cases) {
@@ -1830,7 +1836,7 @@ test('API Key list and delete responses do not require ETags', async () => {
 		runtime(() => Response.json({ items: [], nextCursor: null }))
 	)
 	const deletion = await handleRequest(
-		request('niko000o.site', '/api/users/me/api-keys/AAAAAAAAAAE', {
+		request('niko000o.site', '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX', {
 			method: 'DELETE'
 		}),
 		ENV,
@@ -1854,7 +1860,7 @@ test('API Key versioned responses reject missing weak and malformed ETags', asyn
 		const headers = { 'Content-Type': 'application/json' }
 		if (etag !== null) headers.ETag = etag
 		const response = await handleRequest(
-			request('niko000o.site', '/api/users/me/api-keys/AAAAAAAAAAE'),
+			request('niko000o.site', '/api/users/me/api-keys/01K32S6J00E4Q0H7R9M2N5P8TX'),
 			ENV,
 			runtime(() => new Response('{"rowVersion":"0"}', {
 				status: 200,

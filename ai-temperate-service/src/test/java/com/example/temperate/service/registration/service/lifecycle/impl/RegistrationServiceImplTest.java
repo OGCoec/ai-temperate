@@ -272,6 +272,21 @@ class RegistrationServiceImplTest {
     }
 
     @Test
+    void sendBeforeHumanVerificationNeverCreatesOrPublishesCode() {
+        RegistrationAccess access = startAndAccess();
+
+        assertThatThrownBy(() -> service.sendCode(
+                        new RegistrationSendCodeCommand(
+                                access, VerificationChannel.EMAIL)))
+                .isInstanceOfSatisfying(RegistrationException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                RegistrationErrorCode.HUMAN_VERIFICATION_REQUIRED));
+
+        assertThat(flowStore.codes).isEmpty();
+        assertThat(deliveryPublisher.request(VerificationChannel.EMAIL)).isNull();
+    }
+
+    @Test
     void repeatedTurnstileFinalizationKeepsPublicErrorGenericAndClassifiesConsumedChallenge() {
         RegistrationAccess access = startAndAccess();
         RegistrationTurnstileCommand command =

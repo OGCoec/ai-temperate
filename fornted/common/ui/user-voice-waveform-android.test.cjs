@@ -77,6 +77,17 @@ test('Android waveform extends across the empty cancel column and aligns with du
 		/\.is-android-client\s+\.voice-inline-status\s*\{[^}]*(?:transform|margin-left):/s)
 })
 
+test('Android idle composer reserves the active voice height in every orientation', () => {
+	const panel = read('components/user/workspace/user-chat-panel.vue')
+
+	// 两种输入状态共用 94px border-box 基准，避免依赖各自不同的内边距反推外框高度。
+	assert.match(panel,
+		/\.is-android-client\s+\.composer\s*\{[^}]*min-height:\s*94px[^}]*box-sizing:\s*border-box/s)
+	// 普通态与紧凑横屏都不得再用状态选择器覆盖共同高度。
+	assert.doesNotMatch(panel,
+		/\.is-android-client\s+\.composer:not\(\.is-voice-active\)\s*\{[^}]*min-height:/s)
+})
+
 test('H5 desktop waveform display area is 24px, not 18px', () => {
 	const panel = read('components/user/workspace/user-chat-panel.vue')
 

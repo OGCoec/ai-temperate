@@ -221,9 +221,8 @@ public final class ApiChatDiagnosticSession {
                 && request.streamOptions().includeUsage().isBoolean()
                 && request.streamOptions().includeUsage().booleanValue();
         safeInfo(
-                "event=api_chat_request_shape traceId={} apiKeyId={} accountId={} model={} messages={} tools={} authorizedModels={} streamBoolean={} includeUsage={} hasTokenLimit={} hasToolChoice={}",
+                "event=api_chat_request_shape traceId={} accountId={} model={} messages={} tools={} authorizedModels={} streamBoolean={} includeUsage={} hasTokenLimit={} hasToolChoice={}",
                 traceId,
-                principal.apiKeyId(),
                 principal.loginIdentityId(),
                 safeToken(request.model(), 96),
                 messages,

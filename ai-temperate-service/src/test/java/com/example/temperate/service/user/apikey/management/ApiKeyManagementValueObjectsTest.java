@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -36,27 +37,35 @@ final class ApiKeyManagementValueObjectsTest {
         ApiKeyCursorCodec codec = new ApiKeyCursorCodec();
         OffsetDateTime createdAt = OffsetDateTime.of(
                 2026, 8, 13, 12, 34, 56, 123_456_789, ZoneOffset.UTC);
+        byte[] id = new byte[16];
+        Arrays.fill(id, (byte) 99);
 
-        String encoded = codec.encode(createdAt, 99L);
+        String encoded = codec.encode(createdAt, id);
         ApiKeyCursorCodec.Cursor decoded = codec.decode(encoded);
 
         assertThat(encoded).doesNotContain("=");
+        assertThat(encoded).hasSize(38);
         assertThat(decoded.createdAt()).isEqualTo(createdAt);
-        assertThat(decoded.id()).isEqualTo(99L);
+        assertThat(decoded.id()).containsExactly(id);
     }
 
     @Test
     void cursorRejectsNonCanonicalAndOutOfRangeInstant() {
         ApiKeyCursorCodec codec = new ApiKeyCursorCodec();
         String impossibleInstant = Base64.getUrlEncoder().withoutPadding().encodeToString(
-                ByteBuffer.allocate(20)
+                ByteBuffer.allocate(28)
                         .putLong(Long.MAX_VALUE)
                         .putInt(999_999_999)
-                        .putLong(1L)
+                        .put(new byte[] {
+                                0, 0, 0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0, 0, 1
+                        })
                         .array());
 
         assertThatThrownBy(() -> codec.decode("AAAA="))
                 .isInstanceOf(ApiKeyManagementException.class);
+        assertThatThrownBy(() -> codec.encode(OffsetDateTime.now(), new byte[16]))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> codec.decode(impossibleInstant))
                 .isInstanceOfSatisfying(ApiKeyManagementException.class,
                         exception -> assertThat(exception.code())

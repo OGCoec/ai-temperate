@@ -1,6 +1,8 @@
 package com.example.temperate.service.user.apikey.management.impl;
 
+import com.example.temperate.common.codec.id.HybridUlidCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.mapper.ai.AiModelMapper;
 import com.example.temperate.mapper.ai.UserApiKeyMapper;
 import com.example.temperate.mapper.ai.UserApiKeyModelMapper;
@@ -64,7 +66,9 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     private final ApiKeyCreateLockService createLockService;
     private final TransactionTemplate transactionTemplate;
     private final ApiKeyProperties properties;
-    private final PublicIdCodec publicIdCodec;
+    private final PublicIdCodec modelPublicIdCodec;
+    private final HybridUlidCodec apiKeyUlidCodec;
+    private final HybridSemaphoreIdWorker idWorker;
     private final ApiKeyCursorCodec cursorCodec;
     private final Clock clock;
 
@@ -79,7 +83,9 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
             ApiKeyCreateLockService createLockService,
             TransactionTemplate transactionTemplate,
             ApiKeyProperties properties,
-            PublicIdCodec publicIdCodec,
+            PublicIdCodec modelPublicIdCodec,
+            HybridUlidCodec apiKeyUlidCodec,
+            HybridSemaphoreIdWorker idWorker,
             Clock clock) {
         this.apiKeyMapper = Objects.requireNonNull(apiKeyMapper);
         this.modelGrantMapper = Objects.requireNonNull(modelGrantMapper);
@@ -91,7 +97,9 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         this.createLockService = Objects.requireNonNull(createLockService);
         this.transactionTemplate = Objects.requireNonNull(transactionTemplate);
         this.properties = Objects.requireNonNull(properties);
-        this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
+        this.modelPublicIdCodec = Objects.requireNonNull(modelPublicIdCodec);
+        this.apiKeyUlidCodec = Objects.requireNonNull(apiKeyUlidCodec);
+        this.idWorker = Objects.requireNonNull(idWorker);
         this.cursorCodec = new ApiKeyCursorCodec();
         this.clock = Objects.requireNonNull(clock);
     }
@@ -137,6 +145,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         GeneratedApiKey generated = credentialService.generate();
 
         UserApiKey entity = new UserApiKey();
+        entity.setId(nextHybridId());
         entity.setLoginIdentityId(loginIdentityId);
         entity.setCreateIdempotencyKey(command.idempotencyKey());
         entity.setKeyDigest(generated.digest());
@@ -151,7 +160,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
             }
             throw new IllegalStateException("API Key idempotency conflict row disappeared");
         }
-        if (inserted != 1 || entity.getId() == null) {
+        if (inserted != 1 || entity.getId() == null || entity.getId().length != 16) {
             throw new IllegalStateException("API Key insert did not affect exactly one row");
         }
 
@@ -196,9 +205,9 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
 
     @Override
     @Transactional(readOnly = true)
-    public Detail detail(long loginIdentityId, String apiKeyPublicId) {
+    public Detail detail(long loginIdentityId, byte[] apiKeyId) {
         requireEnabled();
-        long id = decodePublicId(apiKeyPublicId);
+        byte[] id = requireApiKeyId(apiKeyId);
         UserApiKey entity = apiKeyMapper.findOwnedById(id, loginIdentityId);
         if (entity == null || entity.getStatus() == STATUS_DELETED) {
             throw notFound();
@@ -210,7 +219,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     @Transactional
     public Detail update(
             long loginIdentityId,
-            String apiKeyPublicId,
+            byte[] apiKeyId,
             long expectedVersion,
             UpdateCommand command) {
         requireEnabled();
@@ -219,7 +228,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         }
         OffsetDateTime now = now();
         validateFutureExpiry(command.expiresAt(), now);
-        UserApiKey current = lockOwned(apiKeyPublicId, loginIdentityId);
+        UserApiKey current = lockOwned(apiKeyId, loginIdentityId);
         requireVersion(current, expectedVersion);
         int nextStatus = command.status() == Status.ENABLED
                 ? STATUS_ENABLED : STATUS_DISABLED;
@@ -258,14 +267,14 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     @Transactional
     public Detail replaceModels(
             long loginIdentityId,
-            String apiKeyPublicId,
+            byte[] apiKeyId,
             long expectedVersion,
             ReplaceModelsCommand command) {
         requireEnabled();
         if (command == null || command.modelPublicIds() == null) {
             throw invalid("API Key model replacement command is required");
         }
-        UserApiKey current = lockOwned(apiKeyPublicId, loginIdentityId);
+        UserApiKey current = lockOwned(apiKeyId, loginIdentityId);
         requireVersion(current, expectedVersion);
         List<Long> desired = decodeAndValidateModels(command.modelPublicIds(), 0);
         Set<Long> existing = new LinkedHashSet<>(
@@ -308,10 +317,10 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
     @Transactional
     public void delete(
             long loginIdentityId,
-            String apiKeyPublicId,
+            byte[] apiKeyId,
             long expectedVersion) {
         requireEnabled();
-        long id = decodePublicId(apiKeyPublicId);
+        byte[] id = requireApiKeyId(apiKeyId);
         UserApiKey current = apiKeyMapper.findOwnedByIdForUpdate(id, loginIdentityId);
         if (current == null) {
             throw notFound();
@@ -345,7 +354,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         for (String publicId : publicIds) {
             long decoded;
             try {
-                decoded = publicIdCodec.decode(publicId);
+                decoded = modelPublicIdCodec.decode(publicId);
             } catch (IllegalArgumentException exception) {
                 throw invalid("API Key model public ID is invalid");
             }
@@ -364,8 +373,8 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         return normalized;
     }
 
-    private UserApiKey lockOwned(String publicId, long loginIdentityId) {
-        long id = decodePublicId(publicId);
+    private UserApiKey lockOwned(byte[] apiKeyId, long loginIdentityId) {
+        byte[] id = requireApiKeyId(apiKeyId);
         UserApiKey entity = apiKeyMapper.findOwnedByIdForUpdate(id, loginIdentityId);
         if (entity == null || entity.getStatus() == STATUS_DELETED) {
             throw notFound();
@@ -373,7 +382,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         return entity;
     }
 
-    private UserApiKey requireOwned(long id, long loginIdentityId) {
+    private UserApiKey requireOwned(byte[] id, long loginIdentityId) {
         UserApiKey entity = apiKeyMapper.findOwnedById(id, loginIdentityId);
         if (entity == null) {
             throw new IllegalStateException("API Key disappeared inside its transaction");
@@ -381,14 +390,28 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
         return entity;
     }
 
-    private long decodePublicId(String publicId) {
-        try {
-            return publicIdCodec.decode(publicId);
-        } catch (IllegalArgumentException exception) {
-            throw new ApiKeyManagementException(
-                    ApiKeyManagementErrorCode.PUBLIC_ID_INVALID,
-                    "API Key public ID is invalid");
+    private static byte[] requireApiKeyId(byte[] id) {
+        if (id == null || id.length != HybridUlidCodec.BINARY_LENGTH || isZero(id)) {
+            throw invalid("API Key internal ID is invalid");
         }
+        return id.clone();
+    }
+
+    // 在执行 INSERT 前阻断异常 Worker 输出，避免依赖数据库约束把基础设施错误伪装成普通持久化失败。
+    private byte[] nextHybridId() {
+        byte[] id = idWorker.nextId();
+        if (id == null || id.length != HybridUlidCodec.BINARY_LENGTH || isZero(id)) {
+            throw new IllegalStateException("Hybrid worker returned an invalid API Key ID");
+        }
+        return id.clone();
+    }
+
+    private static boolean isZero(byte[] value) {
+        int aggregate = 0;
+        for (byte current : value) {
+            aggregate |= current;
+        }
+        return aggregate == 0;
     }
 
     private void registerPositiveMutation(
@@ -461,7 +484,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
             OffsetDateTime now) {
         List<ModelGrant> models = modelViews.stream()
                 .map(model -> new ModelGrant(
-                        publicIdCodec.encode(model.getAiModelId()),
+                        modelPublicIdCodec.encode(model.getAiModelId()),
                         model.getModelName(),
                         model.getVendor(),
                         Boolean.TRUE.equals(model.getEnabled())))
@@ -471,7 +494,7 @@ public final class UserApiKeyServiceImpl implements UserApiKeyService {
 
     private Summary toSummary(UserApiKey key, OffsetDateTime now) {
         return new Summary(
-                publicIdCodec.encode(key.getId()),
+                apiKeyUlidCodec.encode(key.getId()),
                 credentialService.mask(key.getKeyHint()),
                 key.getStatus() == STATUS_ENABLED ? Status.ENABLED : Status.DISABLED,
                 key.getExpiresAt(),

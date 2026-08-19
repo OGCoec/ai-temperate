@@ -229,7 +229,7 @@ final class ApiChatCompletionServiceImplTest {
                 model, 128, 32, false, false, raw,
                 OpenAiRequestPayloadMode.LOOSE_NORMALIZED, 0);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                11L, 17L, new byte[32], "B".repeat(43), Set.of(23L));
+                new byte[16], 17L, new byte[32], "B".repeat(43), Set.of(23L));
         ApiChatRequestValidator validator = mock(ApiChatRequestValidator.class);
         when(validator.validate(principal, raw)).thenReturn(validated);
         ApiChatProviderAdapter adapter = mock(ApiChatProviderAdapter.class);
@@ -250,7 +250,7 @@ final class ApiChatCompletionServiceImplTest {
                         AiInferenceConcurrencyService.Result.ACQUIRED, permit));
         ApiChatBillingService billing = mock(ApiChatBillingService.class);
         ApiInferenceReservation reservation = new ApiInferenceReservation(
-                29L, 17L, 11L, 2L, 32L,
+                new byte[16], 17L, new byte[16], 2L, 32L,
                 BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
                 ApiInferenceProtocol.CHAT_COMPLETIONS);
         when(billing.reserve(any(ApiKeyPrincipal.class),
@@ -352,7 +352,7 @@ final class ApiChatCompletionServiceImplTest {
         ValidatedApiChatRequest validated =
                 new ValidatedApiChatRequest(request, model, 128, 32, includeUsage);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
-                11L,
+                new byte[16],
                 17L,
                 new byte[32],
                 "B".repeat(43),
@@ -381,9 +381,9 @@ final class ApiChatCompletionServiceImplTest {
 
         ApiChatBillingService billing = mock(ApiChatBillingService.class);
         ApiInferenceReservation reservation = new ApiInferenceReservation(
-                29L,
+                new byte[16],
                 17L,
-                11L,
+                new byte[16],
                 2L,
                 32L,
                 BigDecimal.ONE,

@@ -309,7 +309,7 @@ final class ApiChatExceptionHandlerTest {
     private static final class ApiKeyPrincipalResolver implements HandlerMethodArgumentResolver {
 
         private static final ApiKeyPrincipal PRINCIPAL = new ApiKeyPrincipal(
-                1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
 
         @Override
         public boolean supportsParameter(MethodParameter parameter) {

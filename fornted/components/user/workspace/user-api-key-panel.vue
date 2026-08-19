@@ -110,7 +110,10 @@
 								<text>最近使用：{{ timeText(item.lastUsedAt, '尚未使用') }}</text>
 								<text>创建时间：{{ timeText(item.createdAt) }}</text>
 							</view>
-							<button class="api-key-manage" type="button" :data-api-key-id="item.id" :aria-label="`管理 ${item.maskedKey}`" @click="openEditor(item)">管理 <text aria-hidden="true">›</text></button>
+							<view class="api-key-card-actions">
+								<button class="api-key-usage-entry" type="button" :aria-label="`查看 ${item.maskedKey} 的调用记录`" @click="openUsage(item)">调用记录</button>
+								<button class="api-key-manage" type="button" :data-api-key-id="item.id" :aria-label="`管理 ${item.maskedKey}`" @click="openEditor(item)">管理 <text aria-hidden="true">›</text></button>
+							</view>
 						</view>
 
 						<view v-if="appendError" class="api-key-append-error" role="alert">
@@ -142,6 +145,7 @@
 			:open="Boolean(editorId)"
 			:api-key-public-id="editorId"
 			:summary="editorSummary"
+			:android-client="androidClient"
 			@close="closeEditor"
 			@updated="applyEditorUpdate"
 			@deleted="applyEditorRemoval"
@@ -255,6 +259,10 @@
 			},
 			handlePageShow() {
 				this.onAuthenticatedPageReady()
+				this.$refs.editorSheet?.handlePageShow?.()
+			},
+			handlePageHide() {
+				this.$refs.editorSheet?.handlePageHide?.()
 			},
 			handlePageUnload() {
 				this.releasePageState(false)
@@ -436,6 +444,13 @@
 				this.editorId = item.id
 				this.editorSummary = item
 			},
+			openUsage(item) {
+				this.$emit('open-usage', {
+					id: item.id,
+					maskedKey: item.maskedKey,
+					status: item.status
+				})
+			},
 			closeEditor() {
 				const publicId = this.editorId
 				this.editorId = ''
@@ -516,7 +531,7 @@
 	.api-key-refresh, .api-key-create, .api-key-load-more, .api-key-state button, .api-key-empty button { @include user-frosted-control; margin: 0; padding: 0 16px; border-radius: 12px; color: #dce5e0; }
 	.api-key-refresh, .api-key-create { display: flex; align-items: center; gap: 8px; }
 	.api-key-create { border-color: rgba(55, 211, 154, .4); background: rgba(55, 211, 154, .1); color: #75dfb7; }
-	.api-key-refresh:focus-visible, .api-key-create:focus-visible, .api-key-manage:focus-visible, .api-key-load-more:focus-visible, .api-key-connection-row button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
+	.api-key-refresh:focus-visible, .api-key-create:focus-visible, .api-key-manage:focus-visible, .api-key-usage-entry:focus-visible, .api-key-load-more:focus-visible, .api-key-connection-row button:focus-visible { outline: 2px solid rgba(55, 211, 154, .78); outline-offset: 2px; }
 	.api-key-security-card { display: flex; align-items: flex-start; gap: 12px; margin-top: 26px; padding: 16px 18px; border: 1px solid rgba(221, 157, 83, .28); border-radius: 15px; background: rgba(201, 130, 47, .08); }
 	.api-key-security-title, .api-key-security-copy { display: block; }
 	.api-key-security-title { color: #efc18a; font-size: 13px; font-weight: 720; }
@@ -527,7 +542,7 @@
 	.api-key-pending-title { color: #efc18a; font-size: 14px; font-weight: 740; }
 	.api-key-pending-copy { margin-top: 5px; color: #b9aaa0; font-size: 12px; line-height: 1.6; }
 	.api-key-pending-actions { display: flex; align-items: center; gap: 8px; }
-	.api-key-pending-actions button { min-height: 42px; margin: 0; padding: 0 14px; border: 1px solid rgba(55, 211, 154, .38); border-radius: 10px; background: rgba(55, 211, 154, .1); color: #75dfb7; font-size: 12px; }
+	.api-key-pending-actions button { min-height: 42px; display: flex; align-items: center; justify-content: center; margin: 0; padding: 0 14px; border: 1px solid rgba(55, 211, 154, .38); border-radius: 10px; background: rgba(55, 211, 154, .1); color: #75dfb7; font-size: 12px; text-align: center; }
 	.api-key-pending-actions button.is-secondary { border-color: rgba(151, 170, 160, .22); background: #171b18; color: #aeb9b3; }
 	.api-key-section { margin-top: 28px; }
 	.api-key-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 10px; }
@@ -543,7 +558,7 @@
 	.api-key-connection-row .value { margin-top: 5px; overflow-wrap: anywhere; color: #e4ebe7; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
 	.api-key-connection-row button { min-width: 70px; min-height: 42px; margin: 0; border: 1px solid rgba(151, 170, 160, .2); border-radius: 10px; background: #171b18; color: #b7c2bc; }
 	.api-key-list { display: grid; gap: 12px; }
-	.api-key-list-card { position: relative; padding: 18px 118px 18px 18px; }
+	.api-key-list-card { position: relative; padding: 18px 222px 18px 18px; }
 	.api-key-list-topline { display: flex; align-items: center; gap: 10px; }
 	.api-key-masked { overflow-wrap: anywhere; color: #edf2ef; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 15px; font-weight: 700; }
 	.api-key-status { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 750; }
@@ -551,8 +566,10 @@
 	.api-key-status.is-disabled { background: rgba(151, 170, 160, .12); color: #a8b3ad; }
 	.api-key-status.is-expired { background: rgba(201, 130, 47, .14); color: #efb36e; }
 	.api-key-list-meta { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; color: #929e98; font-size: 12px; font-variant-numeric: tabular-nums; }
-	.api-key-manage { position: absolute; right: 16px; top: 50%; min-width: 84px; min-height: 44px; margin: 0; transform: translateY(-50%); border: 1px solid rgba(151, 170, 160, .2); border-radius: 11px; background: #171b18; color: #c8d1cc; }
-	.api-key-manage:active { transform: translateY(-50%) scale(.97); }
+	.api-key-card-actions { position: absolute; right: 16px; top: 50%; display: flex; gap: 8px; transform: translateY(-50%); }
+	.api-key-manage, .api-key-usage-entry { min-width: 84px; min-height: 44px; margin: 0; border: 1px solid rgba(151, 170, 160, .2); border-radius: 11px; background: #171b18; color: #c8d1cc; }
+	.api-key-usage-entry { border-color: rgba(55, 211, 154, .3); background: rgba(55, 211, 154, .07); color: #75dfb7; }
+	.api-key-manage:active, .api-key-usage-entry:active { transform: scale(.97); }
 	.api-key-state { @include user-frosted-surface; min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 28px; border-radius: 16px; color: #aab5af; text-align: center; }
 	.api-key-empty-icon { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(55, 211, 154, .3); border-radius: 15px; background: rgba(55, 211, 154, .08); color: #75dfb7; font-weight: 800; }
 	.api-key-empty-title { color: #e5ebe8; font-size: 18px; font-weight: 740; }
@@ -574,8 +591,9 @@
 		.api-key-refresh, .api-key-create { min-width: 0; flex: 1; justify-content: center; }
 		.api-key-list-card { padding: 17px; }
 		.api-key-list-topline { flex-wrap: wrap; }
-		.api-key-manage { width: 100%; position: static; margin-top: 16px; transform: none; }
-		.api-key-manage:active { transform: scale(.98); }
+		.api-key-card-actions { width: 100%; position: static; margin-top: 16px; transform: none; }
+		.api-key-manage, .api-key-usage-entry { min-width: 0; flex: 1; }
+		.api-key-manage:active, .api-key-usage-entry:active { transform: scale(.98); }
 		.api-key-pending-card { flex-wrap: wrap; }
 		.api-key-pending-actions { width: 100%; }
 		.api-key-pending-actions button { min-height: 46px; flex: 1; }
@@ -597,8 +615,10 @@
 	.api-key-page.is-android-client .api-key-list { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 	.api-key-page.is-android-client .api-key-list-card { min-width: 0; padding: 16px; }
 	.api-key-page.is-android-client .api-key-list-topline { flex-wrap: wrap; }
-	.api-key-page.is-android-client .api-key-manage { width: 100%; min-height: 48px; position: static; margin-top: 16px; transform: none; }
-	.api-key-page.is-android-client .api-key-manage:active { transform: scale(.98); }
+	.api-key-page.is-android-client .api-key-card-actions { width: 100%; position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; transform: none; }
+	.api-key-page.is-android-client .api-key-manage { width: 100%; min-width: 0; min-height: 48px; }
+	.api-key-page.is-android-client .api-key-usage-entry { width: 100%; min-width: 0; min-height: 48px; }
+	.api-key-page.is-android-client .api-key-manage:active, .api-key-page.is-android-client .api-key-usage-entry:active { transform: scale(.98); }
 	/* #ifdef H5 */
 	// H5 管理页占满剩余工作区，列表按 CSS 可视宽度增列，分页与错误反馈始终横跨整行。
 	.api-key-shell {
@@ -621,6 +641,6 @@
 		.api-key-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	}
 	/* #endif */
-	@media (prefers-reduced-motion: reduce) { .api-key-skeleton .line { animation: none; } .api-key-refresh, .api-key-create, .api-key-manage { transition: none; } }
+	@media (prefers-reduced-motion: reduce) { .api-key-skeleton .line { animation: none; } .api-key-refresh, .api-key-create, .api-key-manage, .api-key-usage-entry { transition: none; } }
 	@media (prefers-contrast: more) { .api-key-list-card, .api-key-connection-card, .api-key-security-card { border-color: #6d7b73; } }
 </style>

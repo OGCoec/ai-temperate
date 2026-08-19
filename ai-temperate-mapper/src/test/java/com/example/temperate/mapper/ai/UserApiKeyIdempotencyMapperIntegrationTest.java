@@ -70,7 +70,7 @@ final class UserApiKeyIdempotencyMapperIntegrationTest {
                     "Kl6M");
 
             assertThat(mapper.insert(winner)).isEqualTo(1);
-            assertThat(winner.getId()).isPositive();
+            assertThat(winner.getId()).hasSize(16).isNotEqualTo(new byte[16]);
             assertThat(mapper.insert(duplicate)).isZero();
             assertThat(mapper.insert(distinctIntent)).isEqualTo(1);
 
@@ -78,7 +78,10 @@ final class UserApiKeyIdempotencyMapperIntegrationTest {
             assertThat(persisted.getId()).isEqualTo(winner.getId());
             assertThat(persisted.getCreateIdempotencyKey()).isEqualTo(IDEMPOTENCY_KEY);
             assertThat(persisted.getKeyDigest()).containsExactly(winner.getKeyDigest());
-            assertThat(distinctIntent.getId()).isPositive().isNotEqualTo(winner.getId());
+            assertThat(distinctIntent.getId())
+                    .hasSize(16)
+                    .isNotEqualTo(new byte[16])
+                    .isNotEqualTo(winner.getId());
             session.commit();
         }
     }
@@ -142,6 +145,10 @@ final class UserApiKeyIdempotencyMapperIntegrationTest {
 
     private static UserApiKey key(UUID idempotencyKey, byte digestByte, String hint) {
         UserApiKey key = new UserApiKey();
+        // Mapper 已不再依赖数据库自增键；测试使用稳定的非零 16 字节值验证显式主键写入边界。
+        byte[] id = new byte[16];
+        Arrays.fill(id, digestByte);
+        key.setId(id);
         key.setLoginIdentityId(17L);
         key.setCreateIdempotencyKey(idempotencyKey);
         byte[] digest = new byte[32];

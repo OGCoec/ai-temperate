@@ -22,47 +22,47 @@ public interface UserApiKeyMapper {
     UserApiKey findByDigest(@Param("keyDigest") byte[] keyDigest);
 
     UserApiKey findOwnedById(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("loginIdentityId") long loginIdentityId);
 
     UserApiKey findOwnedByIdForUpdate(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("loginIdentityId") long loginIdentityId);
 
     List<UserApiKey> findOwnedPage(
             @Param("loginIdentityId") long loginIdentityId,
             @Param("cursorCreatedAt") OffsetDateTime cursorCreatedAt,
-            @Param("cursorId") Long cursorId,
+            @Param("cursorId") byte[] cursorId,
             @Param("limit") int limit);
 
     List<UserApiKey> findBloomBuildPage(
-            @Param("afterId") long afterId,
+            @Param("afterId") byte[] afterId,
             @Param("now") OffsetDateTime now,
             @Param("limit") int limit);
 
     int updateLifecycle(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("loginIdentityId") long loginIdentityId,
             @Param("expectedRowVersion") long expectedRowVersion,
             @Param("status") int status,
             @Param("expiresAt") OffsetDateTime expiresAt);
 
     int softDelete(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("loginIdentityId") long loginIdentityId,
             @Param("expectedRowVersion") long expectedRowVersion,
             @Param("deletedAt") OffsetDateTime deletedAt);
 
     int touchLastUsed(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("lastUsedAt") OffsetDateTime lastUsedAt);
 
     int incrementRowVersion(
-            @Param("id") long id,
+            @Param("id") byte[] id,
             @Param("loginIdentityId") long loginIdentityId,
             @Param("expectedRowVersion") long expectedRowVersion);
 
     ApiKeyReservationAuthorization findReservationAuthorizationForUpdate(
-            @Param("apiKeyId") long apiKeyId,
+            @Param("apiKeyId") byte[] apiKeyId,
             @Param("aiModelId") long aiModelId);
 }

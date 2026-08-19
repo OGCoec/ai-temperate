@@ -15,7 +15,7 @@
     <select id="findActiveModelIds" resultType="java.lang.Long">
         SELECT ai_model_id
         FROM user_api_key_model
-        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BINARY}
           AND status = 1
         ORDER BY ai_model_id
     </select>
@@ -29,7 +29,7 @@
             model.is_enabled AS enabled
         FROM user_api_key_model grant_record
         JOIN ai_model model ON model.id = grant_record.ai_model_id
-        WHERE grant_record.user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+        WHERE grant_record.user_api_key_id = #{userApiKeyId,jdbcType=BINARY}
           AND grant_record.status = 1
         ORDER BY model.model_name, model.id
     </select>
@@ -39,7 +39,7 @@
         SET status = 0,
             updated_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             deleted_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
-        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BINARY}
           AND status = 1
           AND ai_model_id NOT IN
         <foreach collection="retainedModelIds" item="modelId" open="(" separator="," close=")">
@@ -52,7 +52,7 @@
         SET status = 0,
             updated_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             deleted_at = #{revokedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
-        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BIGINT}
+        WHERE user_api_key_id = #{userApiKeyId,jdbcType=BINARY}
           AND status = 1
     </update>
 
@@ -68,7 +68,7 @@
         VALUES
         <foreach collection="modelIds" item="modelId" separator=",">
             (
-                #{userApiKeyId,jdbcType=BIGINT},
+                #{userApiKeyId,jdbcType=BINARY},
                 #{modelId,jdbcType=BIGINT},
                 1,
                 #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},

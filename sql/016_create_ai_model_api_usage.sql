@@ -1,7 +1,7 @@
 BEGIN;
 
 CREATE TABLE ai_model_api_usage (
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
+    id BYTEA NOT NULL,
     key_digest BYTEA NOT NULL,
     ai_model_id BIGINT NOT NULL,
     billing_status SMALLINT NOT NULL DEFAULT 0,
@@ -16,6 +16,8 @@ CREATE TABLE ai_model_api_usage (
 
     CONSTRAINT pk_ai_model_api_usage
         PRIMARY KEY (id),
+    CONSTRAINT chk_ai_model_api_usage_id_length
+        CHECK (OCTET_LENGTH(id) = 16),
     CONSTRAINT chk_ai_model_api_usage_key_digest
         CHECK (OCTET_LENGTH(key_digest) = 32),
     CONSTRAINT chk_ai_model_api_usage_billing_status
@@ -88,7 +90,7 @@ CREATE INDEX idx_ai_model_api_usage_pending_created_id
 COMMENT ON TABLE ai_model_api_usage IS
     '外部 API Key 调用 AI 模型的核心用量和最终计费结果表；每次 HTTP 请求产生一条记录，不保存提问或回答正文';
 COMMENT ON COLUMN ai_model_api_usage.id IS
-    'PostgreSQL 自动递增的 API 模型用量记录主键';
+    'HybridSemaphoreIdWorker 生成的固定 16 字节 API 模型用量记录主键';
 COMMENT ON COLUMN ai_model_api_usage.key_digest IS
     '发起调用的 API Key 经用途隔离 HMAC-SHA256 计算得到的固定 32 字节摘要，不保存 API Key 明文';
 COMMENT ON COLUMN ai_model_api_usage.ai_model_id IS
@@ -120,4 +122,3 @@ COMMENT ON INDEX idx_ai_model_api_usage_pending_created_id IS
     '支持后台任务按创建时间扫描超时预扣和待对账记录';
 
 COMMIT;
-

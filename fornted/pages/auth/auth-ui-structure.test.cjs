@@ -75,8 +75,8 @@ test('country picker renders bundled image flags instead of emoji text', () => {
 	assert.doesNotMatch(source, /flagEmoji/)
 })
 
-test('registration identity summary is read-only and renders a bundled flag image', () => {
-	const source = read('components/auth/registration-identity-summary.vue')
+test('verification identity summary is read-only and renders a bundled flag image', () => {
+	const source = read('components/auth/verification-identity-summary.vue')
 
 	assert.match(source, /<image[\s\S]*:src="phonePresentation\.flag"/)
 	assert.match(source, /phonePresentation\.countryName/)

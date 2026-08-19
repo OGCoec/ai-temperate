@@ -119,7 +119,7 @@ public final class ApiKeyBloomRebuilder {
 
     private void rebuild(BuildFence fence) {
         engine.initializeBuilding(namespace, fence);
-        long afterId = 0;
+        byte[] afterId = null;
         long elementCount = 0;
         long databaseCount = 0;
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);

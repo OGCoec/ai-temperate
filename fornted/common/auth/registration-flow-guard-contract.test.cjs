@@ -64,7 +64,7 @@ test('registration page requests status only after the user enters the verificat
 	assert.doesNotMatch(onLoad, /registerStatus|restoreExistingFlow/)
 	assert.doesNotMatch(source, /restoreExistingFlow/)
 	assert.ok(start.indexOf('registerStart') < start.indexOf('this.step = 2'))
-	assert.match(verifyHuman, /registerStatus\(this\.flow/)
+	assert.match(verifyHuman, /registerStatus\(submittedFlow/)
 	assert.match(run, /isRegistrationRedirectHandled\(error\)[\s\S]*return null[\s\S]*this\.error/)
 	assert.match(verifyHuman, /isRegistrationRedirectHandled\(error\)[\s\S]*return/)
 	assert.match(source, /goLogin\(\)[\s\S]*clearRegistrationFlowState\(\)[\s\S]*uni\.reLaunch/)

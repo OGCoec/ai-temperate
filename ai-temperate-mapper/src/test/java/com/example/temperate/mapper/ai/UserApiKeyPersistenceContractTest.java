@@ -25,6 +25,8 @@ final class UserApiKeyPersistenceContractTest {
         String schema = read("sql/014_create_user_api_key.sql");
 
         assertThat(schema)
+                .contains("id BYTEA NOT NULL")
+                .contains("CHECK (OCTET_LENGTH(id) = 16)")
                 .contains("key_digest BYTEA NOT NULL")
                 .contains("create_idempotency_key UUID")
                 .contains("CREATE UNIQUE INDEX uk_user_api_key_create_idempotency_key")
@@ -46,6 +48,8 @@ final class UserApiKeyPersistenceContractTest {
         String schema = read("sql/015_create_user_api_key_model.sql");
 
         assertThat(schema)
+                .contains("user_api_key_id BYTEA NOT NULL")
+                .contains("CHECK (OCTET_LENGTH(user_api_key_id) = 16)")
                 .contains("PRIMARY KEY (user_api_key_id, ai_model_id)")
                 .contains("status SMALLINT NOT NULL DEFAULT 1")
                 .contains("created_at TIMESTAMPTZ NOT NULL")
@@ -92,6 +96,21 @@ final class UserApiKeyPersistenceContractTest {
                     .doesNotContain("DELETE FROM")
                     .doesNotContain("FOREIGN KEY")
                     .doesNotContain("REFERENCES");
+        }
+    }
+
+    @Test
+    void hybridIdsAreExplicitBinaryParametersWithoutGeneratedKeys() throws IOException {
+        for (String path : java.util.List.of(
+                "ai-temperate-mapper/src/main/resources/mapper/ai/UserApiKeyMapper.xml",
+                "ai-temperate-mapper/src/main/resources/mapper/ai/UserApiKeyModelMapper.xml",
+                "ai-temperate-mapper/src/main/resources/mapper/ai/AiModelApiUsageMapper.xml",
+                "ai-temperate-mapper/src/main/resources/mapper/ai/AiModelApiUsageDetailMapper.xml")) {
+            assertThat(read(path))
+                    .as(path)
+                    .contains("jdbcType=BINARY")
+                    .doesNotContain("useGeneratedKeys")
+                    .doesNotContain("keyProperty=\"id\"");
         }
     }
 

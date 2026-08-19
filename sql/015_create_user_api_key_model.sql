@@ -1,7 +1,7 @@
 BEGIN;
 
 CREATE TABLE user_api_key_model (
-    user_api_key_id BIGINT NOT NULL,
+    user_api_key_id BYTEA NOT NULL,
     ai_model_id BIGINT NOT NULL,
     status SMALLINT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -10,6 +10,8 @@ CREATE TABLE user_api_key_model (
 
     CONSTRAINT pk_user_api_key_model
         PRIMARY KEY (user_api_key_id, ai_model_id),
+    CONSTRAINT chk_user_api_key_model_api_key_id_length
+        CHECK (OCTET_LENGTH(user_api_key_id) = 16),
     CONSTRAINT chk_user_api_key_model_status
         CHECK (status IN (0, 1)),
     CONSTRAINT chk_user_api_key_model_deleted_state
@@ -44,7 +46,7 @@ COMMENT ON TABLE user_api_key_model IS
     '用户 API Key 与允许调用的 AI 模型映射表；一行表示一个 API Key 被授权调用一个模型';
 
 COMMENT ON COLUMN user_api_key_model.user_api_key_id IS
-    '逻辑关联 user_api_key.id，不建立物理外键';
+    '逻辑关联 user_api_key.id 的固定16字节 Hybrid ID，不建立物理外键';
 
 COMMENT ON COLUMN user_api_key_model.ai_model_id IS
     '逻辑关联 ai_model.id，不建立物理外键';

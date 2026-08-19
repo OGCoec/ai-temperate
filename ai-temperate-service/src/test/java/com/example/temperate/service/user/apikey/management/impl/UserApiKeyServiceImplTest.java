@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -13,7 +12,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.temperate.common.codec.id.HybridUlidCodec;
 import com.example.temperate.common.codec.id.PublicIdCodec;
+import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.mapper.ai.AiModelMapper;
 import com.example.temperate.mapper.ai.UserApiKeyMapper;
 import com.example.temperate.mapper.ai.UserApiKeyModelMapper;
@@ -52,6 +53,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  */
 final class UserApiKeyServiceImplTest {
 
+    private static final byte[] API_KEY_ID = hybridId(1);
+    private static final byte[] OTHER_API_KEY_ID = hybridId(2);
     private static final byte[] DIGEST = new byte[32];
     private static final String PLAINTEXT = "sk-" + "A".repeat(86);
     private static final String IDENTIFIER = "B".repeat(43);
@@ -61,6 +64,7 @@ final class UserApiKeyServiceImplTest {
             OffsetDateTime.parse("2026-08-13T12:00:00Z");
 
     private final PublicIdCodec publicIdCodec = new PublicIdCodec();
+    private final HybridUlidCodec apiKeyUlidCodec = new HybridUlidCodec();
     private UserApiKeyMapper apiKeyMapper;
     private UserApiKeyModelMapper modelMapper;
     private AiModelMapper aiModelMapper;
@@ -69,6 +73,7 @@ final class UserApiKeyServiceImplTest {
     private ApiKeyAuthenticationCache authenticationCache;
     private ApiKeyBloomService bloomService;
     private ApiKeyCreateLockService createLockService;
+    private HybridSemaphoreIdWorker idWorker;
     private TransactionTemplate transactionTemplate;
     private UserApiKeyServiceImpl service;
 
@@ -82,12 +87,14 @@ final class UserApiKeyServiceImplTest {
         authenticationCache = mock(ApiKeyAuthenticationCache.class);
         bloomService = mock(ApiKeyBloomService.class);
         createLockService = mock(ApiKeyCreateLockService.class);
+        idWorker = mock(HybridSemaphoreIdWorker.class);
         transactionTemplate = mock(TransactionTemplate.class);
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);
         when(credentialService.digestIdentifier(any(byte[].class)))
                 .thenReturn(IDENTIFIER);
         when(credentialService.mask("abcd")).thenReturn("sk-…abcd");
+        when(idWorker.nextId()).thenReturn(API_KEY_ID.clone());
         doAnswer(invocation -> ((Supplier<?>) invocation.getArgument(2)).get())
                 .when(createLockService)
                 .execute(eq(17L), eq(IDEMPOTENCY_KEY), any());
@@ -107,6 +114,8 @@ final class UserApiKeyServiceImplTest {
                 transactionTemplate,
                 properties,
                 publicIdCodec,
+                apiKeyUlidCodec,
+                idWorker,
                 Clock.fixed(NOW.toInstant(), ZoneOffset.UTC));
     }
 
@@ -125,22 +134,18 @@ final class UserApiKeyServiceImplTest {
                 new GeneratedApiKey(PLAINTEXT, DIGEST, "abcd", "sk-…abcd");
         ApiKeyBloomService.PositiveMutation mutation =
                 new ApiKeyBloomService.PositiveMutation("mutation-1", DIGEST);
-        UserApiKey persisted = key(11L, 1, 0L);
+        UserApiKey persisted = key(API_KEY_ID, 1, 0L);
         when(identityMapper.existsById(17L)).thenReturn(true);
         when(aiModelMapper.findEnabledIdsForShare(List.of(23L)))
                 .thenReturn(List.of(23L));
         when(credentialService.generate()).thenReturn(generated);
         when(bloomService.beginPositiveMutation(any(byte[].class)))
                 .thenReturn(mutation);
-        doAnswer(invocation -> {
-            UserApiKey inserted = invocation.getArgument(0);
-            inserted.setId(11L);
-            return 1;
-        }).when(apiKeyMapper).insert(any(UserApiKey.class));
-        when(modelMapper.upsertActiveBatch(eq(11L), eq(List.of(23L)), any()))
+        when(apiKeyMapper.insert(any(UserApiKey.class))).thenReturn(1);
+        when(modelMapper.upsertActiveBatch(eq(API_KEY_ID), eq(List.of(23L)), any()))
                 .thenReturn(1);
-        when(apiKeyMapper.findOwnedById(11L, 17L)).thenReturn(persisted);
-        when(modelMapper.findActiveModelDetails(11L))
+        when(apiKeyMapper.findOwnedById(API_KEY_ID, 17L)).thenReturn(persisted);
+        when(modelMapper.findActiveModelDetails(API_KEY_ID))
                 .thenReturn(List.of(grant(23L)));
 
         var created = service.create(
@@ -148,6 +153,7 @@ final class UserApiKeyServiceImplTest {
                 new CreateCommand(IDEMPOTENCY_KEY, null, List.of(modelPublicId)));
 
         assertThat(created.apiKey()).isEqualTo(PLAINTEXT);
+        assertThat(created.detail().key().id()).isEqualTo(apiKeyUlidCodec.encode(API_KEY_ID));
         assertThat(created.detail().key().maskedKey()).isEqualTo("sk-…abcd");
         ArgumentCaptor<UserApiKey> inserted = ArgumentCaptor.forClass(UserApiKey.class);
         verify(apiKeyMapper).insert(inserted.capture());
@@ -167,7 +173,7 @@ final class UserApiKeyServiceImplTest {
 
     @Test
     void completedIdempotencyKeyNeverGeneratesOrReplaysAPlaintextKey() {
-        UserApiKey completed = key(11L, 1, 0L);
+        UserApiKey completed = key(API_KEY_ID, 1, 0L);
         completed.setCreateIdempotencyKey(IDEMPOTENCY_KEY);
         when(identityMapper.existsById(17L)).thenReturn(true);
         when(apiKeyMapper.findByCreateIdempotencyKey(IDEMPOTENCY_KEY))
@@ -195,7 +201,7 @@ final class UserApiKeyServiceImplTest {
         String modelPublicId = publicIdCodec.encode(23L);
         GeneratedApiKey generated =
                 new GeneratedApiKey(PLAINTEXT, DIGEST, "abcd", "sk-…abcd");
-        UserApiKey completed = key(12L, 1, 0L);
+        UserApiKey completed = key(OTHER_API_KEY_ID, 1, 0L);
         completed.setCreateIdempotencyKey(IDEMPOTENCY_KEY);
         when(identityMapper.existsById(17L)).thenReturn(true);
         when(apiKeyMapper.findByCreateIdempotencyKey(IDEMPOTENCY_KEY))
@@ -212,7 +218,7 @@ final class UserApiKeyServiceImplTest {
                 .extracting(failure -> ((ApiKeyManagementException) failure).code())
                 .isEqualTo(ApiKeyManagementErrorCode.API_KEY_CREATE_ALREADY_COMPLETED);
 
-        verify(modelMapper, never()).upsertActiveBatch(anyLong(), any(), any());
+        verify(modelMapper, never()).upsertActiveBatch(any(byte[].class), any(), any());
         verify(bloomService, never()).beginPositiveMutation(any(byte[].class));
     }
 
@@ -228,13 +234,9 @@ final class UserApiKeyServiceImplTest {
         when(aiModelMapper.findEnabledIdsForShare(List.of(23L)))
                 .thenReturn(List.of(23L));
         when(credentialService.generate()).thenReturn(generated);
-        doAnswer(invocation -> {
-            UserApiKey inserted = invocation.getArgument(0);
-            inserted.setId(11L);
-            return 1;
-        }).when(apiKeyMapper).insert(any(UserApiKey.class));
+        when(apiKeyMapper.insert(any(UserApiKey.class))).thenReturn(1);
         when(bloomService.beginPositiveMutation(DIGEST)).thenReturn(mutation);
-        when(modelMapper.upsertActiveBatch(eq(11L), eq(List.of(23L)), any()))
+        when(modelMapper.upsertActiveBatch(eq(API_KEY_ID), eq(List.of(23L)), any()))
                 .thenReturn(0);
 
         assertThatThrownBy(() -> service.create(
@@ -251,24 +253,24 @@ final class UserApiKeyServiceImplTest {
     @Test
     void replaceModelsRevokesMissingAndUpsertsTheWholeDesiredSet() {
         TransactionSynchronizationManager.initSynchronization();
-        UserApiKey current = key(11L, 1, 3L);
-        UserApiKey persisted = key(11L, 1, 4L);
-        when(apiKeyMapper.findOwnedByIdForUpdate(11L, 17L)).thenReturn(current);
+        UserApiKey current = key(API_KEY_ID, 1, 3L);
+        UserApiKey persisted = key(API_KEY_ID, 1, 4L);
+        when(apiKeyMapper.findOwnedByIdForUpdate(API_KEY_ID, 17L)).thenReturn(current);
         when(aiModelMapper.findEnabledIdsForShare(List.of(24L, 25L)))
                 .thenReturn(List.of(24L, 25L));
-        when(modelMapper.findActiveModelIds(11L)).thenReturn(List.of(23L, 24L));
-        when(modelMapper.revokeMissing(eq(11L), eq(List.of(24L, 25L)), any()))
+        when(modelMapper.findActiveModelIds(API_KEY_ID)).thenReturn(List.of(23L, 24L));
+        when(modelMapper.revokeMissing(eq(API_KEY_ID), eq(List.of(24L, 25L)), any()))
                 .thenReturn(1);
-        when(modelMapper.upsertActiveBatch(eq(11L), eq(List.of(24L, 25L)), any()))
+        when(modelMapper.upsertActiveBatch(eq(API_KEY_ID), eq(List.of(24L, 25L)), any()))
                 .thenReturn(2);
-        when(apiKeyMapper.incrementRowVersion(11L, 17L, 3L)).thenReturn(1);
-        when(apiKeyMapper.findOwnedById(11L, 17L)).thenReturn(persisted);
-        when(modelMapper.findActiveModelDetails(11L))
+        when(apiKeyMapper.incrementRowVersion(API_KEY_ID, 17L, 3L)).thenReturn(1);
+        when(apiKeyMapper.findOwnedById(API_KEY_ID, 17L)).thenReturn(persisted);
+        when(modelMapper.findActiveModelDetails(API_KEY_ID))
                 .thenReturn(List.of(grant(24L), grant(25L)));
 
         var detail = service.replaceModels(
                 17L,
-                publicIdCodec.encode(11L),
+                API_KEY_ID,
                 3L,
                 new ReplaceModelsCommand(List.of(
                         publicIdCodec.encode(24L),
@@ -285,17 +287,17 @@ final class UserApiKeyServiceImplTest {
     @Test
     void deleteOnlySoftDeletesAndRevokesEveryActiveGrant() {
         TransactionSynchronizationManager.initSynchronization();
-        UserApiKey current = key(11L, 1, 3L);
-        when(apiKeyMapper.findOwnedByIdForUpdate(11L, 17L)).thenReturn(current);
-        when(modelMapper.findActiveModelIds(11L)).thenReturn(List.of(23L, 24L));
-        when(modelMapper.revokeAll(eq(11L), any())).thenReturn(2);
-        when(apiKeyMapper.softDelete(eq(11L), eq(17L), eq(3L), any()))
+        UserApiKey current = key(API_KEY_ID, 1, 3L);
+        when(apiKeyMapper.findOwnedByIdForUpdate(API_KEY_ID, 17L)).thenReturn(current);
+        when(modelMapper.findActiveModelIds(API_KEY_ID)).thenReturn(List.of(23L, 24L));
+        when(modelMapper.revokeAll(eq(API_KEY_ID), any())).thenReturn(2);
+        when(apiKeyMapper.softDelete(eq(API_KEY_ID), eq(17L), eq(3L), any()))
                 .thenReturn(1);
 
-        service.delete(17L, publicIdCodec.encode(11L), 3L);
+        service.delete(17L, API_KEY_ID, 3L);
 
-        verify(modelMapper).revokeAll(eq(11L), any());
-        verify(apiKeyMapper).softDelete(eq(11L), eq(17L), eq(3L), any());
+        verify(modelMapper).revokeAll(eq(API_KEY_ID), any());
+        verify(apiKeyMapper).softDelete(eq(API_KEY_ID), eq(17L), eq(3L), any());
         commitSynchronizations();
         verify(authenticationCache).invalidate(IDENTIFIER);
         verify(bloomService).remove(any(byte[].class));
@@ -303,12 +305,12 @@ final class UserApiKeyServiceImplTest {
 
     @Test
     void staleVersionFailsBeforeAnyLifecycleUpdate() {
-        when(apiKeyMapper.findOwnedByIdForUpdate(11L, 17L))
-                .thenReturn(key(11L, 1, 4L));
+        when(apiKeyMapper.findOwnedByIdForUpdate(API_KEY_ID, 17L))
+                .thenReturn(key(API_KEY_ID, 1, 4L));
 
         assertThatThrownBy(() -> service.update(
                 17L,
-                publicIdCodec.encode(11L),
+                API_KEY_ID,
                 3L,
                 new UpdateCommand(Status.DISABLED, null)))
                 .isInstanceOf(ApiKeyManagementException.class)
@@ -316,12 +318,12 @@ final class UserApiKeyServiceImplTest {
                 .isEqualTo(ApiKeyManagementErrorCode.VERSION_CONFLICT);
 
         verify(apiKeyMapper, never()).updateLifecycle(
-                eq(11L), eq(17L), eq(3L), eq(0), any());
+                eq(API_KEY_ID), eq(17L), eq(3L), eq(0), any());
     }
 
-    private static UserApiKey key(long id, int status, long rowVersion) {
+    private static UserApiKey key(byte[] id, int status, long rowVersion) {
         UserApiKey key = new UserApiKey();
-        key.setId(id);
+        key.setId(id.clone());
         key.setLoginIdentityId(17L);
         key.setKeyDigest(DIGEST);
         key.setKeyHint("abcd");
@@ -330,6 +332,12 @@ final class UserApiKeyServiceImplTest {
         key.setCreatedAt(NOW.minusDays(1));
         key.setUpdatedAt(NOW);
         return key;
+    }
+
+    private static byte[] hybridId(int suffix) {
+        byte[] id = new byte[16];
+        id[15] = (byte) suffix;
+        return id;
     }
 
     private static ApiKeyModelGrantView grant(long modelId) {

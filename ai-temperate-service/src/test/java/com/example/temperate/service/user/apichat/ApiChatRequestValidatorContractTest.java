@@ -44,7 +44,7 @@ final class ApiChatRequestValidatorContractTest {
             objectMapper,
             registry(defaultProperties));
     private final ApiKeyPrincipal principal = new ApiKeyPrincipal(
-            1L, 2L, new byte[32], "A".repeat(43), Set.of(7L));
+            new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
 
     @Test
     void routesEnabledModelsThroughTheLooseCompatibilityValidator() throws Exception {
@@ -152,7 +152,7 @@ final class ApiChatRequestValidatorContractTest {
     @Test
     void rejectsActiveApiKeyWithoutRequestedModelGrant() throws Exception {
         ApiKeyPrincipal noGrant = new ApiKeyPrincipal(
-                1L, 2L, new byte[32], "A".repeat(43), Set.of());
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of());
 
         assertThatThrownBy(() -> validator.validate(noGrant, request("""
                 {"model":"gpt-test","messages":[{"role":"user","content":"hello"}],

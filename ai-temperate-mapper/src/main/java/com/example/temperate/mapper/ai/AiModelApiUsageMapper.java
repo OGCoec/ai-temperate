@@ -15,10 +15,10 @@ public interface AiModelApiUsageMapper {
 
     int insert(AiModelApiUsage usage);
 
-    AiModelApiUsage findByIdForUpdate(@Param("usageId") long usageId);
+    AiModelApiUsage findByIdForUpdate(@Param("usageId") byte[] usageId);
 
     int settle(
-            @Param("usageId") long usageId,
+            @Param("usageId") byte[] usageId,
             @Param("expectedBillingStatus") int expectedBillingStatus,
             @Param("billingStatus") int billingStatus,
             @Param("promptTokens") Long promptTokens,

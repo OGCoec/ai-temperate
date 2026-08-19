@@ -2,6 +2,8 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const test = require('node:test')
+const API_KEY_ID = '01K32S6J00E4Q0H7R9M2N5P8TX'
+const OTHER_API_KEY_ID = '01K32S6J00E4Q0H7R9M2N5P8TY'
 
 async function loadModule() {
 	const url = pathToFileURL(path.resolve(__dirname, 'api-key-state.js'))
@@ -22,20 +24,20 @@ test('derives expired disabled and enabled presentation in the required priority
 
 test('merges cursor pages by public ID without duplicating existing items', async () => {
 	const { mergeApiKeyPageItems } = await loadModule()
-	const first = [{ id: 'AAAAAAAAAAE', maskedKey: 'sk-…aaaa' }]
+	const first = [{ id: API_KEY_ID, maskedKey: 'sk-…aaaa' }]
 	const merged = mergeApiKeyPageItems(first, [
-		{ id: 'AAAAAAAAAAE', maskedKey: 'sk-…aaaa' },
-		{ id: 'AAAAAAAAAAI', maskedKey: 'sk-…bbbb' }
+		{ id: API_KEY_ID, maskedKey: 'sk-…aaaa' },
+		{ id: OTHER_API_KEY_ID, maskedKey: 'sk-…bbbb' }
 	])
 
-	assert.deepEqual(merged.map(item => item.id), ['AAAAAAAAAAE', 'AAAAAAAAAAI'])
+	assert.deepEqual(merged.map(item => item.id), [API_KEY_ID, OTHER_API_KEY_ID])
 	assert.equal(Object.isFrozen(merged), true)
 })
 
 test('removes the one-time secret before a created key enters list state', async () => {
 	const { summaryFromCreatedKey } = await loadModule()
 	const summary = summaryFromCreatedKey({
-		id: 'AAAAAAAAAAE',
+		id: API_KEY_ID,
 		maskedKey: 'sk-…aaaa',
 		status: 'ENABLED',
 		expiresAt: null,

@@ -42,7 +42,7 @@ final class CurrentUserApiKeyControllerContractTest {
         UserApiKeyService service = mock(UserApiKeyService.class);
         OffsetDateTime now = OffsetDateTime.parse("2026-08-17T12:00:00Z");
         Summary summary = new Summary(
-                "AAAAAAAAAAE",
+                "01K32S6J00E4Q0H7R9M2N5P8TX",
                 "sk-…Ab3D",
                 Status.ENABLED,
                 null,

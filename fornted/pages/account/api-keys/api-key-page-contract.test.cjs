@@ -69,9 +69,9 @@ test('H5 background transitions preserve API Key state until unload or logout', 
 	const workspace = read('components/user/user-workspace.vue')
 	const panel = read('components/user/workspace/user-api-key-panel.vue')
 
-	assert.match(workspace, /handlePageHide\(\)\s*\{\s*this\.\$refs\.chatPanel\?\.handlePageHide\(\)\s*\}/)
-	assert.doesNotMatch(workspace, /handlePageHide\(\)[\s\S]{0,160}apiKeyPanel\?\.handlePageHide/)
-	assert.doesNotMatch(panel, /handlePageHide\(\)/)
+	assert.match(workspace, /handlePageHide\(\)\s*\{[\s\S]{0,180}this\.\$refs\.chatPanel\?\.handlePageHide\(\)[\s\S]{0,180}this\.\$refs\.apiKeyUsagePanel\?\.handlePageHide\(\)/)
+	assert.doesNotMatch(workspace, /handlePageHide\(\)[\s\S]{0,240}apiKeyPanel\?\.handlePageHide/)
+	assert.match(panel, /handlePageHide\(\)\s*\{\s*this\.\$refs\.editorSheet\?\.handlePageHide\?\.\(\)\s*\}/)
 	assert.match(panel, /handlePageUnload\(\)[\s\S]{0,100}releasePageState\(false\)/)
 	assert.match(panel, /authenticated\(value\)[\s\S]{0,160}else this\.releasePageState\(true\)/)
 	assert.match(panel, /createdSecret\s*=\s*created\.value\.apiKey/)
@@ -94,6 +94,8 @@ test('uncertain API Key creation resumes manually with the original UUID and com
 	assert.match(panel, /releasePageState\(clearPendingIntent = false\)[\s\S]{0,180}if \(clearPendingIntent\) clearApiKeyCreateIntent\(\)/)
 	assert.match(panel, /API_KEY_CREATE_ALREADY_COMPLETED[\s\S]*clearApiKeyCreateIntent\(\)[\s\S]*refreshKeys\(\)/)
 	assert.match(panel, /shouldKeepCreateIntent[\s\S]*API_KEY_CREATE_IN_PROGRESS/)
+	assert.match(panel,
+		/\.api-key-pending-actions button\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*text-align:\s*center/)
 	assert.match(intent, /schemaVersion[\s\S]*idempotencyKey[\s\S]*expiresAt[\s\S]*modelPublicIds/)
 	assert.match(intent, /crypto[\s\S]*getRandomValues/)
 	assert.doesNotMatch(intent, /Math\.random|apiKey\s*:/)

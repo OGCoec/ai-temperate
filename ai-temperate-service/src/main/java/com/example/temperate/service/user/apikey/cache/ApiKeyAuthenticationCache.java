@@ -19,7 +19,7 @@ public interface ApiKeyAuthenticationCache {
     /** 正向快照只用于快速认证，预扣事务必须重新校验数据库真值。 */
     record CachedCredential(
             int schemaVersion,
-            long apiKeyId,
+            byte[] apiKeyId,
             long loginIdentityId,
             int status,
             OffsetDateTime expiresAt,
@@ -27,11 +27,20 @@ public interface ApiKeyAuthenticationCache {
             boolean negative) {
 
         public CachedCredential {
+            apiKeyId = apiKeyId == null ? null : apiKeyId.clone();
             modelIds = modelIds == null ? Set.of() : Set.copyOf(modelIds);
+            if (!negative && (apiKeyId == null || apiKeyId.length != 16)) {
+                throw new IllegalArgumentException("Positive API Key cache ID must be 16 bytes");
+            }
+        }
+
+        @Override
+        public byte[] apiKeyId() {
+            return apiKeyId == null ? null : apiKeyId.clone();
         }
 
         public static CachedCredential negativeEntry() {
-            return new CachedCredential(1, 0, 0, 0, null, Set.of(), true);
+            return new CachedCredential(2, null, 0, 0, null, Set.of(), true);
         }
     }
 }

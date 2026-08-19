@@ -12,22 +12,22 @@ import org.apache.ibatis.annotations.Param;
 @Mapper
 public interface UserApiKeyModelMapper {
 
-    List<Long> findActiveModelIds(@Param("userApiKeyId") long userApiKeyId);
+    List<Long> findActiveModelIds(@Param("userApiKeyId") byte[] userApiKeyId);
 
     List<ApiKeyModelGrantView> findActiveModelDetails(
-            @Param("userApiKeyId") long userApiKeyId);
+            @Param("userApiKeyId") byte[] userApiKeyId);
 
     int revokeMissing(
-            @Param("userApiKeyId") long userApiKeyId,
+            @Param("userApiKeyId") byte[] userApiKeyId,
             @Param("retainedModelIds") List<Long> retainedModelIds,
             @Param("revokedAt") OffsetDateTime revokedAt);
 
     int revokeAll(
-            @Param("userApiKeyId") long userApiKeyId,
+            @Param("userApiKeyId") byte[] userApiKeyId,
             @Param("revokedAt") OffsetDateTime revokedAt);
 
     int upsertActiveBatch(
-            @Param("userApiKeyId") long userApiKeyId,
+            @Param("userApiKeyId") byte[] userApiKeyId,
             @Param("modelIds") List<Long> modelIds,
             @Param("now") OffsetDateTime now);
 }

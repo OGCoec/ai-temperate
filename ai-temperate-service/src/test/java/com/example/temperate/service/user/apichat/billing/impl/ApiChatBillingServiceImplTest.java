@@ -5,12 +5,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.mapper.ai.AiModelApiUsageDetailMapper;
 import com.example.temperate.mapper.ai.AiModelApiUsageMapper;
 import com.example.temperate.mapper.ai.UserApiKeyMapper;
@@ -50,6 +50,9 @@ import org.mockito.ArgumentCaptor;
  */
 final class ApiChatBillingServiceImplTest {
 
+    private static final byte[] API_KEY_ID = hybridId(1);
+    private static final byte[] USAGE_ID = hybridId(2);
+    private static final byte[] DETAIL_ID = hybridId(3);
     private static final byte[] DIGEST = new byte[32];
     private static final Clock CLOCK = Clock.fixed(
             Instant.parse("2026-08-13T12:00:00Z"), ZoneOffset.UTC);
@@ -59,6 +62,7 @@ final class ApiChatBillingServiceImplTest {
     private AiModelApiUsageMapper usageMapper;
     private AiModelApiUsageDetailMapper detailMapper;
     private UserProfileCacheInvalidationExecutor invalidationExecutor;
+    private HybridSemaphoreIdWorker idWorker;
     private ApiChatBillingServiceImpl service;
 
     @BeforeEach
@@ -68,6 +72,8 @@ final class ApiChatBillingServiceImplTest {
         usageMapper = mock(AiModelApiUsageMapper.class);
         detailMapper = mock(AiModelApiUsageDetailMapper.class);
         invalidationExecutor = mock(UserProfileCacheInvalidationExecutor.class);
+        idWorker = mock(HybridSemaphoreIdWorker.class);
+        when(idWorker.nextId()).thenReturn(USAGE_ID.clone(), DETAIL_ID.clone());
         service = new ApiChatBillingServiceImpl(
                 apiKeyMapper,
                 quotaMapper,
@@ -76,6 +82,7 @@ final class ApiChatBillingServiceImplTest {
                 new AiConversationQuotaCalculator(),
                 mock(MembershipQuotaPlanService.class),
                 invalidationExecutor,
+                idWorker,
                 CLOCK,
                 new SimpleMeterRegistry());
     }
@@ -86,27 +93,24 @@ final class ApiChatBillingServiceImplTest {
         ApiKeyPrincipal principal = principal();
         ValidatedApiChatRequest request = validatedRequest();
         UserMembershipQuota quota = quota(10L);
-        when(apiKeyMapper.findReservationAuthorizationForUpdate(11L, 23L))
+        when(apiKeyMapper.findReservationAuthorizationForUpdate(API_KEY_ID, 23L))
                 .thenReturn(authorization());
-        when(apiKeyMapper.touchLastUsed(eq(11L), any())).thenReturn(1);
+        when(apiKeyMapper.touchLastUsed(eq(API_KEY_ID), any())).thenReturn(1);
         when(quotaMapper.findByLoginIdentityIdForUpdate(17L)).thenReturn(quota);
         when(quotaMapper.updateBalanceAndPeriod(quota)).thenReturn(1);
-        doAnswer(invocation -> {
-            AiModelApiUsage usage = invocation.getArgument(0);
-            usage.setId(501L);
-            return 1;
-        }).when(usageMapper).insert(any(AiModelApiUsage.class));
+        when(usageMapper.insert(any(AiModelApiUsage.class))).thenReturn(1);
         when(detailMapper.insert(any(AiModelApiUsageDetail.class))).thenReturn(1);
 
         ApiInferenceReservation reservation = service.reserve(principal, request);
 
-        assertThat(reservation.usageId()).isEqualTo(501L);
+        assertThat(reservation.usageId()).containsExactly(USAGE_ID);
         assertThat(reservation.reservedMinor()).isEqualTo(2L);
         assertThat(quota.getQuotaBalanceMinor()).isEqualTo(8L);
         ArgumentCaptor<AiModelApiUsageDetail> detail =
                 ArgumentCaptor.forClass(AiModelApiUsageDetail.class);
         verify(detailMapper).insert(detail.capture());
-        assertThat(detail.getValue().getUsageId()).isEqualTo(501L);
+        assertThat(detail.getValue().getId()).containsExactly(DETAIL_ID);
+        assertThat(detail.getValue().getUsageId()).containsExactly(USAGE_ID);
         assertThat(detail.getValue().getReservedQuotaMinor()).isEqualTo(2L);
         verify(invalidationExecutor).evictAfterCommit(17L);
     }
@@ -117,11 +121,11 @@ final class ApiChatBillingServiceImplTest {
         ApiInferenceReservation reservation = reservation();
         AiModelApiUsage persisted = persisted(AiModelBillingStatus.RESERVED);
         UserMembershipQuota quota = quota(0L);
-        when(usageMapper.findByIdForUpdate(501L)).thenReturn(persisted);
+        when(usageMapper.findByIdForUpdate(USAGE_ID)).thenReturn(persisted);
         when(quotaMapper.findByLoginIdentityIdForUpdate(17L)).thenReturn(quota);
         when(quotaMapper.updateBalanceAndPeriod(quota)).thenReturn(1);
         when(usageMapper.settle(
-                eq(501L),
+                eq(USAGE_ID),
                 eq(AiModelBillingStatus.RESERVED.code()),
                 eq(AiModelBillingStatus.RECONCILE_REQUIRED.code()),
                 eq(0L),
@@ -131,13 +135,13 @@ final class ApiChatBillingServiceImplTest {
                 eq("STOP"),
                 isNull(),
                 any())).thenReturn(1);
-        when(detailMapper.finalizeDetail(501L, 1L)).thenReturn(1);
+        when(detailMapper.finalizeDetail(USAGE_ID, 1L)).thenReturn(1);
 
         service.settle(reservation, new ApiInferenceUsage(0, 2_400, 0), "STOP");
 
         assertThat(quota.getQuotaBalanceMinor()).isZero();
         verify(usageMapper).settle(
-                eq(501L),
+                eq(USAGE_ID),
                 eq(AiModelBillingStatus.RESERVED.code()),
                 eq(AiModelBillingStatus.RECONCILE_REQUIRED.code()),
                 eq(0L),
@@ -154,16 +158,12 @@ final class ApiChatBillingServiceImplTest {
         ApiKeyPrincipal principal = principal();
         AiModelCacheEntry model = validatedRequest().model();
         UserMembershipQuota quota = quota(10L);
-        when(apiKeyMapper.findReservationAuthorizationForUpdate(11L, 23L))
+        when(apiKeyMapper.findReservationAuthorizationForUpdate(API_KEY_ID, 23L))
                 .thenReturn(authorization());
-        when(apiKeyMapper.touchLastUsed(eq(11L), any())).thenReturn(1);
+        when(apiKeyMapper.touchLastUsed(eq(API_KEY_ID), any())).thenReturn(1);
         when(quotaMapper.findByLoginIdentityIdForUpdate(17L)).thenReturn(quota);
         when(quotaMapper.updateBalanceAndPeriod(quota)).thenReturn(1);
-        doAnswer(invocation -> {
-            AiModelApiUsage usage = invocation.getArgument(0);
-            usage.setId(502L);
-            return 1;
-        }).when(usageMapper).insert(any(AiModelApiUsage.class));
+        when(usageMapper.insert(any(AiModelApiUsage.class))).thenReturn(1);
         when(detailMapper.insert(any(AiModelApiUsageDetail.class))).thenReturn(1);
 
         ApiInferenceReservation reservation = service.reserve(
@@ -182,12 +182,12 @@ final class ApiChatBillingServiceImplTest {
     void systemFailureRefundsTheReservationExactlyOnce() {
         ApiInferenceReservation reservation = reservation();
         UserMembershipQuota quota = quota(5L);
-        when(usageMapper.findByIdForUpdate(501L))
+        when(usageMapper.findByIdForUpdate(USAGE_ID))
                 .thenReturn(persisted(AiModelBillingStatus.RESERVED));
         when(quotaMapper.findByLoginIdentityIdForUpdate(17L)).thenReturn(quota);
         when(quotaMapper.updateBalanceAndPeriod(quota)).thenReturn(1);
         when(usageMapper.settle(
-                eq(501L),
+                eq(USAGE_ID),
                 eq(AiModelBillingStatus.RESERVED.code()),
                 eq(AiModelBillingStatus.FAILED_REFUNDED.code()),
                 isNull(),
@@ -197,7 +197,7 @@ final class ApiChatBillingServiceImplTest {
                 eq("SYSTEM_FAILURE_REFUNDED"),
                 eq("UPSTREAM_UNAVAILABLE"),
                 any())).thenReturn(1);
-        when(detailMapper.finalizeDetail(501L, -2L)).thenReturn(1);
+        when(detailMapper.finalizeDetail(USAGE_ID, -2L)).thenReturn(1);
 
         service.refundSystemFailure(reservation, "UPSTREAM_UNAVAILABLE");
 
@@ -207,24 +207,24 @@ final class ApiChatBillingServiceImplTest {
 
     @Test
     void duplicateTerminalCallbackDoesNotTouchQuotaAgain() {
-        when(usageMapper.findByIdForUpdate(501L))
+        when(usageMapper.findByIdForUpdate(USAGE_ID))
                 .thenReturn(persisted(AiModelBillingStatus.SETTLED));
 
         service.refundSystemFailure(reservation(), "UPSTREAM_UNAVAILABLE");
 
         verify(quotaMapper, never()).findByLoginIdentityIdForUpdate(17L);
-        verify(detailMapper, never()).finalizeDetail(eq(501L), anyLong());
+        verify(detailMapper, never()).finalizeDetail(eq(USAGE_ID), anyLong());
     }
 
     private static ApiKeyPrincipal principal() {
-        return new ApiKeyPrincipal(11L, 17L, DIGEST, "B".repeat(43), Set.of(23L));
+        return new ApiKeyPrincipal(API_KEY_ID, 17L, DIGEST, "B".repeat(43), Set.of(23L));
     }
 
     private static ApiInferenceReservation reservation() {
         return new ApiInferenceReservation(
-                501L,
+                USAGE_ID,
                 17L,
-                11L,
+                API_KEY_ID,
                 2L,
                 800L,
                 BigDecimal.ONE,
@@ -245,7 +245,7 @@ final class ApiChatBillingServiceImplTest {
 
     private static AiModelApiUsage persisted(AiModelBillingStatus status) {
         AiModelApiUsage usage = new AiModelApiUsage();
-        usage.setId(501L);
+        usage.setId(USAGE_ID.clone());
         usage.setBillingStatus(status.code());
         return usage;
     }
@@ -253,7 +253,7 @@ final class ApiChatBillingServiceImplTest {
     private static ApiKeyReservationAuthorization authorization() {
         ApiKeyReservationAuthorization authorization =
                 new ApiKeyReservationAuthorization();
-        authorization.setApiKeyId(11L);
+        authorization.setApiKeyId(API_KEY_ID.clone());
         authorization.setLoginIdentityId(17L);
         authorization.setKeyDigest(DIGEST);
         authorization.setKeyStatus(1);
@@ -293,5 +293,11 @@ final class ApiChatBillingServiceImplTest {
                 300,
                 800,
                 false);
+    }
+
+    private static byte[] hybridId(int suffix) {
+        byte[] id = new byte[16];
+        id[15] = (byte) suffix;
+        return id;
     }
 }

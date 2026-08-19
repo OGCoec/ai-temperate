@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.ai.ApiKeyUsageQueryMapper">
+
+    <resultMap id="UsageSummaryResultMap"
+               type="com.example.temperate.model.ai.entity.ApiKeyUsageSummaryRow">
+        <result property="requestCount" column="request_count"/>
+        <result property="promptTokens" column="prompt_tokens"/>
+        <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
+        <result property="completionTokens" column="completion_tokens"/>
+        <result property="chargedQuotaMinor" column="charged_quota_minor"/>
+        <result property="pendingRequestCount" column="pending_request_count"/>
+        <result property="pendingReservedQuotaMinor" column="pending_reserved_quota_minor"/>
+    </resultMap>
+
+    <resultMap id="UsageRequestResultMap"
+               type="com.example.temperate.model.ai.entity.ApiKeyUsageRequestRow">
+        <id property="usageId" column="usage_id" jdbcType="BINARY"/>
+        <result property="aiModelId" column="ai_model_id"/>
+        <result property="modelName" column="model_name"/>
+        <result property="vendor" column="vendor"/>
+        <result property="stream" column="is_stream"/>
+        <result property="billingStatus" column="billing_status"/>
+        <result property="promptTokens" column="prompt_tokens"/>
+        <result property="cachedPromptTokens" column="cached_prompt_tokens"/>
+        <result property="completionTokens" column="completion_tokens"/>
+        <result property="chargedQuotaMinor" column="charged_quota_minor"/>
+        <result property="reservedQuotaMinor" column="reserved_quota_minor"/>
+        <result property="finishReason" column="finish_reason"/>
+        <result property="failureCode" column="failure_code"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="settledAt" column="settled_at"/>
+    </resultMap>
+
+    <select id="summarize" resultMap="UsageSummaryResultMap">
+        SELECT
+            COUNT(*) AS request_count,
+            COALESCE(SUM(COALESCE(usage.prompt_tokens, 0)), 0) AS prompt_tokens,
+            COALESCE(SUM(COALESCE(usage.cached_prompt_tokens, 0)), 0)
+                AS cached_prompt_tokens,
+            COALESCE(SUM(COALESCE(usage.completion_tokens, 0)), 0)
+                AS completion_tokens,
+            COALESCE(SUM(
+                CASE
+                    WHEN usage.billing_status IN (0, 2, 4) THEN 0
+                    ELSE COALESCE(usage.charged_quota_minor, 0)
+                END
+            ), 0) AS charged_quota_minor,
+            COUNT(*) FILTER (WHERE usage.billing_status = 0)
+                AS pending_request_count,
+            COALESCE(SUM(
+                CASE
+                    WHEN usage.billing_status = 0
+                        THEN COALESCE(detail.reserved_quota_minor, 0)
+                    ELSE 0
+                END
+            ), 0) AS pending_reserved_quota_minor
+        FROM ai_model_api_usage usage
+        LEFT JOIN ai_model_api_usage_detail detail
+          ON detail.usage_id = usage.id
+        WHERE usage.key_digest = #{keyDigest,jdbcType=BINARY}
+          AND usage.created_at &gt;= #{from,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+          AND usage.created_at &lt; #{to,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+    </select>
+
+    <select id="findPage" resultMap="UsageRequestResultMap">
+        SELECT
+            usage.id AS usage_id,
+            usage.ai_model_id,
+            COALESCE(model.model_name, '未知模型') AS model_name,
+            COALESCE(detail.vendor_snapshot, model.vendor, 'unknown') AS vendor,
+            COALESCE(detail.is_stream, FALSE) AS is_stream,
+            usage.billing_status,
+            COALESCE(usage.prompt_tokens, 0) AS prompt_tokens,
+            COALESCE(usage.cached_prompt_tokens, 0) AS cached_prompt_tokens,
+            COALESCE(usage.completion_tokens, 0) AS completion_tokens,
+            usage.charged_quota_minor,
+            COALESCE(detail.reserved_quota_minor, 0) AS reserved_quota_minor,
+            usage.finish_reason,
+            usage.failure_code,
+            usage.created_at,
+            usage.settled_at
+        FROM ai_model_api_usage usage
+        LEFT JOIN ai_model_api_usage_detail detail
+          ON detail.usage_id = usage.id
+        LEFT JOIN ai_model model
+          ON model.id = usage.ai_model_id
+        WHERE usage.key_digest = #{keyDigest,jdbcType=BINARY}
+          AND usage.created_at &gt;= #{from,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+          AND usage.created_at &lt; #{to,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        <if test="cursorCreatedAt != null and cursorId != null">
+          AND (usage.created_at, usage.id) &lt; (
+              #{cursorCreatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+              #{cursorId,jdbcType=BINARY}
+          )
+        </if>
+        ORDER BY usage.created_at DESC, usage.id DESC
+        LIMIT #{limit,jdbcType=INTEGER}
+    </select>
+</mapper>

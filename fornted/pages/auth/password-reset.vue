@@ -9,7 +9,7 @@
 			</view>
 			<view v-if="error" class="auth-banner" role="alert" aria-live="assertive">{{ error }}</view>
 
-			<view v-if="stage === 'START'">
+			<view v-if="stage === 'START' || stage === 'HUMAN'">
 				<view class="auth-segments" role="tablist" aria-label="找回方式">
 					<button
 						v-for="(item, index) in channelOptions"
@@ -41,13 +41,11 @@
 					@field-blur="validateField"
 					@country-picker-visibility-change="countryPickerOpen = $event"
 				/>
-				<button type="button" class="auth-button" :loading="busy" :disabled="busy" :aria-busy="busy" @click="start">
+				<button v-if="stage === 'START'" type="button" class="auth-button" :loading="busy" :disabled="busy" :aria-busy="busy" @click="start">
 					{{ busy ? '正在开始…' : '继续' }}
 				</button>
-			</view>
-
-			<view v-else-if="stage === 'HUMAN'">
 				<auth-turnstile
+					v-else-if="flow"
 					ref="turnstile"
 					action="password_reset"
 					:challenge="flow.challengeHandle"
@@ -60,6 +58,13 @@
 				<view class="verified-note" role="status">
 					<uni-icons type="checkmarkempty" size="18" color="#37d39a" aria-hidden="true" />
 					<text>安全验证已通过</text>
+				</view>
+				<verification-identity-summary
+					:email="lockedEmail"
+					:phone-presentation="lockedPhonePresentation"
+				/>
+				<view class="auth-links">
+					<button class="auth-link" type="button" :disabled="busy" @click="restartIdentityVerification">重新填写</button>
 				</view>
 				<view class="auth-field">
 					<label class="auth-label" for="auth-reset-code">{{ channel === 'SMS' ? '手机验证码' : '邮箱验证码' }}</label>
@@ -133,6 +138,7 @@
 	import AuthTurnstile from '@/components/auth/auth-turnstile.vue'
 	import IdentifierFields from '@/components/auth/identifier-fields.vue'
 	import PhoneDeliveryMethod from '@/components/auth/phone-delivery-method.vue'
+	import VerificationIdentitySummary from '@/components/auth/verification-identity-summary.vue'
 	import { authApi } from '@/common/auth/auth-api.js'
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
 	import { passwordError } from '@shared-auth/password-policy.js'
@@ -149,14 +155,14 @@
 		selectPhoneCountry
 	} from '@/common/auth/phone-country-default.js'
 	import { findPhoneCountryById } from '@shared-auth/phone-country-search.js'
-	import { isValidLocalPhoneNumber } from '@shared-auth/phone-validation.js'
+	import { formatLocalPhoneNumberInput, isValidLocalPhoneNumber } from '@shared-auth/phone-validation.js'
 
 	function emptyFieldErrors() {
 		return { email: '', phoneNumber: '', password: '', passwordConfirmation: '', code: '' }
 	}
 
 	export default {
-		components: { AuthPasswordFields, AuthTurnstile, IdentifierFields, PhoneDeliveryMethod },
+		components: { AuthPasswordFields, AuthTurnstile, IdentifierFields, PhoneDeliveryMethod, VerificationIdentitySummary },
 		data() {
 			return {
 				channelOptions: [
@@ -171,6 +177,8 @@
 				phoneCountryPageActive: false,
 				phoneNumber: '',
 				flow: null,
+				pendingIdentity: null,
+				humanVerified: false,
 				sent: false,
 				phoneDeliveryMethod: 'SMS',
 				code: '',
@@ -190,8 +198,19 @@
 		},
 		computed: {
 			country() { return findPhoneCountryById(this.countryId) },
+			phoneDisplay() {
+				return formatLocalPhoneNumberInput(this.phoneNumber, this.country?.iso2)
+			},
+			lockedEmail() {
+				return this.pendingIdentity?.type === 'EMAIL' ? this.pendingIdentity.email : ''
+			},
+			lockedPhonePresentation() {
+				return this.pendingIdentity?.type === 'PHONE'
+					? this.pendingIdentity.phonePresentation
+					: null
+			},
 			phoneSupportsWhatsapp() {
-				const dialCode = this.country?.dialCode || ''
+				const dialCode = this.lockedPhonePresentation?.dialCode || this.country?.dialCode || ''
 				return this.channel === 'SMS' && Boolean(dialCode && dialCode !== '+86')
 			},
 			codeDeliveryLabel() {
@@ -201,12 +220,21 @@
 			progress() { return this.stage === 'START' ? 1 : ['HUMAN', 'CODE'].includes(this.stage) ? 2 : 3 }
 		},
 		watch: {
-			email() { this.fieldErrors.email = '' },
-			countryId() { this.fieldErrors.phoneNumber = '' },
+			email() {
+				this.fieldErrors.email = ''
+				this.invalidatePendingHumanFlow()
+			},
+			countryId() {
+				this.fieldErrors.phoneNumber = ''
+				this.invalidatePendingHumanFlow()
+			},
 			phoneSupportsWhatsapp(supported) {
 				if (!supported) this.phoneDeliveryMethod = 'SMS'
 			},
-			phoneNumber() { this.fieldErrors.phoneNumber = '' },
+			phoneNumber() {
+				this.fieldErrors.phoneNumber = ''
+				this.invalidatePendingHumanFlow()
+			},
 			code() { this.fieldErrors.code = '' },
 			password() { this.fieldErrors.password = '' },
 			passwordConfirmation() { this.fieldErrors.passwordConfirmation = '' }
@@ -274,13 +302,86 @@
 				this.fieldErrors.phoneNumber = '请选择国家或地区。'
 				return false
 			},
+			capturePendingIdentity(type) {
+				if (type === 'EMAIL') {
+					return {
+						type,
+						channel: this.channel,
+						email: this.email.trim()
+					}
+				}
+				return {
+					type,
+					channel: this.channel,
+					countryId: this.country?.id || '',
+					countryIso2: this.country?.iso2?.toUpperCase() || '',
+					phoneNumber: this.phoneNumber,
+					phonePresentation: {
+						dialCode: this.country?.dialCode || '',
+						nationalDisplay: this.phoneDisplay,
+						countryIso2: this.country?.iso2?.toUpperCase() || '',
+						countryName: this.country?.name || '未知国家或地区',
+						flag: this.country?.flag || ''
+					}
+				}
+			},
+			pendingIdentityMatchesCurrent(identity = this.pendingIdentity) {
+				if (!identity || identity.channel !== this.channel) return false
+				const current = this.capturePendingIdentity(identity.type)
+				if (identity.type === 'EMAIL') return identity.email === current.email
+				return identity.countryId === current.countryId &&
+					identity.countryIso2 === current.countryIso2 &&
+					identity.phoneNumber === current.phoneNumber
+			},
+			invalidatePendingHumanFlow() {
+				if (!this.flow || this.humanVerified || !this.pendingIdentity) return
+				if (this.pendingIdentityMatchesCurrent()) return
+
+				// 找回身份变化后必须废弃旧挑战，旧人机结果不得解锁新邮箱或新手机号。
+				this.$refs.turnstile?.resetAfterServerRejection('找回身份已更改，请重新验证。')
+				this.flow = null
+				this.pendingIdentity = null
+				this.humanVerified = false
+				this.stage = 'START'
+				this.sent = false
+				this.code = ''
+				this.cooldown = 0
+				this.fieldErrors.code = ''
+				if (this.isAndroid()) clearAndroidPasswordResetFlow()
+				this.error = '找回身份已更改，请重新点击继续并完成人机验证。'
+			},
+			restartIdentityVerification() {
+				if (this.busy) return
+				this.flow = null
+				this.pendingIdentity = null
+				this.humanVerified = false
+				this.stage = 'START'
+				this.channel = 'EMAIL'
+				this.email = ''
+				this.phoneNumber = ''
+				this.countryId = ''
+				this.countryResolving = false
+				this.sent = false
+				this.phoneDeliveryMethod = 'SMS'
+				this.code = ''
+				this.cooldown = 0
+				this.password = ''
+				this.passwordConfirmation = ''
+				this.passwordValid = false
+				this.passwordTouched = false
+				this.error = ''
+				this.fieldErrors = emptyFieldErrors()
+				this.focusedField = ''
+				if (this.isAndroid()) clearAndroidPasswordResetFlow()
+			},
 			changeChannel(value) {
-				if (this.busy || this.channel === value) return
+				if (this.busy || this.humanVerified || this.channel === value) return
 				this.channel = value
 				this.phoneDeliveryMethod = 'SMS'
 				this.error = ''
 				this.fieldErrors.email = ''
 				this.fieldErrors.phoneNumber = ''
+				this.invalidatePendingHumanFlow()
 			},
 			onChannelKeydown(event, index) {
 				if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -333,7 +434,8 @@
 				} finally { this.busy = false }
 			},
 			async start() {
-				const field = this.channel === 'EMAIL' ? 'email' : 'phoneNumber'
+				const type = this.channel === 'EMAIL' ? 'EMAIL' : 'PHONE'
+				const field = type === 'EMAIL' ? 'email' : 'phoneNumber'
 				if (field === 'phoneNumber' && !(await this.ensurePhoneCountry())) {
 					this.focusFirstField([field])
 					return
@@ -342,9 +444,14 @@
 					this.focusFirstField([field])
 					return
 				}
-				const data = this.channel === 'EMAIL'
-					? { channel: 'EMAIL', email: this.email }
-					: { channel: 'SMS', countryIso2: this.country?.iso2.toUpperCase() || '', phoneNumber: this.phoneNumber }
+				const submittedIdentity = this.capturePendingIdentity(type)
+				const data = type === 'EMAIL'
+					? { channel: 'EMAIL', email: submittedIdentity.email }
+					: {
+						channel: 'SMS',
+						countryIso2: submittedIdentity.countryIso2,
+						phoneNumber: submittedIdentity.phoneNumber
+					}
 				const result = await this.run(() => authApi.passwordResetStart(data))
 				if (result) {
 					if (this.isAndroid()) {
@@ -356,28 +463,48 @@
 							expiresAt: result.expiresAt
 						}
 					}
+					this.pendingIdentity = submittedIdentity
+					if (!this.pendingIdentityMatchesCurrent(submittedIdentity)) {
+						this.invalidatePendingHumanFlow()
+						return
+					}
 					this.stage = 'HUMAN'
 					this.focusedField = ''
 				}
 			},
 			async verifyHuman(token) {
-				let verificationFailed = false
-				this.$refs.turnstile?.markServerVerificationStarted()
-				const result = await this.run(
-					() => authApi.passwordResetTurnstile(this.flow, token),
-					() => { verificationFailed = true }
-				)
-				if (result?.accepted) {
-					this.$refs.turnstile?.markServerAccepted()
-					this.stage = 'CODE'
+				if (this.busy || !token) return
+				const submittedFlow = this.flow
+				const submittedIdentity = this.pendingIdentity
+				if (!submittedFlow || !submittedIdentity || !this.pendingIdentityMatchesCurrent(submittedIdentity)) {
+					this.invalidatePendingHumanFlow()
 					return
 				}
-				if (verificationFailed) {
+				this.$refs.turnstile?.markServerVerificationStarted()
+				this.busy = true
+				this.error = ''
+				try {
+					const result = await authApi.passwordResetTurnstile(submittedFlow, token)
+					if (this.flow !== submittedFlow) return
+					if (this.pendingIdentity !== submittedIdentity) return
+					if (!result?.accepted) {
+						const confirmationError = new Error('验证结果未被服务器确认，请重新验证。')
+						confirmationError.code = 'TURNSTILE_NOT_CONFIRMED'
+						throw confirmationError
+					}
+					this.$refs.turnstile?.markServerAccepted()
+					this.humanVerified = true
+					this.stage = 'CODE'
+				} catch (error) {
+					if (this.flow !== submittedFlow || this.pendingIdentity !== submittedIdentity) return
+					this.error = authErrorMessage(error)
 					this.$nextTick(() => {
 						this.$refs.turnstile?.resetAfterServerRejection(
 							'验证结果未被服务器确认，请重新验证。'
 						)
 					})
+				} finally {
+					this.busy = false
 				}
 			},
 			async send() {
@@ -426,12 +553,14 @@
 				))
 				if (result?.passwordReset) {
 					if (this.isAndroid()) clearAndroidPasswordResetFlow()
+					this.pendingIdentity = null
 					this.stage = 'DONE'
 				}
 			},
 			goLogin() {
 				if (this.busy) return
 				if (this.isAndroid()) clearAndroidPasswordResetFlow()
+				this.pendingIdentity = null
 				uni.reLaunch({ url: AUTH_ROUTES.login })
 			}
 		}

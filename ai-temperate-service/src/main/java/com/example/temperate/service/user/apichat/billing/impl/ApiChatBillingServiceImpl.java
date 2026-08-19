@@ -1,5 +1,6 @@
 package com.example.temperate.service.user.apichat.billing.impl;
 
+import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.mapper.ai.AiModelApiUsageDetailMapper;
 import com.example.temperate.mapper.ai.AiModelApiUsageMapper;
 import com.example.temperate.mapper.ai.UserApiKeyMapper;
@@ -27,6 +28,7 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +50,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
     private final AiConversationQuotaCalculator quotaCalculator;
     private final MembershipQuotaPlanService quotaPlanService;
     private final UserProfileCacheInvalidationExecutor cacheInvalidationExecutor;
+    private final HybridSemaphoreIdWorker idWorker;
     private final Clock clock;
     private final MeterRegistry meterRegistry;
 
@@ -59,6 +62,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             AiConversationQuotaCalculator quotaCalculator,
             MembershipQuotaPlanService quotaPlanService,
             UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
+            HybridSemaphoreIdWorker idWorker,
             Clock clock,
             MeterRegistry meterRegistry) {
         this.apiKeyMapper = Objects.requireNonNull(apiKeyMapper);
@@ -68,6 +72,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
         this.quotaPlanService = Objects.requireNonNull(quotaPlanService);
         this.cacheInvalidationExecutor = Objects.requireNonNull(cacheInvalidationExecutor);
+        this.idWorker = Objects.requireNonNull(idWorker);
         this.clock = Objects.requireNonNull(clock);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
     }
@@ -110,13 +115,17 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         }
 
         AiModelApiUsage usage = new AiModelApiUsage();
+        usage.setId(nextHybridId());
         usage.setKeyDigest(principal.keyDigest());
         usage.setAiModelId(request.model().id());
         usage.setBillingStatus(AiModelBillingStatus.RESERVED.code());
-        if (usageMapper.insert(usage) != 1 || usage.getId() == null) {
+        if (usageMapper.insert(usage) != 1
+                || usage.getId() == null
+                || usage.getId().length != 16) {
             throw new IllegalStateException("API model usage insert did not affect one row");
         }
         AiModelApiUsageDetail detail = new AiModelApiUsageDetail();
+        detail.setId(nextHybridId());
         detail.setUsageId(usage.getId());
         detail.setVendorSnapshot(request.model().vendor());
         detail.setStream(request.stream());
@@ -288,7 +297,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             ApiInferenceExecutionRequest request,
             OffsetDateTime now) {
         if (authorization == null
-                || !Objects.equals(authorization.getApiKeyId(), principal.apiKeyId())
+                || !Arrays.equals(authorization.getApiKeyId(), principal.apiKeyId())
                 || !Objects.equals(
                 authorization.getLoginIdentityId(), principal.loginIdentityId())
                 || authorization.getKeyDigest() == null
@@ -374,6 +383,23 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
 
     private static String safeFinishReason(String value) {
         return value != null && value.matches("[A-Z0-9_]{1,64}") ? value : "UNKNOWN";
+    }
+
+    // Usage 与 Detail 必须各自获得非零 16 字节 ID，校验必须发生在扣费事务写库前。
+    private byte[] nextHybridId() {
+        byte[] id = idWorker.nextId();
+        if (id == null || id.length != 16 || isZero(id)) {
+            throw new IllegalStateException("Hybrid worker returned an invalid API usage ID");
+        }
+        return id.clone();
+    }
+
+    private static boolean isZero(byte[] value) {
+        int aggregate = 0;
+        for (byte current : value) {
+            aggregate |= current;
+        }
+        return aggregate == 0;
     }
 
     private static String safeFailureCode(String value) {

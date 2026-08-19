@@ -65,6 +65,9 @@ Worker 将主域名请求分为两类：
 - H5 请求继续执行 Cookie Scope 迁移门槛。
 - Android 原生请求跳过 H5 Cookie Scope 门槛，但必须拒绝或删除 Cookie。
 - Android 请求保留 `Authorization`、`X-Refresh-Token`、`X-CSRF-Token`、`X-AIT-PreAuth`、`X-Device-Installation-Id` 与平台头。
+- Turnstile 主文档 `/api/auth/turnstile/page` 仍是受保护入口，Android WebView 必须携带合法的 challenge、action、PreAuth 与设备安装 ID；它不因子资源放行而降低校验。
+- 只有精确的 `GET /api/auth/turnstile/page.css` 与 `GET /api/auth/turnstile/page.js` 是无凭证验证资源，可以在没有 H5 Cookie Scope 标记时加载；不得使用路径通配符扩大例外。
+- 无凭证验证资源回源时不转发 Cookie、Authorization、Refresh Token、CSRF、PreAuth、设备安装 ID、Referer 或客户端伪造的边缘身份头。Java H5 安全链自动生成的 `XSRF-TOKEN` 由 Worker 精确删除，不交付客户端；若出现任何其他 `Set-Cookie`，Worker 返回受控 `502`。
 - 两类请求都清除客户端伪造的 `X-AIT-Edge-*`、`X-Forwarded-*` 和其他代理身份头，再由 Worker 写入新的 HMAC 与可信网络上下文。
 - Android 回源不添加浏览器 Origin；HMAC 中的外部 Host 仍绑定 `niko000o.site`。
 - Android 上游响应不得设置 Cookie；出现 `Set-Cookie` 时由 Worker 返回受控 `502`。
@@ -114,6 +117,8 @@ Managed Challenge入口。原有 API运输分类、后端签名和 H5行为不�
 - 前端契约：Android生产 API基址为主域名；生产源码不再包含 Android直连 `api.`；本地 H5与生产 H5行为不变。
 - 前端语音契约：Android与H5生产地址都生成主域名 WSS，本地 H5不变。
 - Worker HTTP：Android无 Origin请求成功分类并签名回源；入站 Cookie被删除、上游 Set-Cookie被拒绝；H5仍要求Cookie Scope。
+- Worker Turnstile资源：无 Cookie 的精确 `page.js`、`page.css` 可以签名回源；所有客户端凭证与 Referer 均被删除；非 GET 与通配路径均被拒绝；上游自动生成的 `XSRF-TOKEN` 被删除，任何其他响应 Cookie 均被拒绝。
+- Worker Turnstile边界：主 HTML 无 Android安全头且无 Cookie 时仍返回428；普通H5业务请求无 Cookie 时仍返回428；合法 Android主 HTML继续通过既有安全校验。
 - Worker WebSocket：Android无 Origin Upgrade通过主域名回源且上游无 Origin；H5仍带主域 Origin；两类请求均不泄漏Cookie/Authorization。
 - Worker安全：浏览器请求不得通过伪造 `ANDROID` 头绕过Cookie Scope；伪造边缘头继续被清除。
 - Java定向测试：REQUIRED 拒绝无签名 Android API 与 WebSocket，接受无 Origin 但签名有效的 Android请求；OPTIONAL、DISABLED 与非保护路径语义保持不变。
@@ -138,6 +143,8 @@ Managed Challenge入口。原有 API运输分类、后端签名和 H5行为不�
 - Android抓包中所有自有HTTP、SSE与语音WebSocket都只显示 `niko000o.site`。
 - Worker回源仍为 `api.niko000o.site`。
 - Android不依赖H5 Cookie Scope，不接收H5认证Cookie。
+- 全新真机、全新模拟器与已有历史 Cookie 的模拟器都能加载 Turnstile 的精确脚本和样式资源；模拟器历史 Cookie 不得作为成功条件。
+- Turnstile主 HTML继续受 challenge、action、PreAuth 与设备安装 ID保护，只有精确的脚本和样式子资源无凭证加载。
 - H5现有Cookie、CSRF、SSE与语音行为不回归。
 - `api.niko000o.site` 的无签名 `/api/**` 与 `/ws/voice` 直连被生产后端拒绝。
 - Android API/SSE收到Cloudflare HTML Challenge时进入专用托管验证流程；WebSocket仍不得根据
