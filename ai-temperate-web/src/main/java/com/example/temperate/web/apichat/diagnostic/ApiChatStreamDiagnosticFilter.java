@@ -2,6 +2,7 @@ package com.example.temperate.web.apichat.diagnostic;
 
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticClock;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.web.aiinference.ApiInferenceClientDisconnectClassifier;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.DispatcherType;
@@ -88,18 +89,37 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
         try {
             filterChain.doFilter(request, response);
         } catch (IOException | ServletException | RuntimeException failure) {
+            ApiInferenceClientDisconnectClassifier.Result classification =
+                    ApiInferenceClientDisconnectClassifier.classify(failure, response);
+            if (classification
+                    == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_SSE_CLIENT_DISCONNECT) {
+                recordClientDisconnect(request, state, response, failure);
+                throw failure;
+            }
+            if (classification == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_RESPONSE_IO_FAILURE) {
+                recordCommittedResponseIo(request, state, response, failure);
+                throw failure;
+            }
             state.failureType = safeType(failure);
             state.failureCauseType = safeRootCauseType(failure);
             ensureInitialDispatchLogged(state);
-            safeWarn(
-                    "event=api_chat_servlet_dispatch_error traceId={} dispatcher={} failureType={} causeType={} asyncStarted={} committed={} status={}",
-                    state.traceId,
-                    dispatcher,
-                    state.failureType,
-                    state.failureCauseType,
-                    request.isAsyncStarted(),
-                    response.isCommitted(),
-                    response.getStatus());
+            String template = "event=api_chat_servlet_dispatch_error traceId={} dispatcher={} failureType={} causeType={} asyncStarted={} committed={} status={}";
+            Object[] arguments = {
+                state.traceId,
+                dispatcher,
+                state.failureType,
+                state.failureCauseType,
+                request.isAsyncStarted(),
+                response.isCommitted(),
+                response.getStatus()
+            };
+            if (response.isCommitted()) {
+                safeError(template, arguments);
+            } else {
+                safeWarn(template, arguments);
+            }
             if (!request.isAsyncStarted()) {
                 complete(state, response, "ERROR");
             }
@@ -145,7 +165,8 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
             RequestState state,
             HttpServletResponse response) {
         if (state.listenerAttached.compareAndSet(false, true)) {
-            request.getAsyncContext().addListener(new CompletionListener(state, response));
+            request.getAsyncContext().addListener(
+                    new CompletionListener(request, state, response));
             if (state.sampled) {
                 safeInfo(
                         "event=api_chat_servlet_async_started traceId={} timeoutMs={}",
@@ -184,6 +205,45 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
                 state.errorDispatches.get(),
                 state.failureType,
                 state.failureCauseType);
+    }
+
+    private void recordClientDisconnect(
+            HttpServletRequest request,
+            RequestState state,
+            HttpServletResponse response,
+            Throwable failure) {
+        // 断开可能同时经过过滤器 catch 与 AsyncListener；先占用请求级终态，保证只产生一个稳定诊断事件。
+        if (!state.completed.compareAndSet(false, true)) {
+            return;
+        }
+        if (!ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+            return;
+        }
+        safeDebug(
+                "event=api_chat_servlet_complete diagnosticSchema=chat-diag-v1 traceId={} outcome=CLIENT_DISCONNECTED status={} responseContentType={} committed={} failureType={}",
+                state.traceId,
+                response.getStatus(),
+                safeContentType(response.getContentType()),
+                response.isCommitted(),
+                safeType(failure));
+    }
+
+    private void recordCommittedResponseIo(
+            HttpServletRequest request,
+            RequestState state,
+            HttpServletResponse response,
+            Throwable failure) {
+        if (!state.completed.compareAndSet(false, true)
+                || !ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+            return;
+        }
+        safeWarn(
+                "event=api_chat_servlet_complete diagnosticSchema=chat-diag-v1 traceId={} outcome=COMMITTED_RESPONSE_IO_FAILURE status={} responseContentType={} committed={} failureType={}",
+                state.traceId,
+                response.getStatus(),
+                safeContentType(response.getContentType()),
+                response.isCommitted(),
+                safeType(failure));
     }
 
     private static void logDispatch(
@@ -295,10 +355,15 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
     }
 
     private final class CompletionListener implements AsyncListener {
+        private final HttpServletRequest request;
         private final RequestState state;
         private final HttpServletResponse response;
 
-        private CompletionListener(RequestState state, HttpServletResponse response) {
+        private CompletionListener(
+                HttpServletRequest request,
+                RequestState state,
+                HttpServletResponse response) {
+            this.request = request;
             this.state = state;
             this.response = response;
         }
@@ -323,14 +388,35 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
 
         @Override
         public void onError(AsyncEvent event) {
+            ApiInferenceClientDisconnectClassifier.Result classification =
+                    ApiInferenceClientDisconnectClassifier.classify(
+                            event.getThrowable(), response);
+            if (classification
+                    == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_SSE_CLIENT_DISCONNECT) {
+                recordClientDisconnect(request, state, response, event.getThrowable());
+                return;
+            }
+            if (classification == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_RESPONSE_IO_FAILURE) {
+                recordCommittedResponseIo(request, state, response, event.getThrowable());
+                return;
+            }
             state.failureType = safeType(event.getThrowable());
             state.failureCauseType = safeRootCauseType(event.getThrowable());
             ensureInitialDispatchLogged(state);
-            safeWarn(
-                    "event=api_chat_servlet_async_error traceId={} failureType={} causeType={}",
-                    state.traceId,
-                    state.failureType,
-                    state.failureCauseType);
+            String template =
+                    "event=api_chat_servlet_async_error traceId={} failureType={} causeType={}";
+            Object[] arguments = {
+                state.traceId,
+                state.failureType,
+                state.failureCauseType
+            };
+            if (response.isCommitted()) {
+                safeError(template, arguments);
+            } else {
+                safeWarn(template, arguments);
+            }
             complete(state, response, "ASYNC_ERROR");
         }
 
@@ -412,11 +498,27 @@ public final class ApiChatStreamDiagnosticFilter extends OncePerRequestFilter {
         }
     }
 
+    private static void safeDebug(String template, Object... arguments) {
+        try {
+            LOGGER.debug(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 客户端断开诊断失败不能改变已提交 SSE 的终止行为。
+        }
+    }
+
     private static void safeWarn(String template, Object... arguments) {
         try {
             LOGGER.warn(template, arguments);
         } catch (RuntimeException ignored) {
             // Servlet 诊断后端异常不能替换正在传播的业务异常。
+        }
+    }
+
+    private static void safeError(String template, Object... arguments) {
+        try {
+            LOGGER.error(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 真实已提交流错误的诊断失败不能替换原 Servlet 异常。
         }
     }
 }

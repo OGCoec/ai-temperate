@@ -3,10 +3,12 @@ package com.example.temperate.web.apiresponse.diagnostic;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -18,6 +20,63 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * 该测试是来验证 Responses Servlet 诊断复用既有 Trace ID、观察异步分派且不读取正文、凭据或原始 Accept。
  */
 final class ApiResponsesStreamDiagnosticFilterTest {
+
+    @Test
+    void committedSseIoIsRecordedAsClientDisconnectWithoutDispatchError()
+            throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getStreamDiagnostics().setSampleRate(0.0d);
+        ApiResponsesStreamDiagnosticFilter filter =
+                new ApiResponsesStreamDiagnosticFilter(properties, System::nanoTime);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setHeader("X-Trace-Id", "trace-responses-disconnect");
+
+        try (LogCapture logs = LogCapture.start()) {
+            org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () ->
+                    filter.doFilter(request, response, (servletRequest, servletResponse) -> {
+                        servletResponse.setContentType("text/event-stream;charset=UTF-8");
+                        servletResponse.flushBuffer();
+                        throw new IOException("private-localized-message");
+                    }));
+
+            assertThat(logs.joined())
+                    .contains("outcome=CLIENT_DISCONNECTED")
+                    .contains("failureType=java.io.IOException")
+                    .doesNotContain("dispatch_error")
+                    .doesNotContain("private-localized-message");
+            assertThat(logs.hasLevel(Level.WARN)).isFalse();
+            assertThat(logs.hasLevel(Level.ERROR)).isFalse();
+        }
+    }
+
+    @Test
+    void committedNonDisconnectFailureRemainsAnObservableServerError()
+            throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.getStreamDiagnostics().setSampleRate(0.0d);
+        ApiResponsesStreamDiagnosticFilter filter =
+                new ApiResponsesStreamDiagnosticFilter(properties, System::nanoTime);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setHeader("X-Trace-Id", "trace-responses-server-error");
+
+        try (LogCapture logs = LogCapture.start()) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () ->
+                    filter.doFilter(request, response, (servletRequest, servletResponse) -> {
+                        servletResponse.setContentType("text/event-stream");
+                        servletResponse.flushBuffer();
+                        throw new IllegalStateException("private-message");
+                    }));
+
+            assertThat(logs.joined())
+                    .contains("event=api_responses_servlet_dispatch_error")
+                    .doesNotContain("private-message");
+            assertThat(logs.hasLevel(Level.ERROR)).isTrue();
+        }
+    }
 
     @Test
     void recordsFailedRequestAndPreservesExistingTraceAndResponse() throws Exception {
@@ -142,15 +201,18 @@ final class ApiResponsesStreamDiagnosticFilterTest {
 
     private record LogCapture(
             Logger logger,
-            ListAppender<ILoggingEvent> appender) implements AutoCloseable {
+            ListAppender<ILoggingEvent> appender,
+            Level previousLevel) implements AutoCloseable {
 
         private static LogCapture start() {
             Logger logger = (Logger) LoggerFactory.getLogger(
                     ApiResponsesStreamDiagnosticFilter.class);
+            Level previousLevel = logger.getLevel();
+            logger.setLevel(Level.DEBUG);
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
             logger.addAppender(appender);
-            return new LogCapture(logger, appender);
+            return new LogCapture(logger, appender, previousLevel);
         }
 
         private String joined() {
@@ -160,10 +222,15 @@ final class ApiResponsesStreamDiagnosticFilterTest {
                     .orElse("");
         }
 
+        private boolean hasLevel(Level level) {
+            return appender.list.stream().anyMatch(event -> event.getLevel() == level);
+        }
+
         @Override
         public void close() {
             logger.detachAppender(appender);
             appender.stop();
+            logger.setLevel(previousLevel);
         }
     }
 }

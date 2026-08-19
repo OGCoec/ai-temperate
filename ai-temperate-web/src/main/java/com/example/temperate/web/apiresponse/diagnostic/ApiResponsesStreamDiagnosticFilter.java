@@ -2,6 +2,7 @@ package com.example.temperate.web.apiresponse.diagnostic;
 
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticClock;
+import com.example.temperate.web.aiinference.ApiInferenceClientDisconnectClassifier;
 import com.example.temperate.web.apiresponse.ApiResponsesTraceFilter;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
@@ -81,6 +82,19 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
         try {
             filterChain.doFilter(request, response);
         } catch (IOException | ServletException | RuntimeException failure) {
+            ApiInferenceClientDisconnectClassifier.Result classification =
+                    ApiInferenceClientDisconnectClassifier.classify(failure, response);
+            if (classification
+                    == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_SSE_CLIENT_DISCONNECT) {
+                recordClientDisconnect(request, state, response, failure);
+                throw failure;
+            }
+            if (classification == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_RESPONSE_IO_FAILURE) {
+                recordCommittedResponseIo(request, state, response, failure);
+                throw failure;
+            }
             state.failureType = safeType(failure);
             state.rootFailureType = safeRootCauseType(failure);
             ensureInitialDispatchLogged(state);
@@ -153,7 +167,7 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
             HttpServletResponse response) {
         if (state.listenerAttached.compareAndSet(false, true)) {
             request.getAsyncContext().addListener(
-                    new CompletionListener(state, response));
+                    new CompletionListener(request, state, response));
             if (state.sampled) {
                 safeInfo(
                         "event=api_responses_servlet_dispatch diagnosticSchema={} traceId={} protocol=responses mode={} dispatcher=ASYNC_STARTED timeoutMs={}",
@@ -198,6 +212,49 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
                 state.rootFailureType);
     }
 
+    private void recordClientDisconnect(
+            HttpServletRequest request,
+            RequestState state,
+            HttpServletResponse response,
+            Throwable failure) {
+        // Servlet catch 与异步回调可能观察到同一个写失败；请求级 CAS 让它只产生一次正常断开终态。
+        if (!state.completed.compareAndSet(false, true)) {
+            return;
+        }
+        if (!ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+            return;
+        }
+        safeDebug(
+                "event=api_responses_servlet_complete diagnosticSchema={} traceId={} protocol=responses mode={} outcome=CLIENT_DISCONNECTED status={} responseContentType={} committed={} failureType={}",
+                DIAGNOSTIC_SCHEMA,
+                state.traceId,
+                responseMode(response),
+                response.getStatus(),
+                safeContentType(response.getContentType()),
+                response.isCommitted(),
+                safeType(failure));
+    }
+
+    private void recordCommittedResponseIo(
+            HttpServletRequest request,
+            RequestState state,
+            HttpServletResponse response,
+            Throwable failure) {
+        if (!state.completed.compareAndSet(false, true)
+                || !ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+            return;
+        }
+        safeWarn(
+                "event=api_responses_servlet_complete diagnosticSchema={} traceId={} protocol=responses mode={} outcome=COMMITTED_RESPONSE_IO_FAILURE status={} responseContentType={} committed={} failureType={}",
+                DIAGNOSTIC_SCHEMA,
+                state.traceId,
+                responseMode(response),
+                response.getStatus(),
+                safeContentType(response.getContentType()),
+                response.isCommitted(),
+                safeType(failure));
+    }
+
     private static void logDispatch(
             RequestState state,
             DispatcherType dispatcher,
@@ -229,12 +286,15 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
     }
 
     private final class CompletionListener implements AsyncListener {
+        private final HttpServletRequest request;
         private final RequestState state;
         private final HttpServletResponse response;
 
         private CompletionListener(
+                HttpServletRequest request,
                 RequestState state,
                 HttpServletResponse response) {
+            this.request = request;
             this.state = state;
             this.response = response;
         }
@@ -251,6 +311,20 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
 
         @Override
         public void onError(AsyncEvent event) {
+            ApiInferenceClientDisconnectClassifier.Result classification =
+                    ApiInferenceClientDisconnectClassifier.classify(
+                            event.getThrowable(), response);
+            if (classification
+                    == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_SSE_CLIENT_DISCONNECT) {
+                recordClientDisconnect(request, state, response, event.getThrowable());
+                return;
+            }
+            if (classification == ApiInferenceClientDisconnectClassifier.Result
+                    .COMMITTED_RESPONSE_IO_FAILURE) {
+                recordCommittedResponseIo(request, state, response, event.getThrowable());
+                return;
+            }
             recordAsyncFailure(event, "ASYNC_ERROR");
         }
 
@@ -270,16 +344,22 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
             state.failureType = safeType(event.getThrowable());
             state.rootFailureType = safeRootCauseType(event.getThrowable());
             ensureInitialDispatchLogged(state);
-            safeWarn(
-                    "event=api_responses_servlet_dispatch_error diagnosticSchema={} traceId={} protocol=responses mode={} dispatcher={} failureType={} rootFailureType={} committed={} status={}",
-                    DIAGNOSTIC_SCHEMA,
-                    state.traceId,
-                    responseMode(response),
-                    outcome,
-                    state.failureType,
-                    state.rootFailureType,
-                    response.isCommitted(),
-                    response.getStatus());
+            String template = "event=api_responses_servlet_dispatch_error diagnosticSchema={} traceId={} protocol=responses mode={} dispatcher={} failureType={} rootFailureType={} committed={} status={}";
+            Object[] arguments = {
+                DIAGNOSTIC_SCHEMA,
+                state.traceId,
+                responseMode(response),
+                outcome,
+                state.failureType,
+                state.rootFailureType,
+                response.isCommitted(),
+                response.getStatus()
+            };
+            if (response.isCommitted()) {
+                safeError(template, arguments);
+            } else {
+                safeWarn(template, arguments);
+            }
             complete(state, response, outcome);
         }
     }
@@ -409,6 +489,14 @@ public final class ApiResponsesStreamDiagnosticFilter extends OncePerRequestFilt
             LOGGER.info(template, arguments);
         } catch (RuntimeException ignored) {
             // Servlet 诊断后端异常不能改变分派、异步生命周期或最终 HTTP 响应。
+        }
+    }
+
+    private static void safeDebug(String template, Object... arguments) {
+        try {
+            LOGGER.debug(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 客户端断开诊断失败不能改变已提交 Responses SSE 的终止行为。
         }
     }
 

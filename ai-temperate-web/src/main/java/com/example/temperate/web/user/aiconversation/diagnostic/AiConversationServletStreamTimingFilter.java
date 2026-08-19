@@ -4,6 +4,7 @@ import com.example.temperate.service.user.aiconversation.diagnostic.AiConversati
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingContext;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTimingPath;
 import com.example.temperate.service.user.aiconversation.diagnostic.AiConversationStreamTransportDiagnosticService;
+import com.example.temperate.web.aiinference.ApiInferenceClientDisconnectClassifier;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;
@@ -31,7 +32,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 观察 AI SSE 实际交给 Servlet/Tomcat 的 write 与 flush 时刻，以区分事件就绪和网络写出阶段。
+ * 该过滤器是来观察 AI SSE 实际交给 Servlet/Tomcat 的 write 与 flush 时刻，以区分事件就绪和网络写出阶段。
  * 包装器不缓存、不修改响应字节；记录内容只限事件名、revision、字节数和公共关联标识。
  */
 @Component
@@ -102,10 +103,10 @@ public final class AiConversationServletStreamTimingFilter
             try {
                 filterChain.doFilter(request, wrapped);
             } catch (IOException | ServletException failure) {
-                wrapped.complete("ERROR", failure);
+                wrapped.complete(outcome(failure, wrapped), failure);
                 throw failure;
             } catch (RuntimeException failure) {
-                wrapped.complete("ERROR", failure);
+                wrapped.complete(outcome(failure, wrapped), failure);
                 throw failure;
             }
             if (request.isAsyncStarted()) {
@@ -131,6 +132,15 @@ public final class AiConversationServletStreamTimingFilter
     private static String generationPublicId(String path) {
         Matcher matcher = GENERATION_EVENTS_PATH.matcher(path == null ? "" : path);
         return matcher.matches() ? matcher.group(1) : UNAVAILABLE;
+    }
+
+    private static String outcome(
+            Throwable failure,
+            HttpServletResponse response) {
+        return ApiInferenceClientDisconnectClassifier.classify(failure, response)
+                == ApiInferenceClientDisconnectClassifier.Result
+                .COMMITTED_SSE_CLIENT_DISCONNECT
+                ? "CLIENT_DISCONNECTED" : "ERROR";
     }
 
     private static void restoreMdc(String previousTraceId) {
@@ -160,7 +170,9 @@ public final class AiConversationServletStreamTimingFilter
 
         @Override
         public void onError(AsyncEvent event) {
-            response.complete("ERROR", event.getThrowable());
+            response.complete(
+                    outcome(event.getThrowable(), response),
+                    event.getThrowable());
         }
 
         @Override

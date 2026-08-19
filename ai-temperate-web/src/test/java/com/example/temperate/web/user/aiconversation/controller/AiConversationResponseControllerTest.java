@@ -39,6 +39,7 @@ import com.example.temperate.web.user.aiconversation.api.AiConversationInputRequ
 import com.example.temperate.web.user.aiconversation.api.AiConversationImageRequest;
 import com.example.temperate.web.user.aiconversation.api.AiConversationResponseRequest;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Instant;
@@ -57,6 +58,8 @@ import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.support.WebDataBinderFactory;
@@ -69,7 +72,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 /**
- * 验证 AI 会话 Controller 的 SSE 成功协议与建流前 JSON 错误协商边界。
+ * 该测试是来验证 AI 会话 Controller 的 SSE 成功协议、客户端断开与建流前 JSON 错误协商边界。
  */
 final class AiConversationResponseControllerTest {
 
@@ -401,12 +404,37 @@ final class AiConversationResponseControllerTest {
     }
 
     @Test
-    void committedSseClientDisconnectIsHandledWithoutJsonBody() {
+    void committedSseClientDisconnectIsHandledWithoutJsonBody() throws Exception {
         AiConversationExceptionHandler exceptionHandler =
                 new AiConversationExceptionHandler(Clock.systemUTC());
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/ai/conversations/responses");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+        response.flushBuffer();
 
-        exceptionHandler.handleClientDisconnect(
-                new AsyncRequestNotUsableException("client disconnected"));
+        assertThat(exceptionHandler.handleClientDisconnect(
+                new AsyncRequestNotUsableException("client disconnected"),
+                request,
+                response)).isNull();
+    }
+
+    @Test
+    void uncommittedConversationIoFailureReturnsControlledJson() {
+        AiConversationExceptionHandler exceptionHandler =
+                new AiConversationExceptionHandler(Clock.fixed(
+                        Instant.parse("2026-08-18T12:00:00Z"), ZoneOffset.UTC));
+
+        ResponseEntity<?> result = exceptionHandler.handleClientDisconnect(
+                new IOException("private-message"),
+                new MockHttpServletRequest(
+                        "POST", "/api/ai/conversations/responses"),
+                new MockHttpServletResponse());
+
+        assertThat(result.getStatusCode().value()).isEqualTo(503);
+        assertThat(result.getHeaders().getContentType())
+                .isEqualTo(MediaType.APPLICATION_JSON);
+        assertThat(result.getBody().toString()).doesNotContain("private-message");
     }
 
     private static void assertQuotaFailure(MediaType... acceptedTypes)

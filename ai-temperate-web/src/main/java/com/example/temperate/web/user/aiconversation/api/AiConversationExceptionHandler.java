@@ -4,15 +4,20 @@ import com.example.temperate.web.user.aiconversation.controller.AiConversationGe
 import com.example.temperate.service.user.aiconversation.exception.AiConversationErrorCode;
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
+import com.example.temperate.web.aiinference.ApiInferenceClientDisconnectClassifier;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationResponseController;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationContextController;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationAttachmentController;
 import com.example.temperate.web.user.aiconversation.controller.AiConversationQueryController;
+import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.CacheControl;
@@ -24,7 +29,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 /**
- * 把 SSE 建立前的 AI 会话受控异常映射为稳定 JSON 错误，流开始后的错误由 error 事件承担。
+ * 该处理器是来把 AI 会话建流前的受控异常映射为稳定 JSON，并在 SSE 已提交后阻止客户端断开触发二次响应写入。
  */
 @RestControllerAdvice(assignableTypes = {
         AiConversationResponseController.class,
@@ -66,11 +71,11 @@ public final class AiConversationExceptionHandler {
      * 吞掉客户端主动断开后产生的异步写失败；SSE 响应已经提交，不能再把 JSON 错误写进事件流。
      */
     @ExceptionHandler(AsyncRequestNotUsableException.class)
-    public void handleClientDisconnect(
-            AsyncRequestNotUsableException exception) {
-        LOGGER.debug(
-                "event=ai_conversation_sse_client_disconnected cause={}",
-                exception.getClass().getSimpleName());
+    public ResponseEntity<ApiErrorResponse> handleClientDisconnect(
+            AsyncRequestNotUsableException exception,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return handleIoFailure(exception, request, response);
     }
 
     /**
@@ -78,10 +83,72 @@ public final class AiConversationExceptionHandler {
      * AsyncRequestNotUsableException；此时响应已经提交，继续返回 JSON 只会制造二次异常。
      */
     @ExceptionHandler(IOException.class)
-    public void handleClientDisconnect(IOException exception) {
-        LOGGER.debug(
-                "event=ai_conversation_sse_client_disconnected cause={}",
-                exception.getClass().getSimpleName());
+    public ResponseEntity<ApiErrorResponse> handleClientDisconnect(
+            IOException exception,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return handleIoFailure(exception, request, response);
+    }
+
+    private ResponseEntity<ApiErrorResponse> handleIoFailure(
+            Throwable exception,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        ApiInferenceClientDisconnectClassifier.Result result =
+                ApiInferenceClientDisconnectClassifier.classify(exception, response);
+        if (result == ApiInferenceClientDisconnectClassifier.Result
+                .COMMITTED_SSE_CLIENT_DISCONNECT) {
+            if (ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+                safeDebug(
+                        "event=ai_conversation_sse_client_disconnected traceId={} exceptionType={} outcome=client_disconnected",
+                        traceId(request),
+                        exception.getClass().getName());
+            }
+            return null;
+        }
+        if (result == ApiInferenceClientDisconnectClassifier.Result
+                .COMMITTED_RESPONSE_IO_FAILURE) {
+            if (ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+                safeWarn(
+                        "event=ai_conversation_committed_response_io_failure traceId={} exceptionType={} outcome=response_already_committed",
+                        traceId(request),
+                        exception.getClass().getName());
+            }
+            return null;
+        }
+        // 建流前仍有能力返回 JSON；此处只暴露稳定业务码，不回传 Servlet 或操作系统异常消息。
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .cacheControl(CacheControl.noStore().cachePrivate())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new ApiErrorResponse(
+                        AiConversationErrorCode.AI_UPSTREAM_UNAVAILABLE.name(),
+                        "模型服务暂时不可用，请稍后重试。",
+                        clock.instant()));
+    }
+
+    private static String traceId(HttpServletRequest request) {
+        Object attribute = request == null ? null : request.getAttribute(
+                AiConversationRequestTraceFilter.TRACE_ATTRIBUTE);
+        String value = attribute instanceof String trace
+                ? trace : MDC.get(AiConversationRequestTraceFilter.TRACE_MDC_KEY);
+        return value != null && value.matches("[A-Za-z0-9_-]{1,128}")
+                ? value : "absent";
+    }
+
+    private static void safeDebug(String template, Object... arguments) {
+        try {
+            LOGGER.debug(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 日志后端失败不能重新触发已提交会话 SSE 的错误处理。
+        }
+    }
+
+    private static void safeWarn(String template, Object... arguments) {
+        try {
+            LOGGER.warn(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 已提交非 SSE 响应无法改写，诊断失败时只能保留原终止行为。
+        }
     }
 
     private static String message(AiConversationException exception) {

@@ -34,9 +34,38 @@ test('explicit stop persists cancellation even when the generation id arrives la
 	assert.match(panel, /cancelRequestedBeforeGenerationId = true/)
 	assert.match(panel, /onGenerationId:[\s\S]*requestGenerationCancellation\(generationPublicId\)/)
 	assert.match(panel, /saveAiConversationStoppedDraft\(/)
-	assert.match(panel, /cancelDirectResponseWithRetry\(this\.activeIdempotencyKey\)/)
+	assert.match(panel, /startDirectResponseCancellation\(/)
+	assert.match(panel, /requestCancellation:[\s\S]*cancelDirectResponseWithRetry/)
 	assert.match(panel, /aiConversationApi\.cancelResponse\(idempotencyKey\)/)
 	assert.match(panel, /this\.activeStream\?\.close\?\.\('USER_STOP'/)
+})
+
+test('direct stop freezes markdown and waits for bounded tail plus cancellation confirmation', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+	const stopStart = panel.indexOf('async stop')
+	const stopEnd = panel.indexOf('\n\t\t\tscrollBottom', stopStart)
+	const stopMethod = panel.slice(stopStart, stopEnd)
+
+	assert.match(panel, /beginStopTextTail\(\)[\s\S]*this\.markdownRenderState\?\.close\?\.\(\)/)
+	assert.match(panel, /stopWithTail\(\{[\s\S]*STOP_TAIL_MAX_DURATION_MS[\s\S]*STOP_TAIL_MAX_GRAPHEMES/)
+	assert.match(stopMethod, /const visualTailPromise = this\.beginStopTextTail\(\)/)
+	assert.match(stopMethod, /Promise\.allSettled\(\s*\[visualTailPromise, cancellationPromise\]\)/)
+	assert.ok(stopMethod.indexOf('this.generating = false')
+		< stopMethod.indexOf('startDirectResponseCancellation'))
+	assert.ok(stopMethod.indexOf('Promise.allSettled')
+		< stopMethod.indexOf('saveAiConversationStoppedDraft'))
+})
+
+test('direct stop ignores late answer text and does not expand a natural completion', () => {
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+	const eventStart = panel.indexOf('onStreamEvent(localId, event)')
+	const eventEnd = panel.indexOf('\n\t\t\tasync reconcileCompletedInputAttachments', eventStart)
+	const events = panel.slice(eventStart, eventEnd)
+
+	assert.match(events, /event\.type === 'snapshot'[\s\S]*stopPresentationRequested/)
+	assert.match(events, /event\.type === 'delta'[\s\S]*stopPresentationRequested/)
+	assert.match(events, /event\.type === 'completed'\s*&& this\.transportCancelRequested/)
+	assert.match(events, /stopped: true/)
 })
 
 test('cancel request failure keeps the global observer for authoritative terminal state', () => {

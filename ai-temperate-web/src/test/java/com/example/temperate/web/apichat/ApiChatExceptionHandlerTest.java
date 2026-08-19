@@ -11,12 +11,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.ApiChatCompletionService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,84 @@ import org.springframework.web.method.support.ModelAndViewContainer;
  * 该测试是来锁定 Chat 请求失败时固定返回 JSON，避免 Worker 请求 SSE 后 Spring 因错误响应内容协商失败而把客户端 400 伪装成 502。
  */
 final class ApiChatExceptionHandlerTest {
+
+    @Test
+    void committedChatSseDisconnectDoesNotCreateASecondResponseBody() throws Exception {
+        ApiChatExceptionHandler handler = new ApiChatExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/chat/completions");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+        response.flushBuffer();
+        String previousTrace = MDC.get("apiChatTraceId");
+        MDC.put("apiChatTraceId", "trace-client-disconnect");
+
+        try (LogCapture logs = LogCapture.start()) {
+            Object mapped = handler.ioFailure(
+                    new IOException("private-localized-message"), request, response);
+
+            assertThat(mapped).isNull();
+            assertThat(logs.joined())
+                    .contains("event=api_inference_client_disconnected")
+                    .contains("protocol=chat_completions")
+                    .contains("outcome=client_disconnected")
+                    .doesNotContain("private-localized-message");
+            assertThat(logs.hasLevel(Level.WARN)).isFalse();
+            assertThat(logs.hasLevel(Level.ERROR)).isFalse();
+        } finally {
+            if (previousTrace == null) {
+                MDC.remove("apiChatTraceId");
+            } else {
+                MDC.put("apiChatTraceId", previousTrace);
+            }
+        }
+    }
+
+    @Test
+    void committedResponsesSseDisconnectUsesTheSameNoBodyTermination() throws Exception {
+        ApiChatExceptionHandler handler = new ApiChatExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/responses");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+        response.flushBuffer();
+
+        assertThat(handler.ioFailure(
+                new IOException("private-message"), request, response)).isNull();
+    }
+
+    @Test
+    void committedNonSseIoFailureAlsoRefusesASecondResponseBody() throws Exception {
+        ApiChatExceptionHandler handler = new ApiChatExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/chat/completions");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.flushBuffer();
+
+        assertThat(handler.ioFailure(
+                new IOException("private-message"), request, response)).isNull();
+    }
+
+    @Test
+    void uncommittedIoFailureReturnsOpenAiUpstreamUnavailableJson() {
+        ApiChatExceptionHandler handler = new ApiChatExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/chat/completions");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        Object mapped = handler.ioFailure(
+                new IOException("private-message"), request, response);
+
+        assertThat(mapped).isInstanceOf(ResponseEntity.class);
+        ResponseEntity<?> entity = (ResponseEntity<?>) mapped;
+        assertThat(entity.getStatusCode().value()).isEqualTo(503);
+        assertThat(entity.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+        assertThat(entity.getBody()).isInstanceOf(ApiChatErrorResponse.class);
+        ApiChatErrorResponse body = (ApiChatErrorResponse) entity.getBody();
+        assertThat(body.error().code()).isEqualTo("upstream_unavailable");
+        assertThat(body.error().type()).isEqualTo("server_error");
+    }
 
     @Test
     void invalidRequestUsesExplicitJsonContentType() {
@@ -248,14 +328,17 @@ final class ApiChatExceptionHandlerTest {
 
     private record LogCapture(
             Logger logger,
-            ListAppender<ILoggingEvent> appender) implements AutoCloseable {
+            ListAppender<ILoggingEvent> appender,
+            Level previousLevel) implements AutoCloseable {
 
         private static LogCapture start() {
             Logger logger = (Logger) LoggerFactory.getLogger(ApiChatExceptionHandler.class);
+            Level previousLevel = logger.getLevel();
+            logger.setLevel(Level.DEBUG);
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
             logger.addAppender(appender);
-            return new LogCapture(logger, appender);
+            return new LogCapture(logger, appender, previousLevel);
         }
 
         private String joined() {
@@ -265,10 +348,15 @@ final class ApiChatExceptionHandlerTest {
                     .orElse("");
         }
 
+        private boolean hasLevel(Level level) {
+            return appender.list.stream().anyMatch(event -> event.getLevel() == level);
+        }
+
         @Override
         public void close() {
             logger.detachAppender(appender);
             appender.stop();
+            logger.setLevel(previousLevel);
         }
     }
 }

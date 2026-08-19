@@ -783,7 +783,12 @@
 		subscribeGeneration,
 		updateGeneration
 	} from '@/common/aichat/ai-conversation-generation-manager.js'
-	import { createAiConversationTextDrain } from '@/common/aichat/ai-conversation-text-drain.js'
+	import {
+		createAiConversationTextDrain,
+		STOP_TAIL_MAX_DURATION_MS,
+		STOP_TAIL_MAX_GRAPHEMES
+	} from '@/common/aichat/ai-conversation-text-drain.js'
+	import { startDirectResponseCancellation } from '@/common/aichat/ai-conversation-stop.js'
 	import { createAiMarkdownRenderState } from '@/common/aichat/ai-markdown-render-state.js'
 	import { prewarmAiCodeHighlighter } from '@/common/aichat/ai-code-highlighter.js'
 	import { reportAiCodeHighlightError } from '@/common/aichat/ai-code-diagnostics.js'
@@ -1207,12 +1212,14 @@
 				generating: false,
 				activeStream: null,
 				transportCancelRequested: false,
+				stopPresentationRequested: false,
 				activeGenerationPublicId: '',
 				activeGenerationSubscription: null,
 				cancelRequestedBeforeGenerationId: false,
 				generationCancelDispatching: false,
 				generationCancelSentFor: '',
 				textDrain: null,
+				stopTailPromise: null,
 				markdownRenderState: null,
 				streamDiagnostics: null,
 				lifecycleDiagnostics: null,
@@ -3039,9 +3046,11 @@
 				this.generating = true
 				this.textDrain?.close?.()
 				this.markdownRenderState?.close?.()
+				this.stopTailPromise = null
 				this.terminalPresentationPending = false
 				this.cancelRequestedBeforeGenerationId = false
 				this.transportCancelRequested = false
+				this.stopPresentationRequested = false
 				this.generationCancelDispatching = false
 				this.generationCancelSentFor = ''
 				// H5 与 Android 共享读取、解析和渲染边界；只记录计数与耗时，不记录聊天内容。
@@ -3251,13 +3260,16 @@
 						this.activeGenerationPublicId = event.data.generationPublicId
 						this.bindCurrentGenerationView(event.data.generationPublicId, localId)
 					}
+				} else if (event.type === 'activity'
+						&& this.stopPresentationRequested) {
+					return
 				} else if (event.type === 'activity') {
 					this.handleModelActivity(localId, event.data)
 				} else if (event.type === 'video_generation_progress') {
 					const progress = Math.max(0, Math.min(100,
 						Number(event.data?.progress || 0)))
 					this.applyStore(patchLocalMessage(localId, {
-						streaming: true,
+						streaming: !this.stopPresentationRequested,
 						saving: false,
 						modelActivity: { phase: 'VIDEO_GENERATION', progress }
 					}))
@@ -3335,7 +3347,7 @@
 					this.applyStore(patchLocalMessage(localId, {
 						responseAttachments,
 						imagePresentationOrder,
-						streaming: true,
+						streaming: !this.stopPresentationRequested,
 						saving: responseAttachments.some(attachment =>
 							attachment?.status === 'FINALIZING')
 					}))
@@ -3351,7 +3363,7 @@
 					this.applyStore(patchLocalMessage(localId, {
 						responseAttachments,
 						imagePresentationOrder,
-						streaming: true,
+						streaming: !this.stopPresentationRequested,
 						saving: responseAttachments.some(attachment =>
 							attachment?.status === 'FINALIZING')
 					}))
@@ -3370,6 +3382,15 @@
 							attachment?.status === 'FINALIZING')
 					}))
 					this.beginVisibleImageUpgrades(localId)
+				} else if (event.type === 'snapshot'
+						&& this.stopPresentationRequested) {
+					// Stop 后的网络快照不能绕过已关闭的 Markdown 状态覆盖本地受控尾部。
+					if (this.activeGenerationPublicId) updateGeneration(
+						this.activeGenerationPublicId, {
+							revision: Number(event.data?.revision || 0),
+							responseText: String(event.data?.text || '')
+						})
+					return
 				} else if (event.type === 'snapshot') {
 					this.markdownRenderState?.applySnapshot?.({
 						revision: Number(event.data?.revision || 0),
@@ -3387,6 +3408,9 @@
 						streaming: false,
 						saving: true
 					}))
+				} else if (event.type === 'delta'
+						&& this.stopPresentationRequested) {
+					return
 				} else if (event.type === 'delta' && !asyncGenerationEnabled()) {
 					this.markdownRenderState?.applyDelta?.({
 						sequence: event.data?.sequence,
@@ -3449,6 +3473,24 @@
 						this.$nextTick(() =>
 							this.lifecycleDiagnostics?.finish?.('COMPLETE'))
 					})
+				} else if (event.type === 'completed' && this.transportCancelRequested) {
+					this.acceptTerminalContextUsage(event.data)
+					this.activeResearchSession?.bindMessage?.(
+						event.data?.messagePublicId)
+					this.activeResearchSession?.markTerminal?.('COMPLETED')
+					this.patchResearch(localId)
+					// 自然 completed 与 Stop 竞态时只吸收终态元数据；完整答案留给下一次历史刷新裁决。
+					this.applyStore(patchLocalMessage(localId, {
+						messagePublicId: event.data?.messagePublicId || '',
+						contentAttachments: event.data?.inputAttachments || [],
+						responseAttachments: event.data?.responseAttachments || [],
+						streaming: false,
+						stopped: true,
+						modelActivity: null,
+						warnings: event.data?.warnings || []
+					}))
+					this.$emit('conversation-completed')
+					this.streamDiagnostics?.finish?.('CANCEL')
 				} else if (event.type === 'completed') {
 					this.acceptTerminalContextUsage(event.data)
 					this.activeResearchSession?.bindMessage?.(
@@ -3478,6 +3520,10 @@
 							this.lifecycleDiagnostics?.finish?.('COMPLETE')
 						})
 					})
+				} else if (event.type === 'error' && this.transportCancelRequested) {
+					this.activeResearchSession?.markTerminal?.('USER_STOP')
+					this.patchResearch(localId)
+					this.streamDiagnostics?.finish?.('CANCEL')
 				} else if (event.type === 'error') {
 					this.activeResearchSession?.markTerminal?.('FAILED')
 					this.patchResearch(localId)
@@ -3642,6 +3688,21 @@
 			finishTextPresentation(callback) {
 				const drain = this.textDrain
 				this.terminalPresentationPending = true
+				if (this.stopPresentationRequested && this.stopTailPromise) {
+					const stopTailPromise = this.stopTailPromise
+					void stopTailPromise.then(() => {
+						if (this.stopTailPromise !== stopTailPromise) return
+						try { callback?.() } finally {
+							this.terminalPresentationPending = false
+							this.generating = false
+							this.textDrain = null
+							this.stopTailPromise = null
+							this.markdownRenderState?.close?.()
+							this.markdownRenderState = null
+						}
+					})
+					return
+				}
 				const finish = () => {
 					if (this.textDrain !== drain) return
 					try { callback?.() } finally {
@@ -3654,6 +3715,27 @@
 				}
 				if (drain) drain.finish(finish)
 				else finish()
+			},
+			beginStopTextTail() {
+				const drain = this.textDrain
+				this.markdownRenderState?.close?.()
+				this.markdownRenderState = null
+				const promise = new Promise(resolve => {
+					const complete = () => {
+						if (this.textDrain === drain) this.textDrain = null
+						resolve()
+					}
+					if (!drain) {
+						complete()
+						return
+					}
+					drain.stopWithTail({
+						maxDurationMs: STOP_TAIL_MAX_DURATION_MS,
+						maxGraphemes: STOP_TAIL_MAX_GRAPHEMES
+					}, complete)
+				})
+				this.stopTailPromise = promise
+				return promise
 			},
 			async requestGenerationCancellation(generationPublicId) {
 				if (!generationPublicId
@@ -3674,7 +3756,7 @@
 			},
 			async stop() {
 				if (!this.generating) return
-				// 最终 completed 已经到达时只剩最多五百毫秒视觉排空，不能再把已落库消息降级成本地 Stop 草稿。
+				// 最终 completed 已经到达时只剩最多两百毫秒视觉排空，不能再把已落库消息降级成本地 Stop 草稿。
 				if (this.terminalPresentationPending) return
 				if (this.currentConversationPublicId) {
 					this.applyStore(markAiConversationHistoryStale())
@@ -3682,62 +3764,66 @@
 				const cancelledLocalId = this.activeLocalId
 				const current = this.messages.find(message =>
 					message.localId === cancelledLocalId)
-				// 先确认按需上下文 SSE 已经完成握手，再发送 Stop，避免快速保存与压缩终态落在订阅窗口之外。
-				if (this.currentConversationPublicId
-					&& this.selectedModelPublicId) {
-					await this.openContextObserver()
-				}
+				this.generating = false
+				this.stopPresentationRequested = true
+				this.terminalPresentationPending = false
+				this.activeResearchSession?.markTerminal?.('USER_STOP')
+				this.patchResearch(cancelledLocalId)
+				this.applyStore(patchLocalMessage(cancelledLocalId, {
+					streaming: false,
+					saving: true,
+					stopped: true,
+					modelActivity: null
+				}))
+				const visualTailPromise = this.beginStopTextTail()
 				if (!asyncGenerationEnabled()) {
-					// 先冻结视觉层和当前可见文本，再等待取消确认，避免重试期间继续向 UI 追加内容。
-					this.activeResearchSession?.markTerminal?.('USER_STOP')
-					this.patchResearch(cancelledLocalId)
-					this.textDrain?.close?.()
-					this.textDrain = null
 					this.transportCancelRequested = true
-					this.terminalPresentationPending = false
+					const cancellationPromise = startDirectResponseCancellation({
+						requestCancellation: () => this.activeIdempotencyKey
+							? cancelDirectResponseWithRetry(this.activeIdempotencyKey)
+							: Promise.resolve(),
+						closeTransport: () => this.activeStream?.close?.('USER_STOP', {
+							hasVisibleOutput: Boolean(current?.responseText),
+							emittedTextCharacters: String(current?.responseText || '').length
+						})
+					})
+					this.activeStream = null
+					this.streamDiagnostics?.finish?.('CANCEL')
+					const [, cancellationResult] = await Promise.allSettled(
+						[visualTailPromise, cancellationPromise])
+					const visible = this.messages.find(message =>
+						message.localId === cancelledLocalId)
 					saveAiConversationStoppedDraft({
 						conversationPublicId: this.currentConversationPublicId,
 						localId: cancelledLocalId,
 						idempotencyKey: this.activeIdempotencyKey,
-						inputText: current?.contentText || '',
-						responseText: current?.responseText || '',
+						inputText: visible?.contentText || '',
+						responseText: visible?.responseText || '',
 						stoppedAt: new Date().toISOString()
 					})
-					this.applyStore(patchLocalMessage(cancelledLocalId, {
-						streaming: false,
-						saving: true,
-						stopped: true,
-						modelActivity: null
-					}))
-					try {
-						if (this.activeIdempotencyKey) {
-							await cancelDirectResponseWithRetry(this.activeIdempotencyKey)
-						}
-					} catch (_) {
+					if (cancellationResult.status === 'rejected') {
 						this.composerError = '取消请求暂未确认，连接已关闭，后端将按断线兜底处理。'
-					} finally {
-						this.activeStream?.close?.('USER_STOP', {
-							hasVisibleOutput: Boolean(current?.responseText),
-							emittedTextCharacters: String(current?.responseText || '').length
-						})
-						this.activeStream = null
 					}
-					this.streamDiagnostics?.finish?.('CANCEL')
 					this.applyStore(patchLocalMessage(cancelledLocalId, {
 						streaming: false,
 						saving: false,
 						stopped: true
 					}))
-					this.generating = false
 					this.$nextTick(() =>
 						this.lifecycleDiagnostics?.finish?.('CANCEL'))
 					return
 				}
 				if (asyncGenerationEnabled()) {
+					// 异步模式保留上下文 Observer 的握手顺序，但 UI 冻结与视觉尾部已经在等待前开始。
+					if (this.currentConversationPublicId
+						&& this.selectedModelPublicId) {
+						await this.openContextObserver()
+					}
 					// Stop 是明确业务取消；响应头尚未返回时保留意图，拿到 Generation ID 后立即补发一次。
 					this.cancelRequestedBeforeGenerationId = true
 					this.applyStore(patchLocalMessage(cancelledLocalId, {
 						saving: true,
+						stopped: true,
 						error: '取消处理中…'
 					}))
 					await this.requestGenerationCancellation(this.activeGenerationPublicId)
@@ -3748,16 +3834,8 @@
 					// Stop 只暂停当前页面交互，不能把 Observer 断开误当成模型取消。
 					this.activeStream = null
 				}
-				this.textDrain?.close?.()
-				this.textDrain = null
+				await visualTailPromise
 				this.streamDiagnostics?.finish?.('CANCEL')
-				this.terminalPresentationPending = false
-				this.applyStore(patchLocalMessage(cancelledLocalId, {
-					streaming: false,
-					saving: asyncGenerationEnabled(),
-					stopped: !asyncGenerationEnabled()
-				}))
-				this.generating = false
 				this.$nextTick(() =>
 					this.lifecycleDiagnostics?.finish?.('CANCEL'))
 			},

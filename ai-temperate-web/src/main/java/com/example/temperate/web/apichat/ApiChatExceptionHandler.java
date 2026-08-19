@@ -6,10 +6,12 @@ import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.diagnostic.ApiChatDiagnosticParameter;
 import com.example.temperate.service.user.apiresponse.diagnostic.ApiResponseDiagnosticParameter;
 import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter.PayloadTooLargeException;
+import com.example.temperate.web.aiinference.ApiInferenceClientDisconnectClassifier;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +26,10 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 /**
- * 该异常处理器是来把公开 Chat 与 Responses 在响应提交前的校验、额度和并发错误转换为 OpenAI JSON，且不暴露 Jackson 或上游异常细节。
+ * 该异常处理器是来把公开 Chat 与 Responses 在提交前的失败转换为 OpenAI JSON，并在流已提交后安全终止客户端断开且不暴露异常细节。
  */
 @Order(-100)
 @RestControllerAdvice(assignableTypes = {
@@ -36,6 +39,50 @@ public final class ApiChatExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(
             ApiChatExceptionHandler.class);
+
+    /**
+     * 已提交响应绝不能再生成 JSON；未提交的写入异常仍映射为稳定的 OpenAI 上游不可用错误。
+     */
+    @ExceptionHandler({IOException.class, AsyncRequestNotUsableException.class})
+    public Object ioFailure(
+            Throwable exception,
+            HttpServletRequest request,
+            HttpServletResponse servletResponse) {
+        ApiInferenceClientDisconnectClassifier.Result result =
+                ApiInferenceClientDisconnectClassifier.classify(
+                        exception, servletResponse);
+        if (result == ApiInferenceClientDisconnectClassifier.Result
+                .COMMITTED_SSE_CLIENT_DISCONNECT) {
+            if (ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+                safeDebug(
+                        "event=api_inference_client_disconnected protocol={} traceId={} exceptionType={} outcome=client_disconnected",
+                        protocol(request),
+                        safeTraceId(MDC.get("apiChatTraceId")),
+                        safeType(exception.getClass()));
+            }
+            return null;
+        }
+        if (result == ApiInferenceClientDisconnectClassifier.Result
+                .COMMITTED_RESPONSE_IO_FAILURE) {
+            if (ApiInferenceClientDisconnectClassifier.claimDiagnostic(request)) {
+                safeLog(
+                        "event=api_inference_committed_response_io_failure protocol={} traceId={} exceptionType={} outcome=response_already_committed",
+                        protocol(request),
+                        safeTraceId(MDC.get("apiChatTraceId")),
+                        safeType(exception.getClass()));
+            }
+            return null;
+        }
+        return mappedResponse(
+                "IO_FAILURE",
+                exception.getClass(),
+                ApiChatErrorCode.UPSTREAM_UNAVAILABLE,
+                "The upstream service is temporarily unavailable.",
+                null,
+                ApiChatException.ValidationReason.UNSPECIFIED,
+                request,
+                servletResponse);
+    }
 
     @ExceptionHandler(
             value = ApiInferenceUpstreamException.class,
@@ -229,6 +276,19 @@ public final class ApiChatExceptionHandler {
             return "JSON_ONLY";
         }
         return normalized.contains("*/*") ? "WILDCARD" : "OTHER";
+    }
+
+    private static String protocol(HttpServletRequest request) {
+        return request != null && "/v1/responses".equals(request.getRequestURI())
+                ? "responses" : "chat_completions";
+    }
+
+    private static void safeDebug(String template, Object... arguments) {
+        try {
+            LOGGER.debug(template, arguments);
+        } catch (RuntimeException ignored) {
+            // 客户端断开日志失败不能重新触发已提交响应的异常处理。
+        }
     }
 
     private static void safeLog(String template, Object... arguments) {

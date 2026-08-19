@@ -65,7 +65,7 @@ async function waitFor(predicate) {
 	throw new Error('Timed out waiting for context stream state')
 }
 
-test('context stream reconnects with eventRevision and stop subscribes before cancel', () => {
+test('context stream reconnects while direct stop never waits before closing transport', () => {
 	const stream = fs.readFileSync(path.resolve(
 		__dirname, 'ai-conversation-context-stream.js'), 'utf8')
 	const panel = fs.readFileSync(path.resolve(
@@ -76,10 +76,12 @@ test('context stream reconnects with eventRevision and stop subscribes before ca
 	assert.match(stream, /compaction_completed/)
 	assert.match(stream, /compaction_failed/)
 	assert.match(stream, /timeout/)
-	assert.match(stop, /await this\.openContextObserver/)
-	assert.match(stop, /cancelDirectResponseWithRetry/)
-	assert.ok(stop.indexOf('await this.openContextObserver')
-		< stop.indexOf('cancelDirectResponseWithRetry'))
+	const directStart = stop.indexOf('if (!asyncGenerationEnabled())')
+	const asyncStart = stop.indexOf('if (asyncGenerationEnabled())', directStart)
+	const directStop = stop.slice(directStart, asyncStart)
+	assert.match(directStop, /startDirectResponseCancellation/)
+	assert.doesNotMatch(directStop, /await this\.openContextObserver/)
+	assert.doesNotMatch(directStop, /await cancelDirectResponseWithRetry/)
 })
 
 test('context stream builds initial and reconnect URLs without URLSearchParams', async () => {
