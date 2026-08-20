@@ -24,6 +24,7 @@ public final class VerificationEmailContentFactory {
             case REGISTRATION -> "注册";
             case ADMIN_REGISTRATION -> "管理员注册";
             case LOGIN -> "登录";
+            case OAUTH_PHONE -> "第三方登录手机号验证";
             case PASSWORD_RESET -> "找回密码";
         };
         return new VerificationEmailContent(

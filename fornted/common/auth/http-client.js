@@ -54,6 +54,11 @@ import {
 const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
 const PHONE_COUNTRY_PATH = '/api/auth/phone-country'
+const OAUTH_START_PATH = '/api/auth/oauth2/start'
+const H5_WEBRTC_BACKGROUND_PATHS = new Set([
+	PHONE_COUNTRY_PATH,
+	OAUTH_START_PATH
+])
 const TERMINAL_SESSION_ERRORS = new Set([
 	'AT_REQUIRED',
 	'AT_INVALID',
@@ -68,6 +73,10 @@ const TERMINAL_SESSION_ERRORS = new Set([
 
 let bootstrapInFlight = null
 let csrfInFlight = null
+
+function shouldAwaitH5WebRtc(path) {
+	return !H5_WEBRTC_BACKGROUND_PATHS.has(path)
+}
 
 function rawRequestTask(options) {
 	return new Promise((resolve, reject) => {
@@ -226,8 +235,8 @@ export async function publicRequest(
 	await ensurePreAuth()
 	try {
 		// #ifdef H5
-		// 国家解析是只读初始化请求，允许与 WebRTC 探针并行；其余请求继续等待 report 终态。
-		if (path !== PHONE_COUNTRY_PATH) {
+		// 国家解析和 OAuth 握手只依赖已建立的 PreAuth，允许后台探针并行完成；其余请求等待 report 终态。
+		if (shouldAwaitH5WebRtc(path)) {
 			await ensureH5WebRtcVerified()
 		}
 		// #endif
@@ -289,7 +298,7 @@ export async function publicRequest(
 			invalidateWebRtcVerification()
 			await ensurePreAuth()
 			// #ifdef H5
-			if (path !== PHONE_COUNTRY_PATH) {
+			if (shouldAwaitH5WebRtc(path)) {
 				await ensureH5WebRtcVerified()
 			}
 			// #endif

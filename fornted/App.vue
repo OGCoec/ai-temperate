@@ -18,6 +18,7 @@
 	import {
 		startAndroidWebRtcVerificationInBackground
 	} from '@/common/auth/webrtc-verification.js'
+	import { resumePendingOAuth } from '@/common/auth/oauth-flow.js'
 	// #endif
 	// #ifdef APP
 	import checkUpdate from '@/uni_modules/uni-upgrade-center-app/utils/check-update'
@@ -65,6 +66,15 @@
 		},
 		onShow() {
 			console.log('App Show')
+			// #ifdef APP-PLUS
+			// 系统浏览器经 App Link 返回或用户手动回到 App 时，都从 KeyStore 中恢复同一个待处理 Flow。
+			void resumePendingOAuth().catch(error => {
+				uni.showToast({
+					title: error?.message || '第三方登录恢复失败',
+					icon: 'none'
+				})
+			})
+			// #endif
 		},
 		onHide() {
 			console.log('App Hide')

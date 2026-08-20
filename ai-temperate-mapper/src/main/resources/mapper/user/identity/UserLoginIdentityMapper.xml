@@ -7,7 +7,12 @@
     <resultMap id="UserLoginIdentityResultMap"
                type="com.example.temperate.model.user.entity.UserLoginIdentity">
         <id property="id" column="id"/>
+        <result property="registrationSource" column="registration_source"
+                typeHandler="com.example.temperate.mapper.typehandler.RegistrationSourceTypeHandler"/>
+        <result property="githubSubject" column="github_subject"/>
+        <result property="googleSubject" column="google_subject"/>
         <result property="email" column="email"/>
+        <result property="emailVerified" column="email_verified"/>
         <result property="phone" column="phone"/>
         <result property="passwordHash" column="password_hash"/>
         <result property="passwordVersion" column="password_version"/>
@@ -58,7 +63,11 @@
 
     <sql id="IdentityColumns">
         id,
+        registration_source,
+        github_subject,
+        google_subject,
         email,
+        email_verified,
         phone,
         password_hash,
         password_version,
@@ -191,6 +200,36 @@
           AND up.account_status = 0
     </select>
 
+    <select id="findByGithubSubject" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE github_subject = #{githubSubject,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findByGoogleSubject" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE google_subject = #{googleSubject,jdbcType=VARCHAR}
+    </select>
+
+    <select id="findByNormalizedEmailForUpdate" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE LOWER(email) = #{normalizedEmail,jdbcType=VARCHAR}
+        FOR UPDATE
+    </select>
+
+    <select id="findByIdForUpdate" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE id = #{identityId,jdbcType=BIGINT}
+        FOR UPDATE
+    </select>
+
     <select id="existsById" resultType="boolean">
         SELECT EXISTS (
             SELECT 1
@@ -203,17 +242,78 @@
             parameterType="com.example.temperate.model.user.entity.UserLoginIdentity">
         INSERT INTO userloginidentity (
             id,
+            registration_source,
+            github_subject,
+            google_subject,
             email,
+            email_verified,
             phone,
             password_hash
         )
         VALUES (
             #{id,jdbcType=BIGINT},
+            #{registrationSource.databaseCode,jdbcType=SMALLINT},
+            #{githubSubject,jdbcType=VARCHAR},
+            #{googleSubject,jdbcType=VARCHAR},
             #{email,jdbcType=VARCHAR},
+            #{emailVerified,jdbcType=BOOLEAN},
             #{phone,jdbcType=VARCHAR},
             #{passwordHash,jdbcType=VARCHAR}
         )
     </insert>
+
+    <insert id="insertOAuthIdentityIfAbsent"
+            parameterType="com.example.temperate.model.user.entity.UserLoginIdentity">
+        INSERT INTO userloginidentity (
+            id,
+            registration_source,
+            github_subject,
+            google_subject,
+            email,
+            email_verified,
+            phone,
+            password_hash
+        )
+        VALUES (
+            #{id,jdbcType=BIGINT},
+            #{registrationSource.databaseCode,jdbcType=SMALLINT},
+            #{githubSubject,jdbcType=VARCHAR},
+            #{googleSubject,jdbcType=VARCHAR},
+            #{email,jdbcType=VARCHAR},
+            #{emailVerified,jdbcType=BOOLEAN},
+            #{phone,jdbcType=VARCHAR},
+            #{passwordHash,jdbcType=VARCHAR}
+        )
+        ON CONFLICT DO NOTHING
+    </insert>
+
+    <update id="bindGithubSubjectIfAbsent">
+        UPDATE userloginidentity
+        SET github_subject = #{githubSubject,jdbcType=VARCHAR}
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND github_subject IS NULL
+    </update>
+
+    <update id="bindGoogleSubjectIfAbsent">
+        UPDATE userloginidentity
+        SET google_subject = #{googleSubject,jdbcType=VARCHAR}
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND google_subject IS NULL
+    </update>
+
+    <update id="markEmailVerified">
+        UPDATE userloginidentity
+        SET email_verified = TRUE
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND email_verified = FALSE
+    </update>
+
+    <update id="fillPhoneIfAbsent">
+        UPDATE userloginidentity
+        SET phone = #{phone,jdbcType=VARCHAR}
+        WHERE id = #{identityId,jdbcType=BIGINT}
+          AND phone IS NULL
+    </update>
 
     <update id="updatePasswordHash">
         UPDATE userloginidentity

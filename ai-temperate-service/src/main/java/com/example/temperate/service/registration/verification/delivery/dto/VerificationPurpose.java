@@ -9,5 +9,6 @@ public enum VerificationPurpose {
     REGISTRATION,
     ADMIN_REGISTRATION,
     LOGIN,
+    OAUTH_PHONE,
     PASSWORD_RESET
 }

@@ -16,6 +16,8 @@ CREATE TABLE userloginidentity (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT pk_userloginidentity PRIMARY KEY (id),
+    CONSTRAINT chk_userloginidentity_registration_source
+        CHECK (registration_source IN (0, 1, 2)),
     CONSTRAINT chk_userloginidentity_password_version_positive
         CHECK (password_version > 0)
 );

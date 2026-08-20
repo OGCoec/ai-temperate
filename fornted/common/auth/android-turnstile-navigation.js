@@ -10,7 +10,8 @@ const NON_VISIBLE_ASCII_PATTERN = /[^\x21-\x7e]/
 const ALLOWED_ACTIONS = new Set([
 	'register',
 	'login',
-	'password_reset'
+	'password_reset',
+	'oauth_phone'
 ])
 
 function navigationError(code) {

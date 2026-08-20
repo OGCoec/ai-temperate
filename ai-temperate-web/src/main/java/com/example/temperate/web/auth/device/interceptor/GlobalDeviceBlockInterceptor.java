@@ -80,7 +80,13 @@ public final class GlobalDeviceBlockInterceptor implements HandlerInterceptor {
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
-        return !isProtectedPath(normalizedPath(request));
+        String path = normalizedPath(request);
+        // Provider 顶层授权与回调无法携带设备请求头，其安全绑定由 OAuth 一次性状态机完成。
+        if (path.startsWith("/api/auth/oauth2/authorization/")
+                || path.startsWith("/api/auth/oauth2/code/")) {
+            return true;
+        }
+        return !isProtectedPath(path);
     }
 
     private static String normalizedPath(HttpServletRequest request) {
@@ -100,6 +106,7 @@ public final class GlobalDeviceBlockInterceptor implements HandlerInterceptor {
         return matchesProtectedPrefix(path, "/api/auth/login")
                 || matchesProtectedPrefix(path, "/api/auth/register")
                 || matchesProtectedPrefix(path, "/api/auth/password-reset")
+                || matchesProtectedPrefix(path, "/api/auth/oauth2")
                 || "/api/auth/session/bootstrap".equals(path)
                 || "/api/users/me/voice/session-tickets".equals(path);
     }

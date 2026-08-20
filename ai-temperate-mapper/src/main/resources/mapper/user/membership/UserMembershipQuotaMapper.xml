@@ -74,6 +74,21 @@
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
     </update>
 
+    <update id="expirePaidMembershipIfDue">
+        UPDATE user_membership_quota
+        SET membership_tier = 0,
+            membership_expires_at = NULL,
+            quota_balance_minor = #{freeQuotaMinor,jdbcType=BIGINT},
+            quota_period_started_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            quota_period_ends_at = #{freeQuotaEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND membership_tier BETWEEN 1 AND 6
+          AND (
+              membership_expires_at IS NULL
+              OR membership_expires_at &lt;= #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+          )
+    </update>
+
     <update id="addHistoricalAiRefunds">
         WITH raw_refund(login_identity_id, refund_minor) AS (
             VALUES

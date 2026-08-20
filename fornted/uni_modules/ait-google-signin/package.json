@@ -1,0 +1,31 @@
+{
+  "id": "ait-google-signin",
+  "displayName": "AI Temperate Google Sign-In",
+  "version": "1.0.0",
+  "description": "Android Credential Manager Google 登录桥接，不持久化 ID Token。",
+  "keywords": ["Google", "Credential Manager", "OAuth"],
+  "engines": {
+    "HBuilderX": "^4.0"
+  },
+  "dcloudext": {
+    "type": "uts",
+    "declaration": {
+      "ads": "无",
+      "data": "只把用户选择后返回的短时 Google ID Token 交给调用方内存回调，不持久化、不记录日志。",
+      "permissions": "需要网络连接与设备上的 Google Play 服务。"
+    }
+  },
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "client": {
+        "Vue": { "vue2": "n", "vue3": "y" },
+        "App": {
+          "app-android": { "minVersion": "21" },
+          "app-ios": "n"
+        }
+      }
+    }
+  }
+}

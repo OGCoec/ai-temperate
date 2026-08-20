@@ -19,6 +19,7 @@ import com.example.temperate.service.auth.identity.bloom.IdentityPresenceFilter;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowSnapshot;
+import com.example.temperate.service.auth.login.code.flow.LoginCodePurpose;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowStore;
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
@@ -138,6 +139,7 @@ class LoginCodeDeliveryMethodTest {
         verify(flowStore).create(
                 any(),
                 eq(LoginStrategyType.EMAIL_CODE),
+                eq(LoginCodePurpose.LOGIN),
                 eq("missing@example.com"),
                 eq(0L),
                 eq(NOW));
@@ -234,6 +236,7 @@ class LoginCodeDeliveryMethodTest {
     void unverifiedRedisFlowNeverGeneratesOrPublishesCode() {
         when(flowStore.getRequired(any(), eq(NOW))).thenReturn(new LoginCodeFlowSnapshot(
                 LoginStrategyType.SMS_CODE,
+                LoginCodePurpose.LOGIN,
                 "+447911123456",
                 42L,
                 false,
@@ -283,6 +286,7 @@ class LoginCodeDeliveryMethodTest {
     void emailFlowRejectsWhatsappBeforeCodeOrMessageCreation() {
         when(flowStore.getRequired(any(), eq(NOW))).thenReturn(new LoginCodeFlowSnapshot(
                 LoginStrategyType.EMAIL_CODE,
+                LoginCodePurpose.LOGIN,
                 "alice@example.test",
                 42L,
                 true,
@@ -307,6 +311,7 @@ class LoginCodeDeliveryMethodTest {
     private static LoginCodeFlowSnapshot phoneFlow(String identifier) {
         return new LoginCodeFlowSnapshot(
                 LoginStrategyType.SMS_CODE,
+                LoginCodePurpose.LOGIN,
                 identifier,
                 42L,
                 true,

@@ -18,6 +18,7 @@ import com.example.temperate.service.auth.session.authentication.exception.Sessi
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import jakarta.servlet.Filter;
@@ -46,6 +47,7 @@ class UserSessionAuthenticationInterceptorTest {
     private AccessSessionService service;
     private AuthCookieWriter cookieWriter;
     private PreAuthService preAuthService;
+    private MembershipExpirationService membershipExpirationService;
     private UserSessionAuthenticationInterceptor interceptor;
 
     @BeforeEach
@@ -53,11 +55,13 @@ class UserSessionAuthenticationInterceptorTest {
         service = mock(AccessSessionService.class);
         cookieWriter = mock(AuthCookieWriter.class);
         preAuthService = mock(PreAuthService.class);
+        membershipExpirationService = mock(MembershipExpirationService.class);
         interceptor = new UserSessionAuthenticationInterceptor(
                 service,
                 cookieWriter,
                 preAuthService,
-                mock(NetworkRiskProperties.class));
+                mock(NetworkRiskProperties.class),
+                membershipExpirationService);
     }
 
     @AfterEach
@@ -90,6 +94,7 @@ class UserSessionAuthenticationInterceptorTest {
         ArgumentCaptor<SessionAccessCommand> command =
                 ArgumentCaptor.forClass(SessionAccessCommand.class);
         verify(service).authenticateOrRenew(command.capture());
+        verify(membershipExpirationService).expireIfDue(10001L);
         assertThat(command.getValue().accessToken()).isEqualTo("browser-at");
         assertThat(command.getValue().refreshToken()).isEqualTo("browser-rt");
         assertThat(command.getValue().presentedCsrfToken()).isEqualTo(CSRF_TOKEN);
@@ -139,8 +144,30 @@ class UserSessionAuthenticationInterceptorTest {
         interceptor.preHandle(request, response, new Object());
 
         verify(service, times(1)).authenticateOrRenew(any(SessionAccessCommand.class));
+        verify(membershipExpirationService, times(1)).expireIfDue(10001L);
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
                 .isEqualTo(result(false).principal());
+    }
+
+    @Test
+    void membershipExpirationFailureStopsTheRequestBeforeEstablishingSecurityContext() {
+        MockHttpServletRequest request = request("ANDROID");
+        request.addHeader("Authorization", "Bearer android-at");
+        request.addHeader("X-Refresh-Token", "android-rt");
+        when(service.authenticateOrRenew(any(SessionAccessCommand.class)))
+                .thenReturn(result(false));
+        when(membershipExpirationService.expireIfDue(10001L))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+        assertThatThrownBy(() -> interceptor.preHandle(
+                request, new MockHttpServletResponse(), new Object()))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code()).isEqualTo(
+                            SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE);
+                    assertThat(exception.clearCookies()).isFalse();
+                });
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @Test
@@ -162,6 +189,7 @@ class UserSessionAuthenticationInterceptorTest {
                 .isSameAs(expected);
 
         verifyNoInteractions(preAuthService);
+        verifyNoInteractions(membershipExpirationService);
     }
 
     private static MockHttpServletRequest request(String platform) {

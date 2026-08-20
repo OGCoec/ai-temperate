@@ -50,7 +50,7 @@ function decode(value) {
 }
 
 function emptyState() {
-	return { register: null, passwordReset: null, totpLogin: null }
+	return { register: null, passwordReset: null, totpLogin: null, oauth: null }
 }
 
 function hasFutureExpiry(flow) {
@@ -73,11 +73,18 @@ function validTotpLoginFlow(flow) {
 	return Boolean(flow?.totpFlowToken && Number.isFinite(expiresAt) && expiresAt > Date.now())
 }
 
+function validOAuthFlow(flow) {
+	const absoluteExpiresAt = Date.parse(flow?.absoluteExpiresAt || flow?.expiresAt || '')
+	return Boolean(flow?.oauthFlowToken && flow?.provider && flow?.mode &&
+		Number.isFinite(absoluteExpiresAt) && absoluteExpiresAt > Date.now())
+}
+
 function sanitizeState(state) {
 	return {
 		register: validRegisterFlow(state?.register) ? state.register : null,
 		passwordReset: validPasswordResetFlow(state?.passwordReset) ? state.passwordReset : null,
-		totpLogin: validTotpLoginFlow(state?.totpLogin) ? state.totpLogin : null
+		totpLogin: validTotpLoginFlow(state?.totpLogin) ? state.totpLogin : null,
+		oauth: validOAuthFlow(state?.oauth) ? state.oauth : null
 	}
 }
 
@@ -118,7 +125,7 @@ function readState() {
 
 function writeState(nextState) {
 	const state = sanitizeState(nextState)
-	if (!state.register && !state.passwordReset && !state.totpLogin) {
+	if (!state.register && !state.passwordReset && !state.totpLogin && !state.oauth) {
 		clearStorageAndKey()
 		return
 	}
@@ -206,5 +213,53 @@ export function loadAndroidTotpLoginFlow() {
 export function clearAndroidTotpLoginFlow() {
 	const state = readState()
 	state.totpLogin = null
+	writeState(state)
+}
+
+export function saveAndroidOAuthFlow(flow) {
+	const state = readState()
+	state.oauth = validOAuthFlow(flow) ? {
+		oauthFlowToken: flow.oauthFlowToken,
+		provider: flow.provider,
+		mode: flow.mode,
+		expiresAt: flow.expiresAt,
+		absoluteExpiresAt: flow.absoluteExpiresAt || '',
+		phoneFlowToken: flow.phoneFlowToken || '',
+		turnstileChallenge: flow.turnstileChallenge || ''
+	} : null
+	writeState(state)
+}
+
+export function updateAndroidOAuthPhoneFlow(phoneFlow) {
+	const state = readState()
+	if (!state.oauth) return
+	state.oauth = {
+		...state.oauth,
+		phoneFlowToken: phoneFlow?.phoneFlowToken || '',
+		turnstileChallenge: phoneFlow?.turnstileChallenge || ''
+	}
+	writeState(state)
+}
+
+export function updateAndroidOAuthFlowExpiry(status) {
+	const state = readState()
+	if (!state.oauth || !status?.expiresAt) return
+	state.oauth = {
+		...state.oauth,
+		expiresAt: status.expiresAt,
+		absoluteExpiresAt: status.absoluteExpiresAt || state.oauth.absoluteExpiresAt || ''
+	}
+	writeState(state)
+}
+
+export function loadAndroidOAuthFlow() {
+	const state = readState()
+	if (!state.oauth) clearAndroidOAuthFlow()
+	return state.oauth
+}
+
+export function clearAndroidOAuthFlow() {
+	const state = readState()
+	state.oauth = null
 	writeState(state)
 }

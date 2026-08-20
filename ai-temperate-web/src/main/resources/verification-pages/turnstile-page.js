@@ -2,7 +2,7 @@
   'use strict';
   const SDK_READY_TIMEOUT_MS=15000;
   const SCRIPT_ID='ait-turnstile-sdk';
-  const ALLOWED_ACTIONS=new Set(['register','login','password_reset']);
+  const ALLOWED_ACTIONS=new Set(['register','login','password_reset','oauth_phone']);
   const parameters=new URLSearchParams(window.location.search);
   const challenge=parameters.get('challenge')||'';
   const action=parameters.get('action')||'';

@@ -11,8 +11,11 @@ import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartResult;
+import com.example.temperate.service.auth.login.code.dto.OAuthPhoneCodeStartCommand;
+import com.example.temperate.service.auth.login.code.dto.OAuthPhoneCodeStartResult;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowSnapshot;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowStore;
+import com.example.temperate.service.auth.login.code.flow.LoginCodePurpose;
 import com.example.temperate.service.auth.login.code.flow.ProtectedLoginCodeAccess;
 import com.example.temperate.service.auth.login.code.service.LoginCodeFlowService;
 import com.example.temperate.service.auth.login.completion.LoginCompletionService;
@@ -128,10 +131,30 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         }
         return createFlow(
                 command.strategyType(),
+                LoginCodePurpose.LOGIN,
                 identifier,
                 identity == null || identity.getId() == null ? 0L : identity.getId(),
                 command.deviceInstallationId(),
                 command.clientIp());
+    }
+
+    @Override
+    public OAuthPhoneCodeStartResult startOAuthPhone(OAuthPhoneCodeStartCommand command) {
+        Objects.requireNonNull(command, "command must not be null");
+        String phone = inputNormalizer.normalizePhone(
+                command.countryIso2(), command.phoneNumber());
+        LoginCodeStartResult result = createFlow(
+                LoginStrategyType.SMS_CODE,
+                LoginCodePurpose.OAUTH_PHONE,
+                phone,
+                0L,
+                command.deviceInstallationId(),
+                command.clientIp());
+        return new OAuthPhoneCodeStartResult(
+                result.loginFlowToken(),
+                result.challengeHandle(),
+                phone,
+                result.expiresAt());
     }
 
     @Override
@@ -157,11 +180,18 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
                     LoginErrorCode.INVALID_INPUT,
                     "The selected verification channel is unavailable.");
         }
-        return createFlow(type, identifier, userId, deviceInstallationId, clientIp);
+        return createFlow(
+                type,
+                LoginCodePurpose.LOGIN,
+                identifier,
+                userId,
+                deviceInstallationId,
+                clientIp);
     }
 
     private LoginCodeStartResult createFlow(
             LoginStrategyType type,
+            LoginCodePurpose purpose,
             String identifier,
             long userId,
             String deviceInstallationId,
@@ -175,7 +205,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
                         deviceInstallationId, clientIp));
         Instant now = clock.instant();
         // 无论身份是否存在都创建同样的流程并返回相同结构，避免启动接口成为账号枚举探针。
-        flowStore.create(access, type, identifier, userId, now);
+        flowStore.create(access, type, purpose, identifier, userId, now);
         return new LoginCodeStartResult(flowToken, challenge, now.plusSeconds(600));
     }
 
@@ -184,35 +214,33 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         return Mono.defer(() -> {
             String requestTraceId = traceId();
             ProtectedLoginCodeAccess protectedAccess = protect(access);
-            Mono<Void> loadFlow = Mono.fromCallable(
+            Mono<LoginCodeFlowSnapshot> loadFlow = Mono.fromCallable(
                             () -> flowStore.getRequired(
                                     protectedAccess, clock.instant()))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .then();
+                    .subscribeOn(Schedulers.boundedElastic());
             HumanVerificationService turnstile =
                     humanVerificationServices.getRequired(HumanVerificationType.TURNSTILE);
-            Mono<Void> siteverify = Mono.defer(() -> turnstile.verify(
-                            HumanVerificationCommand.turnstile(
-                                    turnstileToken,
-                                    access.clientIp(),
-                                    access.challengeHandle(),
-                                    "login")))
-                    .contextWrite(context -> context.put(
-                            HumanVerificationService.TRACE_ID_CONTEXT_KEY,
-                            requestTraceId))
-                    .onErrorMap(
-                            RegistrationException.class,
-                            exception -> new LoginException(
-                                    LoginErrorCode.TURNSTILE_REJECTED,
-                                    "Turnstile verification was rejected.",
-                                    exception));
+            Mono<Void> siteverify = loadFlow.flatMap(flow -> Mono.defer(() -> turnstile.verify(
+                                    HumanVerificationCommand.turnstile(
+                                            turnstileToken,
+                                            access.clientIp(),
+                                            access.challengeHandle(),
+                                            flow.purpose() == LoginCodePurpose.OAUTH_PHONE
+                                                    ? "oauth_phone" : "login")))
+                            .contextWrite(context -> context.put(
+                                    HumanVerificationService.TRACE_ID_CONTEXT_KEY,
+                                    requestTraceId)))
+                    .onErrorMap(RegistrationException.class, exception -> new LoginException(
+                            LoginErrorCode.TURNSTILE_REJECTED,
+                            "Turnstile verification was rejected.",
+                            exception));
             // 只有 Siteverify 成功后才在线程池执行阻塞 Redis Lua，失败时不写入 humanVerified。
             Mono<Void> markVerified = Mono.fromRunnable(
                             () -> flowStore.markHumanVerified(
                                     protectedAccess, clock.instant()))
                     .subscribeOn(Schedulers.boundedElastic())
                     .then();
-            return loadFlow.then(siteverify).then(markVerified);
+            return siteverify.then(markVerified);
         });
     }
 
@@ -252,7 +280,7 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         HmacIdentifier operationId = protector.loginDeliveryOperation(
                 operationIdGenerator.generateRawOperationId());
         flowStore.issueCode(protectedAccess, digest, operationId, clock.instant());
-        if (flow.userId() <= 0) {
+        if (flow.purpose() == LoginCodePurpose.LOGIN && flow.userId() <= 0) {
             if (flow.strategyType() == LoginStrategyType.EMAIL_CODE) {
                 notificationService.notifyEmailNotRegistered(flow.identifier());
             }
@@ -267,7 +295,11 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
                     deliveryMethod,
                     operationId,
                     new VerificationDeliveryRequest(
-                            flow.identifier(), code, VerificationPurpose.LOGIN),
+                            flow.identifier(),
+                            code,
+                            flow.purpose() == LoginCodePurpose.OAUTH_PHONE
+                                    ? VerificationPurpose.OAUTH_PHONE
+                                    : VerificationPurpose.LOGIN),
                     clock.instant().plus(Duration.ofMinutes(5)));
         } catch (RuntimeException exception) {
             flowStore.compensateDeliveryFailure(protectedAccess, operationId);
@@ -296,6 +328,10 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         if (flow.strategyType() != type) {
             throw new LoginException(LoginErrorCode.LOGIN_FLOW_FORBIDDEN,
                     "Login strategy does not match the flow.");
+        }
+        if (flow.purpose() != LoginCodePurpose.LOGIN) {
+            throw new LoginException(LoginErrorCode.LOGIN_FLOW_FORBIDDEN,
+                    "Login purpose does not match the flow.");
         }
         LoginAttempt attempt = new LoginAttempt(
                 flow.identifier(), request.deviceInstallationId());
@@ -333,6 +369,50 @@ public final class LoginCodeFlowServiceImpl implements LoginCodeFlowService {
         flowStore.delete(protectedAccess);
         rateLimitService.clearSubjectFailures(attempt);
         return context;
+    }
+
+    @Override
+    public String verifyOAuthPhone(LoginStrategyRequest request) {
+        if (request == null) {
+            throw invalid();
+        }
+        LoginCodeAccess access = new LoginCodeAccess(
+                request.loginFlowToken(),
+                request.challengeHandle(),
+                request.deviceInstallationId(),
+                request.clientIp());
+        ProtectedLoginCodeAccess protectedAccess = protect(access);
+        LoginCodeFlowSnapshot flow = flowStore.getRequired(protectedAccess, clock.instant());
+        if (flow.strategyType() != LoginStrategyType.SMS_CODE
+                || flow.purpose() != LoginCodePurpose.OAUTH_PHONE) {
+            throw new LoginException(
+                    LoginErrorCode.LOGIN_FLOW_FORBIDDEN,
+                    "OAuth phone purpose does not match the flow.");
+        }
+        LoginAttempt attempt = new LoginAttempt(
+                flow.identifier(), request.deviceInstallationId());
+        requireAllowed(attempt);
+        try {
+            flowStore.verifyCode(
+                    protectedAccess,
+                    protector.loginCodeDigest(
+                            request.loginFlowToken(), request.verificationCode()),
+                    clock.instant());
+        } catch (LoginException exception) {
+            if (exception.code() == LoginErrorCode.VERIFICATION_CODE_INVALID
+                    || exception.code() == LoginErrorCode.VERIFICATION_CODE_EXPIRED) {
+                if (rateLimitService.recordFailure(attempt, LoginFailureBucket.CODE)
+                        == LoginLimitDecision.BLOCKED) {
+                    throw new LoginException(
+                            LoginErrorCode.LOGIN_BLOCKED,
+                            "OAuth phone verification is temporarily blocked.");
+                }
+            }
+            throw exception;
+        }
+        flowStore.delete(protectedAccess);
+        rateLimitService.clearSubjectFailures(attempt);
+        return flow.identifier();
     }
 
     private String normalize(LoginCodeStartCommand command) {

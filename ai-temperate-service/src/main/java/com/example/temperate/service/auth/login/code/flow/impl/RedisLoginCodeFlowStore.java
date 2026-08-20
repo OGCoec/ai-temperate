@@ -4,6 +4,7 @@ import com.example.temperate.common.redis.key.RedisKeyFactory;
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowSnapshot;
 import com.example.temperate.service.auth.login.code.flow.LoginCodeFlowStore;
+import com.example.temperate.service.auth.login.code.flow.LoginCodePurpose;
 import com.example.temperate.service.auth.login.code.flow.ProtectedLoginCodeAccess;
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
@@ -69,6 +70,7 @@ public final class RedisLoginCodeFlowStore implements LoginCodeFlowStore {
     public void create(
             ProtectedLoginCodeAccess access,
             LoginStrategyType type,
+            LoginCodePurpose purpose,
             String identifier,
             long userId,
             Instant createdAt) {
@@ -79,7 +81,8 @@ public final class RedisLoginCodeFlowStore implements LoginCodeFlowStore {
         Long status = execute(CREATE,
                 List.of(keyFactory.loginFlowKey(valid.flowId()),
                         keyFactory.loginChallengeKey(valid.challengeId())),
-                "2", type.name(), requireText(identifier), Long.toString(userId),
+                "3", type.name(), Objects.requireNonNull(purpose).name(),
+                requireText(identifier), Long.toString(userId),
                 valid.deviceHash().value(), valid.challengeId().value(),
                 Long.toString(createdAt.toEpochMilli()),
                 Long.toString(IDLE_TTL_MILLIS), Long.toString(ABSOLUTE_TTL_MILLIS));
@@ -282,17 +285,18 @@ public final class RedisLoginCodeFlowStore implements LoginCodeFlowStore {
                 default -> unavailable();
             };
         }
-        if (result.size() < 8) {
+        if (result.size() < 9) {
             throw unavailable();
         }
         return new LoginCodeFlowSnapshot(
                 LoginStrategyType.valueOf(text(result.get(1))),
-                text(result.get(2)),
-                number(result.get(3)),
-                "1".equals(text(result.get(4))),
-                Instant.ofEpochMilli(number(result.get(5))),
+                LoginCodePurpose.valueOf(text(result.get(2))),
+                text(result.get(3)),
+                number(result.get(4)),
+                "1".equals(text(result.get(5))),
                 Instant.ofEpochMilli(number(result.get(6))),
-                Instant.ofEpochMilli(number(result.get(7))));
+                Instant.ofEpochMilli(number(result.get(7))),
+                Instant.ofEpochMilli(number(result.get(8))));
     }
 
     private static ProtectedLoginCodeAccess requireAccess(ProtectedLoginCodeAccess access) {

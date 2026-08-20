@@ -13,7 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 class HumanVerificationCommandTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"register", "login", "password_reset"})
+    @ValueSource(strings = {"register", "login", "password_reset", "oauth_phone"})
     void createsTurnstileCommandForSupportedAction(String action) {
         HumanVerificationCommand command = HumanVerificationCommand.turnstile(
                 "token", "203.0.113.10", "challenge", action);

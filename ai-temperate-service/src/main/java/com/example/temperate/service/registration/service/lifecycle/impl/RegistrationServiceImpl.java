@@ -6,6 +6,7 @@ import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
 import com.example.temperate.model.auth.enums.MembershipTier;
+import com.example.temperate.model.auth.enums.RegistrationSource;
 import com.example.temperate.model.user.entity.UserLoginIdentity;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.entity.UserProfile;
@@ -524,7 +525,9 @@ public class RegistrationServiceImpl implements RegistrationService {
 
             UserLoginIdentity identity = new UserLoginIdentity();
             identity.setId(internalId);
+            identity.setRegistrationSource(RegistrationSource.STANDARD);
             identity.setEmail(snapshot.email());
+            identity.setEmailVerified(Boolean.TRUE);
             identity.setPhone(snapshot.phone());
             identity.setPasswordHash(passwordEncoder.encode(command.password()));
             if (identityMapper.insert(identity) != 1) {

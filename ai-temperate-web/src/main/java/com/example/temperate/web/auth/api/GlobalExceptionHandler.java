@@ -2,6 +2,10 @@ package com.example.temperate.web.auth.api;
 
 import com.example.temperate.service.auth.login.enums.LoginErrorCode;
 import com.example.temperate.service.auth.login.exception.LoginException;
+import com.example.temperate.service.auth.oauth.flow.OAuthFlowException;
+import com.example.temperate.service.auth.oauth.identity.OAuthAccountErrorCode;
+import com.example.temperate.service.auth.oauth.identity.OAuthAccountException;
+import com.example.temperate.service.auth.oauth.phone.OAuthPhoneRiskException;
 import com.example.temperate.service.auth.passwordreset.PasswordResetErrorCode;
 import com.example.temperate.service.auth.passwordreset.PasswordResetException;
 import com.example.temperate.service.auth.phonecountry.service.exception.PhoneCountryTimeoutException;
@@ -13,6 +17,7 @@ import com.example.temperate.service.registration.exception.RegistrationExceptio
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
+import com.example.temperate.web.auth.oauth.provider.OAuthProviderException;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
@@ -292,6 +297,62 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
                 HttpStatus.NOT_FOUND,
                 "RESOURCE_NOT_FOUND",
                 "请求资源不存在。");
+    }
+
+    @ExceptionHandler(OAuthFlowException.class)
+    public ResponseEntity<ApiErrorResponse> handleOAuthFlow(
+            OAuthFlowException exception) {
+        HttpStatus status = switch (exception.code()) {
+            case FLOW_NOT_FOUND, FLOW_EXPIRED -> HttpStatus.GONE;
+            case FLOW_FORBIDDEN, STATE_REJECTED, NONCE_REJECTED -> HttpStatus.FORBIDDEN;
+            case INVALID_TRANSITION -> HttpStatus.CONFLICT;
+            case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+        };
+        return response(status, exception.code().name(), "OAuth 登录流程无效或已过期，请重新开始。");
+    }
+
+    @ExceptionHandler(OAuthAccountException.class)
+    public ResponseEntity<ApiErrorResponse> handleOAuthAccount(
+            OAuthAccountException exception) {
+        if (exception.code() == OAuthAccountErrorCode.PHONE_UNAVAILABLE) {
+            // 对外只表示本次 OAuth 手机号不可用，禁止泄露手机号属于哪个账号。
+            return response(
+                    HttpStatus.CONFLICT,
+                    "OAUTH_PHONE_UNAVAILABLE",
+                    "该手机号无法用于本次登录，请更换后重试。");
+        }
+        HttpStatus status = switch (exception.code()) {
+            case ACCOUNT_CONFLICT -> HttpStatus.CONFLICT;
+            case ACCOUNT_UNAVAILABLE -> HttpStatus.FORBIDDEN;
+            case PERSISTENCE_FAILED -> HttpStatus.SERVICE_UNAVAILABLE;
+            default -> HttpStatus.BAD_REQUEST;
+        };
+        return response(status, exception.code().name(), "OAuth 账号无法完成登录，请重新开始。");
+    }
+
+    @ExceptionHandler(OAuthProviderException.class)
+    public ResponseEntity<ApiErrorResponse> handleOAuthProvider(
+            OAuthProviderException exception) {
+        HttpStatus status = switch (exception.code()) {
+            case AUTHORIZATION_REJECTED, PROVIDER_SUBJECT_MISSING,
+                    VERIFIED_EMAIL_MISSING, IDENTITY_UNVERIFIED -> HttpStatus.FORBIDDEN;
+            case TOKEN_EXCHANGE_FAILED, PROVIDER_UNAVAILABLE -> HttpStatus.BAD_GATEWAY;
+        };
+        return response(
+                status,
+                exception.code().name(),
+                status == HttpStatus.FORBIDDEN
+                        ? "第三方登录凭据未通过验证，请重新开始。"
+                        : "第三方登录服务暂时不可用，请稍后重试。");
+    }
+
+    @ExceptionHandler(OAuthPhoneRiskException.class)
+    public ResponseEntity<ApiErrorResponse> handleOAuthPhoneRisk(
+            OAuthPhoneRiskException exception) {
+        return response(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "OAUTH_PHONE_RATE_LIMITED",
+                "操作过于频繁，请稍后重试。");
     }
 
     /**

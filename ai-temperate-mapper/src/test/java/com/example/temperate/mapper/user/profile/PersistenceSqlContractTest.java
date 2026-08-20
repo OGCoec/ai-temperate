@@ -87,6 +87,9 @@ class PersistenceSqlContractTest {
             throws IOException {
         String membershipSchema = normalizedSql(readRequired(
                 PROJECT_ROOT.resolve("sql/005_create_user_membership_quota.sql")));
+        String membershipExpirationMigration = normalizedSql(readRequired(
+                PROJECT_ROOT.resolve(
+                        "sql/migrations/027_add_membership_expiration.sql")));
         String orphanCheck = normalizedSql(readRequired(PROJECT_ROOT.resolve(
                 "sql/checks/user_membership_quota_orphans.sql")));
 
@@ -95,6 +98,11 @@ class PersistenceSqlContractTest {
                 "quota_balance_minor bigint not null default 5000"));
         assertTrue(membershipSchema.contains("quota_period_started_at timestamptz"));
         assertTrue(membershipSchema.contains("quota_period_ends_at timestamptz"));
+        assertTrue(membershipSchema.contains("membership_expires_at timestamptz"));
+        assertTrue(membershipExpirationMigration.contains(
+                "add column if not exists membership_expires_at timestamptz"));
+        assertTrue(membershipExpirationMigration.contains(
+                "comment on column user_membership_quota.membership_expires_at"));
         assertFalse(membershipSchema.contains("created_at"));
         assertFalse(membershipSchema.contains("updated_at"));
         assertFalse(membershipSchema.contains("set_user_membership_quota_updated_at"));
@@ -208,6 +216,11 @@ class PersistenceSqlContractTest {
         assertTrue(membershipQuotaMapper.contains("insert into user_membership_quota"));
         assertTrue(membershipQuotaMapper.contains("#{loginidentityid"));
         assertTrue(membershipQuotaMapper.contains("id=\"findbyloginidentityid\""));
+        assertTrue(membershipQuotaMapper.contains(
+                "id=\"expirepaidmembershipifdue\""));
+        assertTrue(membershipQuotaMapper.contains("membership_tier between 1 and 6"));
+        assertTrue(membershipQuotaMapper.contains("membership_expires_at is null"));
+        assertTrue(membershipQuotaMapper.contains("membership_expires_at &lt;= #{now"));
 
         assertNoPhysicalForeignKey(identityMapper);
         assertNoPhysicalForeignKey(profileMapper);

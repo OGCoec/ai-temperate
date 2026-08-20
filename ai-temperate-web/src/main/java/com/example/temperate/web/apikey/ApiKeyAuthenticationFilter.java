@@ -5,6 +5,7 @@ import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthentica
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,21 +18,25 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 该过滤器是来在 DispatcherServlet 读取请求体前完成固定 Bearer API Key 认证，并只把脱敏专用 Principal 写入无状态 SecurityContext。
+ * 该过滤器是来在 DispatcherServlet 读取请求体前完成固定 Bearer API Key 认证和付费会员惰性过期，并只把脱敏专用 Principal 写入无状态 SecurityContext。
  */
 public final class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String PREFIX = "Bearer ";
 
     private final ApiKeyAuthenticationService authenticationService;
+    private final MembershipExpirationService membershipExpirationService;
     private final ApiKeyProperties properties;
     private final OpenAiErrorResponseWriter errorWriter;
 
     public ApiKeyAuthenticationFilter(
             ApiKeyAuthenticationService authenticationService,
+            MembershipExpirationService membershipExpirationService,
             ApiKeyProperties properties,
             OpenAiErrorResponseWriter errorWriter) {
         this.authenticationService = Objects.requireNonNull(authenticationService);
+        this.membershipExpirationService =
+                Objects.requireNonNull(membershipExpirationService);
         this.properties = Objects.requireNonNull(properties);
         this.errorWriter = Objects.requireNonNull(errorWriter);
     }
@@ -76,6 +81,8 @@ public final class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         try {
             principal = authenticationService.authenticate(
                     authorization.substring(PREFIX.length()));
+            // API Key 认证结果中的内部身份 ID 是唯一可信更新目标，到期失败时整个请求必须关闭。
+            membershipExpirationService.expireIfDue(principal.loginIdentityId());
         } catch (ApiKeyAuthenticationException exception) {
             SecurityContextHolder.clearContext();
             reject(response);

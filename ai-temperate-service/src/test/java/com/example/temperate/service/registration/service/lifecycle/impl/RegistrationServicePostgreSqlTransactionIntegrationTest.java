@@ -339,7 +339,52 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
         }
 
         @Override
+        public UserLoginIdentity findByGithubSubject(String githubSubject) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public UserLoginIdentity findByGoogleSubject(String googleSubject) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public UserLoginIdentity findByNormalizedEmailForUpdate(String normalizedEmail) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public UserLoginIdentity findByIdForUpdate(long identityId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public List<UserLoginIdentity> findIdentityContactsAfterId(long afterId, int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int insertOAuthIdentityIfAbsent(UserLoginIdentity identity) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int bindGithubSubjectIfAbsent(long identityId, String githubSubject) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int bindGoogleSubjectIfAbsent(long identityId, String googleSubject) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int markEmailVerified(long identityId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int fillPhoneIfAbsent(long identityId, String phone) {
             throw new UnsupportedOperationException();
         }
 

@@ -14,6 +14,7 @@ public interface LoginCodeFlowStore {
     void create(
             ProtectedLoginCodeAccess access,
             LoginStrategyType type,
+            LoginCodePurpose purpose,
             String identifier,
             long userId,
             Instant createdAt);

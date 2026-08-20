@@ -44,6 +44,7 @@ const DEVICE_INSTALLATION_ID_PATTERN =
 const TURNSTILE_ACTIONS = new Set([
 	'register',
 	'login',
+	'oauth_phone',
 	'password_reset'
 ])
 const WEBVIEW_FETCH_SITES = new Set(['', 'none', 'same-origin'])
@@ -79,6 +80,10 @@ const ROOT_COOKIE_NAMES = new Set([
 	'reset_flow_token',
 	'forget_token',
 	'totp_login_flow',
+	'oauth_flow',
+	'oauth_handshake',
+	'oauth_phone_flow',
+	'oauth_phone_challenge',
 	'__Host-ait-preauth'
 ])
 
@@ -104,6 +109,10 @@ const LEGACY_COOKIE_PATHS = Object.freeze([
 	['register_challenge', '/api/auth/register'],
 	['reset_flow_token', '/api/auth/password-reset'],
 	['forget_token', '/api/auth/password-reset/complete'],
+	['oauth_flow', '/api/auth/oauth2'],
+	['oauth_handshake', '/api/auth/oauth2'],
+	['oauth_phone_flow', '/api/auth/oauth2'],
+	['oauth_phone_challenge', '/api/auth/oauth2'],
 	['admin_session', '/api/admin'],
 	['ADMIN-XSRF-TOKEN', '/'],
 	['admin_register_token', '/api/admin/auth/register'],
@@ -146,6 +155,9 @@ export async function handleRequest(request, env, runtime = {}) {
 	}
 	if (route.h5Resource) {
 		return h5ResourceResponse(request, env, route, fetchImpl)
+	}
+	if (route.edgeDocument) {
+		return edgeDocumentResponse(request, env, route.edgeDocument)
 	}
 	if (route.androidClearance) {
 		return androidClearanceResponse(request, route.androidClearance)
@@ -205,6 +217,7 @@ export async function handleRequest(request, env, runtime = {}) {
 		return routeError(route, transport.status, transport.code)
 	}
 	if (transport.kind === H5_TRANSPORT
+		&& !route.oauthNavigation
 		&& !route.riskChallenge
 		&& !route.credentiallessVerificationAsset
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
@@ -266,7 +279,9 @@ export async function handleRequest(request, env, runtime = {}) {
 
 	if ((route.apiKeySdk && upstreamResponse.status >= 300
 			&& upstreamResponse.status < 400)
-		|| isCrossHostRedirect(upstreamResponse, route.surface)) {
+		|| (route.oauthNavigation
+			? !isAllowedOAuthRedirect(upstreamResponse)
+			: isCrossHostRedirect(upstreamResponse, route.surface))) {
 		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
 			edgeOutcome: 'UPSTREAM_REDIRECT_REJECTED',
 			upstreamAttempted: true,
@@ -456,6 +471,45 @@ function plainSiteError(status, body, additionalHeaders = {}) {
 		headers.set(name, value)
 	}
 	return new Response(body, { status, headers })
+}
+
+function edgeDocumentResponse(request, env, documentType) {
+	if (documentType === 'assetlinks') {
+		const fingerprint = String(env.ANDROID_APP_LINK_SHA256 || '')
+			.trim().toUpperCase()
+		if (!/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fingerprint)) {
+			return plainSiteError(503, 'Service Unavailable')
+		}
+		const body = JSON.stringify([{
+			relation: ['delegate_permission/common.handle_all_urls'],
+			target: {
+				namespace: 'android_app',
+				package_name: 'site.niko000o.aitemperate',
+				sha256_cert_fingerprints: [fingerprint]
+			}
+		}])
+		const headers = new Headers({
+			'Cache-Control': 'public, max-age=300',
+			'Content-Type': 'application/json; charset=utf-8',
+			'X-Content-Type-Options': 'nosniff'
+		})
+		return new Response(request.method === 'HEAD' ? null : body, { headers })
+	}
+	if (documentType === 'app-oauth-return') {
+		const body = '<!doctype html><html lang="zh-CN"><head>'
+			+ '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+			+ '<title>返回 AI Temperate</title></head><body>'
+			+ '<main><h1>登录结果已收到</h1><p>如果 App 没有自动打开，请手动返回 AI Temperate，登录会自动继续。</p></main>'
+			+ '</body></html>'
+		const headers = noStoreHeaders()
+		headers.set('Content-Type', 'text/html; charset=utf-8')
+		headers.set('Content-Security-Policy', "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		headers.set('X-Content-Type-Options', 'nosniff')
+		headers.set('X-Frame-Options', 'DENY')
+		headers.set('X-Robots-Tag', 'noindex, nofollow')
+		return new Response(request.method === 'HEAD' ? null : body, { headers })
+	}
+	return plainSiteError(404, 'Not Found')
 }
 
 async function h5ResourceResponse(request, env, route, fetchImpl) {
@@ -704,6 +758,10 @@ function safeApiKeyDiagnosticNow(now) {
 function classifyClientTransport(request, route, url) {
 	if (route.apiKeySdk) {
 		return classifyApiKeySdkTransport(request, route)
+	}
+	if (route.oauthNavigation) {
+		// Provider 顶层导航无法附加应用请求头，仍作为受 state/PKCE/握手 Cookie 保护的浏览器运输回源。
+		return { allowed: true, kind: H5_TRANSPORT }
 	}
 	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim()
@@ -1625,6 +1683,30 @@ function isCrossHostRedirect(response, surface) {
 		return new URL(location, externalOrigin).origin !== externalOrigin
 	} catch (_) {
 		return true
+	}
+}
+
+function isAllowedOAuthRedirect(response) {
+	if (response.status < 300 || response.status >= 400) return true
+	const location = response.headers.get('Location')
+	if (!location) return false
+	try {
+		const target = new URL(location, `https://${ROOT_HOST}`)
+		if (target.username || target.password || target.hash) return false
+		if (target.origin === 'https://accounts.google.com') {
+			return target.pathname === '/o/oauth2/v2/auth'
+		}
+		if (target.origin === 'https://github.com') {
+			return target.pathname === '/login/oauth/authorize'
+		}
+		if (target.origin === `https://${ROOT_HOST}`) {
+			return target.search === ''
+				&& (target.pathname === '/pages/auth/oauth-return'
+					|| target.pathname === '/app/oauth-return')
+		}
+		return false
+	} catch (_) {
+		return false
 	}
 }
 

@@ -32,6 +32,18 @@ public interface UserLoginIdentityMapper {
     UserLoginIdentity findByNormalizedPhone(
             @Param("normalizedPhone") String normalizedPhone);
 
+    UserLoginIdentity findByGithubSubject(@Param("githubSubject") String githubSubject);
+
+    UserLoginIdentity findByGoogleSubject(@Param("googleSubject") String googleSubject);
+
+    /**
+     * 在最终 OAuth 裁决事务内锁定邮箱命中的账号，避免并发 Provider 绑定互相覆盖。
+     */
+    UserLoginIdentity findByNormalizedEmailForUpdate(
+            @Param("normalizedEmail") String normalizedEmail);
+
+    UserLoginIdentity findByIdForUpdate(@Param("identityId") long identityId);
+
     /**
      * 按内部 ID 游标分页读取 Bloom 初始化所需的最小联系方式列。
      *
@@ -65,6 +77,36 @@ public interface UserLoginIdentityMapper {
     boolean existsById(@Param("identityId") long identityId);
 
     int insert(UserLoginIdentity identity);
+
+    /**
+     * 尝试插入 OAuth 首次登录账号；任一唯一约束已被并发请求占用时返回零并保持当前事务可继续查询。
+     *
+     * <p>调用方必须在返回零后重新按 Subject 与规范化邮箱裁决，禁止把所有冲突直接当成新账号失败。</p>
+     */
+    int insertOAuthIdentityIfAbsent(UserLoginIdentity identity);
+
+    /**
+     * 仅在尚未绑定 GitHub 时写入稳定主体；返回零表示账号不存在或已被其他主体占用。
+     */
+    int bindGithubSubjectIfAbsent(
+            @Param("identityId") long identityId,
+            @Param("githubSubject") String githubSubject);
+
+    /**
+     * 仅在尚未绑定 Google 时写入稳定主体；返回零表示账号不存在或已被其他主体占用。
+     */
+    int bindGoogleSubjectIfAbsent(
+            @Param("identityId") long identityId,
+            @Param("googleSubject") String googleSubject);
+
+    int markEmailVerified(@Param("identityId") long identityId);
+
+    /**
+     * OAuth 补验手机号只允许填补空值，禁止借登录流程替换已有安全联系方式。
+     */
+    int fillPhoneIfAbsent(
+            @Param("identityId") long identityId,
+            @Param("phone") String phone);
 
     int updatePasswordHash(
             @Param("id") Long id,

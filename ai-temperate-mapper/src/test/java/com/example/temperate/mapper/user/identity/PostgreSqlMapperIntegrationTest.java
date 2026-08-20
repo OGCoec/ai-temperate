@@ -22,12 +22,17 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.exceptions.PersistenceException;
@@ -155,6 +160,7 @@ class PostgreSqlMapperIntegrationTest {
         assertEquals("23514", negativeBalance.getSQLState());
 
         assertUniqueContactValuesAreEnforced();
+        assertSubjectIndexesAreUsed();
 
         UserProfile orphanProfile = profile(888_888L, "Orphan User");
         assertEquals(1, insertProfile(orphanProfile));
@@ -171,6 +177,51 @@ class PostgreSqlMapperIntegrationTest {
         assertFalse(membershipOrphanIds.contains(validMembershipQuota.getId()));
     }
 
+    @Test
+    void paidMembershipExpirationHandlesNullBoundaryAndConcurrentRequests()
+            throws Exception {
+        long loginIdentityId = 909_001L;
+        OffsetDateTime now = OffsetDateTime.parse("2026-08-20T12:00:00Z");
+        OffsetDateTime freeEndsAt = OffsetDateTime.parse("2026-08-27T12:00:00Z");
+        assertEquals(1, insertMembershipQuota(membershipQuota(loginIdentityId)));
+
+        assertEquals(0, expireMembership(loginIdentityId, now, freeEndsAt));
+
+        setMembershipState(loginIdentityId, 4, now.plusSeconds(1));
+        assertEquals(0, expireMembership(loginIdentityId, now, freeEndsAt));
+
+        setMembershipState(loginIdentityId, 4, now.minusSeconds(1));
+        assertEquals(1, expireMembership(loginIdentityId, now, freeEndsAt));
+        assertFreeMembership(loginIdentityId, now, freeEndsAt);
+
+        setMembershipState(loginIdentityId, 5, null);
+        assertEquals(1, expireMembership(loginIdentityId, now, freeEndsAt));
+        assertFreeMembership(loginIdentityId, now, freeEndsAt);
+
+        setMembershipState(loginIdentityId, 6, now);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Integer> first = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                return expireMembership(loginIdentityId, now, freeEndsAt);
+            });
+            Future<Integer> second = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                return expireMembership(loginIdentityId, now, freeEndsAt);
+            });
+            ready.await();
+            start.countDown();
+            assertEquals(1, first.get() + second.get());
+        } finally {
+            executor.shutdownNow();
+        }
+        assertFreeMembership(loginIdentityId, now, freeEndsAt);
+    }
+
     private static void assertUniqueContactIndexes() throws SQLException {
         String query = """
                 SELECT indexname, indexdef
@@ -179,7 +230,9 @@ class PostgreSqlMapperIntegrationTest {
                   AND tablename = 'userloginidentity'
                   AND indexname IN (
                       'uk_userloginidentity_email_lower',
-                      'uk_userloginidentity_phone'
+                      'uk_userloginidentity_phone',
+                      'uk_userloginidentity_github_subject',
+                      'uk_userloginidentity_google_subject'
                   )
                 """;
         Map<String, String> indexes = new HashMap<>();
@@ -194,9 +247,11 @@ class PostgreSqlMapperIntegrationTest {
         assertEquals(
                 Set.of(
                         "uk_userloginidentity_email_lower",
-                        "uk_userloginidentity_phone"),
+                        "uk_userloginidentity_phone",
+                        "uk_userloginidentity_github_subject",
+                        "uk_userloginidentity_google_subject"),
                 indexes.keySet(),
-                "sql/001-003 must create both contact indexes");
+                "sql/001-003 must create contact and OAuth subject indexes");
         String emailIndex = indexes.get("uk_userloginidentity_email_lower").toLowerCase();
         assertTrue(emailIndex.contains("unique index"));
         assertTrue(emailIndex.contains("lower"));
@@ -207,6 +262,23 @@ class PostgreSqlMapperIntegrationTest {
         assertTrue(phoneIndex.contains("phone"));
         assertTrue(phoneIndex.contains("where"));
         assertTrue(phoneIndex.contains("is not null"));
+
+        assertPartialUniqueSubjectIndex(
+                indexes.get("uk_userloginidentity_github_subject"),
+                "github_subject");
+        assertPartialUniqueSubjectIndex(
+                indexes.get("uk_userloginidentity_google_subject"),
+                "google_subject");
+    }
+
+    private static void assertPartialUniqueSubjectIndex(
+            String indexDefinition, String column) {
+        String normalized = indexDefinition.toLowerCase();
+        assertTrue(normalized.contains("unique index"));
+        assertTrue(normalized.contains("using btree"));
+        assertTrue(normalized.contains(column));
+        assertTrue(normalized.contains("where"));
+        assertTrue(normalized.contains("is not null"));
     }
 
     private static void assertUniqueContactValuesAreEnforced() {
@@ -223,6 +295,73 @@ class PostgreSqlMapperIntegrationTest {
                 "+15550000001",
                 "{bcrypt}duplicate-phone");
         assertUniqueViolation(() -> insertIdentity(duplicatePhone));
+
+        UserLoginIdentity githubOwner = identity(
+                10005L,
+                "github-owner@example.com",
+                "+15550000005",
+                "{bcrypt}github-owner");
+        githubOwner.setGithubSubject("github-subject-10005");
+        assertEquals(1, insertIdentity(githubOwner));
+        UserLoginIdentity duplicateGithub = identity(
+                10006L,
+                "github-duplicate@example.com",
+                "+15550000006",
+                "{bcrypt}github-duplicate");
+        duplicateGithub.setGithubSubject("github-subject-10005");
+        assertUniqueViolation(() -> insertIdentity(duplicateGithub));
+
+        UserLoginIdentity googleOwner = identity(
+                10007L,
+                "google-owner@example.com",
+                "+15550000007",
+                "{bcrypt}google-owner");
+        googleOwner.setGoogleSubject("google-subject-10007");
+        assertEquals(1, insertIdentity(googleOwner));
+        UserLoginIdentity duplicateGoogle = identity(
+                10008L,
+                "google-duplicate@example.com",
+                "+15550000008",
+                "{bcrypt}google-duplicate");
+        duplicateGoogle.setGoogleSubject("google-subject-10007");
+        assertUniqueViolation(() -> insertIdentity(duplicateGoogle));
+    }
+
+    private static void assertSubjectIndexesAreUsed() throws SQLException {
+        assertIndexScan(
+                "github_subject",
+                "github-subject-10005",
+                "uk_userloginidentity_github_subject");
+        assertIndexScan(
+                "google_subject",
+                "google-subject-10007",
+                "uk_userloginidentity_google_subject");
+    }
+
+    private static void assertIndexScan(
+            String column, String value, String expectedIndex) throws SQLException {
+        String query = "EXPLAIN (ANALYZE, BUFFERS) "
+                + "SELECT id FROM userloginidentity WHERE " + column + " = ?";
+        try (Connection connection = openConnection()) {
+            connection.setAutoCommit(false);
+            try (Statement setting = connection.createStatement()) {
+                setting.execute("SET LOCAL enable_seqscan = off");
+            }
+            try (PreparedStatement statement = connection.prepareStatement(query)) {
+                statement.setString(1, value);
+                StringBuilder plan = new StringBuilder();
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        plan.append(resultSet.getString(1)).append('\n');
+                    }
+                }
+                assertTrue(
+                        plan.toString().contains(expectedIndex),
+                        () -> "Expected index " + expectedIndex + " in plan: " + plan);
+            } finally {
+                connection.rollback();
+            }
+        }
     }
 
     private static void assertUniqueViolation(ThrowingOperation operation) {
@@ -325,6 +464,55 @@ class PostgreSqlMapperIntegrationTest {
         }
     }
 
+    private static int expireMembership(
+            long loginIdentityId,
+            OffsetDateTime now,
+            OffsetDateTime freeEndsAt) {
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            return session.getMapper(UserMembershipQuotaMapper.class)
+                    .expirePaidMembershipIfDue(
+                            loginIdentityId,
+                            now,
+                            5_000L,
+                            freeEndsAt);
+        }
+    }
+
+    private static void setMembershipState(
+            long loginIdentityId,
+            int membershipTier,
+            OffsetDateTime membershipExpiresAt) throws SQLException {
+        String sql = """
+                UPDATE user_membership_quota
+                SET membership_tier = ?,
+                    membership_expires_at = ?,
+                    quota_balance_minor = 123456
+                WHERE login_identity_id = ?
+                """;
+        try (Connection connection = openConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, membershipTier);
+            if (membershipExpiresAt == null) {
+                statement.setNull(2, Types.TIMESTAMP_WITH_TIMEZONE);
+            } else {
+                statement.setObject(2, membershipExpiresAt);
+            }
+            statement.setLong(3, loginIdentityId);
+            assertEquals(1, statement.executeUpdate());
+        }
+    }
+
+    private static void assertFreeMembership(
+            long loginIdentityId,
+            OffsetDateTime expectedStartedAt,
+            OffsetDateTime expectedEndsAt) {
+        UserMembershipQuota quota = findMembershipQuota(loginIdentityId);
+        assertEquals(0, quota.getMembershipTier());
+        assertEquals(5_000L, quota.getQuotaBalanceMinor());
+        assertEquals(expectedStartedAt, quota.getQuotaPeriodStartedAt());
+        assertEquals(expectedEndsAt, quota.getQuotaPeriodEndsAt());
+    }
+
     private static void insertMembershipQuotaWithBalance(
             long loginIdentityId, long quotaBalanceMinor) throws SQLException {
         String sql = """
@@ -399,7 +587,8 @@ class PostgreSqlMapperIntegrationTest {
                 "sql/003_create_ai_model.sql",
                 "sql/004_create_ai_model_capability.sql",
                 "sql/005_create_user_membership_quota.sql",
-                "sql/006_create_ai_model_icon.sql");
+                "sql/006_create_ai_model_icon.sql",
+                "sql/migrations/027_add_membership_expiration.sql");
         try (Connection connection = openConnection();
                 Statement statement = connection.createStatement()) {
             for (String migration : migrations) {

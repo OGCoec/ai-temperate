@@ -3,6 +3,8 @@ package com.example.temperate.service.auth.login.code.service;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeAccess;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartCommand;
 import com.example.temperate.service.auth.login.code.dto.LoginCodeStartResult;
+import com.example.temperate.service.auth.login.code.dto.OAuthPhoneCodeStartCommand;
+import com.example.temperate.service.auth.login.code.dto.OAuthPhoneCodeStartResult;
 import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.login.strategy.LoginStrategyRequest;
@@ -18,6 +20,11 @@ import reactor.core.publisher.Mono;
 public interface LoginCodeFlowService {
 
     LoginCodeStartResult start(LoginCodeStartCommand command);
+
+    /**
+     * 由 OAuth 编排服务创建服务端固定用途的手机验证码流程；客户端不能提交 purpose。
+     */
+    OAuthPhoneCodeStartResult startOAuthPhone(OAuthPhoneCodeStartCommand command);
 
     /**
      * 为当前已认证用户使用数据库中的邮箱或手机号创建验证码复验流程，禁止客户端替换投递目标。
@@ -54,4 +61,9 @@ public interface LoginCodeFlowService {
     AuthenticationContext verifyPrimaryFactor(
             LoginStrategyType type,
             LoginStrategyRequest request);
+
+    /**
+     * 原子消费 OAUTH_PHONE 流程验证码并返回已经规范化且证明归属的 E.164 手机号，不创建登录会话。
+     */
+    String verifyOAuthPhone(LoginStrategyRequest request);
 }

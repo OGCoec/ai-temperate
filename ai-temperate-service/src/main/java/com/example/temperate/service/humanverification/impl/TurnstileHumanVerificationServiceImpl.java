@@ -65,7 +65,7 @@ public final class TurnstileHumanVerificationServiceImpl
     private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(8);
     private static final String CF_RAY_HEADER = "CF-Ray";
     private static final Set<String> ALLOWED_ACTIONS =
-            Set.of("register", "login", "password_reset");
+            Set.of("register", "login", "password_reset", "oauth_phone");
     private static final Set<String> KNOWN_PROVIDER_ERROR_CODES = Set.of(
             "missing-input-secret",
             "invalid-input-secret",

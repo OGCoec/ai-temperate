@@ -64,7 +64,7 @@ test('Android Turnstile navigation loads once with only the required URL fields 
 test('Android Turnstile navigation accepts every supported action and encodes only challenge and action', async () => {
 	const { loadAndroidTurnstilePage } = await loadNavigationModule()
 
-	for (const action of ['register', 'login', 'password_reset']) {
+	for (const action of ['register', 'login', 'password_reset', 'oauth_phone']) {
 		const webview = recordingWebview()
 		loadAndroidTurnstilePage(webview, validOptions({ action }))
 

@@ -3,9 +3,35 @@
 		<view class="auth-container" :aria-busy="busy">
 			<text class="auth-kicker">Welcome back</text>
 			<text class="auth-title">登录</text>
-			<text class="auth-subtitle">使用密码、邮箱验证码或手机验证码继续。</text>
+			<text class="auth-subtitle">使用 Google、GitHub、密码或验证码继续。</text>
 			<view v-if="error" class="auth-banner" role="alert" aria-live="assertive">{{ error }}</view>
 			<text v-if="successMessage" class="auth-sr-only" role="status" aria-live="polite">{{ successMessage }}</text>
+
+			<view class="oauth-actions" role="group" aria-label="第三方登录方式">
+				<button
+					class="oauth-button google"
+					type="button"
+					:loading="busy && oauthProvider === 'GOOGLE'"
+					:disabled="busy"
+					:aria-busy="busy && oauthProvider === 'GOOGLE'"
+					@click="oauthLogin('GOOGLE')"
+				>
+					<image class="oauth-icon" src="/static/icons/auth/google.svg" mode="aspectFit" aria-hidden="true" />
+					<text class="oauth-label">使用 Google 登录</text>
+				</button>
+				<button
+					class="oauth-button github"
+					type="button"
+					:loading="busy && oauthProvider === 'GITHUB'"
+					:disabled="busy"
+					:aria-busy="busy && oauthProvider === 'GITHUB'"
+					@click="oauthLogin('GITHUB')"
+				>
+					<image class="oauth-icon" src="/static/icons/auth/github.svg" mode="aspectFit" aria-hidden="true" />
+					<text class="oauth-label">使用 GitHub 登录</text>
+				</button>
+			</view>
+			<view class="oauth-divider" aria-hidden="true"><text>或使用本站账号</text></view>
 
 			<view v-if="!humanVerified" class="auth-segments" role="tablist" aria-label="登录方式">
 				<button
@@ -184,6 +210,7 @@
 	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import { initializeBrowserCsrf } from '@/common/auth/http-client.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
+	import { startOAuth } from '@/common/auth/oauth-flow.js'
 	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
 	import {
 		getCurrentPhoneCountrySelection,
@@ -230,6 +257,7 @@
 				turnstilePageScrollTop: 0,
 				timer: null,
 				busy: false,
+				oauthProvider: '',
 				error: '',
 				successMessage: '',
 				fieldErrors: emptyFieldErrors(),
@@ -304,6 +332,21 @@
 			return true
 		},
 		methods: {
+			async oauthLogin(provider) {
+				if (this.busy) return
+				this.oauthProvider = provider
+				const result = await this.run(() => startOAuth(provider))
+				this.oauthProvider = ''
+				if (result?.cancelled) {
+					this.successMessage = '已取消 Google 账号选择'
+					return
+				}
+				if (result?.nativeUnavailable) {
+					this.error = result.code === 'GOOGLE_NATIVE_NO_ACCOUNT'
+						? '设备上没有可用的 Google 账号，请先在系统中添加账号。'
+						: '当前设备或调试基座不支持 Google 原生登录，请使用包含 Google 登录插件的自定义基座，或改用密码、邮箱验证码、手机验证码登录。'
+				}
+			},
 			syncTurnstileBounds(context = {}) {
 				const scrollTop = Number(context?.scrollTop)
 				if (Number.isFinite(scrollTop) && scrollTop >= 0) this.turnstilePageScrollTop = scrollTop
@@ -646,5 +689,40 @@
 <style lang="scss">
 	@import '@/common/auth/auth.scss';
 	.compact { width: 210px; margin-bottom: 20px; }
-	@media screen and (max-width: 359px) { .compact { width: 100%; } }
+	.oauth-actions {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+		margin: 24px 0 20px;
+	}
+	.oauth-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		min-width: 0;
+		min-height: 48px;
+		padding: 0 12px;
+		border: 1px solid rgba(152, 166, 158, .32);
+		border-radius: 12px;
+		background: #151a17;
+		color: #f3f5f4;
+		font-size: 15px;
+		font-weight: 650;
+		line-height: 1.2;
+	}
+	.oauth-icon { width: 20px; height: 20px; flex: 0 0 20px; }
+	.oauth-label { white-space: nowrap; }
+	.oauth-button:focus-visible { outline: 2px solid #58e2ad; outline-offset: 2px; }
+	.oauth-button.google { background: #f5f7f6; color: #17201c; }
+	.oauth-button.github { background: #202421; color: #f7f8f7; }
+	.oauth-divider { display: flex; align-items: center; gap: 12px; color: #7f8b85; font-size: 12px; }
+	.oauth-divider::before,
+	.oauth-divider::after { content: ''; height: 1px; flex: 1; background: rgba(139, 150, 144, .2); }
+	@media screen and (max-width: 359px) {
+		.compact { width: 100%; }
+		.oauth-actions { gap: 8px; }
+		.oauth-button { padding: 0 6px; font-size: 12px; }
+		.oauth-icon { width: 18px; height: 18px; flex-basis: 18px; }
+	}
 </style>

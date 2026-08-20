@@ -13,6 +13,7 @@ import com.example.temperate.service.risk.domain.RiskSessionType;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
@@ -28,10 +29,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 对普通用户受保护请求执行 RT-first 会话认证，并把同请求 AT 续签结果写入平台专属传输位置。
+ * 对普通用户受保护请求执行 RT-first 会话认证、付费会员惰性过期，并把同请求 AT 续签结果写入平台专属传输位置。
  *
  * <p>H5 只读取 HttpOnly Cookie，Android 只读取 Header；两端都必须提交设备与 CSRF。请求级结果会在
- * Servlet 异步再次分派时复用，避免 SSE 或异步 Controller 重复访问 Redis、重复续签或重复写响应头。</p>
+ * Servlet 异步再次分派时复用，避免 SSE 或异步 Controller 重复访问 Redis、重复续签、重复会员检查或重复写响应头。</p>
  */
 @Component
 public final class UserSessionAuthenticationInterceptor implements HandlerInterceptor {
@@ -51,16 +52,20 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
     private final AuthCookieWriter cookieWriter;
     private final PreAuthService preAuthService;
     private final NetworkRiskProperties networkRiskProperties;
+    private final MembershipExpirationService membershipExpirationService;
 
     public UserSessionAuthenticationInterceptor(
             AccessSessionService accessSessionService,
             AuthCookieWriter cookieWriter,
             PreAuthService preAuthService,
-            NetworkRiskProperties networkRiskProperties) {
+            NetworkRiskProperties networkRiskProperties,
+            MembershipExpirationService membershipExpirationService) {
         this.accessSessionService = Objects.requireNonNull(accessSessionService);
         this.cookieWriter = Objects.requireNonNull(cookieWriter);
         this.preAuthService = Objects.requireNonNull(preAuthService);
         this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
+        this.membershipExpirationService =
+                Objects.requireNonNull(membershipExpirationService);
     }
 
     @Override
@@ -89,6 +94,17 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
         SessionAccessResult result = binding == null
                 ? accessSessionService.authenticateOrRenew(command)
                 : accessSessionService.authenticateOrRenew(command, binding);
+
+        try {
+            // 只有会话已经认证出的内部用户 ID 才能触发会员降级，禁止使用请求参数选择待更新账号。
+            membershipExpirationService.expireIfDue(result.principal().userId());
+        } catch (RuntimeException exception) {
+            throw new SessionAuthenticationException(
+                    SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+                    "Membership validation is temporarily unavailable.",
+                    false,
+                    exception);
+        }
 
         establishSecurityContext(request, result.principal());
         if (result.renewed()) {

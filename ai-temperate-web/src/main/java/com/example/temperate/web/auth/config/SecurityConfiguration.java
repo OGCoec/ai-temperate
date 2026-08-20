@@ -5,6 +5,7 @@ import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
 import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter;
 import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
@@ -94,9 +95,14 @@ public class SecurityConfiguration {
     @Bean
     ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
             ApiKeyAuthenticationService authenticationService,
+            MembershipExpirationService membershipExpirationService,
             ApiKeyProperties properties,
             OpenAiErrorResponseWriter errorWriter) {
-        return new ApiKeyAuthenticationFilter(authenticationService, properties, errorWriter);
+        return new ApiKeyAuthenticationFilter(
+                authenticationService,
+                membershipExpirationService,
+                properties,
+                errorWriter);
     }
 
     @Bean
@@ -283,6 +289,8 @@ public class SecurityConfiguration {
                 "X-Register-Token",
                 "X-Register-CSRF",
                 "X-Login-Flow-Token",
+                "X-OAuth-Flow-Token",
+                "X-OAuth-Phone-Flow-Token",
                 "X-TOTP-Flow-Token",
                 "X-Reset-Flow-Token",
                 "X-Forget-Token",

@@ -1,0 +1,19 @@
+/** Google 账号选择成功后只向当前内存回调交付短时 ID Token。 */
+export type GoogleSignInResult = {
+	idToken : string
+}
+
+/** Google Credential Manager 的成功、取消与受控失败回调。 */
+export type GoogleSignInCallbacks = {
+	success : (result : GoogleSignInResult) => void,
+	cancel : () => void,
+	fail : (code : string, message : string) => void
+}
+
+export type IsGoogleSignInAvailable = () => boolean
+export type SignInWithGoogle = (
+	serverClientId : string,
+	nonce : string,
+	callbacks : GoogleSignInCallbacks
+) => void
+export type ClearGoogleCredentialState = () => void

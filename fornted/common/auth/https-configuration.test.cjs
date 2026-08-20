@@ -11,6 +11,12 @@ function readRootProjectFile(relativePath) {
 	return fs.readFileSync(path.resolve(__dirname, '..', '..', '..', relativePath), 'utf8')
 }
 
+async function loadAuthConfigModule() {
+	const source = readProjectFile('common/auth/config.js')
+	const encoded = Buffer.from(source, 'utf8').toString('base64')
+	return import(`data:text/javascript;base64,${encoded}`)
+}
+
 test('uses the primary domain for Android and same-origin production H5 API', () => {
 	const source = readProjectFile('common/auth/config.js')
 
@@ -21,6 +27,36 @@ test('uses the primary domain for Android and same-origin production H5 API', ()
 	assert.match(source, /window\.location\.hostname/)
 	assert.doesNotMatch(source, /https:\/\/api\.niko000o\.site/)
 	assert.doesNotMatch(source, /http:\/\/(?:127\.0\.0\.1|localhost):6655/)
+})
+
+test('maps only Android runtime information to the native edge transport', async () => {
+	const { resolveClientPlatform } = await loadAuthConfigModule()
+
+	assert.equal(resolveClientPlatform('android'), 'ANDROID')
+	assert.equal(resolveClientPlatform('ANDROID'), 'ANDROID')
+	assert.equal(resolveClientPlatform(' ios '), 'H5')
+	assert.equal(resolveClientPlatform(''), 'H5')
+	assert.equal(resolveClientPlatform(undefined), 'H5')
+	assert.equal(resolveClientPlatform('harmony'), 'H5')
+})
+
+test('uses APP-PLUS runtime detection and keeps H5 as the compile-time fallback', () => {
+	const source = readProjectFile('common/auth/config.js')
+
+	assert.match(source, /#ifdef APP-PLUS[\s\S]*uni\.getSystemInfoSync\(\)\?\.platform[\s\S]*#endif/)
+	assert.match(source, /#ifndef APP-PLUS[\s\S]*return 'H5'[\s\S]*#endif/)
+	assert.doesNotMatch(source, /#ifdef APP-(?:ANDROID|IOS)/)
+})
+
+test('Android HBuilderX launcher uses the standard uni-app base', () => {
+	const launch = JSON.parse(readProjectFile('.hbuilderx/launch.json'))
+	const android = launch.configurations.find(
+		configuration => configuration.type === 'uni-app:app-android')
+
+	assert.ok(android, '必须存在 Android 运行配置')
+	assert.equal(android.playground, 'standard')
+	assert.equal(android.packageName, 'io.dcloud.HBuilder')
+	assert.notEqual(android.packageName, 'com.android.chrome')
 })
 
 test('runs cookie-scope migration before ordinary API requests and retries 428 once', () => {

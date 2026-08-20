@@ -4,6 +4,8 @@ export const PUBLIC_ROUTES = Object.freeze([
 	'/pages/auth/totp-login',
 	'/pages/auth/register',
 	'/pages/auth/password-reset',
+	'/pages/auth/oauth-return',
+	'/pages/auth/oauth-phone',
 	'/pages/risk/blocked',
 	'/pages/risk/challenge-complete',
 	'/pages/risk/challenge-failed',

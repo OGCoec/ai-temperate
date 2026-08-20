@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.web.apikey.ApiInferenceBodyLimitFilter;
 import com.example.temperate.web.apikey.ApiKeyAuthenticationFilter;
 import com.example.temperate.web.apikey.ApiKeyIpRiskFilter;
@@ -108,6 +109,7 @@ final class ApiChatSecurityAsyncDispatchRegressionTest {
         NetworkRiskProperties riskProperties = mock(NetworkRiskProperties.class);
         ApiKeyAuthenticationFilter authenticationFilter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                mock(MembershipExpirationService.class),
                 apiKeyProperties,
                 errorWriter);
         ApiKeyIpRiskFilter riskFilter = new ApiKeyIpRiskFilter(

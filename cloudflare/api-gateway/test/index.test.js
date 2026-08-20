@@ -110,6 +110,62 @@ function websocketUpgradeResponse(options = {}) {
 	}
 }
 
+test('App Link documents are edge-hosted and contain only the fixed Android package', async () => {
+	const fingerprint = Array.from({ length: 32 }, () => 'AB').join(':')
+	const env = { ...ENV, ANDROID_APP_LINK_SHA256: fingerprint }
+	const assetlinks = await handleRequest(
+		request('niko000o.site', '/.well-known/assetlinks.json'), env)
+	const appReturn = await handleRequest(
+		request('niko000o.site', '/app/oauth-return'), env)
+
+	assert.equal(assetlinks.status, 200)
+	assert.equal(assetlinks.headers.get('Content-Type'), 'application/json; charset=utf-8')
+	const statements = await assetlinks.json()
+	assert.equal(statements[0].target.package_name, 'site.niko000o.aitemperate')
+	assert.deepEqual(statements[0].target.sha256_cert_fingerprints, [fingerprint])
+	assert.equal(appReturn.status, 200)
+	assert.match(appReturn.headers.get('Cache-Control'), /no-store/)
+	assert.doesNotMatch(await appReturn.text(), /state|code|flow.?token|email|phone/i)
+})
+
+test('OAuth navigation permits only fixed provider and site redirects', async () => {
+	const google = await handleRequest(
+		request('niko000o.site', '/api/auth/oauth2/authorization/google', {
+			migrated: false
+		}),
+		ENV,
+		runtime(async upstream => {
+			assert.equal(new URL(upstream.url).hostname, 'api.niko000o.site')
+			return new Response(null, {
+				status: 302,
+				headers: { Location: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=test' }
+			})
+		}))
+	assert.equal(google.status, 302)
+
+	const poisoned = await handleRequest(
+		request('niko000o.site', '/api/auth/oauth2/code/github?code=x&state=y', {
+			migrated: false
+		}),
+		ENV,
+		runtime(async () => new Response(null, {
+			status: 302,
+			headers: { Location: 'https://evil.example/collect' }
+		})))
+	assert.equal(poisoned.status, 502)
+
+	const leakedReturnMaterial = await handleRequest(
+		request('niko000o.site', '/api/auth/oauth2/code/google?code=x&state=y', {
+			migrated: false
+		}),
+		ENV,
+		runtime(async () => new Response(null, {
+			status: 302,
+			headers: { Location: 'https://niko000o.site/app/oauth-return?code=leak' }
+		})))
+	assert.equal(leakedReturnMaterial.status, 502)
+})
+
 test('wrangler sends every ordinary root-domain path through this Worker', () => {
 	const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')
 
@@ -124,6 +180,8 @@ test('valid H5 pages fetch the Pages root without forwarding credentials or quer
 		'/pages/launch/session-gate',
 		'/pages/auth/login',
 		'/pages/auth/totp-login',
+		'/pages/auth/oauth-return',
+		'/pages/auth/oauth-phone',
 		'/pages/auth/register',
 		'/pages/auth/password-reset',
 		'/pages/ai-chat/index',

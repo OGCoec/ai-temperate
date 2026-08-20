@@ -77,6 +77,27 @@
 				}
 			}
 		},
+		{
+			"path": "pages/auth/oauth-return",
+			"style": {
+				"navigationBarTitleText": "正在完成登录",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/auth/oauth-phone",
+			"style": {
+				"navigationBarTitleText": "验证手机号",
+				"navigationBarTextStyle": "white",
+				"navigationBarBackgroundColor": "#0b0d0c",
+				"backgroundColor": "#0b0d0c",
+				"app-plus": {
+					"softinputMode": "adjustResize"
+				}
+			}
+		},
 		// #ifdef H5
 		{
 			"path": "pages/account/api-keys",

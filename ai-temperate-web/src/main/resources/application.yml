@@ -199,6 +199,31 @@ mybatis:
 
 # 应用业务、Web 异步响应与安全边界配置。
 app:
+  # Google 与 GitHub OAuth 只在全部固定 HTTPS 地址和环境凭据齐备时启用。
+  oauth:
+    # 默认开启第三方登录；仍可通过 OAUTH_ENABLED=false 紧急关闭，Provider 凭据必须由环境变量注入。
+    enabled: ${OAUTH_ENABLED:true}
+    # 服务端授权入口、Provider 回调和 App Link 共用的公开 HTTPS 基址。
+    public-base-url: ${OAUTH_PUBLIC_BASE_URL:https://niko000o.site}
+    # H5 Provider 回调完成后只允许跳转到本站固定返回页。
+    h5-return-url: ${OAUTH_H5_RETURN_URL:https://niko000o.site/pages/auth/oauth-return}
+    # Android 浏览器 OAuth 完成后只允许跳转到固定 App Link 页面。
+    android-return-url: ${OAUTH_ANDROID_RETURN_URL:https://niko000o.site/app/oauth-return}
+    # Google Browser OAuth 与 Android Credential Manager 的客户端配置。
+    google:
+      # Web OAuth Client ID 同时用于 H5 Browser OAuth 的 audience。
+      client-id: ${GOOGLE_CLIENT_ID:}
+      # Google Web OAuth Client Secret 只能由运行环境注入。
+      client-secret: ${GOOGLE_CLIENT_SECRET:}
+      # Android 原生 ID Token 固定以服务端 Client ID 作为 audience。
+      android-server-client-id: ${GOOGLE_ANDROID_SERVER_CLIENT_ID:}
+    # GitHub OAuth App 的固定服务端客户端配置。
+    github:
+      # GitHub OAuth App Client ID 只能由运行环境注入。
+      client-id: ${GITHUB_CLIENT_ID:}
+      # GitHub OAuth App Client Secret 禁止进入仓库与客户端包。
+      client-secret: ${GITHUB_CLIENT_SECRET:}
+
   # Web 层异步响应使用独立有界执行器承载 SSE 等阻塞 Servlet 写出任务。
   web:
     # MVC 异步边界显式配置线程和外层超时，禁止退回不适合生产长连接的默认执行器。

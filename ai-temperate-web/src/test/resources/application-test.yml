@@ -83,6 +83,31 @@ ai-model-icon:
 
 # 测试应用业务、Web 异步响应与安全配置。
 app:
+  # 普通上下文测试关闭 OAuth，Provider 与状态机行为由隔离单元和合同测试覆盖。
+  oauth:
+    # 测试不连接 Google 或 GitHub 官方端点。
+    enabled: false
+    # 测试使用固定非生产 HTTPS 基址验证属性绑定。
+    public-base-url: https://niko000o.site
+    # 测试 H5 返回页保持固定本站地址。
+    h5-return-url: https://niko000o.site/pages/auth/oauth-return
+    # 测试 Android 返回页保持固定 App Link 地址。
+    android-return-url: https://niko000o.site/app/oauth-return
+    # Google 测试占位配置不含真实客户端凭据。
+    google:
+      # OAuth 关闭时允许测试 Client ID 为空。
+      client-id: ""
+      # OAuth 关闭时允许测试 Client Secret 为空。
+      client-secret: ""
+      # OAuth 关闭时允许 Android Server Client ID 为空。
+      android-server-client-id: ""
+    # GitHub 测试占位配置不含真实客户端凭据。
+    github:
+      # OAuth 关闭时允许测试 Client ID 为空。
+      client-id: ""
+      # OAuth 关闭时允许测试 Client Secret 为空。
+      client-secret: ""
+
   # 上下文测试不受开发机边缘代理环境变量影响；边缘验签策略由专用过滤器测试覆盖。
   edge-proxy:
     # 普通 Web 上下文测试不经过真实 Worker，固定关闭验签以隔离外部部署环境。

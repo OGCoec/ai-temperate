@@ -35,6 +35,8 @@ test('allows authentication bootstrap and pre-auth security pages without login'
 		'/pages/auth/totp-login',
 		'/pages/auth/register',
 		'/pages/auth/password-reset',
+		'/pages/auth/oauth-return',
+		'/pages/auth/oauth-phone',
 		'/pages/risk/blocked',
 		'/pages/risk/challenge-complete',
 		'/pages/risk/challenge-failed',
@@ -44,6 +46,14 @@ test('allows authentication bootstrap and pre-auth security pages without login'
 		assert.equal(isPublicRoute(route), true)
 		assert.equal(isProtectedRoute(route), false)
 	}
+})
+
+test('keeps OAuth flow pages public without broadly allowing authentication routes', async () => {
+	const { isPublicRoute, isProtectedRoute } = await loadModule()
+
+	assert.equal(isPublicRoute('/pages/auth/oauth-return?provider=github'), true)
+	assert.equal(isProtectedRoute('/pages/auth/oauth-phone#challenge'), false)
+	assert.equal(isProtectedRoute('/pages/auth/security-settings'), true)
 })
 
 test('protects account and future internal pages by default', async () => {

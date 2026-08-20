@@ -199,6 +199,30 @@ public final class RedisKeyFactory {
         return authKey(LOGIN_OBJECT, IdentifierType.REGISTRATION_CHALLENGE, identifier);
     }
 
+    public String oauthFlowKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_FLOW, identifier);
+    }
+
+    public String oauthAuthorizationStateKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_STATE, identifier);
+    }
+
+    public String oauthLaunchTicketKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_LAUNCH, identifier);
+    }
+
+    public String oauthPhoneSendRiskKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_PHONE_SEND_RISK, identifier);
+    }
+
+    public String oauthPhoneConflictRiskKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_PHONE_CONFLICT_RISK, identifier);
+    }
+
+    public String oauthPhoneBlockKey(HmacIdentifier identifier) {
+        return authKey("oauth", IdentifierType.OAUTH_PHONE_BLOCK, identifier);
+    }
+
     /**
      * 生成第一因子通过后等待 TOTP 校验的短期登录挑战 Key。
      */
@@ -954,6 +978,12 @@ public final class RedisKeyFactory {
         DEVICE_BLOCK("block"),
         LOGIN_CODE("code"),
         AUTH_FLOW("flow"),
+        OAUTH_FLOW("oauth-flow"),
+        OAUTH_STATE("oauth-state"),
+        OAUTH_LAUNCH("oauth-launch"),
+        OAUTH_PHONE_SEND_RISK("phone-send-risk"),
+        OAUTH_PHONE_CONFLICT_RISK("phone-conflict-risk"),
+        OAUTH_PHONE_BLOCK("phone-block"),
         TOTP_LOGIN_FLOW("login-flow"),
         TOTP_USED_STEP("used-step"),
         TOTP_SETUP("setup"),

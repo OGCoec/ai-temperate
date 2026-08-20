@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.Locale;
 import java.util.Map;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
@@ -67,6 +68,7 @@ class MyBatisMapperXmlIntegrationTest {
 
         assertTrue(configuration.hasStatement(namespace + "insert"));
         assertTrue(configuration.hasStatement(namespace + "findByLoginIdentityId"));
+        assertTrue(configuration.hasStatement(namespace + "expirePaidMembershipIfDue"));
 
         var insert = configuration.getMappedStatement(namespace + "insert")
                 .getBoundSql(Map.of(
@@ -95,6 +97,30 @@ class MyBatisMapperXmlIntegrationTest {
         String lookupSql = lookup.getSql().toLowerCase(Locale.ROOT);
         assertTrue(lookupSql.contains("quota_period_started_at"));
         assertTrue(lookupSql.contains("quota_period_ends_at"));
+
+        OffsetDateTime now = OffsetDateTime.parse("2026-08-20T12:00:00Z");
+        OffsetDateTime freeEndsAt = OffsetDateTime.parse("2026-08-27T12:00:00Z");
+        var expiration = configuration.getMappedStatement(
+                        namespace + "expirePaidMembershipIfDue")
+                .getBoundSql(Map.of(
+                        "loginIdentityId", 10001L,
+                        "now", now,
+                        "freeQuotaMinor", 5_000L,
+                        "freeQuotaEndsAt", freeEndsAt));
+        String expirationSql = expiration.getSql().toLowerCase(Locale.ROOT);
+        assertTrue(expirationSql.contains("membership_tier = 0"));
+        assertTrue(expirationSql.contains("membership_expires_at = null"));
+        assertTrue(expirationSql.contains("membership_tier between 1 and 6"));
+        assertTrue(expirationSql.contains("membership_expires_at is null"));
+        assertTrue(expirationSql.contains("membership_expires_at <= ?"));
+        assertTrue(expiration.getParameterMappings().stream()
+                .anyMatch(mapping -> "loginIdentityId".equals(mapping.getProperty())));
+        assertTrue(expiration.getParameterMappings().stream()
+                .anyMatch(mapping -> "now".equals(mapping.getProperty())));
+        assertTrue(expiration.getParameterMappings().stream()
+                .anyMatch(mapping -> "freeQuotaMinor".equals(mapping.getProperty())));
+        assertTrue(expiration.getParameterMappings().stream()
+                .anyMatch(mapping -> "freeQuotaEndsAt".equals(mapping.getProperty())));
     }
 
     private static Configuration parseMapper(String resource) throws IOException {

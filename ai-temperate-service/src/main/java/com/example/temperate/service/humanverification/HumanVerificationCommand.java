@@ -14,7 +14,7 @@ public record HumanVerificationCommand(
         String expectedAction) {
 
     private static final Set<String> TURNSTILE_ACTIONS =
-            Set.of("register", "login", "password_reset");
+            Set.of("register", "login", "password_reset", "oauth_phone");
 
     /**
      * 创建普通用户 Turnstile 校验命令，并在进入供应商实现前锁定允许的业务动作集合。
@@ -22,7 +22,7 @@ public record HumanVerificationCommand(
      * @param responseToken 前端取得的一次性 Turnstile 响应
      * @param canonicalClientIp 服务端解析后的规范客户端 IP
      * @param challengeId 当前业务 Flow 的挑战标识
-     * @param expectedAction 只允许注册、验证码登录或密码重置动作
+     * @param expectedAction 只允许注册、验证码登录、密码重置或 OAuth 补手机动作
      * @return 不包含可空 action 的统一校验命令
      */
     public static HumanVerificationCommand turnstile(

@@ -31,6 +31,9 @@ public class NetworkRiskWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/admin/_edge/pre-auth",
                         "/api/_edge/risk-challenge",
                         "/api/admin/_edge/risk-challenge",
+                        // OAuth Provider 顶层导航不能附加应用请求头，只由一次性 state/PKCE/nonce/握手 Cookie 保护。
+                        "/api/auth/oauth2/authorization/**",
+                        "/api/auth/oauth2/code/**",
                         /*
                          * WebView 子资源请求不会复用首个页面请求的自定义请求头，因此仅放行不含凭据和运行时数据的
                          * 精确 CSS/JavaScript 资源路径；受控 HTML 入口仍按原规则执行参数与风险校验。

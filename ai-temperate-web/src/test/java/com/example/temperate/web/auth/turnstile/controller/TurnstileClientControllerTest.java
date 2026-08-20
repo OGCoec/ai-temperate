@@ -83,6 +83,21 @@ class TurnstileClientControllerTest {
     }
 
     @Test
+    void acceptsOAuthPhoneAsServerControlledTurnstileAction() {
+        AuthSecurityProperties properties = mock(AuthSecurityProperties.class);
+        when(properties.turnstile()).thenReturn(new AuthSecurityProperties.Turnstile(
+                "1x00000000000000000000AA",
+                "1x0000000000000000000000000000000AA",
+                List.of("localhost")));
+        TurnstileClientController controller = new TurnstileClientController(properties);
+
+        var response = controller.page(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL", "oauth_phone");
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+    }
+
+    @Test
     void controllerSourceContainsNoFrontendImplementation() throws IOException {
         String source = Files.readString(Path.of(
                 "src/main/java/com/example/temperate/web/auth/turnstile/controller/TurnstileClientController.java"));

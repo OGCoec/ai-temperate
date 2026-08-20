@@ -1,5 +1,6 @@
 package com.example.temperate.model.user.entity;
 
+import com.example.temperate.model.auth.enums.RegistrationSource;
 import java.time.OffsetDateTime;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -17,7 +18,11 @@ import lombok.Setter;
 public class UserLoginIdentity {
 
     private Long id;
+    private RegistrationSource registrationSource = RegistrationSource.STANDARD;
+    private String githubSubject;
+    private String googleSubject;
     private String email;
+    private Boolean emailVerified = Boolean.FALSE;
     private String phone;
     private String passwordHash;
     private Long passwordVersion;

@@ -31,6 +31,12 @@ public class WebRtcWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/admin/_edge/pre-auth",
                         "/api/_edge/risk-challenge",
                         "/api/admin/_edge/risk-challenge",
+                        /*
+                         * Provider 顶层导航和回调无法携带站内 WebRTC 请求上下文；这里只精确排除两条入口，
+                         * 其完整性继续由一次性 state、PKCE、OIDC nonce 与握手 Cookie 共同保证。
+                         */
+                        "/api/auth/oauth2/authorization/**",
+                        "/api/auth/oauth2/code/**",
                         "/api/_edge/webrtc/start",
                         "/api/_edge/webrtc/report",
                         "/api/admin/_edge/webrtc/start",

@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.user.profile.CurrentUserProfileResult;
 import com.example.temperate.service.user.profile.CurrentUserProfileService;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -75,7 +76,8 @@ class CurrentUserAccessTokenTransportTest {
                         accessSessionService,
                         mock(AuthCookieWriter.class),
                         mock(PreAuthService.class),
-                        mock(NetworkRiskProperties.class)))
+                        mock(NetworkRiskProperties.class),
+                        mock(MembershipExpirationService.class)))
                 .build();
     }
 

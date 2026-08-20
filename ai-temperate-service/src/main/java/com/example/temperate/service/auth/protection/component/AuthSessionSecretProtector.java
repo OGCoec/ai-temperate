@@ -21,6 +21,7 @@ public final class AuthSessionSecretProtector {
     private static final String NUL = Character.toString(0);
     private static final Pattern E164 = Pattern.compile("^\\+[1-9][0-9]{7,14}$");
     private static final Pattern NANO_ID = Pattern.compile("^[A-Za-z0-9_-]{38}$");
+    private static final Pattern NANO_ID_32 = Pattern.compile("^[A-Za-z0-9_-]{32}$");
     private static final Pattern CSRF = Pattern.compile("^[A-Za-z0-9_-]{43}$");
     private static final Base64.Decoder BASE64_URL_DECODER = Base64.getUrlDecoder();
     private static final Base64.Encoder BASE64_URL_ENCODER =
@@ -77,6 +78,34 @@ public final class AuthSessionSecretProtector {
 
     public HmacIdentifier loginDeliveryOperation(String operationId) {
         return identify("auth:login:delivery", requireText("delivery operation", operationId, 64));
+    }
+
+    public HmacIdentifier oauthFlowToken(String rawFlowToken) {
+        return identify("auth:oauth:flow:v1", requireNanoId("OAuth flow token", rawFlowToken));
+    }
+
+    public HmacIdentifier oauthBrowserBinding(String rawBinding) {
+        return identify("auth:oauth:browser-binding:v1",
+                requireNanoId("OAuth browser binding", rawBinding));
+    }
+
+    public HmacIdentifier oauthState(String rawState) {
+        return identify("auth:oauth:state:v1", requireNanoId32("OAuth state", rawState));
+    }
+
+    public HmacIdentifier oauthLaunchTicket(String rawLaunchTicket) {
+        return identify("auth:oauth:launch:v1",
+                requireNanoId32("OAuth launch ticket", rawLaunchTicket));
+    }
+
+    public HmacIdentifier oauthNonce(String rawNonce) {
+        return identify("auth:oauth:nonce:v1",
+                requireCanonicalBase64Url32("OAuth nonce", rawNonce));
+    }
+
+    public HmacIdentifier oauthClientIp(String canonicalIp) {
+        return identify("auth:oauth:ip:v1",
+                requireText("OAuth client IP", canonicalIp, 64));
     }
 
     public HmacIdentifier passwordResetFlowToken(String rawFlowToken) {
@@ -227,6 +256,14 @@ public final class AuthSessionSecretProtector {
         String valid = requireText(name, value, 38);
         if (!NANO_ID.matcher(valid).matches()) {
             throw invalid(name + " must be a 38-character NanoID.");
+        }
+        return valid;
+    }
+
+    private static String requireNanoId32(String name, String value) {
+        String valid = requireText(name, value, 32);
+        if (!NANO_ID_32.matcher(valid).matches()) {
+            throw invalid(name + " must be a 32-character NanoID.");
         }
         return valid;
     }

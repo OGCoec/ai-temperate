@@ -8,6 +8,8 @@
 | `X-Client-Platform` | `H5` 或 `ANDROID`，缺省按 H5 处理 |
 | `X-Register-Token` | 注册流程 NanoID38 |
 | `X-Login-Flow-Token` | 验证码登录流程 NanoID38 |
+| `X-OAuth-Flow-Token` | Android Google/GitHub 登录的 NanoID38 流程凭据；H5 改用路径隔离的 HttpOnly Cookie |
+| `X-OAuth-Phone-Flow-Token` | Android OAuth 补手机号子流程凭据；只能与外层 OAuth Flow 和当前设备组合使用 |
 | `X-TOTP-Flow-Token` | Android 第一因子通过后使用的五分钟 TOTP 登录挑战；H5 改用路径隔离的 HttpOnly Cookie |
 | `X-Reset-Flow-Token` | 找回密码流程 NanoID38 |
 | `X-Forget-Token` | 验证码通过后签发的五分钟一次性密码重置凭证 |
@@ -94,6 +96,28 @@ TOTP 挑战有效期五分钟、最多失败五次，验证码接受当前三十
 匹配时间片通过 Redis 原子领取，禁止在并发登录或敏感操作中重放。
 
 H5 登录前若缺少 CSRF Cookie，先调用 `GET /api/auth/csrf`。该接口返回 204，并初始化 JavaScript 可读的 `XSRF-TOKEN` 会话 Cookie。
+
+## Google 与 GitHub OAuth 登录
+
+| Method | Path | 请求与行为 |
+| --- | --- | --- |
+| POST | `/api/auth/oauth2/start` | 按 Provider、H5/Android 和交互模式创建短时 Flow；H5 不返回原始 Flow Token |
+| GET | `/api/auth/oauth2/authorization/{provider}` | 消费 H5 Cookie 或 Android 一次性 launch ticket，并跳转固定 Provider 授权端点 |
+| GET | `/api/auth/oauth2/code/{provider}` | 一次性消费 state，使用 PKCE 换码并跳转固定 H5/App 返回页 |
+| POST | `/api/auth/oauth2/google/native/complete` | Android 上传 Credential Manager 的短时 Google ID Token；服务端验证 JWS 与 nonce 后立即消费 nonce |
+| GET | `/api/auth/oauth2/flow/status` | 恢复 App Link、手动回到 App 或 H5 回调后的流程状态 |
+| POST | `/api/auth/oauth2/phone/start` | 为当前 OAuth Flow 锁定规范化手机号并创建服务端固定 `OAUTH_PHONE` 子流程 |
+| POST | `/api/auth/oauth2/phone/turnstile` | 使用 `oauth_phone` action 完成人机验证 |
+| POST | `/api/auth/oauth2/phone/send` | 从服务端 Flow 读取锁定手机号并发送短信或 WhatsApp，客户端不能重新提交手机号 |
+| POST | `/api/auth/oauth2/phone/verify` | 一次性消费验证码，只把手机号归属证明写入当前 OAuth Flow |
+| POST | `/api/auth/oauth2/complete` | 事务内重新裁决 Subject、邮箱与手机号，随后签发正式会话或返回 `TOTP_REQUIRED` |
+| POST | `/api/auth/oauth2/cancel` | 删除当前短时 OAuth Flow；Android 同时清除本地 KeyStore 流程材料 |
+
+Google 使用 OIDC `sub`，GitHub 使用数字 `user.id`；Provider 已验证邮箱只在 Subject 未绑定时用于匹配本地账号。同邮箱密码账号会自动绑定对应 Subject，不要求再次输入密码或邮箱验证码；邮箱不存在或已有账号缺手机号时必须先完成 Turnstile 与手机验证码。`registration_source` 只记录首次来源，绑定第二种或第三种登录方式时不改变。
+
+浏览器流程使用 NanoID32 state、PKCE S256、一次性浏览器握手，Google 额外校验 OIDC nonce；Android 原生 Google 不使用浏览器 state 或 App Link。Provider Code、Access Token、ID Token 和原始 Flow Token 不写入数据库、Redis 长期值、应用日志或固定回跳 URL。
+
+OAuth 手机发送采用六十秒冷却、五分钟最多五次和两小时 Flow/全局设备封禁；手机号冲突统一返回 `OAUTH_PHONE_UNAVAILABLE`，不披露号码属于哪个账号。Redis 不可用时关闭发送通路，不调用短信供应商。
 
 所有业务 Cookie 都不设置 `Domain`。生产普通 H5 通过
 `https://niko000o.site/api/**` 的 Cloudflare Worker 同源入口访问后端，管理员 H5

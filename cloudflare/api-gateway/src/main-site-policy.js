@@ -5,6 +5,8 @@ export const H5_PAGE_PATHS = Object.freeze([
 	'/pages/launch/session-gate',
 	'/pages/auth/login',
 	'/pages/auth/totp-login',
+	'/pages/auth/oauth-return',
+	'/pages/auth/oauth-phone',
 	'/pages/auth/register',
 	'/pages/auth/password-reset',
 	'/pages/ai-chat/index',
@@ -121,6 +123,21 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/auth/login/code/send', ['POST']),
 	route('/api/auth/login/code/verify', ['POST']),
 	route('/api/auth/login/totp/verify', ['POST']),
+	route('/api/auth/oauth2/start', ['POST']),
+	route('/api/auth/oauth2/google/native/complete', ['POST']),
+	route('/api/auth/oauth2/flow/status', ['GET']),
+	route('/api/auth/oauth2/phone/start', ['POST']),
+	route('/api/auth/oauth2/phone/turnstile', ['POST']),
+	route('/api/auth/oauth2/phone/send', ['POST']),
+	route('/api/auth/oauth2/phone/verify', ['POST']),
+	route('/api/auth/oauth2/complete', ['POST']),
+	route('/api/auth/oauth2/cancel', ['POST']),
+	route('/app/oauth-return', ['GET', 'HEAD'], {
+		edgeDocument: 'app-oauth-return'
+	}),
+	route('/.well-known/assetlinks.json', ['GET', 'HEAD'], {
+		edgeDocument: 'assetlinks'
+	}),
 	route('/api/auth/register/start', ['POST']),
 	route('/api/auth/register/status', ['GET']),
 	route('/api/auth/register/turnstile', ['POST']),
@@ -185,6 +202,16 @@ function templateRoute(pattern, invalidPattern, allowedMethods, options = {}) {
 }
 
 const TEMPLATE_ROOT_ROUTES = Object.freeze([
+	templateRoute(
+		/^\/api\/auth\/oauth2\/authorization\/(google|github)$/,
+		/^\/api\/auth\/oauth2\/authorization\/[^/]+$/,
+		['GET'],
+		{ oauthNavigation: true, parameterType: 'OAUTH_PROVIDER' }),
+	templateRoute(
+		/^\/api\/auth\/oauth2\/code\/(google|github)$/,
+		/^\/api\/auth\/oauth2\/code\/[^/]+$/,
+		['GET'],
+		{ oauthNavigation: true, parameterType: 'OAUTH_PROVIDER' }),
 	templateRoute(
 		new RegExp(`^/api/users/me/api-keys/(${API_KEY_ULID_26})$`),
 		/^\/api\/users\/me\/api-keys\/[^/]+$/,

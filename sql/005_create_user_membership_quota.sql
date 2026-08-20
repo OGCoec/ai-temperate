@@ -7,6 +7,7 @@ CREATE TABLE user_membership_quota (
     quota_balance_minor BIGINT NOT NULL DEFAULT 5000,
     quota_period_started_at TIMESTAMPTZ,
     quota_period_ends_at TIMESTAMPTZ,
+    membership_expires_at TIMESTAMPTZ,
 
     CONSTRAINT pk_user_membership_quota PRIMARY KEY (id),
     CONSTRAINT uk_user_membership_quota_login_identity
@@ -24,5 +25,6 @@ COMMENT ON COLUMN user_membership_quota.membership_tier IS '会员等级：0=FRE
 COMMENT ON COLUMN user_membership_quota.quota_balance_minor IS '可用额度的最小单位整数值；固定缩放比例为 100，数据库值 5000 表示实际额度 50.00';
 COMMENT ON COLUMN user_membership_quota.quota_period_started_at IS '当前额度周期实际开始时间；新用户尚未消费额度时为空';
 COMMENT ON COLUMN user_membership_quota.quota_period_ends_at IS '当前额度周期结束时间；新用户注册时由业务服务写入当前 UTC 时间，使首次模型调用进入新周期';
+COMMENT ON COLUMN user_membership_quota.membership_expires_at IS '当前付费会员订阅到期时间；FREE 允许为空，付费等级为空时由惰性过期逻辑降级为 FREE';
 
 COMMIT;

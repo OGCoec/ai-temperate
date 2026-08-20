@@ -120,7 +120,7 @@ class WebRtcSecurityPathContractTest {
     }
 
     @Test
-    void networkRiskDoesNotExcludeWebRtcWhileWebRtcInterceptorExcludesItself()
+    void networkRiskAndWebRtcUseExactOAuthNavigationExclusions()
             throws Exception {
         String network = source(
                 "src/main/java/com/example/temperate/web/risk/",
@@ -130,14 +130,20 @@ class WebRtcSecurityPathContractTest {
                 "WebRtcWebMvcConfiguration.java");
 
         assertThat(network).doesNotContain("/webrtc/");
-        assertThat(network).contains(
-                "/api/auth/turnstile/page.css",
-                "/api/auth/turnstile/page.js",
-                "/api/admin/auth/hcaptcha/page.css",
-                "/api/admin/auth/hcaptcha/page.js");
+        assertThat(network)
+                .contains(
+                        "/api/auth/oauth2/authorization/**",
+                        "/api/auth/oauth2/code/**",
+                        "/api/auth/turnstile/page.css",
+                        "/api/auth/turnstile/page.js",
+                        "/api/admin/auth/hcaptcha/page.css",
+                        "/api/admin/auth/hcaptcha/page.js")
+                .doesNotContain("/api/auth/oauth2/**");
         assertThat(webRtc)
                 .contains("Ordered.HIGHEST_PRECEDENCE + 1")
                 .contains(
+                        "/api/auth/oauth2/authorization/**",
+                        "/api/auth/oauth2/code/**",
                         "/api/_edge/webrtc/start",
                         "/api/_edge/webrtc/report",
                         "/api/admin/_edge/webrtc/start",
@@ -146,6 +152,7 @@ class WebRtcSecurityPathContractTest {
                         "/api/auth/turnstile/page.js",
                         "/api/admin/auth/hcaptcha/page.css",
                         "/api/admin/auth/hcaptcha/page.js")
+                .doesNotContain("/api/auth/oauth2/**")
                 .doesNotContain("/api/auth/turnstile/**")
                 .doesNotContain("/api/admin/auth/hcaptcha/**");
     }

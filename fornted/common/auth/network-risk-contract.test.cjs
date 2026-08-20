@@ -31,27 +31,41 @@ test('ordinary H5 bootstraps PreAuth before protected API requests without expos
 	assert.match(http, /clearSession\(\)[\s\S]*invalidatePreAuth\(\)/)
 })
 
-test('ordinary H5 loads phone country without waiting for the WebRTC report', () => {
+test('only exact H5 bootstrap paths continue while the WebRTC report is pending', () => {
 	const http = source('common/auth/http-client.js')
 	const authApi = source('common/auth/auth-api.js')
 	const publicRequest = http.slice(http.indexOf('export async function publicRequest'))
 
 	assert.match(http, /PHONE_COUNTRY_PATH\s*=\s*'\/api\/auth\/phone-country'/)
+	assert.match(http, /OAUTH_START_PATH\s*=\s*'\/api\/auth\/oauth2\/start'/)
 	assert.match(
-		publicRequest,
-		/await ensureCookieScopeMigration\(\)[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(path !== PHONE_COUNTRY_PATH\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
+		http,
+		/H5_WEBRTC_BACKGROUND_PATHS\s*=\s*new Set\(\[\s*PHONE_COUNTRY_PATH,\s*OAUTH_START_PATH\s*\]\)/
+	)
+	assert.match(
+		http,
+		/function shouldAwaitH5WebRtc\(path\)\s*\{\s*return !H5_WEBRTC_BACKGROUND_PATHS\.has\(path\)\s*\}/
 	)
 	assert.match(
 		publicRequest,
-		/error\.code === 'PREAUTH_REQUIRED'[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(path !== PHONE_COUNTRY_PATH\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
+		/await ensureCookieScopeMigration\(\)[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(shouldAwaitH5WebRtc\(path\)\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
+	)
+	assert.match(
+		publicRequest,
+		/error\.code === 'PREAUTH_REQUIRED'[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(shouldAwaitH5WebRtc\(path\)\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
 	)
 	assert.equal(
-		(publicRequest.match(/if \(path !== PHONE_COUNTRY_PATH\) \{/g) || []).length,
+		(publicRequest.match(/if \(shouldAwaitH5WebRtc\(path\)\) \{/g) || []).length,
 		2
 	)
+	assert.doesNotMatch(http, /skipWebRtc/i)
 	assert.match(
 		authApi,
 		/phoneCountry\(\)\s*\{[\s\S]*publicRequest\('\/api\/auth\/phone-country'/
+	)
+	assert.match(
+		authApi,
+		/oauthStart\(provider, interactionMode\)[\s\S]*publicRequest\('\/api\/auth\/oauth2\/start'/
 	)
 })
 

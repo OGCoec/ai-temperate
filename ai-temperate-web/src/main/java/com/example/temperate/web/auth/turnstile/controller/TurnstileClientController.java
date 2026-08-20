@@ -31,7 +31,7 @@ public final class TurnstileClientController {
     private static final Pattern CHALLENGE = Pattern.compile("^[A-Za-z0-9_-]{38}$");
     private static final Pattern ACTION = Pattern.compile("^[a-z][a-z0-9_-]{1,31}$");
     private static final Set<String> ALLOWED_ACTIONS =
-            Set.of("register", "login", "password_reset");
+            Set.of("register", "login", "password_reset", "oauth_phone");
     private static final Resource PAGE =
             new ClassPathResource("verification-pages/turnstile-page.html");
     private static final Resource PAGE_STYLE =

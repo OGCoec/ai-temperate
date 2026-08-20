@@ -11,6 +11,7 @@ import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthentica
 import com.example.temperate.service.user.apikey.authentication.ApiKeyAuthenticationService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
+import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,6 +39,8 @@ final class ApiKeyV1FiltersTest {
     @Test
     void authenticatesModelDiscoveryWithTheSameBearerFilterAsChatCompletions() throws Exception {
         ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
+        MembershipExpirationService expirationService =
+                mock(MembershipExpirationService.class);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
                 new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
         when(authenticationService.authenticate("sk-test")).thenReturn(principal);
@@ -45,6 +48,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                expirationService,
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/models");
@@ -60,12 +64,15 @@ final class ApiKeyV1FiltersTest {
                         .getAuthentication().getPrincipal()));
 
         verify(authenticationService).authenticate("sk-test");
+        verify(expirationService).expireIfDue(2L);
         assertThat(authenticatedPrincipal.get()).isSameAs(principal);
     }
 
     @Test
     void authenticatesChatCompletionsWhenNodeFetchAddsFetchMetadata() throws Exception {
         ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
+        MembershipExpirationService expirationService =
+                mock(MembershipExpirationService.class);
         ApiKeyPrincipal principal = new ApiKeyPrincipal(
                 new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
         when(authenticationService.authenticate("sk-test")).thenReturn(principal);
@@ -73,6 +80,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                expirationService,
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
@@ -85,6 +93,35 @@ final class ApiKeyV1FiltersTest {
                         .getAuthentication().getPrincipal()));
 
         verify(authenticationService).authenticate("sk-test");
+        verify(expirationService).expireIfDue(2L);
+        assertThat(authenticatedPrincipal.get()).isSameAs(principal);
+    }
+
+    @Test
+    void authenticatesResponsesAndChecksMembershipExpiration() throws Exception {
+        ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
+        MembershipExpirationService expirationService =
+                mock(MembershipExpirationService.class);
+        ApiKeyPrincipal principal = new ApiKeyPrincipal(
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
+        when(authenticationService.authenticate("sk-test")).thenReturn(principal);
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.setEnabled(true);
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
+                authenticationService,
+                expirationService,
+                properties,
+                new OpenAiErrorResponseWriter(new ObjectMapper()));
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/v1/responses");
+        request.addHeader("Authorization", "Bearer sk-test");
+        AtomicReference<Object> authenticatedPrincipal = new AtomicReference<>();
+
+        filter.doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) ->
+                authenticatedPrincipal.set(SecurityContextHolder.getContext()
+                        .getAuthentication().getPrincipal()));
+
+        verify(expirationService).expireIfDue(2L);
         assertThat(authenticatedPrincipal.get()).isSameAs(principal);
     }
 
@@ -95,6 +132,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                mock(MembershipExpirationService.class),
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -118,6 +156,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                mock(MembershipExpirationService.class),
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/models");
@@ -139,12 +178,15 @@ final class ApiKeyV1FiltersTest {
             String method,
             String path) throws Exception {
         ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
+        MembershipExpirationService expirationService =
+                mock(MembershipExpirationService.class);
         when(authenticationService.authenticate("sk-test"))
                 .thenThrow(new ApiKeyAuthenticationException());
         ApiKeyProperties properties = new ApiKeyProperties();
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                expirationService,
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest(method, path);
@@ -163,6 +205,41 @@ final class ApiKeyV1FiltersTest {
         assertThat(chainCalled.get()).isFalse();
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
         verify(authenticationService).authenticate("sk-test");
+        verifyNoInteractions(expirationService);
+    }
+
+    @Test
+    void membershipExpirationFailureReturnsServiceUnavailableAndStopsChain()
+            throws Exception {
+        ApiKeyAuthenticationService authenticationService = mock(ApiKeyAuthenticationService.class);
+        MembershipExpirationService expirationService =
+                mock(MembershipExpirationService.class);
+        ApiKeyPrincipal principal = new ApiKeyPrincipal(
+                new byte[16], 2L, new byte[32], "A".repeat(43), Set.of(7L));
+        when(authenticationService.authenticate("sk-test")).thenReturn(principal);
+        when(expirationService.expireIfDue(2L))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.setEnabled(true);
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
+                authenticationService,
+                expirationService,
+                properties,
+                new OpenAiErrorResponseWriter(new ObjectMapper()));
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/v1/models");
+        request.addHeader("Authorization", "Bearer sk-test");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<Boolean> chainCalled = new AtomicReference<>(false);
+
+        filter.doFilter(request, response, (ignoredRequest, ignoredResponse) ->
+                chainCalled.set(true));
+
+        assertThat(response.getStatus()).isEqualTo(503);
+        assertThat(response.getContentAsString())
+                .contains("api_key_authentication_unavailable");
+        assertThat(chainCalled.get()).isFalse();
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @ParameterizedTest
@@ -174,6 +251,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                mock(MembershipExpirationService.class),
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/models");
@@ -214,6 +292,7 @@ final class ApiKeyV1FiltersTest {
         properties.setEnabled(true);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(
                 authenticationService,
+                mock(MembershipExpirationService.class),
                 properties,
                 new OpenAiErrorResponseWriter(new ObjectMapper()));
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1/models/");

@@ -2,6 +2,10 @@
 
 登录与会话校验通过 `userloginidentity.id = user_profile.login_identity_id` 的逻辑关系一次查询认证上下文，不建立物理外键。
 
+- `userloginidentity.registration_source` 只记录账号第一次建立的来源：`0=STANDARD`、`1=GITHUB`、`2=GOOGLE`；后续绑定其他登录方式不得改写。
+- `userloginidentity.github_subject` 使用 GitHub 数字用户 ID 字符串，`google_subject` 使用 OIDC `sub`；两个非空字段分别唯一，邮箱不得替代 Subject。
+- `userloginidentity.email_verified` 表示邮箱已由本站验证码或受信任 Provider 的已验证声明确认；只保存当前状态，不保存独立验证时间。
+- `userloginidentity.password_hash` 允许为空；第三方首次注册账号未设置本地密码时，密码登录必须执行等成本假哈希后统一拒绝，不能把空值当作可登录密码。
 - `userloginidentity.password_version` 是密码凭据版本，默认从 `1` 开始。
 - `userloginidentity.totp_enabled` 表示登录是否必须进入 TOTP 第二因子，默认 `false`。
 - `userloginidentity.totp_secret_encrypted` 只保存与用户 ID 绑定的 AES-256-GCM 密文；关闭时必须在同一 SQL 中置 `NULL`，Base32 只用于十分钟设置响应。
@@ -10,7 +14,7 @@
 - 密码重置必须在同一 SQL 中同时更新密码哈希和凭据版本。
 - `userloginidentity.created_at` 记录登录身份的创建时间，`updated_at` 记录该行最后一次变更时间。
 - 仅因 `PasswordEncoder.upgradeEncoding` 升级哈希时使用旧哈希 CAS 更新，不修改 `password_version`；数据库更新时间触发器仍会刷新 `updated_at`。
-- 邮箱和手机号所有权验证属于注册流程状态，不在登录身份表中保存独立的验证时间字段。
+- 邮箱和手机号所有权验证不在登录身份表中保存独立的验证时间字段；手机号非空即表示已通过受控验证流程写入。
 - 认证状态以 `user_profile.account_status` 为准：`0=ACTIVE`、`1=FROZEN`、`2=DISABLED`（数据库历史名称 `DEACTIVATED` 在认证域映射为 `DISABLED`）。
 - 会员等级、额度和额度周期边界存放在 `user_membership_quota`，不进入认证上下文，也不参与登录、忘记密码、Access Token 或 Refresh Token 的账号可用性判断。
 - 个人中心可以在认证完成后按内部用户 ID 读取独立短期资料缓存；该缓存不扩展 `SessionPrincipal`，

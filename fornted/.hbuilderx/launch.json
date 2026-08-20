@@ -4,7 +4,7 @@
         {
             "customPlaygroundType" : "device",
             "packageName" : "io.dcloud.HBuilder",
-            "playground" : "standard",
+            "playground" : "custom",
             "type" : "uni-app:app-android"
         },
         {

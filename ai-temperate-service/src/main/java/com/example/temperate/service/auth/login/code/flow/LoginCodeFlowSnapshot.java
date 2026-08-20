@@ -10,6 +10,7 @@ import java.time.Instant;
  */
 public record LoginCodeFlowSnapshot(
         LoginStrategyType strategyType,
+        LoginCodePurpose purpose,
         String identifier,
         long userId,
         boolean humanVerified,

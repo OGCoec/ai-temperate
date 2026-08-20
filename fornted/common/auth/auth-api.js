@@ -6,7 +6,12 @@ import { classifyPassword, passwordError } from './password-policy.js'
 import {
 	loadAndroidPasswordResetFlow,
 	loadAndroidRegisterFlow,
-	loadAndroidTotpLoginFlow
+	loadAndroidTotpLoginFlow,
+	loadAndroidOAuthFlow,
+	saveAndroidOAuthFlow,
+	updateAndroidOAuthPhoneFlow,
+	updateAndroidOAuthFlowExpiry,
+	clearAndroidOAuthFlow
 } from './android-flow-keystore.js'
 import { beginTotpLoginFlow, clearTotpLoginFlow } from './totp-login-flow.js'
 import { invalidateWebRtcVerification } from './webrtc-verification.js'
@@ -44,6 +49,20 @@ function flowHeaders(kind, flow = {}) {
 		if (android && resetFlow?.resetFlowToken) {
 			headers['X-Reset-Flow-Token'] = resetFlow.resetFlowToken
 		}
+	}
+	return headers
+}
+
+function oauthHeaders(flow = null, includePhone = false) {
+	if (clientPlatform() !== 'ANDROID') return {}
+	const current = flow || loadAndroidOAuthFlow() || {}
+	const headers = {}
+	if (current.oauthFlowToken) headers['X-OAuth-Flow-Token'] = current.oauthFlowToken
+	if (includePhone && current.phoneFlowToken) {
+		headers['X-OAuth-Phone-Flow-Token'] = current.phoneFlowToken
+	}
+	if (includePhone && current.turnstileChallenge) {
+		headers['X-Turnstile-Challenge'] = current.turnstileChallenge
 	}
 	return headers
 }
@@ -105,6 +124,68 @@ function handleLoginResponse(response) {
 }
 
 export const authApi = {
+	async oauthStart(provider, interactionMode) {
+		const response = await publicRequest('/api/auth/oauth2/start', {
+			data: { provider, interactionMode }
+		})
+		if (clientPlatform() === 'ANDROID' && response?.oauthFlowToken) {
+			saveAndroidOAuthFlow({ ...response, provider })
+		}
+		return response
+	},
+	async oauthStatus(flow = null) {
+		const response = await publicRequest('/api/auth/oauth2/flow/status', {
+			method: 'GET',
+			headers: oauthHeaders(flow)
+		})
+		if (clientPlatform() === 'ANDROID') updateAndroidOAuthFlowExpiry(response)
+		return response
+	},
+	oauthNativeGoogleComplete(idToken, flow = null) {
+		return publicRequest('/api/auth/oauth2/google/native/complete', {
+			headers: oauthHeaders(flow),
+			data: { idToken }
+		})
+	},
+	async oauthPhoneStart(data, flow = null) {
+		const response = await publicRequest('/api/auth/oauth2/phone/start', {
+			headers: oauthHeaders(flow), data
+		})
+		if (clientPlatform() === 'ANDROID') updateAndroidOAuthPhoneFlow(response)
+		return response
+	},
+	oauthPhoneTurnstile(turnstileToken, flow = null) {
+		return publicRequest('/api/auth/oauth2/phone/turnstile', {
+			headers: oauthHeaders(flow, true), data: { turnstileToken }
+		})
+	},
+	oauthPhoneSend(deliveryMethod, flow = null) {
+		return publicRequest('/api/auth/oauth2/phone/send', {
+			headers: oauthHeaders(flow, true), data: { deliveryMethod }
+		})
+	},
+	oauthPhoneVerify(code, flow = null) {
+		return publicRequest('/api/auth/oauth2/phone/verify', {
+			headers: oauthHeaders(flow, true), data: { code }
+		})
+	},
+	async oauthComplete(flow = null) {
+		const response = await publicRequest('/api/auth/oauth2/complete', {
+			headers: oauthHeaders(flow)
+		})
+		const handled = handleLoginResponse(response)
+		if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
+		return handled
+	},
+	async oauthCancel(flow = null) {
+		try {
+			return await publicRequest('/api/auth/oauth2/cancel', {
+				headers: oauthHeaders(flow)
+			})
+		} finally {
+			if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
+		}
+	},
 	turnstileConfig() {
 		return publicRequest('/api/auth/turnstile/config', { method: 'GET' })
 	},

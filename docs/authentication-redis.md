@@ -51,6 +51,26 @@ ait:<env>:auth:login:v2:phone-code:<HMAC(flowToken)>
 - 任意登录成功清理两个失败桶与当前挑战。
 - IP 本期不参与 Key、计数或封禁，只允许脱敏审计。
 
+## OAuth 域
+
+```text
+ait:<env>:auth:oauth:v2:oauth-flow:<HMAC(flowToken)>
+ait:<env>:auth:oauth:v2:oauth-state:<HMAC(state)>
+ait:<env>:auth:oauth:v2:oauth-launch:<HMAC(launchTicket)>
+ait:<env>:auth:oauth:v2:phone-send-risk:<HMAC(flowToken)>
+ait:<env>:auth:oauth:v2:phone-conflict-risk:<HMAC(flowToken)>
+ait:<env>:auth:oauth:v2:phone-block:<HMAC(flowToken)>
+ait:<env>:auth:device:v2:block:<HMAC(deviceInstallationId)>
+```
+
+- OAuth Flow 空闲十分钟、绝对三十分钟；状态推进与空闲续期由 Lua 原子执行且不得越过绝对期限。
+- H5/Android 浏览器 state 与 Android launch ticket 均为 NanoID32，Redis Key 只保存用途隔离 HMAC，并在回调或授权入口单次消费。
+- PKCE verifier 只保存在十分钟授权状态中；Google nonce 以 HMAC 字段保存，Android 原生完成时通过 Lua 单次消费。
+- Flow 值只保存账号最终裁决所需的 Provider、Subject、已验证邮箱和补验手机号状态；Provider Code、Access Token 与 ID Token 不进入 Redis。
+- OAuth 补手机号复用登录验证码 Key，但 Flow 内部 purpose 固定为 `OAUTH_PHONE`，客户端不能选择或覆盖。
+- 手机发送和手机号冲突使用独立五分钟计数 Key；触发规则后同时写入 Flow 封禁和现有全局设备封禁，TTL 两小时。
+- Redis 状态缺失、过期或不可用时全部 Fail Closed，不继续换码、发短信或签发会话。
+
 ## 固定 RT 会话 v4
 
 ### RT 会话 Key

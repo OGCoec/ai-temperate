@@ -30,6 +30,16 @@ class VerificationEmailContentFactoryTest {
     }
 
     @Test
+    void createsSafeOAuthPhoneCopyAtTheSharedDeliveryBoundary() {
+        VerificationEmailContent content = VerificationEmailContentFactory.create(
+                VerificationPurpose.OAUTH_PHONE, "012345");
+
+        assertThat(content.subject()).isEqualTo("第三方登录手机号验证验证码");
+        assertThat(content.body())
+                .isEqualTo("您的第三方登录手机号验证验证码是 012345，5 分钟内有效。");
+    }
+
+    @Test
     void rejectsCodeThatIsNotExactlySixDigits() {
         assertThatThrownBy(() -> VerificationEmailContentFactory.create(
                         VerificationPurpose.LOGIN, "12345"))

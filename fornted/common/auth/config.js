@@ -15,6 +15,8 @@ export const AUTH_ROUTES = Object.freeze({
 	sessionGate: '/pages/launch/session-gate',
 	login: '/pages/auth/login',
 	totpLogin: '/pages/auth/totp-login',
+	oauthReturn: '/pages/auth/oauth-return',
+	oauthPhone: '/pages/auth/oauth-phone',
 	register: '/pages/auth/register',
 	passwordReset: '/pages/auth/password-reset',
 	home: '/pages/ai-chat/index',
@@ -25,10 +27,16 @@ export const AUTH_ROUTES = Object.freeze({
 	models: '/pages/ai-models/catalog'
 })
 
+export function resolveClientPlatform(platform) {
+	const normalized = String(platform || '').trim().toLowerCase()
+	return normalized === 'android' ? 'ANDROID' : 'H5'
+}
+
 export function clientPlatform() {
 	// #ifdef APP-PLUS
-	return 'ANDROID'
+	return resolveClientPlatform(uni.getSystemInfoSync()?.platform)
 	// #endif
+
 	// #ifndef APP-PLUS
 	return 'H5'
 	// #endif
