@@ -446,4 +446,65 @@ final class RedisKeyFactoryTest {
                 "ait:prod:bloom:uak:v1:positive-mutation",
                 factory.apiKeyBloomPositiveMutationKey());
     }
+
+    @Test
+    void createsMembershipPaymentKeysFromTypedBase64UrlIdsAndProtectedIdempotency() {
+        RedisKeyFactory factory = new RedisKeyFactory("test");
+        MembershipOrderRedisId orderId = new MembershipOrderRedisId(
+                "AaAjECcaAQGqi_h2Rl1PiA");
+        PaymentCallbackRedisId callbackId = new PaymentCallbackRedisId(
+                "AaAjECcaAQGqi_h2Rl1PiQ");
+        HmacIdentifier fingerprint = new HmacSha256Identifier(
+                "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8))
+                .identify("membership-callback-v1");
+
+        assertEquals(
+                "ait:test:payment:membership-order:v1:snapshot:" + orderId.value(),
+                factory.membershipOrderSnapshotKey(orderId));
+        assertEquals(
+                "ait:test:payment:callback:v1:data:" + callbackId.value(),
+                factory.paymentCallbackDataKey(callbackId));
+        assertEquals(
+                "ait:test:payment:callback:v1:ready:all",
+                factory.paymentCallbackReadyKey());
+        assertEquals(
+                "ait:test:payment:callback:v1:processing:all",
+                factory.paymentCallbackProcessingKey());
+        assertEquals(
+                "ait:test:payment:callback:v1:idem:" + fingerprint.value(),
+                factory.paymentCallbackIdempotencyKey(fingerprint));
+        assertEquals(
+                "ait:test:payment:callback:v1:order-idem:" + orderId.value(),
+                factory.paymentCallbackOrderIdempotencyKey(orderId));
+        assertEquals(
+                "ait:test:payment:callback:v1:provider-idem:" + fingerprint.value(),
+                factory.paymentCallbackProviderTradeIdempotencyKey(fingerprint));
+        assertEquals(
+                "ait:test:payment:membership-order:v1:callback:" + orderId.value(),
+                factory.membershipOrderCallbackMarkerKey(orderId));
+        assertEquals(
+                "ait:test:payment:provider-result:v1:status:" + orderId.value(),
+                factory.simulatedPaymentProviderResultKey(orderId));
+        assertEquals(
+                "ait:test:payment:order-persist:v1:dirty:all",
+                factory.orderPersistenceDirtyKey());
+        assertEquals(
+                "ait:test:payment:order-persist:v1:processing:all",
+                factory.orderPersistenceProcessingKey());
+        assertEquals(
+                "ait:test:payment:order-persist:v1:lock:singleton",
+                factory.orderPersistenceLockKey());
+    }
+
+    @Test
+    void rejectsNonCanonicalMembershipPaymentRedisIds() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new MembershipOrderRedisId("01M0HH09RT040TN2ZRES35TKW8"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new PaymentCallbackRedisId("AaAjECcaAQGqi_h2Rl1PiA="));
+        assertThrows(IllegalArgumentException.class,
+                () -> new PaymentCallbackRedisId("AaAjECcaAQGqi/h2Rl1PiA"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new MembershipOrderRedisId("AAAAAAAAAAAAAAAAAAAAAA"));
+    }
 }

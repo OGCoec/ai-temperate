@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
@@ -20,6 +21,8 @@ import com.example.temperate.service.risk.observability.NetworkRiskMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
@@ -49,6 +52,23 @@ class NetworkRiskInterceptorModeTest {
         verify(fixture.assessmentService(), never())
                 .assess(org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void enabledExactMembershipLoadtestRouteBypassesPreAuthRiskOnly() throws Exception {
+        MembershipPaymentLoadtestRequestPolicy policy =
+                new MembershipPaymentLoadtestRequestPolicy(
+                        new MembershipPaymentLoadtestProperties(
+                                true, java.util.List.of(73014701344296960L)));
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE, policy);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/user/membership-orders");
+
+        boolean allowed = fixture.interceptor().preHandle(
+                request, new MockHttpServletResponse(), new Object());
+
+        assertThat(allowed).isTrue();
+        verifyNoInteractions(fixture.preAuthService(), fixture.assessmentService());
     }
 
     @Test
@@ -178,6 +198,12 @@ class NetworkRiskInterceptorModeTest {
     }
 
     private static Fixture fixture(NetworkRiskMode mode) {
+        return fixture(mode, MembershipPaymentLoadtestRequestPolicy.disabled());
+    }
+
+    private static Fixture fixture(
+            NetworkRiskMode mode,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
         NetworkRiskProperties properties = mock(NetworkRiskProperties.class);
         when(properties.mode()).thenReturn(mode);
         PreAuthService preAuthService = mock(PreAuthService.class);
@@ -205,7 +231,8 @@ class NetworkRiskInterceptorModeTest {
                 contextResolver,
                 transport,
                 new ObjectMapper(),
-                new NetworkRiskMetrics(new SimpleMeterRegistry()));
+                new NetworkRiskMetrics(new SimpleMeterRegistry()),
+                loadtestRequestPolicy);
         return new Fixture(
                 interceptor,
                 properties,

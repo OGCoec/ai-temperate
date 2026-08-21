@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper">
+
+    <resultMap id="CallbackWriteResultMap"
+               type="com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult">
+        <result property="ordinal" column="ordinal"/>
+        <result property="callbackId" column="callback_id"/>
+        <result property="requestedOrderId" column="requested_order_id"/>
+        <result property="persistedOrderId" column="persisted_order_id"/>
+        <result property="persistedCallbackId" column="persisted_callback_id"/>
+        <result property="providerTradeNo" column="provider_trade_no"/>
+        <result property="tradeStatus" column="trade_status"/>
+        <result property="resolution" column="resolution"/>
+        <result property="outcome" column="outcome"/>
+        <result property="inserted" column="inserted"/>
+        <result property="duplicate" column="duplicate"/>
+        <result property="sameCallback" column="same_callback"/>
+        <result property="orderMismatch" column="order_mismatch"/>
+    </resultMap>
+
+    <select id="batchInsertOrResolve" resultMap="CallbackWriteResultMap">
+        WITH callback_input AS (
+            SELECT
+                raw.ordinal,
+                DECODE(raw."idHex", 'hex') AS callback_id,
+                DECODE(raw."orderIdHex", 'hex') AS order_id,
+                raw."providerTradeNo" AS provider_trade_no,
+                raw."tradeStatus" AS trade_status,
+                raw."paidAmountYuan" AS paid_amount_yuan,
+                raw."paidAt" AS paid_at,
+                raw."receivedAt" AS received_at
+            FROM jsonb_to_recordset(
+                CAST(#{callbacksJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS raw(
+                ordinal INTEGER,
+                "idHex" TEXT,
+                "orderIdHex" TEXT,
+                "providerTradeNo" TEXT,
+                "tradeStatus" TEXT,
+                "paidAmountYuan" NUMERIC,
+                "paidAt" TIMESTAMPTZ,
+                "receivedAt" TIMESTAMPTZ
+            )
+        ),
+        inserted AS (
+            INSERT INTO membership_payment_callback (
+                id,
+                order_id,
+                provider_trade_no,
+                trade_status,
+                paid_amount_yuan,
+                paid_at,
+                received_at
+            )
+            SELECT
+                callback_id,
+                order_id,
+                provider_trade_no,
+                trade_status,
+                paid_amount_yuan,
+                paid_at,
+                received_at
+            FROM callback_input
+            ORDER BY ordinal
+            ON CONFLICT DO NOTHING
+            RETURNING
+                id,
+                order_id,
+                provider_trade_no,
+                trade_status,
+                paid_at,
+                resolution,
+                resolved_at
+        ),
+        callback_facts AS (
+            SELECT
+                id,
+                order_id,
+                provider_trade_no,
+                trade_status,
+                resolution
+            FROM inserted
+            UNION ALL
+            SELECT
+                id,
+                order_id,
+                provider_trade_no,
+                trade_status,
+                resolution
+            FROM membership_payment_callback
+        ),
+        resolved AS (
+            SELECT
+                callback_input.ordinal,
+                callback_input.callback_id,
+                callback_input.order_id AS requested_order_id,
+                COALESCE(
+                    order_fact.id,
+                    provider_fact.id,
+                    id_fact.id
+                ) AS persisted_callback_id,
+                COALESCE(
+                    order_fact.order_id,
+                    provider_fact.order_id,
+                    id_fact.order_id
+                ) AS persisted_order_id,
+                callback_input.provider_trade_no,
+                callback_input.trade_status,
+                COALESCE(
+                    order_fact.resolution,
+                    provider_fact.resolution,
+                    id_fact.resolution
+                ) AS resolution,
+                inserted_for_input.id AS inserted_id,
+                order_fact.id AS order_fact_id,
+                order_fact.provider_trade_no AS order_fact_provider_trade_no,
+                provider_fact.id AS provider_fact_id,
+                provider_fact.order_id AS provider_fact_order_id,
+                id_fact.id AS id_fact_id
+            FROM callback_input
+            LEFT JOIN callback_facts order_fact
+              ON order_fact.order_id = callback_input.order_id
+            LEFT JOIN callback_facts provider_fact
+              ON provider_fact.provider_trade_no = callback_input.provider_trade_no
+            LEFT JOIN callback_facts id_fact
+              ON id_fact.id = callback_input.callback_id
+            LEFT JOIN inserted inserted_for_input
+              ON inserted_for_input.id = callback_input.callback_id
+        )
+        SELECT
+            ordinal,
+            callback_id,
+            requested_order_id,
+            persisted_order_id,
+            persisted_callback_id,
+            provider_trade_no,
+            trade_status,
+            resolution,
+            CASE
+                WHEN inserted_id IS NOT NULL THEN 'INSERTED'
+                WHEN order_fact_id IS NOT NULL
+                     AND provider_fact_id IS NOT NULL
+                     AND order_fact_id &lt;&gt; provider_fact_id THEN 'IDENTITY_CONFLICT'
+                WHEN order_fact_id IS NOT NULL
+                     AND order_fact_provider_trade_no &lt;&gt; provider_trade_no
+                    THEN 'ORDER_DUPLICATE'
+                WHEN provider_fact_id IS NOT NULL
+                     AND provider_fact_order_id &lt;&gt; requested_order_id
+                    THEN 'PROVIDER_TRADE_REUSED'
+                WHEN id_fact_id IS NOT NULL
+                     AND persisted_order_id &lt;&gt; requested_order_id
+                    THEN 'CALLBACK_ID_REUSED'
+                ELSE 'DUPLICATE'
+            END AS outcome,
+            inserted_id IS NOT NULL AS inserted,
+            inserted_id IS NULL
+                AND order_fact_id IS NOT NULL
+                AND NOT (
+                    provider_fact_id IS NOT NULL
+                    AND order_fact_id &lt;&gt; provider_fact_id
+                ) AS duplicate,
+            persisted_callback_id = callback_id AS same_callback,
+            (
+                provider_fact_id IS NOT NULL
+                AND provider_fact_order_id &lt;&gt; requested_order_id
+            ) OR (
+                id_fact_id IS NOT NULL
+                AND persisted_order_id &lt;&gt; requested_order_id
+            ) AS order_mismatch
+        FROM resolved
+        ORDER BY ordinal
+    </select>
+
+    <update id="batchResolve">
+        WITH raw_resolutions AS (
+            SELECT
+                DECODE(raw."callbackIdHex", 'hex') AS callback_id,
+                raw.resolution,
+                raw."resolvedAt" AS resolved_at
+            FROM jsonb_to_recordset(
+                CAST(#{resolutionsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS raw(
+                "callbackIdHex" TEXT,
+                resolution TEXT,
+                "resolvedAt" TIMESTAMPTZ
+            )
+        ),
+        resolutions AS (
+            SELECT DISTINCT ON (callback_id)
+                callback_id,
+                resolution,
+                resolved_at
+            FROM raw_resolutions
+            ORDER BY callback_id
+        )
+        UPDATE membership_payment_callback
+        SET resolution = COALESCE(
+                membership_payment_callback.resolution,
+                resolutions.resolution),
+            resolved_at = COALESCE(
+                membership_payment_callback.resolved_at,
+                resolutions.resolved_at)
+        FROM resolutions
+        WHERE membership_payment_callback.id = resolutions.callback_id
+          AND (
+              membership_payment_callback.resolution IS NULL
+              OR membership_payment_callback.resolution = resolutions.resolution
+          )
+    </update>
+</mapper>

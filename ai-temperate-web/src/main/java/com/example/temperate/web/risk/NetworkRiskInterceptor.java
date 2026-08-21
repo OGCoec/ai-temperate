@@ -16,6 +16,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthRequiredExceptio
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,6 +28,7 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -68,6 +70,29 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
     private final PreAuthTransport transport;
     private final ObjectMapper objectMapper;
     private final NetworkRiskMetrics metrics;
+    private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
+
+    @Autowired
+    public NetworkRiskInterceptor(
+            NetworkRiskProperties properties,
+            PreAuthService preAuthService,
+            NetworkRiskAssessmentService assessmentService,
+            RiskChallengeService challengeService,
+            RiskRequestContextResolver contextResolver,
+            PreAuthTransport transport,
+            ObjectMapper objectMapper,
+            NetworkRiskMetrics metrics,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
+        this.properties = Objects.requireNonNull(properties);
+        this.preAuthService = Objects.requireNonNull(preAuthService);
+        this.assessmentService = Objects.requireNonNull(assessmentService);
+        this.challengeService = Objects.requireNonNull(challengeService);
+        this.contextResolver = Objects.requireNonNull(contextResolver);
+        this.transport = Objects.requireNonNull(transport);
+        this.objectMapper = Objects.requireNonNull(objectMapper);
+        this.metrics = Objects.requireNonNull(metrics);
+        this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
+    }
 
     public NetworkRiskInterceptor(
             NetworkRiskProperties properties,
@@ -78,14 +103,16 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             PreAuthTransport transport,
             ObjectMapper objectMapper,
             NetworkRiskMetrics metrics) {
-        this.properties = Objects.requireNonNull(properties);
-        this.preAuthService = Objects.requireNonNull(preAuthService);
-        this.assessmentService = Objects.requireNonNull(assessmentService);
-        this.challengeService = Objects.requireNonNull(challengeService);
-        this.contextResolver = Objects.requireNonNull(contextResolver);
-        this.transport = Objects.requireNonNull(transport);
-        this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.metrics = Objects.requireNonNull(metrics);
+        this(
+                properties,
+                preAuthService,
+                assessmentService,
+                challengeService,
+                contextResolver,
+                transport,
+                objectMapper,
+                metrics,
+                MembershipPaymentLoadtestRequestPolicy.disabled());
     }
 
     @Override
@@ -93,6 +120,12 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             HttpServletRequest request,
             HttpServletResponse response,
             Object handler) throws Exception {
+        // 压测路径仍会在后续用户认证拦截器验证 AT、白名单与数据库状态，这里只跳过其明确不需要的 PreAuth 风险会话。
+        if (loadtestRequestPolicy.matchesTokenMint(request)
+                || loadtestRequestPolicy.matches(request)) {
+            // 本机 Token 签发入口只由 Controller 的回环地址校验保护；会员业务路径仍在后续认证拦截器校验 AT。
+            return true;
+        }
         int invocationNo = nextInvocationNo(request);
         String dispatcherType = request.getDispatcherType().name();
         String traceId = traceId(request);

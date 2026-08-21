@@ -49,6 +49,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -73,6 +74,10 @@ public class SecurityConfiguration {
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String BOOTSTRAP_PATH = "/api/auth/session/bootstrap";
     private static final String WEBRTC_REPORT_PATH = "/api/_edge/webrtc/report";
+    private static final String SIMULATED_PAYMENT_CALLBACK_PATH =
+            "/internal/test/membership-payments/liuhao/notify";
+    private static final String MEMBERSHIP_LOADTEST_CONTROL_ROOT =
+            "/internal/test/membership-payments/loadtest-control";
 
     @Bean
     SecretKey jwtSigningKey(AuthSecurityProperties properties) {
@@ -425,14 +430,18 @@ public class SecurityConfiguration {
             @Qualifier("csrfTokenRepository")
                     CookieCsrfTokenRepository csrfTokenRepository,
             JsonCsrfAccessDeniedHandler csrfAccessDeniedHandler,
-            EdgeProxySignatureFilter edgeProxySignatureFilter) throws Exception {
+            EdgeProxySignatureFilter edgeProxySignatureFilter,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) throws Exception {
         // H5 由浏览器自动携带 Cookie，bootstrap 保留给后续 Origin、设备和 RT 组合校验。
         configureCommon(http, corsConfigurationSource);
         return http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(csrfTokenRepository)
                         .csrfTokenRequestHandler(new SpaCsrfTokenRequestHandler())
-                        .ignoringRequestMatchers(SecurityConfiguration::isBootstrapRequest))
+                        .ignoringRequestMatchers(
+                                SecurityConfiguration::isCsrfExemptRequest,
+                                loadtestRequestPolicy::matches,
+                                loadtestRequestPolicy::matchesTokenMint))
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                         .accessDeniedHandler(csrfAccessDeniedHandler))
@@ -457,6 +466,15 @@ public class SecurityConfiguration {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
+                        // 模拟支付回调只对 GET/POST 精确路径公开，业务认证由常量时间测试密钥校验完成。
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                SIMULATED_PAYMENT_CALLBACK_PATH)
+                        .permitAll()
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                SIMULATED_PAYMENT_CALLBACK_PATH)
+                        .permitAll()
                         .requestMatchers(
                                 "/api/health",
                                 "/actuator/health/liveness",
@@ -473,7 +491,7 @@ public class SecurityConfiguration {
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
     }
 
-    private static boolean isBootstrapRequest(jakarta.servlet.http.HttpServletRequest request) {
+    private static boolean isCsrfExemptRequest(jakarta.servlet.http.HttpServletRequest request) {
         return HttpMethod.POST.matches(request.getMethod())
                 && ((request.getContextPath() + BOOTSTRAP_PATH)
                                 .equals(request.getRequestURI())
@@ -481,6 +499,34 @@ public class SecurityConfiguration {
                                 .equals(request.getRequestURI())
                         // WebRTC 报告发生在常规 CSRF 初始化之前，只豁免这一条精确 PreAuth 绑定路径。
                         || (request.getContextPath() + WEBRTC_REPORT_PATH)
+                                .equals(request.getRequestURI())
+                        // 模拟支付 POST 由独立测试密钥认证，只豁免这一条精确路径；GET 本身不受 CSRF 校验。
+                        || (request.getContextPath() + SIMULATED_PAYMENT_CALLBACK_PATH)
+                                .equals(request.getRequestURI())
+                        // 控制入口只在 loadtest Profile 注册且由 Controller 校验回环地址；CSRF 仅豁免固定 POST 动作。
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/recover-callback")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/recover-order")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/flush")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/state-batch")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/rabbit-retry")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/rabbit-poison")
                                 .equals(request.getRequestURI()));
     }
 

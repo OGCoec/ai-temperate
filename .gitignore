@@ -23,3 +23,5 @@ target/
 /cloudflare/api-gateway/node_modules/
 /cloudflare/api-gateway/.wrangler/
 /cloudflare/html-preview-sandbox/.wrangler/
+/loadtest-output/
+/loadtest/local/

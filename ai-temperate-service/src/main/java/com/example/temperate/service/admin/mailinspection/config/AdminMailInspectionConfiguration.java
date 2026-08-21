@@ -1,6 +1,5 @@
 package com.example.temperate.service.admin.mailinspection.config;
 
-import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.admin.mailinspection.domain.MailInspectionType;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionDispatchMarkerPublisher;
 import com.example.temperate.service.admin.mailinspection.rabbit.MailInspectionListenerControl;
@@ -36,11 +35,6 @@ import reactor.netty.transport.ProxyProvider;
 public class AdminMailInspectionConfiguration {
 
     private static final int RABBIT_PUBLISH_SCHEDULER_QUEUE_CAPACITY = 256;
-
-    @Bean
-    HybridBase64UrlCodec hybridBase64UrlCodec() {
-        return new HybridBase64UrlCodec();
-    }
 
     @Bean(name = "adminMailInspectionConnectionProvider", destroyMethod = "dispose")
     ConnectionProvider adminMailInspectionConnectionProvider(

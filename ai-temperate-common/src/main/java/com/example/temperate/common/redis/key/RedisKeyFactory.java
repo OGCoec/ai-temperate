@@ -454,6 +454,126 @@ public final class RedisKeyFactory {
                 requireHmacIdentifier(requestIdentifier));
     }
 
+    /** 生成会员支付订单的 Redis Hash 快照 Key，订单标识必须是规范 22 字符 Base64URL。 */
+    public String membershipOrderSnapshotKey(MembershipOrderRedisId orderId) {
+        return create(
+                "payment",
+                "membership-order",
+                "v1",
+                IdentifierType.PAYMENT_ORDER_SNAPSHOT,
+                Objects.requireNonNull(orderId).value());
+    }
+
+    /** 生成单个支付回调的 Redis Hash 数据 Key。 */
+    public String paymentCallbackDataKey(PaymentCallbackRedisId callbackId) {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_DATA,
+                Objects.requireNonNull(callbackId).value());
+    }
+
+    /** 生成全部实例共享的待处理支付回调有序集合 Key。 */
+    public String paymentCallbackReadyKey() {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_READY,
+                "all");
+    }
+
+    /** 生成支付回调领取中的有序集合 Key。 */
+    public String paymentCallbackProcessingKey() {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_PROCESSING,
+                "all");
+    }
+
+    /** 生成 GET 与 POST 共享业务指纹的短期回调幂等 Key。 */
+    public String paymentCallbackIdempotencyKey(HmacIdentifier fingerprint) {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_IDEMPOTENCY,
+                requireHmacIdentifier(fingerprint));
+    }
+
+    /** 生成会员业务订单级回调幂等 Key，使同一订单的不同第三方流水也能在一次 Lua 中快速拦截。 */
+    public String paymentCallbackOrderIdempotencyKey(MembershipOrderRedisId orderId) {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_ORDER_IDEMPOTENCY,
+                Objects.requireNonNull(orderId).value());
+    }
+
+    /** 生成第三方流水号 HMAC 幂等 Key，禁止把支付平台原始流水直接暴露到 Redis Key。 */
+    public String paymentCallbackProviderTradeIdempotencyKey(HmacIdentifier fingerprint) {
+        return create(
+                "payment",
+                "callback",
+                "v1",
+                IdentifierType.PAYMENT_CALLBACK_PROVIDER_IDEMPOTENCY,
+                requireHmacIdentifier(fingerprint));
+    }
+
+    /** 生成订单当前尚未完成落库的支付回调标记 Key。 */
+    public String membershipOrderCallbackMarkerKey(MembershipOrderRedisId orderId) {
+        return create(
+                "payment",
+                "membership-order",
+                "v1",
+                IdentifierType.PAYMENT_ORDER_CALLBACK,
+                Objects.requireNonNull(orderId).value());
+    }
+
+    /** 生成模拟支付方对单笔订单的查询结果 Hash Key。 */
+    public String simulatedPaymentProviderResultKey(MembershipOrderRedisId orderId) {
+        return create(
+                "payment",
+                "provider-result",
+                "v1",
+                IdentifierType.PAYMENT_PROVIDER_RESULT_STATUS,
+                Objects.requireNonNull(orderId).value());
+    }
+
+    /** 生成等待批量持久化的订单版本有序集合 Key。 */
+    public String orderPersistenceDirtyKey() {
+        return create(
+                "payment",
+                "order-persist",
+                "v1",
+                IdentifierType.PAYMENT_ORDER_PERSIST_DIRTY,
+                "all");
+    }
+
+    /** 生成已经被批处理器领取的订单版本有序集合 Key。 */
+    public String orderPersistenceProcessingKey() {
+        return create(
+                "payment",
+                "order-persist",
+                "v1",
+                IdentifierType.PAYMENT_ORDER_PERSIST_PROCESSING,
+                "all");
+    }
+
+    /** 生成订单批量持久化调度器的 Redisson 看门狗锁 Key。 */
+    public String orderPersistenceLockKey() {
+        return create(
+                "payment",
+                "order-persist",
+                "v1",
+                IdentifierType.PAYMENT_ORDER_PERSIST_LOCK,
+                "singleton");
+    }
+
     /**
      * 生成单个 API Key 的并发租约集合 Key，并与账号和全局集合在同一 Lua 中原子更新。
      */
@@ -1009,6 +1129,18 @@ public final class RedisKeyFactory {
         AI_INFERENCE_API_KEY_CONCURRENCY("concurrency-key"),
         API_KEY_CREDENTIAL("credential"),
         API_KEY_CREATE_LOCK("create-lock"),
+        PAYMENT_ORDER_SNAPSHOT("snapshot"),
+        PAYMENT_CALLBACK_DATA("data"),
+        PAYMENT_CALLBACK_READY("ready"),
+        PAYMENT_CALLBACK_PROCESSING("processing"),
+        PAYMENT_CALLBACK_IDEMPOTENCY("idem"),
+        PAYMENT_CALLBACK_ORDER_IDEMPOTENCY("order-idem"),
+        PAYMENT_CALLBACK_PROVIDER_IDEMPOTENCY("provider-idem"),
+        PAYMENT_ORDER_CALLBACK("callback"),
+        PAYMENT_PROVIDER_RESULT_STATUS("status"),
+        PAYMENT_ORDER_PERSIST_DIRTY("dirty"),
+        PAYMENT_ORDER_PERSIST_PROCESSING("processing"),
+        PAYMENT_ORDER_PERSIST_LOCK("lock"),
         AI_DIRECT_RESPONSE_OWNER("owner"),
         AI_DIRECT_RESPONSE_CANCEL("cancel"),
         AI_GENERATION_SNAPSHOT("snapshot"),

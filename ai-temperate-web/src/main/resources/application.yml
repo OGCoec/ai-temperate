@@ -260,6 +260,101 @@ app:
       # MAX 在普通用户前端显示为 Ultra，每周总额度为五万。
       MAX: ${MEMBERSHIP_QUOTA_MAX_LIMIT_MINOR:5000000}
 
+  # 会员模拟支付订单闭环默认关闭，启用后使用 PostgreSQL、Redis 双 ZSET 和 RabbitMQ 分段检查收敛状态。
+  membership-payment:
+    # 总开关默认关闭，只有受控测试环境完成依赖和密钥配置后才允许开启。
+    enabled: ${MEMBERSHIP_PAYMENT_ENABLED:false}
+    # 压测认证默认关闭，允许列表只从本地受限环境变量绑定，不写入仓库或生产默认配置。
+    loadtest:
+      # 仅在 local-dev、test、loadtest-fast 或 loadtest-realtime Profile 中允许开启 AT-only 路径。
+      enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_ENABLED:false}
+      # 现有用户白名单使用环境变量 MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS 提供，禁止在 YAML 硬编码账号。
+      allowed-user-ids: ${MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS:}
+    # 待支付窗口固定为五分钟，RabbitMQ PENDING 延时数组必须与该窗口一致。
+    pending-duration: ${MEMBERSHIP_PAYMENT_PENDING_DURATION:PT5M}
+    # 软关闭窗口固定为五分钟，期间仍允许已经发起支付产生的成功回调收敛。
+    closing-duration: ${MEMBERSHIP_PAYMENT_CLOSING_DURATION:PT5M}
+    # 模拟六号回调同时支持 GET、POST 表单和 POST JSON，生产环境必须保持关闭。
+    simulator:
+      # 模拟回调路由默认不存在，启用时必须同时配置商户号和至少三十二字节测试密钥。
+      enabled: ${SIMULATED_PAYMENT_ENABLED:false}
+      # 模拟商户号只从环境变量读取，禁止在仓库中提供生产或共享默认值。
+      pid: ${SIMULATED_PAYMENT_PID:}
+      # 回调测试密钥只从环境变量读取，同时用于常量时间认证和回调 HMAC 幂等指纹。
+      callback-key: ${SIMULATED_PAYMENT_CALLBACK_KEY:}
+      # 生产默认不裁决模拟签名；仅受控 loadtest Profile 打开确定性 HMAC 校验。
+      signature-validation-enabled: ${SIMULATED_PAYMENT_SIGNATURE_VALIDATION_ENABLED:false}
+      # 回调 Unix 秒时间戳允许前后五分钟时钟偏差，超窗请求直接拒绝。
+      timestamp-tolerance: ${SIMULATED_PAYMENT_TIMESTAMP_TOLERANCE:PT5M}
+      # GET Query、POST 表单或 JSON 的最大 UTF-8 载荷限制为十六 KiB。
+      request-max-bytes: ${SIMULATED_PAYMENT_REQUEST_MAX_BYTES:16384}
+    # 回调 ready/processing 双 ZSET 每五秒执行有界领取、恢复与批量落库。
+    callback:
+      # 调度固定延迟默认五秒，上一轮未完成时不会并发启动同一实例的新一轮。
+      flush-interval-millis: ${MEMBERSHIP_PAYMENT_CALLBACK_FLUSH_INTERVAL_MILLIS:5000}
+      # 每批最多领取一百个回调，禁止超过 Redis 批量边界五百。
+      batch-size: ${MEMBERSHIP_PAYMENT_CALLBACK_BATCH_SIZE:100}
+      # 单轮最多处理二十批，避免调度线程被持续流量永久占用。
+      max-batches-per-run: ${MEMBERSHIP_PAYMENT_CALLBACK_MAX_BATCHES_PER_RUN:20}
+      # processing 领取超过六十秒未完成时允许恢复到 ready。
+      processing-timeout: ${MEMBERSHIP_PAYMENT_CALLBACK_PROCESSING_TIMEOUT:PT60S}
+      # 传输层 HMAC 短期幂等固定三十秒，数据库唯一键继续承担最终幂等。
+      dedupe-ttl: ${MEMBERSHIP_PAYMENT_CALLBACK_DEDUPE_TTL:PT30S}
+      # 订单回调 marker 固定保留十分钟，覆盖 PENDING 与 CLOSING 两个窗口，偏离时启动失败。
+      marker-ttl: ${MEMBERSHIP_PAYMENT_CALLBACK_MARKER_TTL:PT10M}
+      # 回调 Hash 固定保留六小时，覆盖完整软关单与有界恢复窗口，偏离时启动失败。
+      data-ttl: ${MEMBERSHIP_PAYMENT_CALLBACK_DATA_TTL:PT6H}
+    # 订单 dirty/processing 双 ZSET 每五秒批量把更高 stateVersion 写回 PostgreSQL。
+    order-persist:
+      # 订单刷盘调度固定延迟默认五秒。
+      flush-interval-millis: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_FLUSH_INTERVAL_MILLIS:5000}
+      # 每批最多领取一百个版本化 dirty 令牌。
+      batch-size: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_BATCH_SIZE:100}
+      # 单轮最多处理二十批，避免持有 Redisson 协调锁时间无界增长。
+      max-batches-per-run: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_MAX_BATCHES_PER_RUN:20}
+      # processing 令牌超过六十秒未提交时允许恢复。
+      processing-timeout: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_PROCESSING_TIMEOUT:PT60S}
+      # Redisson 看门狗锁最多等待一百毫秒，未取得时跳过本轮而不阻塞线程。
+      lock-wait: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_LOCK_WAIT:PT0.1S}
+    # RabbitMQ 使用两组总计五分钟的延时阶段，并为最终 UNKNOWN 提供有限重试。
+    rabbit:
+      # PENDING 检查的九段延时总和必须精确等于五分钟。
+      payment-check-delays-millis:
+        # 第一段十秒后检查，但禁止主动反查模拟平台。
+        - 10000
+        # 第二段继续等待十秒。
+        - 10000
+        # 第三段继续等待十秒。
+        - 10000
+        # 第四段等待十五秒。
+        - 15000
+        # 第五段等待十五秒。
+        - 15000
+        # 第六段等待三十秒。
+        - 30000
+        # 第七段等待三十秒。
+        - 30000
+        # 第八段等待六十秒。
+        - 60000
+        # 第九段等待一百二十秒后才允许最终主动查询。
+        - 120000
+      # CLOSING 检查的五段延时总和必须精确等于五分钟。
+      closing-check-delays-millis:
+        # 第一段软关闭等待三十秒。
+        - 30000
+        # 第二段继续等待三十秒。
+        - 30000
+        # 第三段等待六十秒。
+        - 60000
+        # 第四段等待六十秒。
+        - 60000
+        # 第五段等待一百二十秒后进行最终裁决。
+        - 120000
+      # 最终 marker、PAID 或 UNKNOWN 状态每三十秒重查一次。
+      terminal-query-retry-delay: ${MEMBERSHIP_PAYMENT_TERMINAL_QUERY_RETRY_DELAY:PT30S}
+      # 最终查询最多额外重试三次，耗尽后进入 DLQ 且订单保持 CLOSING。
+      terminal-query-max-retries: ${MEMBERSHIP_PAYMENT_TERMINAL_QUERY_MAX_RETRIES:3}
+
   # 普通用户资料使用每用户一个 Redis String 加速读取，PostgreSQL 始终是事实来源。
   user-profile-cache:
     # 内部用户 ID 使用独立 AES-256-KWP 密钥生成稳定 Key 标识，禁止配置默认明文密钥。

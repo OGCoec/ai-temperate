@@ -6,6 +6,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.service.user.voice.diagnostic.VoiceDiagnosticContext;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Clock;
@@ -13,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.List;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
@@ -63,6 +66,32 @@ class EdgeProxySignatureFilterTest {
         assertThat(response.getContentAsString())
                 .contains("EDGE_PROXY_SIGNATURE_INVALID");
         assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void requiredModeDoesNotFilterExactMembershipLoadtestPath() throws Exception {
+        EdgeProxyProperties properties = new EdgeProxyProperties(
+                EdgeProxyMode.REQUIRED,
+                Base64.getEncoder().encodeToString(SECRET),
+                Duration.ofSeconds(30));
+        EdgeProxySignatureVerifier verifier = new EdgeProxySignatureVerifier(
+                properties,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        MembershipPaymentLoadtestRequestPolicy policy =
+                new MembershipPaymentLoadtestRequestPolicy(
+                        new MembershipPaymentLoadtestProperties(
+                                true,
+                                List.of(73014701344296960L)));
+        EdgeProxySignatureFilter filter =
+                new EdgeProxySignatureFilter(properties, verifier, policy);
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/api/user/membership-orders");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
     }
 
     @Test

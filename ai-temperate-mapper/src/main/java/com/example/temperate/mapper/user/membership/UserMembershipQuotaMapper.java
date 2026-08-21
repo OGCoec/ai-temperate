@@ -1,8 +1,8 @@
 package com.example.temperate.mapper.user.membership;
 
-import com.example.temperate.model.user.entity.UserMembershipQuota;
-import com.example.temperate.model.ai.entity.AiModelUsageRefundCandidate;
 import com.example.temperate.model.ai.entity.AiModelApiUsageRefundCandidate;
+import com.example.temperate.model.ai.entity.AiModelUsageRefundCandidate;
+import com.example.temperate.model.user.entity.UserMembershipQuota;
 import java.time.OffsetDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
@@ -21,6 +21,10 @@ public interface UserMembershipQuotaMapper {
 
     UserMembershipQuota findByLoginIdentityId(
             @Param("loginIdentityId") long loginIdentityId);
+
+    /** 按一组身份 ID 一次读取会员额度，供本机压测在签发 Token 前验证既有账号。 */
+    List<UserMembershipQuota> findByLoginIdentityIds(
+            @Param("loginIdentityIds") List<Long> loginIdentityIds);
 
     UserMembershipQuota findByLoginIdentityIdForUpdate(
             @Param("loginIdentityId") long loginIdentityId);

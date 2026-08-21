@@ -1,6 +1,7 @@
 package com.example.temperate.web.edgeproxy;
 
 import java.time.Clock;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
@@ -53,8 +54,9 @@ public class EdgeProxyConfiguration {
     @Bean
     EdgeProxySignatureFilter edgeProxySignatureFilter(
             EdgeProxyProperties properties,
-            EdgeProxySignatureVerifier verifier) {
-        return new EdgeProxySignatureFilter(properties, verifier);
+            EdgeProxySignatureVerifier verifier,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
+        return new EdgeProxySignatureFilter(properties, verifier, loadtestRequestPolicy);
     }
 
     @Bean

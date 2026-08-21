@@ -1,0 +1,76 @@
+# 会员支付快速压测 Profile，仅把固定合同缩短到可控的 45 秒加 40 秒。
+spring:
+  # 快速压测配置激活规则，普通 Profile 不会加载本文件。
+  config:
+    # 只有显式启用 loadtest-fast 时才应用快速时间窗口。
+    activate:
+      # 快速压测 Profile 名称必须与启动守卫白名单一致。
+      on-profile: loadtest-fast
+
+# 快速压测默认使用本机 HTTP 端口，Runner 不需要额外传入服务端口。
+server:
+  # 仅供 loadtest-fast 本机调试使用的 HTTP 端口。
+  port: ${SERVER_PORT:8080}
+  # 快速压测使用本机 HTTP，避免继承默认 TLS 配置导致必须准备证书。
+  ssl:
+    # 仅在 loadtest-fast 下关闭 Web 服务器 TLS，回调和 JMeter 均走回环 HTTP。
+    enabled: false
+
+# 会员支付快速压测时间合同，禁止通过普通环境变量任意缩短。
+app:
+  # 本机回调与 JMeter 使用 HTTP 回环地址，认证安全策略按 LOCAL 而非生产 HTTPS 规则校验。
+  security:
+    # 该值只影响受控本机 Profile，生产环境仍由基础配置保持 PROD。
+    env: LOCAL
+  # 会员模拟支付业务配置组。
+  membership-payment:
+    # 该 Profile 明确打开会员模拟支付，普通 Profile 仍由基础配置保持关闭。
+    enabled: true
+    # 本机 Runner 使用应用内部签发的短期 AT，开关只在受控 Profile 生效。
+    loadtest:
+      # 仅本机快速状态机调试启用 AT-only 认证入口。
+      enabled: true
+      # 第一个既有可用账号只用于本次本机压测，不创建或修改账号。
+      allowed-user-ids:
+        # 既有白名单账号一。
+        - 73014701344296960
+        # 既有白名单账号二。
+        - 72659006262480896
+        # 既有白名单账号三。
+        - 76721355290185728
+        # 既有白名单账号四。
+        - 74891801495998464
+    # 模拟支付商户和回调密钥使用仅供本机测试的固定占位值，不代表真实商户凭据。
+    simulator:
+      # 仅在本机快速 Profile 注册双协议模拟回调路由。
+      enabled: true
+      # 模拟商户号只用于构造测试回调，不连接真实支付平台。
+      pid: loadtest-merchant
+      # 回调密钥仅用于本机回调鉴权和指纹，禁止在生产 Profile 复用。
+      callback-key: membership-loadtest-callback-key-v1-local
+      # 快速压测启用确定性 HMAC 回调签名校验，拒绝伪造签名但不执行真实 RSA 验签。
+      signature-validation-enabled: true
+    # PENDING_PAYMENT 阶段固定为四十五秒。
+    pending-duration: PT45S
+    # CLOSING 阶段固定为四十秒。
+    closing-duration: PT40S
+    # RabbitMQ 快速压测分段配置。
+    rabbit:
+      # PENDING 检查严格使用十秒、十秒、十秒、十五秒四段。
+      payment-check-delays-millis:
+        # 第一段等待十秒。
+        - 10000
+        # 第二段等待十秒。
+        - 10000
+        # 第三段等待十秒。
+        - 10000
+        # 最后一段等待十五秒后进入 CLOSING。
+        - 15000
+      # CLOSING 检查严格使用十秒、十五秒、十五秒三段。
+      closing-check-delays-millis:
+        # 第一段等待十秒。
+        - 10000
+        # 第二段等待十五秒。
+        - 15000
+        # 最后一段等待十五秒后进入 CLOSED。
+        - 15000

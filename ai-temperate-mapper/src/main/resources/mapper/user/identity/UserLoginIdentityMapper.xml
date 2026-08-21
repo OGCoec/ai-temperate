@@ -163,6 +163,20 @@
         WHERE uli.id = #{identityId,jdbcType=BIGINT}
     </select>
 
+    <select id="findAuthenticationByIds"
+            resultMap="AuthenticationContextResultMap">
+        SELECT
+        <include refid="AuthenticationContextColumns"/>
+        FROM userloginidentity uli
+        JOIN user_profile up
+          ON up.login_identity_id = uli.id
+        WHERE uli.id IN
+        <foreach collection="identityIds" item="identityId" open="(" separator="," close=")">
+            #{identityId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY uli.id
+    </select>
+
     <select id="findTotpCredentialById"
             resultMap="TotpCredentialResultMap">
         SELECT

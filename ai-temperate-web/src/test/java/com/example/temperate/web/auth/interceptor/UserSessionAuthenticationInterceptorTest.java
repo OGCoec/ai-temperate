@@ -19,8 +19,11 @@ import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.user.membership.MembershipExpirationService;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
+import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestAccessService;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import jakarta.servlet.Filter;
 import jakarta.servlet.http.Cookie;
 import java.time.Instant;
@@ -190,6 +193,37 @@ class UserSessionAuthenticationInterceptorTest {
 
         verifyNoInteractions(preAuthService);
         verifyNoInteractions(membershipExpirationService);
+    }
+
+    @Test
+    void exactLoadtestRouteUsesBearerAccessTokenWithoutRtDeviceOrCsrf() {
+        MembershipPaymentLoadtestAccessService loadtestAccessService =
+                mock(MembershipPaymentLoadtestAccessService.class);
+        MembershipPaymentLoadtestRequestPolicy policy =
+                new MembershipPaymentLoadtestRequestPolicy(
+                        new MembershipPaymentLoadtestProperties(
+                                true, java.util.List.of(73014701344296960L)));
+        interceptor = new UserSessionAuthenticationInterceptor(
+                service,
+                cookieWriter,
+                preAuthService,
+                mock(NetworkRiskProperties.class),
+                membershipExpirationService,
+                policy,
+                loadtestAccessService);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/user/membership-orders");
+        request.addHeader("Authorization", "Bearer loadtest-at");
+        SessionPrincipal principal =
+                new SessionPrincipal(73014701344296960L, "AKMEmwYi80A", "压测用户");
+        when(loadtestAccessService.authenticate("loadtest-at")).thenReturn(principal);
+
+        interceptor.preHandle(request, new MockHttpServletResponse(), new Object());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
+                .isEqualTo(principal);
+        verify(membershipExpirationService).expireIfDue(73014701344296960L);
+        verifyNoInteractions(service, preAuthService, cookieWriter);
     }
 
     private static MockHttpServletRequest request(String platform) {

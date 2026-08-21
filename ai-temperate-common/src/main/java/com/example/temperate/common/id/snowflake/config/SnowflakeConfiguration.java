@@ -1,5 +1,6 @@
 package com.example.temperate.common.id.snowflake.config;
 
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.codec.id.HybridUlidCodec;
 import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.common.id.snowflake.component.SnowflakeIdWorker;
@@ -28,5 +29,10 @@ public class SnowflakeConfiguration {
     @Bean
     public HybridUlidCodec hybridUlidCodec() {
         return new HybridUlidCodec();
+    }
+
+    @Bean
+    public HybridBase64UrlCodec hybridBase64UrlCodec() {
+        return new HybridBase64UrlCodec();
     }
 }

@@ -22,4 +22,5 @@ public class UserMembershipQuota {
     private Long quotaBalanceMinor;
     private OffsetDateTime quotaPeriodStartedAt;
     private OffsetDateTime quotaPeriodEndsAt;
+    private OffsetDateTime membershipExpiresAt;
 }

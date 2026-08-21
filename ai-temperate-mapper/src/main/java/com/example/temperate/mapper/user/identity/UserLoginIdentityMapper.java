@@ -62,6 +62,10 @@ public interface UserLoginIdentityMapper {
     AuthenticationContext findAuthenticationById(
             @Param("identityId") long identityId);
 
+    /** 按一组内部身份 ID 一次读取认证状态，供固定小批量的本机压测账号预检使用。 */
+    List<AuthenticationContext> findAuthenticationByIds(
+            @Param("identityIds") List<Long> identityIds);
+
     /**
      * 按已认证用户 ID 读取当前 TOTP 状态和密文；调用方必须在服务层完成解密与状态一致性校验。
      */

@@ -13,6 +13,7 @@ import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,6 +26,7 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -55,6 +57,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
     private final ObjectMapper objectMapper;
     private final WebRtcMetrics metrics;
     private final WebRtcVerificationTransport transport;
+    private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
 
     public WebRtcVerificationInterceptor(
             NetworkRiskProperties properties,
@@ -63,12 +66,38 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             ObjectMapper objectMapper,
             WebRtcMetrics metrics,
             WebRtcVerificationTransport transport) {
+        this(
+                properties,
+                verificationService,
+                contextResolver,
+                objectMapper,
+                metrics,
+                transport,
+                MembershipPaymentLoadtestRequestPolicy.disabled());
+    }
+
+    /**
+     * 创建带会员压测精确路径旁路策略的 WebRTC 拦截器。
+     *
+     * <p>压测订单自身使用签名 AT 认证，不需要站内 PreAuth/WebRTC 状态；旁路只由同一精确路由策略裁决，
+     * 其他 API 仍执行原有风险门禁。</p>
+     */
+    @Autowired
+    public WebRtcVerificationInterceptor(
+            NetworkRiskProperties properties,
+            WebRtcVerificationService verificationService,
+            RiskRequestContextResolver contextResolver,
+            ObjectMapper objectMapper,
+            WebRtcMetrics metrics,
+            WebRtcVerificationTransport transport,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
         this.properties = Objects.requireNonNull(properties);
         this.verificationService = Objects.requireNonNull(verificationService);
         this.contextResolver = Objects.requireNonNull(contextResolver);
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.metrics = Objects.requireNonNull(metrics);
         this.transport = Objects.requireNonNull(transport);
+        this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
     }
 
     @Override
@@ -76,6 +105,10 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             HttpServletRequest request,
             HttpServletResponse response,
             Object handler) throws Exception {
+        if (loadtestRequestPolicy.matches(request)) {
+            // 会员压测认证已由后续 UserSessionAuthenticationInterceptor 完成，不能再要求站内 WebRTC PreAuth。
+            return true;
+        }
         RiskScope scope = scope(request);
         CompletedVerification completedVerification = completedVerification(request, scope);
         if (completedVerification != null) {

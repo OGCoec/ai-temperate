@@ -12,6 +12,7 @@
         <result property="quotaBalanceMinor" column="quota_balance_minor"/>
         <result property="quotaPeriodStartedAt" column="quota_period_started_at"/>
         <result property="quotaPeriodEndsAt" column="quota_period_ends_at"/>
+        <result property="membershipExpiresAt" column="membership_expires_at"/>
     </resultMap>
 
     <insert id="insert"
@@ -24,14 +25,16 @@
             membership_tier,
             quota_balance_minor,
             quota_period_started_at,
-            quota_period_ends_at
+            quota_period_ends_at,
+            membership_expires_at
         )
         VALUES (
             #{loginIdentityId,jdbcType=BIGINT},
             #{membershipTier,jdbcType=SMALLINT},
             #{quotaBalanceMinor,jdbcType=BIGINT},
             #{quotaPeriodStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
-            #{quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            #{quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{membershipExpiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         )
     </insert>
 
@@ -43,9 +46,28 @@
             membership_tier,
             quota_balance_minor,
             quota_period_started_at,
-            quota_period_ends_at
+            quota_period_ends_at,
+            membership_expires_at
         FROM user_membership_quota
         WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="findByLoginIdentityIds"
+            resultMap="UserMembershipQuotaResultMap">
+        SELECT
+            id,
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at,
+            membership_expires_at
+        FROM user_membership_quota
+        WHERE login_identity_id IN
+        <foreach collection="loginIdentityIds" item="loginIdentityId" open="(" separator="," close=")">
+            #{loginIdentityId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY login_identity_id
     </select>
 
     <select id="findByLoginIdentityIdForUpdate"
@@ -56,7 +78,8 @@
             membership_tier,
             quota_balance_minor,
             quota_period_started_at,
-            quota_period_ends_at
+            quota_period_ends_at,
+            membership_expires_at
         FROM user_membership_quota
         WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
         FOR UPDATE

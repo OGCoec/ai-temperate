@@ -160,10 +160,15 @@ class PersistenceSqlContractTest {
 
         assertFalse(identityMapper.contains("$" + "{"));
         assertFalse(profileMapper.contains("$" + "{"));
-        assertFalse(identityMapper.contains("<foreach"));
         assertFalse(profileMapper.contains("<foreach"));
         assertFalse(membershipQuotaMapper.contains("$" + "{"));
         assertFalse(identityMapper.contains("select *"));
+
+        // 压测账号预检必须以一次有界批量查询完成；foreach 只生成占位符，禁止退化为逐条数据库 I/O 或字符串拼接。
+        assertTrue(identityMapper.contains("id=\"findauthenticationbyids\""));
+        assertTrue(identityMapper.contains(
+                "<foreach collection=\"identityids\" item=\"identityid\""));
+        assertTrue(identityMapper.contains("#{identityid,jdbctype=bigint}"));
 
         // 历史退款必须在一次有界 SQL 中批量处理；允许 foreach 生成行占位符，但每个值仍须使用预编译参数绑定。
         assertTrue(membershipQuotaMapper.contains("id=\"addhistoricalairefunds\""));

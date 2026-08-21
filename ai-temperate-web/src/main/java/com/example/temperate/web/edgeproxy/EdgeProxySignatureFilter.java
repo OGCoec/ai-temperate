@@ -1,6 +1,7 @@
 package com.example.temperate.web.edgeproxy;
 
 import com.example.temperate.service.user.voice.diagnostic.VoiceDiagnosticContext;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -34,6 +35,7 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
 
     private final EdgeProxyProperties properties;
     private final EdgeProxySignatureVerifier verifier;
+    private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
 
     /**
      * 创建只处理 API 与公开语音 WebSocket Upgrade 请求的边缘签名过滤器。
@@ -46,12 +48,30 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
     public EdgeProxySignatureFilter(
             EdgeProxyProperties properties,
             EdgeProxySignatureVerifier verifier) {
+        this(properties, verifier, MembershipPaymentLoadtestRequestPolicy.disabled());
+    }
+
+    /**
+     * 创建带会员压测精确路径旁路策略的边缘签名过滤器。
+     *
+     * <p>压测旁路只对已由策略精确匹配的会员订单路径生效，其他 API 仍然保留生产边缘签名校验。</p>
+     */
+    public EdgeProxySignatureFilter(
+            EdgeProxyProperties properties,
+            EdgeProxySignatureVerifier verifier,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
         this.properties = Objects.requireNonNull(properties);
         this.verifier = Objects.requireNonNull(verifier);
+        this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        if (loadtestRequestPolicy.matchesTokenMint(request)
+                || loadtestRequestPolicy.matches(request)) {
+            // loadtest Profile 的认证、白名单和回调密钥在后续边界完成；这里不能把旁路扩大到其他 API。
+            return true;
+        }
         String uri = request.getRequestURI();
         // 只把公开语音握手的精确路径纳入边缘边界，避免未来新增的内部 /ws 路径被意外暴露或改变认证语义。
         return uri == null

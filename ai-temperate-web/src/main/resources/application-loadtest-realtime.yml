@@ -1,0 +1,66 @@
+# 会员支付真实时间压测 Profile，保留生产五分钟加五分钟边界但仍使用独立认证白名单。
+spring:
+  # 真实时间压测配置激活规则，普通 Profile 不会加载本文件。
+  config:
+    # 只有显式启用 loadtest-realtime 时才应用本 Profile。
+    activate:
+      # 真实时间压测 Profile 名称必须与启动守卫白名单一致。
+      on-profile: loadtest-realtime
+
+# 真实时间压测默认使用本机 HTTP 端口，Runner 不需要额外传入服务端口。
+server:
+  # 仅供 loadtest-realtime 本机调试使用的 HTTP 端口。
+  port: ${SERVER_PORT:8080}
+  # 真实并发回调测试使用独立 Tomcat 容量，避免五百条同时建连被默认一百长度的监听队列误判为业务失败。
+  tomcat:
+    # 等待工作线程处理的连接队列覆盖五百并发及本机调度抖动，只影响该受控压测 Profile。
+    accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:1000}
+    # 同时连接上限高于回调并发和健康探针总量，不改变普通及生产 Profile 的连接配置。
+    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:2000}
+    # Tomcat 工作线程只在真实时间压测 Profile 扩容，确保五百个短回调不会因默认线程上限形成连接风暴。
+    threads:
+      # 五百一十二个线程覆盖五百回调并为订单查询和 Actuator 探针保留余量。
+      max: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_THREADS:512}
+  # 实时压测仍使用本机 HTTP，避免继承默认 TLS 配置导致必须准备证书。
+  ssl:
+    # 仅在 loadtest-realtime 下关闭 Web 服务器 TLS，回调和 JMeter 均走回环 HTTP。
+    enabled: false
+
+# 真实时间压测只启用会员模拟支付闭环，不接入真实支付、会员升级或退款平台。
+app:
+  # 本机回调与 JMeter 使用 HTTP 回环地址，认证安全策略按 LOCAL 而非生产 HTTPS 规则校验。
+  security:
+    # 该值只影响受控本机 Profile，生产环境仍由基础配置保持 PROD。
+    env: LOCAL
+    # 真实十分钟状态机结束后仍需查询最终状态，因此只在本 Profile 延长短期 AT 生命周期。
+    ttl:
+      # 三十分钟覆盖单个 5+5 场景及有界收敛，不改变普通环境的十分钟默认值。
+      access-token: 30m
+  # 会员模拟支付业务配置组。
+  membership-payment:
+    # 该 Profile 明确打开会员模拟支付，普通 Profile 仍由基础配置保持关闭。
+    enabled: true
+    # 本机 Runner 使用应用内部签发的短期 AT，开关只在受控 Profile 生效。
+    loadtest:
+      # 仅本机实时状态机调试启用 AT-only 认证入口。
+      enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_ENABLED:true}
+      # 第一个既有可用账号只用于本次本机压测，不创建或修改账号。
+      allowed-user-ids:
+        # 既有白名单账号一。
+        - 73014701344296960
+        # 既有白名单账号二。
+        - 72659006262480896
+        # 既有白名单账号三。
+        - 76721355290185728
+        # 既有白名单账号四。
+        - 74891801495998464
+    # 模拟支付商户和回调密钥使用仅供本机测试的固定占位值，不代表真实商户凭据。
+    simulator:
+      # 仅在本机实时 Profile 注册双协议模拟回调路由。
+      enabled: true
+      # 模拟商户号只用于构造测试回调，不连接真实支付平台。
+      pid: loadtest-merchant
+      # 回调密钥仅用于本机回调鉴权和指纹，禁止在生产 Profile 复用。
+      callback-key: membership-loadtest-callback-key-v1-local
+      # 实时压测启用确定性 HMAC 回调签名校验，拒绝伪造签名但不执行真实 RSA 验签。
+      signature-validation-enabled: true

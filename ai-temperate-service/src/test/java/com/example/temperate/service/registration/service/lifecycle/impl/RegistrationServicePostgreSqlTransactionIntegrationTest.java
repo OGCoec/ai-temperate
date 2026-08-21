@@ -407,6 +407,12 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
         }
 
         @Override
+        public List<com.example.temperate.model.auth.domain.AuthenticationContext>
+                findAuthenticationByIds(List<Long> identityIds) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public com.example.temperate.model.user.domain.CurrentUserProfile
                 findCurrentUserProfileById(long identityId) {
             throw new UnsupportedOperationException();

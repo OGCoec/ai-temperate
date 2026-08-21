@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper">
+
+    <resultMap id="MembershipOrderResultMap"
+               type="com.example.temperate.model.user.membership.payment.MembershipOrder">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="membershipTier" column="membership_tier"
+                typeHandler="com.example.temperate.mapper.typehandler.MembershipTierTypeHandler"/>
+        <result property="payAmountYuan" column="pay_amount_yuan"/>
+        <result property="payType" column="pay_type"/>
+        <result property="status" column="status"
+                typeHandler="com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler"/>
+        <result property="idempotencyKey"
+                column="idempotency_key"
+                javaType="java.util.UUID"
+                jdbcType="OTHER"
+                typeHandler="com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler"/>
+        <result property="providerTradeNo" column="provider_trade_no"/>
+        <result property="paymentStartedAt" column="payment_started_at"/>
+        <result property="expiresAt" column="expires_at"/>
+        <result property="closingDeadlineAt" column="closing_deadline_at"/>
+        <result property="paidAt" column="paid_at"/>
+        <result property="stateVersion" column="state_version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="MembershipOrderColumns">
+        id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
+        status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
+        closing_deadline_at, paid_at, state_version, created_at, updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.example.temperate.model.user.membership.payment.MembershipOrder">
+        INSERT INTO membership_order (
+            id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
+            status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
+            closing_deadline_at, paid_at, state_version, created_at, updated_at
+        )
+        SELECT
+            #{id,jdbcType=BINARY},
+            #{loginIdentityId,jdbcType=BIGINT},
+            #{membershipTier,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipTierTypeHandler},
+            #{payAmountYuan,jdbcType=NUMERIC},
+            #{payType,jdbcType=VARCHAR},
+            #{status,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler},
+            #{idempotencyKey,
+              javaType=java.util.UUID,
+              jdbcType=OTHER,
+              typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler},
+            #{providerTradeNo,jdbcType=VARCHAR},
+            #{paymentStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{closingDeadlineAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{paidAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{stateVersion,jdbcType=BIGINT},
+            #{createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        FROM userloginidentity
+        WHERE id = #{loginIdentityId,jdbcType=BIGINT}
+        ON CONFLICT (idempotency_key) DO NOTHING
+    </insert>
+
+    <select id="findById" resultMap="MembershipOrderResultMap">
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        WHERE id = #{orderId,jdbcType=BINARY}
+    </select>
+
+    <select id="findOwnedById" resultMap="MembershipOrderResultMap">
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        WHERE id = #{orderId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </select>
+
+    <select id="startPaymentAttemptIfAbsent" resultMap="MembershipOrderResultMap">
+        UPDATE membership_order
+        SET payment_started_at = #{startedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            state_version = state_version + 1,
+            updated_at = #{startedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        WHERE id = #{orderId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND status = #{pendingStatus,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler}
+          AND payment_started_at IS NULL
+          AND expires_at &gt; #{startedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        RETURNING <include refid="MembershipOrderColumns"/>
+    </select>
+
+    <select id="findByIdempotencyKey" resultMap="MembershipOrderResultMap">
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        WHERE idempotency_key = #{idempotencyKey,
+                                  javaType=java.util.UUID,
+                                  jdbcType=OTHER,
+                                  typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler}
+    </select>
+
+    <select id="findLatestPaidOrder" resultMap="MembershipOrderResultMap">
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND membership_tier = #{membershipTier,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipTierTypeHandler}
+          AND status = #{paidStatus,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler}
+        ORDER BY paid_at DESC NULLS LAST, created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findByIdsJson" resultMap="MembershipOrderResultMap">
+        WITH requested AS (
+            SELECT
+                DECODE(requested_value, 'hex') AS order_id,
+                requested_ordinal
+            FROM jsonb_array_elements_text(
+                CAST(#{idsJson,jdbcType=VARCHAR} AS JSONB)
+            ) WITH ORDINALITY AS requested(requested_value, requested_ordinal)
+        )
+        SELECT
+            membership_order.id,
+            membership_order.login_identity_id,
+            membership_order.membership_tier,
+            membership_order.pay_amount_yuan,
+            membership_order.pay_type,
+            membership_order.status,
+            membership_order.idempotency_key,
+            membership_order.provider_trade_no,
+            membership_order.payment_started_at,
+            membership_order.expires_at,
+            membership_order.closing_deadline_at,
+            membership_order.paid_at,
+            membership_order.state_version,
+            membership_order.created_at,
+            membership_order.updated_at
+        FROM requested
+        JOIN membership_order
+          ON membership_order.id = requested.order_id
+        ORDER BY requested.requested_ordinal
+    </select>
+
+    <update id="batchAdvanceState">
+        WITH raw_snapshots AS (
+            SELECT
+                DECODE(raw."idHex", 'hex') AS order_id,
+                raw.status,
+                raw."providerTradeNo" AS provider_trade_no,
+                raw."paymentStartedAt" AS payment_started_at,
+                raw."closingDeadlineAt" AS closing_deadline_at,
+                raw."paidAt" AS paid_at,
+                raw."stateVersion" AS state_version,
+                raw."updatedAt" AS updated_at
+            FROM jsonb_to_recordset(
+                CAST(#{snapshotsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS raw(
+                "idHex" TEXT,
+                status SMALLINT,
+                "providerTradeNo" TEXT,
+                "paymentStartedAt" TIMESTAMPTZ,
+                "closingDeadlineAt" TIMESTAMPTZ,
+                "paidAt" TIMESTAMPTZ,
+                "stateVersion" BIGINT,
+                "updatedAt" TIMESTAMPTZ
+            )
+        ),
+        snapshots AS (
+            SELECT DISTINCT ON (order_id)
+                order_id,
+                status,
+                provider_trade_no,
+                payment_started_at,
+                closing_deadline_at,
+                paid_at,
+                state_version,
+                updated_at
+            FROM raw_snapshots
+            ORDER BY order_id, state_version DESC
+        )
+        UPDATE membership_order
+        SET status = snapshots.status,
+            provider_trade_no = COALESCE(
+                snapshots.provider_trade_no,
+                membership_order.provider_trade_no),
+            payment_started_at = COALESCE(
+                snapshots.payment_started_at,
+                membership_order.payment_started_at),
+            closing_deadline_at = snapshots.closing_deadline_at,
+            paid_at = COALESCE(snapshots.paid_at, membership_order.paid_at),
+            state_version = snapshots.state_version,
+            updated_at = snapshots.updated_at
+        FROM snapshots
+        WHERE membership_order.id = snapshots.order_id
+          AND membership_order.state_version &lt; snapshots.state_version
+    </update>
+</mapper>

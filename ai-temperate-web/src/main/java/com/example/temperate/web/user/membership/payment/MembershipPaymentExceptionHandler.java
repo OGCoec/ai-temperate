@@ -1,0 +1,73 @@
+package com.example.temperate.web.user.membership.payment;
+
+import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
+import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
+import com.example.temperate.web.auth.api.ApiErrorResponse;
+import java.time.Clock;
+import java.util.Objects;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/**
+ * 该处理器是来把会员订单受控异常映射为稳定的 400、404、409 或 503 响应，并隐藏订单归属与基础设施细节。
+ */
+@RestControllerAdvice(assignableTypes = CurrentUserMembershipOrderController.class)
+@ConditionalOnProperty(
+        prefix = "app.membership-payment",
+        name = "enabled",
+        havingValue = "true")
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public final class MembershipPaymentExceptionHandler {
+
+    private final Clock clock;
+
+    public MembershipPaymentExceptionHandler(Clock clock) {
+        this.clock = Objects.requireNonNull(clock);
+    }
+
+    @ExceptionHandler(MembershipPaymentException.class)
+    public ResponseEntity<ApiErrorResponse> handle(MembershipPaymentException exception) {
+        HttpStatus status = switch (exception.code()) {
+            case MEMBERSHIP_ORDER_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case MEMBERSHIP_ORDER_IDEMPOTENCY_CONFLICT,
+                    MEMBERSHIP_ORDER_STATE_CONFLICT,
+                    MEMBERSHIP_PAYMENT_CALLBACK_IN_PROGRESS,
+                    MEMBERSHIP_TRANSITION_REJECTED,
+                    MEMBERSHIP_UPGRADE_HISTORY_MISSING,
+                    MEMBERSHIP_PAYMENT_AMOUNT_MISMATCH,
+                    MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT -> HttpStatus.CONFLICT;
+            case FEATURE_DISABLED,
+                    MEMBERSHIP_PAYMENT_REDIS_UNAVAILABLE,
+                    MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case INPUT_INVALID -> HttpStatus.BAD_REQUEST;
+        };
+        return ResponseEntity.status(status)
+                .cacheControl(CacheControl.noStore().cachePrivate())
+                .header("CDN-Cache-Control", "no-store")
+                .body(new ApiErrorResponse(
+                        exception.code().name(),
+                        message(exception.code()),
+                        clock.instant()));
+    }
+
+    private static String message(MembershipPaymentErrorCode code) {
+        return switch (code) {
+            case MEMBERSHIP_ORDER_NOT_FOUND -> "会员支付订单不存在。";
+            case MEMBERSHIP_ORDER_IDEMPOTENCY_CONFLICT -> "该幂等键已用于另一会员订单意图。";
+            case MEMBERSHIP_PAYMENT_CALLBACK_IN_PROGRESS -> "支付结果正在处理，暂时不能取消订单。";
+            case MEMBERSHIP_TRANSITION_REJECTED -> "当前会员等级不允许执行该转换。";
+            case MEMBERSHIP_UPGRADE_HISTORY_MISSING -> "缺少可信的历史支付周期，暂时无法计算升级价格。";
+            case MEMBERSHIP_PAYMENT_REDIS_UNAVAILABLE -> "会员支付状态暂时不可用，请稍后重试。";
+            case MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE -> "会员支付检查暂时无法提交，请原样重试。";
+            case FEATURE_DISABLED -> "会员支付功能暂未启用。";
+            case INPUT_INVALID -> "会员支付请求参数无效。";
+            default -> "会员支付订单状态冲突，请刷新后重试。";
+        };
+    }
+}

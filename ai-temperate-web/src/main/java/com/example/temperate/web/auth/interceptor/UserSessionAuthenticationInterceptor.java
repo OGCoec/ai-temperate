@@ -14,14 +14,17 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.user.membership.MembershipExpirationService;
+import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestAccessService;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -53,6 +56,27 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
     private final PreAuthService preAuthService;
     private final NetworkRiskProperties networkRiskProperties;
     private final MembershipExpirationService membershipExpirationService;
+    private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
+    private final MembershipPaymentLoadtestAccessService loadtestAccessService;
+
+    @Autowired
+    public UserSessionAuthenticationInterceptor(
+            AccessSessionService accessSessionService,
+            AuthCookieWriter cookieWriter,
+            PreAuthService preAuthService,
+            NetworkRiskProperties networkRiskProperties,
+            MembershipExpirationService membershipExpirationService,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy,
+            MembershipPaymentLoadtestAccessService loadtestAccessService) {
+        this.accessSessionService = Objects.requireNonNull(accessSessionService);
+        this.cookieWriter = Objects.requireNonNull(cookieWriter);
+        this.preAuthService = Objects.requireNonNull(preAuthService);
+        this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
+        this.membershipExpirationService =
+                Objects.requireNonNull(membershipExpirationService);
+        this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
+        this.loadtestAccessService = Objects.requireNonNull(loadtestAccessService);
+    }
 
     public UserSessionAuthenticationInterceptor(
             AccessSessionService accessSessionService,
@@ -60,12 +84,16 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
             PreAuthService preAuthService,
             NetworkRiskProperties networkRiskProperties,
             MembershipExpirationService membershipExpirationService) {
-        this.accessSessionService = Objects.requireNonNull(accessSessionService);
-        this.cookieWriter = Objects.requireNonNull(cookieWriter);
-        this.preAuthService = Objects.requireNonNull(preAuthService);
-        this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
-        this.membershipExpirationService =
-                Objects.requireNonNull(membershipExpirationService);
+        this(
+                accessSessionService,
+                cookieWriter,
+                preAuthService,
+                networkRiskProperties,
+                membershipExpirationService,
+                MembershipPaymentLoadtestRequestPolicy.disabled(),
+                rawAccessToken -> {
+                    throw new IllegalStateException("Loadtest authentication is disabled.");
+                });
     }
 
     @Override
@@ -77,6 +105,19 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
         if (Boolean.TRUE.equals(request.getAttribute(COMPLETED_ATTRIBUTE))
                 && existingPrincipal instanceof SessionPrincipal principal) {
             establishSecurityContext(request, principal);
+            return true;
+        }
+
+        if (loadtestRequestPolicy.matchesTokenMint(request)) {
+            // Token 签发入口由本机回环 Controller 自己做地址和开关校验，不应被当成带 Bearer 的业务请求。
+            return true;
+        }
+        if (loadtestRequestPolicy.matches(request)) {
+            // 只有精确压测路由可以跳过 RT、Device 与 CSRF；原始 AT 验证后立即丢弃，不写 Cookie 或响应头。
+            SessionPrincipal principal = loadtestAccessService.authenticate(bearerToken(request));
+            expireMembership(principal.userId());
+            establishSecurityContext(request, principal);
+            request.setAttribute(COMPLETED_ATTRIBUTE, Boolean.TRUE);
             return true;
         }
 
@@ -95,16 +136,7 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
                 ? accessSessionService.authenticateOrRenew(command)
                 : accessSessionService.authenticateOrRenew(command, binding);
 
-        try {
-            // 只有会话已经认证出的内部用户 ID 才能触发会员降级，禁止使用请求参数选择待更新账号。
-            membershipExpirationService.expireIfDue(result.principal().userId());
-        } catch (RuntimeException exception) {
-            throw new SessionAuthenticationException(
-                    SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE,
-                    "Membership validation is temporarily unavailable.",
-                    false,
-                    exception);
-        }
+        expireMembership(result.principal().userId());
 
         establishSecurityContext(request, result.principal());
         if (result.renewed()) {
@@ -120,6 +152,19 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
         // 请求属性只保存完成标记和 Principal，禁止让新 AT 跟随异步/SSE 请求生命周期驻留。
         request.setAttribute(COMPLETED_ATTRIBUTE, Boolean.TRUE);
         return true;
+    }
+
+    private void expireMembership(long userId) {
+        try {
+            // 只有认证分支已经裁决出的内部用户 ID 才能触发会员降级，禁止使用请求参数选择待更新账号。
+            membershipExpirationService.expireIfDue(userId);
+        } catch (RuntimeException exception) {
+            throw new SessionAuthenticationException(
+                    SessionAuthenticationErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+                    "Membership validation is temporarily unavailable.",
+                    false,
+                    exception);
+        }
     }
 
     private PreAuthSessionBinding userPreAuthBinding(
