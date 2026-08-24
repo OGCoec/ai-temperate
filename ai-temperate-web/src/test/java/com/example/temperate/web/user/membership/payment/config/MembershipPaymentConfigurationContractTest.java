@@ -18,6 +18,7 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.boot.autoconfigure.amqp.ConnectionFactoryCustomizer;
 import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -105,5 +106,19 @@ final class MembershipPaymentConfigurationContractTest {
                 .isEqualTo(48);
         assertThat(ReflectionTestUtils.getField(factory, "prefetchCount"))
                 .isEqualTo(20);
+    }
+
+    @Test
+    void requestedChannelMaxIsAppliedToRabbitJavaClient() {
+        MembershipPaymentRabbitConfiguration configuration =
+                new MembershipPaymentRabbitConfiguration();
+        com.rabbitmq.client.ConnectionFactory rabbitClient =
+                new com.rabbitmq.client.ConnectionFactory();
+
+        ConnectionFactoryCustomizer customizer =
+                configuration.membershipPaymentConnectionFactoryCustomizer(16_384);
+        customizer.customize(rabbitClient);
+
+        assertThat(rabbitClient.getRequestedChannelMax()).isEqualTo(16_384);
     }
 }

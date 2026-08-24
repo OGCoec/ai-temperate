@@ -19,14 +19,16 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
+import org.springframework.boot.autoconfigure.amqp.ConnectionFactoryCustomizer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
  * 该配置类是来声明会员支付和软关闭的持久延时交换机、Quorum 业务队列、独立 DLQ、Confirm 模板及手动 ACK 容器。
  *
- * <p>两条业务队列使用独立拓扑，每条队列固定三十二个消费者且 prefetch 为 20；监听失败由 Quorum Queue
+ * <p>两条业务队列使用独立拓扑，每条队列固定四十八个消费者且 prefetch 为 20；监听失败由 Quorum Queue
  * 的三次 delivery limit 有限重投，耗尽后进入独立 DLQ，禁止异常消息无限循环。</p>
  */
 @Configuration
@@ -35,6 +37,24 @@ import org.springframework.context.annotation.Configuration;
         name = "enabled",
         havingValue = "true")
 public class MembershipPaymentRabbitConfiguration {
+
+    /**
+     * 将受控 Profile 中的通道协商上限显式写入 Rabbit Java Client。
+     *
+     * <p>Spring Boot 3.5 不会自动把该扩展键绑定到底层客户端，因此必须在创建连接前完成定制；
+     * 这只改变协商容量，实际并发仍由五百一十二通道缓存的有界背压控制。</p>
+     */
+    @Bean
+    ConnectionFactoryCustomizer membershipPaymentConnectionFactoryCustomizer(
+            @Value("${spring.rabbitmq.requested-channel-max:2047}")
+                    int requestedChannelMax) {
+        if (requestedChannelMax < 1 || requestedChannelMax > 65_535) {
+            throw new IllegalArgumentException(
+                    "RabbitMQ requested channel max must be between 1 and 65535.");
+        }
+        return connectionFactory ->
+                connectionFactory.setRequestedChannelMax(requestedChannelMax);
+    }
 
     @Bean
     Declarables membershipPaymentRabbitTopology() {
