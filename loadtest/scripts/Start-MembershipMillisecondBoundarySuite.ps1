@@ -11,7 +11,8 @@ param(
     [ValidateRange(60, 600)]
     [int] $PrecheckSeconds = 120,
     [ValidateRange(60, 600)]
-    [int] $InterSegmentSeconds = 60
+    [int] $InterSegmentSeconds = 60,
+    [switch] $PreserveDataAfterPass
 )
 
 Set-StrictMode -Version Latest
@@ -424,30 +425,42 @@ try {
         throw 'Final timestamp evidence does not contain exactly 40,000 rows.'
     }
 
-    $resetManifest = Join-Path $outputRoot 'reset-order-ids.json'
-    [void](Write-ResetOrderManifest -ScenarioPaths $scenarioPaths -Destination $resetManifest)
-    $runOrderIds = @(
-        foreach ($path in $scenarioPaths) {
-            Import-Csv -LiteralPath $path | ForEach-Object { [string]$_.order_id }
-        }
-    )
-
-    # 只删除本轮四万笔支付事实并恢复额度；固定四万用户、资料和账号模板永久保留。
     if ((Get-SourceFingerprint) -ne $sourceFingerprint) {
-        throw 'Source fingerprint changed before final reset.'
+        throw 'Source fingerprint changed before final verdict.'
     }
-    $reset = Invoke-RestMethod -Method Post `
-        -Uri "$baseUrl/internal/test/membership-payments/millisecond-boundary/reset" `
-        -ContentType 'application/json' `
-        -InFile $resetManifest `
-        -TimeoutSec 300
-    if (-not $reset.prepared -or $reset.orderCount -ne 0 -or $reset.callbackCount -ne 0) {
-        throw 'Boundary reset did not preserve a clean persistent fixture.'
+
+    if ($PreserveDataAfterPass) {
+        # 最终验收通过后保留本轮数据库与 Redis 业务事实，便于逐笔复核微秒边界结果。
+        [ordered]@{
+            runId = $RunId
+            orders = 40000
+            callbacks = 40000
+            preservedAt = [datetimeoffset]::UtcNow.ToString('O')
+        } | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $outputRoot 'data-preserved.json') -Encoding UTF8
+    } else {
+        $resetManifest = Join-Path $outputRoot 'reset-order-ids.json'
+        [void](Write-ResetOrderManifest -ScenarioPaths $scenarioPaths -Destination $resetManifest)
+        $runOrderIds = @(
+            foreach ($path in $scenarioPaths) {
+                Import-Csv -LiteralPath $path | ForEach-Object { [string]$_.order_id }
+            }
+        )
+
+        # 默认模式只删除本轮四万笔支付事实并恢复额度；固定账号、资料和额度模板永久保留。
+        $reset = Invoke-RestMethod -Method Post `
+            -Uri "$baseUrl/internal/test/membership-payments/millisecond-boundary/reset" `
+            -ContentType 'application/json' `
+            -InFile $resetManifest `
+            -TimeoutSec 300
+        if (-not $reset.prepared -or $reset.orderCount -ne 0 -or $reset.callbackCount -ne 0) {
+            throw 'Boundary reset did not preserve a clean persistent fixture.'
+        }
+        $redisContainer = if ($env:REDIS_CONTAINER) { $env:REDIS_CONTAINER } else { 'redis7' }
+        [void](Remove-MembershipBoundaryRedisOrderArtifacts `
+                -Container $redisContainer -OrderIds $runOrderIds)
+        Assert-RedisBoundaryBaseline
     }
-    $redisContainer = if ($env:REDIS_CONTAINER) { $env:REDIS_CONTAINER } else { 'redis7' }
-    [void](Remove-MembershipBoundaryRedisOrderArtifacts `
-            -Container $redisContainer -OrderIds $runOrderIds)
-    Assert-RedisBoundaryBaseline
     Get-ChildItem -LiteralPath $tokenRoot -Filter "$RunId-*.csv" -File -ErrorAction SilentlyContinue |
         Remove-Item -Force
 
@@ -456,6 +469,7 @@ try {
         runId = $RunId
         sourceFingerprint = $sourceFingerprint
         actualOrders = 40000
+        dataPreserved = [bool]$PreserveDataAfterPass
         timestampEvidence = 'final-timestamp-evidence.csv'
         completedAt = [datetimeoffset]::UtcNow.ToString('O')
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $suiteVerdictPath -Encoding UTF8
