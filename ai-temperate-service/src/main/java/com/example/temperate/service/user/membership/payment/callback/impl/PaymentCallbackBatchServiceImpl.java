@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.membership.payment.callback.impl;
 
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
+
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
@@ -8,7 +10,8 @@ import com.example.temperate.model.user.membership.payment.MembershipOrderStatus
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackResolution;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentCallbackDecision;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentCallbackDecisionService;
-import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundRequiredTrigger;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundService;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackResumeService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackBatchService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackClaim;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackCompletion;
@@ -17,6 +20,9 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentCal
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackSnapshot;
 import com.example.temperate.service.user.membership.payment.callback.PaymentProviderResultCompletionAction;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
+import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentEntitlementCommand;
+import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentEntitlementSettlementService;
+import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentRefundEntitlementCommand;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestFaultGate;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderPaidCommand;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
@@ -24,6 +30,7 @@ import com.example.temperate.service.user.membership.payment.observability.Membe
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentRefundCommand;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -46,9 +53,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来恢复和领取回调 ZSet，批量补齐订单、先提交回调审计表，再通过一个 Lua 批次推进实时订单状态。
+ * 该实现是来恢复和领取回调 ZSet，批量补齐订单、先提交回调审计表，再协调 Redis 状态迁移与 PostgreSQL 权益结算。
  *
- * <p>未知订单和字段冲突属于永久拒绝；数据库、Redis 或序列化异常会精确重入 ready 并结束当前轮，避免忙循环。</p>
+ * <p>APPLIED 必须进入独立权益事务，事务提交后才清理 marker；未知订单和字段冲突属于永久拒绝，基础设施异常会精确重入 ready 并结束当前轮。</p>
  */
 @Service
 @ConditionalOnProperty(
@@ -66,8 +73,10 @@ public final class PaymentCallbackBatchServiceImpl
     private final MembershipOrderSnapshotStore orderSnapshotStore;
     private final MembershipOrderMapper orderMapper;
     private final PaymentCallbackPersistenceService persistenceService;
+    private final MembershipPaymentEntitlementSettlementService entitlementService;
     private final MembershipPaymentCallbackDecisionService decisionService;
-    private final MembershipPaymentRefundRequiredTrigger refundRequiredTrigger;
+    private final MembershipPaymentRefundService refundService;
+    private final MembershipPaymentRejectedCallbackResumeService rejectedResumeService;
     private final MembershipPaymentLoadtestFaultGate loadtestFaultGate;
     private final HybridBase64UrlCodec base64UrlCodec;
     private final ObjectMapper objectMapper;
@@ -80,8 +89,10 @@ public final class PaymentCallbackBatchServiceImpl
             MembershipOrderSnapshotStore orderSnapshotStore,
             MembershipOrderMapper orderMapper,
             PaymentCallbackPersistenceService persistenceService,
+            MembershipPaymentEntitlementSettlementService entitlementService,
             MembershipPaymentCallbackDecisionService decisionService,
-            MembershipPaymentRefundRequiredTrigger refundRequiredTrigger,
+            MembershipPaymentRefundService refundService,
+            MembershipPaymentRejectedCallbackResumeService rejectedResumeService,
             MembershipPaymentLoadtestFaultGate loadtestFaultGate,
             HybridBase64UrlCodec base64UrlCodec,
             ObjectMapper objectMapper,
@@ -92,8 +103,10 @@ public final class PaymentCallbackBatchServiceImpl
         this.orderSnapshotStore = Objects.requireNonNull(orderSnapshotStore);
         this.orderMapper = Objects.requireNonNull(orderMapper);
         this.persistenceService = Objects.requireNonNull(persistenceService);
+        this.entitlementService = Objects.requireNonNull(entitlementService);
         this.decisionService = Objects.requireNonNull(decisionService);
-        this.refundRequiredTrigger = Objects.requireNonNull(refundRequiredTrigger);
+        this.refundService = Objects.requireNonNull(refundService);
+        this.rejectedResumeService = Objects.requireNonNull(rejectedResumeService);
         this.loadtestFaultGate = Objects.requireNonNull(loadtestFaultGate);
         this.base64UrlCodec = Objects.requireNonNull(base64UrlCodec);
         this.objectMapper = Objects.requireNonNull(objectMapper);
@@ -126,6 +139,7 @@ public final class PaymentCallbackBatchServiceImpl
     }
 
     private boolean process(List<PaymentCallbackClaim> claims) {
+        List<PaymentCallbackClaim> retryOnFailure = claims;
         try {
             Map<String, PaymentCallbackClaim> claimsById = claims.stream()
                     .collect(Collectors.toMap(
@@ -133,9 +147,31 @@ public final class PaymentCallbackBatchServiceImpl
                             claim -> claim,
                             (left, right) -> left,
                             LinkedHashMap::new));
-            Map<String, PaymentCallbackSnapshot> callbacks = callbackQueue.findAll(
-                    claimsById.keySet());
-            List<PaymentCallbackCompletion> complete = claims.stream()
+            Map<String, PaymentCallbackSnapshot> callbacks = new LinkedHashMap<>(
+                    callbackQueue.findAll(claimsById.keySet()));
+            List<PaymentCallbackClaim> heldClaims = callbacks.values().stream()
+                    .filter(callback -> loadtestFaultGate.callbackHeld(callback.orderId()))
+                    .map(callback -> claimsById.get(callback.callbackId()))
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+            if (!heldClaims.isEmpty()) {
+                // hold 只把目标订单重入 ready；同批其他回调继续处理，避免本机竞态探针阻塞无关订单。
+                callbackQueue.requeue(heldClaims, clock.millis() + 1_000L);
+                Set<String> heldIds = heldClaims.stream()
+                        .map(PaymentCallbackClaim::callbackId)
+                        .collect(Collectors.toSet());
+                heldIds.forEach(callbacks::remove);
+                heldIds.forEach(claimsById::remove);
+            }
+            List<PaymentCallbackClaim> activeClaims = claims.stream()
+                    .filter(claim -> claimsById.containsKey(claim.callbackId()))
+                    .toList();
+            retryOnFailure = activeClaims;
+            if (activeClaims.isEmpty()) {
+                return true;
+            }
+            List<PaymentCallbackCompletion> complete = activeClaims.stream()
                     .filter(claim -> !callbacks.containsKey(claim.callbackId()))
                     .map(claim -> new PaymentCallbackCompletion(claim, null))
                     .collect(Collectors.toCollection(ArrayList::new));
@@ -181,9 +217,13 @@ public final class PaymentCallbackBatchServiceImpl
                 List<MembershipOrderPaidCommand> paidCommands = new ArrayList<>();
                 Map<String, CallbackWork> paidWork = new LinkedHashMap<>();
                 List<PaymentCallbackResolutionCommand> resolutions = new ArrayList<>();
-                List<MembershipOrderStatus> refundEvents = new ArrayList<>();
-                OffsetDateTime resolvedAt =
-                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+                List<MembershipPaymentEntitlementCommand> entitlementCommands =
+                        new ArrayList<>();
+                List<MembershipPaymentRefundEntitlementCommand> refundEntitlements =
+                        new ArrayList<>();
+                List<PaymentRefundCommand> refundCommands = new ArrayList<>();
+                List<MembershipOrderSnapshot> unappliedOrders = new ArrayList<>();
+                OffsetDateTime resolvedAt = MembershipPaymentTime.now(clock);
                 for (MembershipPaymentCallbackWriteResult write : writes) {
                     int ordinal = requiredOrdinal(write, validCallbacks.size());
                     PaymentCallbackSnapshot callback = validCallbacks.get(ordinal - 1);
@@ -216,15 +256,39 @@ public final class PaymentCallbackBatchServiceImpl
                         continue;
                     }
                     if (write.getResolution() != null) {
-                        complete.add(completion(claimsById, callback));
+                        if (MembershipPaymentCallbackResolution.REFUND_REQUIRED.name()
+                                .equals(write.getResolution())) {
+                            // resolution 已提交但 HTTP 或 Redis complete 中断时，恢复任务必须再次执行同一幂等退款。
+                            refundCommands.add(refundCommand(callback));
+                            unappliedOrders.add(resolvedOrder);
+                            if (write.getOrderEntitlementResolution() == null) {
+                                refundEntitlements.add(refundEntitlementCommand(
+                                        write, callback, resolvedAt));
+                            }
+                        } else if (MembershipPaymentCallbackResolution.APPLIED.name()
+                                .equals(write.getResolution())
+                                && write.getOrderEntitlementResolution() == null
+                                && resolvedOrder.status() == MembershipOrderStatus.PAID) {
+                            // 兼容数据库回调已解析但旧进程尚未原子发放权益的恢复窗口；已发放订单由投影字段直接跳过。
+                            entitlementCommands.add(entitlementCommand(
+                                    write, resolvedOrder, resolvedAt));
+                        } else if (MembershipPaymentCallbackResolution.REJECTED.name()
+                                .equals(write.getResolution())) {
+                            // resolution 已提交但 Marker 清理曾中断时，恢复任务必须再次发布最终阶段，重复消息由状态机幂等吸收。
+                            unappliedOrders.add(resolvedOrder);
+                        }
+                        complete.add(completion(
+                                claimsById,
+                                callback,
+                                providerResultCompletionAction(
+                                        MembershipPaymentCallbackResolution.valueOf(
+                                                write.getResolution()))));
                         continue;
                     }
                     if (unresolvedAppliedRecovery(write, resolvedOrder, callback)) {
-                        // 订单已被同一 callback 推进为 PAID、但 resolution/complete 尚未提交时，重试只能补写 APPLIED，不能降格为 REJECTED。
-                        resolutions.add(resolutionCommand(
-                                write,
-                                MembershipPaymentCallbackResolution.APPLIED,
-                                resolvedAt));
+                        // 订单已被同一 callback 推进为 PAID、但权益事务尚未提交时，恢复必须重新进入原子发放，不能只补写 callback APPLIED。
+                        entitlementCommands.add(entitlementCommand(
+                                write, resolvedOrder, resolvedAt));
                         complete.add(completion(claimsById, callback));
                         continue;
                     }
@@ -233,18 +297,22 @@ public final class PaymentCallbackBatchServiceImpl
                     if (!decision.applyPayment()) {
                         MembershipPaymentCallbackResolution resolution =
                                 duplicateCrashResolution(write, decision.resolution());
-                        resolutions.add(resolutionCommand(write, resolution, resolvedAt));
-                        if (decision.refundRequired()
-                                && Boolean.TRUE.equals(write.getInserted())) {
-                            refundEvents.add(resolvedOrder.status());
+                        if (decision.refundRequired()) {
+                            refundEntitlements.add(refundEntitlementCommand(
+                                    write, callback, resolvedAt));
+                            refundCommands.add(refundCommand(callback));
+                            unappliedOrders.add(resolvedOrder);
+                        } else {
+                            resolutions.add(resolutionCommand(
+                                    write, resolution, resolvedAt));
+                            if (resolution == MembershipPaymentCallbackResolution.REJECTED) {
+                                unappliedOrders.add(resolvedOrder);
+                            }
                         }
                         complete.add(completion(
                                 claimsById,
                                 callback,
-                                decision.resolution()
-                                        == MembershipPaymentCallbackResolution.REJECTED
-                                                ? PaymentProviderResultCompletionAction.RESET_UNPAID
-                                                : PaymentProviderResultCompletionAction.KEEP));
+                                providerResultCompletionAction(decision.resolution())));
                         continue;
                     }
                     MembershipOrderPaidCommand paidCommand = new MembershipOrderPaidCommand(
@@ -264,22 +332,33 @@ public final class PaymentCallbackBatchServiceImpl
                         claimsById,
                         complete,
                         resolutions,
-                        refundEvents,
+                        entitlementCommands,
+                        refundEntitlements,
+                        refundCommands,
+                        unappliedOrders,
                         resolvedAt);
+                // 空批次不经过事务代理；恢复任务已经完成权益裁决时只清理 Redis，不开启无意义数据库事务。
+                if (!entitlementCommands.isEmpty()) {
+                    entitlementService.settleApplied(entitlementCommands);
+                }
+                if (!refundEntitlements.isEmpty()) {
+                    entitlementService.settleRefundRequired(refundEntitlements);
+                }
                 persistenceService.resolve(resolutions);
-                refundEvents.forEach(refundRequiredTrigger::trigger);
+                resumeUnappliedOrders(unappliedOrders);
+                refundCommands.stream().distinct().forEach(refundService::refund);
                 completeCallbacks(complete);
                 return fullyProcessed;
             }
             completeCallbacks(complete);
             return true;
         } catch (RuntimeException exception) {
-            safeRequeue(claims);
+            safeRequeue(retryOnFailure);
             LOGGER.warn(
                     "Membership payment callback batch will retry; "
                             + "traceId={} count={} reason={}",
                     MembershipPaymentTraceContext.currentTraceId(),
-                    claims.size(),
+                    retryOnFailure.size(),
                     exception.getClass().getSimpleName());
             return false;
         }
@@ -291,7 +370,10 @@ public final class PaymentCallbackBatchServiceImpl
             Map<String, PaymentCallbackClaim> claimsById,
             List<PaymentCallbackCompletion> complete,
             List<PaymentCallbackResolutionCommand> resolutions,
-            List<MembershipOrderStatus> refundEvents,
+            List<MembershipPaymentEntitlementCommand> entitlementCommands,
+            List<MembershipPaymentRefundEntitlementCommand> refundEntitlements,
+            List<PaymentRefundCommand> refundCommands,
+            List<MembershipOrderSnapshot> unappliedOrders,
             OffsetDateTime resolvedAt) {
         if (commands.isEmpty()) {
             return true;
@@ -314,10 +396,19 @@ public final class PaymentCallbackBatchServiceImpl
             }
             MembershipPaymentCallbackResolution resolution =
                     transitionResolution(transition, work.write());
-            resolutions.add(resolutionCommand(work.write(), resolution, resolvedAt));
-            if (resolution == MembershipPaymentCallbackResolution.REFUND_REQUIRED
-                    && Boolean.TRUE.equals(work.write().getInserted())) {
-                refundEvents.add(requireStatus(transition.status(), work.order().status()));
+            if (resolution == MembershipPaymentCallbackResolution.APPLIED) {
+                MembershipOrderSnapshot paidOrder = paidOrder(
+                        work.order(),
+                        work.callback(),
+                        transition.stateVersion(),
+                        resolvedAt);
+                entitlementCommands.add(entitlementCommand(
+                        work.write(), paidOrder, resolvedAt));
+            } else if (resolution == MembershipPaymentCallbackResolution.REFUND_REQUIRED) {
+                refundEntitlements.add(refundEntitlementCommand(
+                        work.write(), work.callback(), resolvedAt));
+                refundCommands.add(refundCommand(work.callback()));
+                unappliedOrders.add(work.order());
                 // 告警只记录终态，不包含订单、回调或平台流水，避免高基数与敏感标识进入日志。
                 LOGGER.warn(
                         "Membership payment callback requires refund; traceId={} status={}",
@@ -325,24 +416,103 @@ public final class PaymentCallbackBatchServiceImpl
                         requireStatus(transition.status(), work.order().status()));
                 metrics.latePaid();
             } else if (resolution == MembershipPaymentCallbackResolution.REJECTED) {
+                resolutions.add(resolutionCommand(
+                        work.write(), resolution, resolvedAt));
+                unappliedOrders.add(work.order());
                 metrics.callbackRejected();
                 LOGGER.warn(
                         "Membership payment callback state transition was rejected; "
                                 + "traceId={} outcome={}",
                         MembershipPaymentTraceContext.currentTraceId(),
                         transition.outcome());
+            } else {
+                resolutions.add(resolutionCommand(
+                        work.write(), resolution, resolvedAt));
             }
             complete.add(new PaymentCallbackCompletion(
                     claimsById.get(command.callbackId()),
                     command.orderId(),
-                    resolution == MembershipPaymentCallbackResolution.REJECTED
-                            ? PaymentProviderResultCompletionAction.RESET_UNPAID
-                            : PaymentProviderResultCompletionAction.KEEP));
+                    providerResultCompletionAction(resolution)));
         }
         if (!retry.isEmpty()) {
             callbackQueue.requeue(distinctClaims(retry), clock.millis());
         }
         return retry.isEmpty();
+    }
+
+    /**
+     * REJECTED 与 REFUND_REQUIRED 都可能保持原活动状态；必须先可靠发布恢复消息，再删除 Marker，
+     * 避免旧 MQ 链因回调并发短路后永久停留在 PENDING_PAYMENT 或 CLOSING。
+     */
+    private void resumeUnappliedOrders(Collection<MembershipOrderSnapshot> orders) {
+        orders.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(
+                        MembershipOrderSnapshot::orderId,
+                        order -> order,
+                        (left, right) -> left,
+                        LinkedHashMap::new))
+                .values()
+                .forEach(rejectedResumeService::resume);
+    }
+
+    private static PaymentRefundCommand refundCommand(PaymentCallbackSnapshot callback) {
+        return new PaymentRefundCommand(
+                callback.orderId(),
+                callback.providerTradeNo(),
+                callback.paidAmountYuan());
+    }
+
+    private MembershipPaymentEntitlementCommand entitlementCommand(
+            MembershipPaymentCallbackWriteResult write,
+            MembershipOrderSnapshot paidOrder,
+            OffsetDateTime resolvedAt) {
+        return new MembershipPaymentEntitlementCommand(
+                persistedCallbackId(write),
+                paidOrder,
+                resolvedAt);
+    }
+
+    private MembershipPaymentRefundEntitlementCommand refundEntitlementCommand(
+            MembershipPaymentCallbackWriteResult write,
+            PaymentCallbackSnapshot callback,
+            OffsetDateTime resolvedAt) {
+        return new MembershipPaymentRefundEntitlementCommand(
+                persistedCallbackId(write),
+                callback.orderId(),
+                resolvedAt);
+    }
+
+    private String persistedCallbackId(MembershipPaymentCallbackWriteResult write) {
+        byte[] persisted = write.getPersistedCallbackId();
+        if (persisted == null) {
+            throw new IllegalStateException("Payment callback persisted ID is missing.");
+        }
+        return base64UrlCodec.encode(persisted);
+    }
+
+    private static MembershipOrderSnapshot paidOrder(
+            MembershipOrderSnapshot current,
+            PaymentCallbackSnapshot callback,
+            long stateVersion,
+            OffsetDateTime changedAt) {
+        return new MembershipOrderSnapshot(
+                current.schemaVersion(),
+                current.orderId(),
+                current.loginIdentityId(),
+                current.membershipTier(),
+                current.payAmountYuan(),
+                current.payType(),
+                MembershipOrderStatus.PAID,
+                current.idempotencyKey(),
+                callback.providerTradeNo(),
+                current.paymentStartedAt(),
+                current.expiresAt(),
+                current.closingDeadlineAt(),
+                callback.paidAt(),
+                stateVersion,
+                current.createdAt(),
+                changedAt);
     }
 
     private ResolvedOrders resolveOrders(Set<String> orderIds) {
@@ -483,6 +653,18 @@ public final class PaymentCallbackBatchServiceImpl
             MembershipOrderStatus transitionStatus,
             MembershipOrderStatus fallback) {
         return transitionStatus == null ? Objects.requireNonNull(fallback) : transitionStatus;
+    }
+
+    /**
+     * REJECTED 与 REFUND_REQUIRED 都不能让模拟 Provider 继续暴露 PAID；否则恢复的关单消息会
+     * 永久把活动订单判为已支付。Marker 与 Provider Result 必须由同一 complete Lua 原子收口。
+     */
+    private static PaymentProviderResultCompletionAction providerResultCompletionAction(
+            MembershipPaymentCallbackResolution resolution) {
+        return resolution == MembershipPaymentCallbackResolution.REJECTED
+                        || resolution == MembershipPaymentCallbackResolution.REFUND_REQUIRED
+                ? PaymentProviderResultCompletionAction.RESET_UNPAID
+                : PaymentProviderResultCompletionAction.KEEP;
     }
 
     private void safeRequeue(List<PaymentCallbackClaim> claims) {
