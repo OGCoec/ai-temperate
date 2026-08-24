@@ -426,6 +426,11 @@ try {
 
     $resetManifest = Join-Path $outputRoot 'reset-order-ids.json'
     [void](Write-ResetOrderManifest -ScenarioPaths $scenarioPaths -Destination $resetManifest)
+    $runOrderIds = @(
+        foreach ($path in $scenarioPaths) {
+            Import-Csv -LiteralPath $path | ForEach-Object { [string]$_.order_id }
+        }
+    )
 
     # 只删除本轮四万笔支付事实并恢复额度；固定四万用户、资料和账号模板永久保留。
     if ((Get-SourceFingerprint) -ne $sourceFingerprint) {
@@ -439,6 +444,10 @@ try {
     if (-not $reset.prepared -or $reset.orderCount -ne 0 -or $reset.callbackCount -ne 0) {
         throw 'Boundary reset did not preserve a clean persistent fixture.'
     }
+    $redisContainer = if ($env:REDIS_CONTAINER) { $env:REDIS_CONTAINER } else { 'redis7' }
+    [void](Remove-MembershipBoundaryRedisOrderArtifacts `
+            -Container $redisContainer -OrderIds $runOrderIds)
+    Assert-RedisBoundaryBaseline
     Get-ChildItem -LiteralPath $tokenRoot -Filter "$RunId-*.csv" -File -ErrorAction SilentlyContinue |
         Remove-Item -Force
 

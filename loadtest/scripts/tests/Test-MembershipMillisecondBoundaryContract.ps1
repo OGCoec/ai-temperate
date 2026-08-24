@@ -128,6 +128,15 @@ foreach ($fragment in @(
         throw "Redis helper is missing authenticated inspection fragment: $fragment"
     }
 }
+foreach ($fragment in @(
+    'Remove-MembershipBoundaryRedisOrderArtifacts',
+    '[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)',
+    '[Math]::Min(100,',
+    "@('UNLINK') + `$batch")) {
+    if (-not $sources[$redisHelperPath].Contains($fragment)) {
+        throw "Redis helper is missing exact run-owned artifact cleanup: $fragment"
+    }
+}
 foreach ($path in @($waveRunnerPath, $suitePath)) {
     if (-not $sources[$path].Contains('MembershipBoundaryRedis.ps1') -or
         -not $sources[$path].Contains('Invoke-MembershipBoundaryRedisCli')) {
@@ -292,6 +301,8 @@ foreach ($fragment in @(
     'final-timestamp-evidence.csv',
     'Merge-CsvFiles',
     'Write-ResetOrderManifest',
+    'Remove-MembershipBoundaryRedisOrderArtifacts',
+    '-OrderIds $runOrderIds',
     '-InFile $resetManifest',
     '/reset')) {
     if (-not $sources[$suitePath].Contains($fragment)) {
