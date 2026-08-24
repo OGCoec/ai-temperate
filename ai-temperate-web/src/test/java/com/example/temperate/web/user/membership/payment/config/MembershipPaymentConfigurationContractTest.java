@@ -1,8 +1,10 @@
 package com.example.temperate.web.user.membership.payment.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -14,6 +16,11 @@ import org.springframework.amqp.core.CustomExchange;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * 该配置契约测试是来锁定会员支付 YAML 紧邻中文注释以及持久 delayed exchange、Quorum 队列和独立 DLQ。
@@ -78,5 +85,25 @@ final class MembershipPaymentConfigurationContractTest {
             assertThat(queue.isDurable()).isTrue();
             assertThat(queue.getArguments()).containsEntry("x-queue-type", "quorum");
         });
+    }
+
+    @Test
+    void membershipQueuesEachUseFortyEightConsumersAndPrefetchTwenty() {
+        MembershipPaymentRabbitConfiguration configuration =
+                new MembershipPaymentRabbitConfiguration();
+        SimpleRabbitListenerContainerFactory factory =
+                configuration.membershipPaymentListenerContainerFactory(
+                        new SimpleRabbitListenerContainerFactoryConfigurer(
+                                new RabbitProperties()),
+                        mock(ConnectionFactory.class),
+                        configuration.membershipPaymentMessageConverter(
+                                new ObjectMapper()));
+
+        assertThat(ReflectionTestUtils.getField(factory, "concurrentConsumers"))
+                .isEqualTo(48);
+        assertThat(ReflectionTestUtils.getField(factory, "maxConcurrentConsumers"))
+                .isEqualTo(48);
+        assertThat(ReflectionTestUtils.getField(factory, "prefetchCount"))
+                .isEqualTo(20);
     }
 }

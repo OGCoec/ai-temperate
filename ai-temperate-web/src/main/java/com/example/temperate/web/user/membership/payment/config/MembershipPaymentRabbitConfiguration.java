@@ -26,8 +26,8 @@ import org.springframework.context.annotation.Configuration;
 /**
  * 该配置类是来声明会员支付和软关闭的持久延时交换机、Quorum 业务队列、独立 DLQ、Confirm 模板及手动 ACK 容器。
  *
- * <p>两条业务队列使用独立拓扑，prefetch 固定为 20；监听失败由 Quorum Queue 的三次 delivery limit
- * 有限重投，耗尽后进入独立 DLQ，禁止异常消息无限循环。</p>
+ * <p>两条业务队列使用独立拓扑，每条队列固定三十二个消费者且 prefetch 为 20；监听失败由 Quorum Queue
+ * 的三次 delivery limit 有限重投，耗尽后进入独立 DLQ，禁止异常消息无限循环。</p>
  */
 @Configuration
 @ConditionalOnProperty(
@@ -125,8 +125,9 @@ public class MembershipPaymentRabbitConfiguration {
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         factory.setDefaultRequeueRejected(false);
         factory.setPrefetchCount(20);
-        factory.setConcurrentConsumers(1);
-        factory.setMaxConcurrentConsumers(1);
+        // 两条队列各自使用固定四十八个消费者，提高同点到期消息的处理时效，并避免自动扩缩容引入不可复现抖动。
+        factory.setConcurrentConsumers(48);
+        factory.setMaxConcurrentConsumers(48);
         return factory;
     }
 
