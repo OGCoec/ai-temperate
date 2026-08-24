@@ -41,7 +41,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * 该测试是来锁定四十万个持久边界账号只能在固定空区间内批量创建，并且每轮只清理清单内订单后恢复 FREE 基线。
+ * 该测试是来锁定四万个持久边界账号只能在固定空区间内批量创建，并且每轮只清理清单内订单后恢复 FREE 基线。
  */
 final class MembershipPaymentBoundaryFixtureServiceImplTest {
 

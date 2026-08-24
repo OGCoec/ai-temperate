@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Membership 8x5,000 Millisecond Boundary" enabled="true">
-      <stringProp name="TestPlan.comments">loadtest-realtime 下真实 6655 HTTP、PostgreSQL、Redis、RabbitMQ、订单状态机和回调链路的四十万用户微秒证据边界测试；八个区段逐段执行且禁止压缩业务时间。</stringProp>
+      <stringProp name="TestPlan.comments">loadtest-realtime 下真实 6655 HTTP、PostgreSQL、Redis、RabbitMQ、订单状态机和回调链路的四万用户微秒证据边界测试；八个区段逐段执行且禁止压缩业务时间。</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>

@@ -21,7 +21,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 该测试是来锁定四十万用户夹具、重置和分页 Token 接口仅供回环 Runner 使用且响应禁止缓存。
+ * 该测试是来锁定四万用户夹具、重置和分页 Token 接口仅供回环 Runner 使用且响应禁止缓存。
  */
 final class MembershipPaymentBoundaryLoadtestControllerTest {
 

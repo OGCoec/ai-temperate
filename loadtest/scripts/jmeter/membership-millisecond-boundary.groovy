@@ -70,7 +70,7 @@ def json = new JsonSlurper()
 def iso = DateTimeFormatter.ISO_OFFSET_DATE_TIME
 def callbackTime = DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm:ss.SSSSSS').withZone(ZoneOffset.UTC)
 def evidenceTime = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'").withZone(ZoneOffset.UTC)
-// 一个区段共享同一连接池，避免五万请求主动断连后耗尽 Windows 回环临时端口。
+// 一个区段共享同一连接池，避免五千请求主动断连后耗尽 Windows 回环临时端口。
 HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10L))
         .followRedirects(HttpClient.Redirect.NEVER)

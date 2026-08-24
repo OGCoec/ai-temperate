@@ -6,21 +6,33 @@ spring:
     activate:
       # 真实时间压测 Profile 名称必须与启动守卫白名单一致。
       on-profile: loadtest-realtime
+  # 会员支付压测对 AMQP 发布通道施加独立背压，避免四千零九十六个 HTTP 请求同时耗尽 Broker Channel。
+  rabbitmq:
+    # 客户端显式请求一万六千三百八十四个可协商通道，避免沿用 Java 客户端二千零四十七默认值压低 Broker 上限。
+    requested-channel-max: ${MEMBERSHIP_LOADTEST_RABBIT_REQUESTED_CHANNEL_MAX:16384}
+    # Channel 缓存用于复用已确认发布后的通道，并限制生产者同时占用的通道数量。
+    cache:
+      # Channel 维度与单连接模式保持一致，不额外创建 RabbitMQ 连接池。
+      channel:
+        # 五百一十二个通道形成发布并发硬上限，JMeter 的四千零九十六 HTTP 并发保持不变。
+        size: ${MEMBERSHIP_LOADTEST_RABBIT_CHANNEL_CACHE_SIZE:512}
+        # 通道池耗尽时最多等待三十秒，通过有界背压代替继续创建新通道直至 Broker 拒绝。
+        checkout-timeout: ${MEMBERSHIP_LOADTEST_RABBIT_CHANNEL_CHECKOUT_TIMEOUT:30s}
 
 # 真实时间压测默认使用本机 HTTP 端口，Runner 不需要额外传入服务端口。
 server:
   # 仅供 loadtest-realtime 本机调试使用的 HTTP 端口。
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:6655}
   # 真实并发回调测试使用独立 Tomcat 容量，避免五百条同时建连被默认一百长度的监听队列误判为业务失败。
   tomcat:
-    # 等待工作线程处理的连接队列覆盖五百并发及本机调度抖动，只影响该受控压测 Profile。
-    accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:1000}
-    # 同时连接上限高于回调并发和健康探针总量，不改变普通及生产 Profile 的连接配置。
-    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:2000}
-    # Tomcat 工作线程只在真实时间压测 Profile 扩容，确保五百个短回调不会因默认线程上限形成连接风暴。
+    # 压测连接接收队列与统一四千零九十六并发上限一致，只影响该受控压测 Profile。
+    accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:4096}
+    # 压测同时连接上限统一为四千零九十六，不改变普通及生产 Profile 的连接配置。
+    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:4096}
+    # Tomcat 工作线程上限按本轮明确的压测合同统一为四千零九十六，仅用于受控本机压测。
     threads:
-      # 五百一十二个线程覆盖五百回调并为订单查询和 Actuator 探针保留余量。
-      max: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_THREADS:512}
+      # 高线程上限只定义容量边界，正式运行仍必须监控线程、内存、CPU 和请求超时。
+      max: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_THREADS:4096}
   # 实时压测仍使用本机 HTTP，避免继承默认 TLS 配置导致必须准备证书。
   ssl:
     # 仅在 loadtest-realtime 下关闭 Web 服务器 TLS，回调和 JMeter 均走回环 HTTP。
@@ -40,20 +52,54 @@ app:
   membership-payment:
     # 该 Profile 明确打开会员模拟支付，普通 Profile 仍由基础配置保持关闭。
     enabled: true
+    # 本地实时压测允许创建支付尝试。
+    checkout-enabled: true
+    # 本地实时压测只使用项目内模拟 Provider，绝不连接 BAR。
+    default-provider: LOCAL_SIMULATOR
     # 本机 Runner 使用应用内部签发的短期 AT，开关只在受控 Profile 生效。
     loadtest:
       # 仅本机实时状态机调试启用 AT-only 认证入口。
       enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_ENABLED:true}
-      # 第一个既有可用账号只用于本次本机压测，不创建或修改账号。
+      # EDU/TEAM 原始额度快照只写入 Git 忽略目录，应用重启后仍可执行幂等恢复。
+      restricted-fixture-snapshot-path: ${MEMBERSHIP_PAYMENT_RESTRICTED_FIXTURE_SNAPSHOT_PATH:loadtest/local/restricted-membership-fixtures.json}
+      # 十六个明确批准账号只用于本机真实时间压测，禁止从数据库动态扩张到未批准用户。
       allowed-user-ids:
         # 既有白名单账号一。
-        - 73014701344296960
-        # 既有白名单账号二。
         - 72659006262480896
+        # 既有白名单账号二。
+        - 73014701344296960
         # 既有白名单账号三。
-        - 76721355290185728
-        # 既有白名单账号四。
         - 74891801495998464
+        # 既有白名单账号四。
+        - 76721355290185728
+        # 既有白名单账号五。
+        - 84736921162616832
+        # 既有白名单账号六。
+        - 84739559597936640
+        # 既有白名单账号七。
+        - 84742296792338432
+        # 既有白名单账号八。
+        - 84745417706835968
+        # 既有白名单账号九。
+        - 84746552547086336
+        # 既有白名单账号十。
+        - 84753114204344320
+        # 既有白名单账号十一。
+        - 84754367089086464
+        # 既有白名单账号十二。
+        - 84755204414771200
+        # 既有白名单账号十三。
+        - 84758509811535872
+        # 既有白名单账号十四。
+        - 84758866549673984
+        # 既有白名单账号十五。
+        - 84759380653903872
+        # 既有白名单账号十六。
+        - 84760794662834176
+    # 四万用户毫秒边界夹具与既有十六用户压测白名单完全隔离，默认不注册其受控入口。
+    boundary-loadtest:
+      # 只有执行已批准的四万用户 JMeter 边界套件时才通过环境变量显式开启。
+      enabled: ${MEMBERSHIP_PAYMENT_BOUNDARY_LOADTEST_ENABLED:false}
     # 模拟支付商户和回调密钥使用仅供本机测试的固定占位值，不代表真实商户凭据。
     simulator:
       # 仅在本机实时 Profile 注册双协议模拟回调路由。
