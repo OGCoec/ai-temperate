@@ -111,7 +111,28 @@ function Save-RabbitSnapshot([string] $Path) {
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-function Save-RedisSnapshot([string] $Path) {
+function Wait-RedisMembershipQueueDrain([int] $TimeoutSeconds = 120) {
+    $deadline = [datetimeoffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $queues = Invoke-RestMethod -Method Get `
+            -Uri "$baseUrl/internal/test/membership-payments/loadtest-inspection/queues" `
+            -TimeoutSec 15
+        $nonEmpty = @(
+            'callbackReadySize', 'callbackProcessingSize', 'dirtySize', 'dirtyProcessingSize' |
+                Where-Object { [long]$queues.$_ -ne 0L }
+        )
+        if ($nonEmpty.Count -eq 0) {
+            return $queues
+        }
+        if ([datetimeoffset]::UtcNow -ge $deadline) {
+            $details = $nonEmpty | ForEach-Object { "$_=$($queues.$_)" }
+            throw "Redis membership queues did not drain within ${TimeoutSeconds}s: $($details -join ', ')"
+        }
+        Start-Sleep -Milliseconds 500
+    } while ($true)
+}
+
+function Save-RedisSnapshot([string] $Path, [switch] $WaitForDrain) {
     $container = if ($env:REDIS_CONTAINER) { $env:REDIS_CONTAINER } else { 'redis7' }
     $v1Keys = @(Invoke-MembershipBoundaryRedisCli -Container $container `
         -Arguments @('--scan', '--pattern', 'ait:*:payment:*:v1:*'))
@@ -120,9 +141,13 @@ function Save-RedisSnapshot([string] $Path) {
     }
     $v2Keys = @(Invoke-MembershipBoundaryRedisCli -Container $container `
         -Arguments @('--scan', '--pattern', 'ait:*:payment:*:v2:*'))
-    $queues = Invoke-RestMethod -Method Get `
-        -Uri "$baseUrl/internal/test/membership-payments/loadtest-inspection/queues" `
-        -TimeoutSec 15
+    $queues = if ($WaitForDrain) {
+        Wait-RedisMembershipQueueDrain
+    } else {
+        Invoke-RestMethod -Method Get `
+            -Uri "$baseUrl/internal/test/membership-payments/loadtest-inspection/queues" `
+            -TimeoutSec 15
+    }
     foreach ($property in @(
         'callbackReadySize', 'callbackProcessingSize', 'dirtySize', 'dirtyProcessingSize')) {
         if ([long]$queues.$property -ne 0L) {
@@ -367,7 +392,7 @@ try {
 
     $stage = 'final-evidence'
     Save-RabbitSnapshot $rabbitAfter
-    Save-RedisSnapshot $redisAfter
+    Save-RedisSnapshot $redisAfter -WaitForDrain
     if ((Get-SourceFingerprint) -ne $SourceFingerprint) {
         throw 'Source fingerprint changed during the wave.'
     }

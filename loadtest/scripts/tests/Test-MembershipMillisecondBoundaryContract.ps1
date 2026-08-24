@@ -258,6 +258,15 @@ foreach ($fragment in @(
     }
 }
 foreach ($fragment in @(
+    'Wait-RedisMembershipQueueDrain',
+    '[int] $TimeoutSeconds = 120',
+    'Start-Sleep -Milliseconds 500',
+    'Save-RedisSnapshot $redisAfter -WaitForDrain')) {
+    if (-not $sources[$waveRunnerPath].Contains($fragment)) {
+        throw "Wave Runner is missing the bounded Redis drain gate: $fragment"
+    }
+}
+foreach ($fragment in @(
     'E-P1', 'E-PR', 'E-A1', 'E-AR', 'H-P1', 'H-PR', 'H-A1', 'H-AR',
     'Assert-PostgresBoundaryBaseline',
     'Assert-RedisBoundaryBaseline',
