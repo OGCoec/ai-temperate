@@ -6,7 +6,6 @@ $ErrorActionPreference = 'Stop'
 
 $postgresUrl = 'postgresql://postgres@127.0.0.1:5431/ai_temperate'
 $redisContainer = 'redis7'
-$rabbitContainer = 'rabbitmq1'
 $applicationPort = 6655
 $stage = 'INITIALIZATION'
 
@@ -121,33 +120,6 @@ function Assert-RedisIdentity {
         -Arguments @('PING'))
     if ($pong.Count -ne 1 -or ([string]$pong[0]).Trim() -ne 'PONG') {
         throw "Redis PING did not return PONG: $($pong -join '; ')"
-    }
-}
-
-function Assert-MembershipRabbitQueuesEmpty {
-    $arguments = @('exec', $script:rabbitContainer, 'rabbitmqctl',
-        'list_queues', '--formatter', 'json', 'name',
-        'messages_ready', 'messages_unacknowledged')
-    $raw = @(& $script:dockerExecutable @arguments 2>&1)
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0 -or $raw.Count -eq 0) {
-        throw "RabbitMQ queue inspection failed with exit code $exitCode."
-    }
-    try {
-        $queues = @((($raw -join "`n") | ConvertFrom-Json))
-    } catch {
-        throw "RabbitMQ queue inspection returned invalid JSON: $($_.Exception.Message)"
-    }
-    $nonEmpty = @($queues | Where-Object {
-        [string]$_.name -like 'membership.*' -and
-        ([long]$_.messages_ready -ne 0L -or
-            [long]$_.messages_unacknowledged -ne 0L)
-    })
-    if ($nonEmpty.Count -ne 0) {
-        $details = $nonEmpty | ForEach-Object {
-            "$($_.name):ready=$($_.messages_ready),unacked=$($_.messages_unacknowledged)"
-        }
-        throw "Membership RabbitMQ queues are not empty: $($details -join '; ')"
     }
 }
 
@@ -284,9 +256,6 @@ try {
 
     $stage = 'PREFLIGHT_REDIS'
     Assert-RedisIdentity
-
-    $stage = 'PREFLIGHT_RABBITMQ'
-    Assert-MembershipRabbitQueuesEmpty
 
     $stage = 'POSTGRES_RESET'
     $databaseResult = Reset-MembershipPostgresData

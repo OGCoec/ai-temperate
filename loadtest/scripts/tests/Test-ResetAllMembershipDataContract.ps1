@@ -55,7 +55,6 @@ foreach ($pattern in $requiredRedisPatterns) {
 foreach ($fragment in @(
         "'postgresql://postgres@127.0.0.1:5431/ai_temperate'",
         "'redis7'",
-        "'rabbitmq1'",
         '$commands = @(Get-Command',
         'Select-Object -First 1',
         'return [string]$command.Source',
@@ -64,8 +63,6 @@ foreach ($fragment in @(
         'Get-CimInstance Win32_Process',
         'current_database()',
         "COALESCE(host(inet_server_addr()), '')",
-        'messages_ready',
-        'messages_unacknowledged',
         "'PONG'",
         "'--count', '500'",
         "@('UNLINK') + `$batch",
@@ -85,6 +82,9 @@ if ($resetSource.Contains(
 foreach ($forbidden in @(
         'Read-Host',
         'TRUNCATE',
+        'rabbitmqctl',
+        'PREFLIGHT_RABBITMQ',
+        "'purge_queue'",
         "@('KEYS'",
         "'ait:*:payment:order-persist:v[12]:lock:*'")) {
     if ($resetSource.Contains($forbidden)) {
