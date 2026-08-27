@@ -32,11 +32,15 @@ function Resolve-RequiredCommand {
         [string] $Name
     )
 
-    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -eq $command -or [string]::IsNullOrWhiteSpace($command.Source)) {
+    $commands = @(Get-Command $Name -CommandType Application `
+        -ErrorAction SilentlyContinue)
+    $command = $commands |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Source) } |
+        Select-Object -First 1
+    if ($null -eq $command) {
         throw "Required executable is unavailable: $Name"
     }
-    return $command.Source
+    return [string]$command.Source
 }
 
 function Invoke-ResetPsql {
