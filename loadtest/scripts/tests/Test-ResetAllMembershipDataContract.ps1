@@ -60,6 +60,7 @@ foreach ($fragment in @(
         "LocalAddress -in @('127.0.0.1', '::1', '0.0.0.0', '::')",
         'Get-CimInstance Win32_Process',
         'current_database()',
+        "COALESCE(host(inet_server_addr()), '')",
         'messages_ready',
         'messages_unacknowledged',
         "'PONG'",

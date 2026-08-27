@@ -97,7 +97,7 @@ function Assert-NoActiveMembershipRuntime {
 
 function Assert-PostgresIdentity {
     $sql = @'
-SELECT current_database(), COALESCE(inet_server_addr()::text, ''), inet_server_port();
+SELECT current_database(), COALESCE(host(inet_server_addr()), ''), inet_server_port();
 '@
     $facts = @(Invoke-ResetPsql -Sql $sql | Where-Object {
         ([string]$_).Trim() -match '^[^|]+\|[^|]+\|\d+$'
