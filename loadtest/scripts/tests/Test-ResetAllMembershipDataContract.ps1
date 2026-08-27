@@ -57,6 +57,7 @@ foreach ($fragment in @(
         "'redis7'",
         "'rabbitmq1'",
         'Get-NetTCPConnection',
+        "LocalAddress -in @('127.0.0.1', '::1', '0.0.0.0', '::')",
         'Get-CimInstance Win32_Process',
         'current_database()',
         'messages_ready',
@@ -70,6 +71,11 @@ foreach ($fragment in @(
     if (-not $resetSource.Contains($fragment)) {
         throw "Full Membership reset is missing safety contract: $fragment"
     }
+}
+
+if ($resetSource.Contains(
+        "Where-Object { `$_.LocalPort -eq `$script:applicationPort }")) {
+    throw 'A non-loopback listener must not be treated as the local load-test application.'
 }
 
 foreach ($forbidden in @(

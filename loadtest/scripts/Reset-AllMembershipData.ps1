@@ -59,7 +59,10 @@ function Assert-NoActiveMembershipRuntime {
         throw 'Get-NetTCPConnection is unavailable.'
     }
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -eq $script:applicationPort })
+        Where-Object {
+            $_.LocalPort -eq $script:applicationPort -and
+            $_.LocalAddress -in @('127.0.0.1', '::1', '0.0.0.0', '::')
+        })
     if ($listeners.Count -ne 0) {
         throw "Application port $($script:applicationPort) still has a listener."
     }
