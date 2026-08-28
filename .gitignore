@@ -25,3 +25,4 @@ target/
 /cloudflare/html-preview-sandbox/.wrangler/
 /loadtest-output/
 /loadtest/local/
+/.worktrees/
