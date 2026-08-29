@@ -220,6 +220,8 @@ export async function handleRequest(request, env, runtime = {}) {
 		&& !route.oauthNavigation
 		&& !route.riskChallenge
 		&& !route.credentiallessVerificationAsset
+		// BAR 服务器回调没有浏览器 Cookie；精确 GET 入口仍由 Origin 侧 HMAC 与权威主动查询认证。
+		&& !route.providerCallback
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED'

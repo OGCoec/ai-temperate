@@ -3,6 +3,7 @@ package com.example.temperate.service.user.membership.payment.callback.impl;
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper;
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult;
+import com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackPersistenceService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackResolutionCommand;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackSnapshot;
@@ -12,8 +13,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
@@ -106,6 +111,54 @@ public final class PaymentCallbackPersistenceServiceImpl
             throw new MembershipPaymentInfrastructureException(
                     "Payment callback resolution result is incomplete.");
         }
+    }
+
+    /**
+     * Redis 快照缺失时只能读取已提交的 PostgreSQL 终态；结果必须精确属于本次请求且不得重复。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, MembershipPaymentRefundTerminalFact> findRefundTerminalFacts(
+            Collection<String> callbackIds) {
+        Objects.requireNonNull(callbackIds, "callback IDs must not be null");
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        List<String> idsHex = new ArrayList<>(callbackIds.size());
+        for (String callbackId : callbackIds) {
+            String canonical = base64UrlCodec.encode(base64UrlCodec.decode(
+                    Objects.requireNonNull(callbackId)));
+            if (!unique.add(canonical)) {
+                throw new IllegalArgumentException(
+                        "Refund terminal fact callback IDs must be unique.");
+            }
+            idsHex.add(HexFormat.of().formatHex(base64UrlCodec.decode(canonical)));
+        }
+        if (unique.isEmpty()) {
+            return Map.of();
+        }
+        if (unique.size() > MAXIMUM_BATCH) {
+            throw new IllegalArgumentException(
+                    "Refund terminal fact batch must contain at most 500 callback IDs.");
+        }
+        List<MembershipPaymentRefundTerminalFact> facts =
+                callbackMapper.findRefundTerminalFactsByIdsJson(toJson(idsHex));
+        if (facts == null) {
+            throw new MembershipPaymentInfrastructureException(
+                    "Refund terminal fact result is unavailable.");
+        }
+        Map<String, MembershipPaymentRefundTerminalFact> byCallbackId = new LinkedHashMap<>();
+        for (MembershipPaymentRefundTerminalFact fact : facts) {
+            if (fact == null || fact.getCallbackId() == null) {
+                throw new MembershipPaymentInfrastructureException(
+                        "Refund terminal fact result is malformed.");
+            }
+            String callbackId = base64UrlCodec.encode(fact.getCallbackId());
+            if (!unique.contains(callbackId)
+                    || byCallbackId.put(callbackId, fact) != null) {
+                throw new MembershipPaymentInfrastructureException(
+                        "Refund terminal fact result does not match its request.");
+            }
+        }
+        return Map.copyOf(byCallbackId);
     }
 
     private void validateResults(

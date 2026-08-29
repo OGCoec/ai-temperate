@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
@@ -19,15 +20,22 @@ import com.example.temperate.service.user.membership.payment.order.MembershipOrd
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptResult;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptService;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmission;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmissionFields;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
 import com.example.temperate.web.user.membership.payment.id.MembershipOrderPublicId;
 import com.example.temperate.web.user.membership.payment.id.MembershipOrderPublicIdConverter;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -163,25 +171,121 @@ final class MembershipOrderWebContractTest {
         OffsetDateTime startedAt = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         MembershipOrderSnapshot started = snapshot(startedAt);
         when(attemptService.start(anyLong(), any())).thenReturn(
-                new MembershipPaymentAttemptResult(started, true),
-                new MembershipPaymentAttemptResult(started, false));
+                new MembershipPaymentAttemptResult(
+                        started, true, PaymentProviderType.LOCAL_SIMULATOR, null),
+                new MembershipPaymentAttemptResult(
+                        started, false, PaymentProviderType.LOCAL_SIMULATOR, null));
         CurrentUserMembershipOrderController controller =
                 new CurrentUserMembershipOrderController(orderService, attemptService);
         SessionPrincipal principal = new SessionPrincipal(17L, "public-user", "member");
         MembershipOrderPublicId publicId = new MembershipOrderPublicId(
                 started.orderId(), bytes((byte) 7));
 
-        ResponseEntity<MembershipOrderResponse> first = controller.startPayment(
+        ResponseEntity<MembershipPaymentAttemptResponse> first = controller.startPayment(
                 principal, publicId);
-        ResponseEntity<MembershipOrderResponse> replay = controller.startPayment(
+        ResponseEntity<MembershipPaymentAttemptResponse> replay = controller.startPayment(
                 principal, publicId);
 
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(replay.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(first.getHeaders().getCacheControl()).contains("no-store");
+        assertThat(first.getHeaders().getFirst("CDN-Cache-Control")).isEqualTo("no-store");
+        assertThat(replay.getHeaders().getCacheControl()).contains("no-store");
+        assertThat(replay.getHeaders().getFirst("CDN-Cache-Control")).isEqualTo("no-store");
         assertThat(first.getBody()).isNotNull();
-        assertThat(first.getBody().paymentStartedAt()).isEqualTo(startedAt);
+        assertThat(first.getBody().order().paymentStartedAt()).isEqualTo(startedAt);
+        assertThat(first.getBody().checkoutSubmission()).isNull();
         assertThat(replay.getBody()).isNotNull();
-        assertThat(replay.getBody().paymentStartedAt()).isEqualTo(startedAt);
+        assertThat(replay.getBody().order().paymentStartedAt()).isEqualTo(startedAt);
+        assertThat(replay.getBody().checkoutSubmission()).isNull();
+    }
+
+    @Test
+    void barPaymentAttemptReturnsOrderAndEphemeralSignedPostSubmission() throws Exception {
+        MembershipOrderService orderService = mock(MembershipOrderService.class);
+        MembershipPaymentAttemptService attemptService =
+                mock(MembershipPaymentAttemptService.class);
+        MembershipOrderSnapshot started = snapshot(
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+        PaymentCheckoutSubmission submission = checkoutSubmission(started);
+        when(attemptService.start(anyLong(), any())).thenReturn(
+                new MembershipPaymentAttemptResult(
+                        started,
+                        true,
+                        PaymentProviderType.BAR,
+                        submission));
+        CurrentUserMembershipOrderController controller =
+                new CurrentUserMembershipOrderController(orderService, attemptService);
+        SessionPrincipal principal = new SessionPrincipal(17L, "public-user", "member");
+        MembershipOrderPublicId publicId = new MembershipOrderPublicId(
+                started.orderId(), bytes((byte) 7));
+
+        ResponseEntity<MembershipPaymentAttemptResponse> response = controller.startPayment(
+                principal, publicId);
+
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().order().orderId()).isEqualTo(started.orderId());
+        assertThat(response.getBody().checkoutSubmission()).isNotNull();
+        assertThat(response.getBody().checkoutSubmission().provider())
+                .isEqualTo(PaymentProviderType.BAR);
+        assertThat(response.getBody().checkoutSubmission().action())
+                .isEqualTo(URI.create("https://ihaveagoddamnplan.com/api/pay/submit"));
+        assertThat(response.getBody().checkoutSubmission().method()).isEqualTo("POST");
+        assertThat(response.getBody().checkoutSubmission().contentType())
+                .isEqualTo("application/x-www-form-urlencoded");
+
+        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(
+                response.getBody());
+        JsonNode fields = new ObjectMapper().readTree(json).path("checkoutSubmission").path("fields");
+        List<String> fieldNames = new ArrayList<>();
+        fields.fieldNames().forEachRemaining(fieldNames::add);
+        assertThat(fieldNames).containsExactlyInAnyOrder(
+                "pid",
+                "out_trade_no",
+                "type",
+                "name",
+                "money",
+                "notify_url",
+                "return_url",
+                "timestamp",
+                "key_version",
+                "sign_type",
+                "sign");
+        assertThat(json).doesNotContain(
+                "payUrl",
+                "payUrlExpiresAt",
+                "pay_type",
+                "pay_url",
+                "#token",
+                "test-api-key",
+                "Cookie",
+                "checkout_token");
+    }
+
+    @Test
+    void localPaymentAttemptSerializesExplicitNullSubmissionWithoutLegacyFields() throws Exception {
+        MembershipOrderSnapshot started = snapshot(
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+        MembershipPaymentAttemptResponse response = MembershipPaymentAttemptResponse.from(
+                new MembershipPaymentAttemptResult(
+                        started,
+                        true,
+                        PaymentProviderType.LOCAL_SIMULATOR,
+                        null));
+
+        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(response);
+
+        assertThat(json).contains("\"checkoutSubmission\":null");
+        assertThat(json).doesNotContain("\"provider\"", "payUrl", "payUrlExpiresAt");
+    }
+
+    @Test
+    void ordinaryOrderResponseDoesNotContainCheckoutSubmission() throws Exception {
+        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(
+                MembershipOrderResponse.from(snapshot()));
+
+        assertThat(json).doesNotContain(
+                "checkoutSubmission", "payUrl", "payUrlExpiresAt", "pay_type", "pay_url", "#token");
     }
 
     private static CurrentUserMembershipOrderController controller(
@@ -208,7 +312,7 @@ final class MembershipOrderWebContractTest {
         byte[] id = bytes((byte) 7);
         OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 new HybridBase64UrlCodec().encode(id),
                 17L,
                 MembershipTier.PLUS,
@@ -224,6 +328,29 @@ final class MembershipOrderWebContractTest {
                 1L,
                 now,
                 now);
+    }
+
+    private static PaymentCheckoutSubmission checkoutSubmission(
+            MembershipOrderSnapshot snapshot) {
+        OffsetDateTime submitExpiresAt = OffsetDateTime.parse("2026-08-20T12:04:00Z");
+        return new PaymentCheckoutSubmission(
+                PaymentProviderType.BAR,
+                URI.create("https://ihaveagoddamnplan.com/api/pay/submit"),
+                "POST",
+                "application/x-www-form-urlencoded",
+                submitExpiresAt,
+                new PaymentCheckoutSubmissionFields(
+                        "1001",
+                        snapshot.orderId(),
+                        snapshot.payType(),
+                        "会员模拟支付订单",
+                        snapshot.payAmountYuan().toPlainString(),
+                        "https://niko000o.site/api/payment/bar/notify",
+                        "https://niko000o.site/membership/payment/result",
+                        "1787227200",
+                        "1",
+                        "HMAC-SHA256",
+                        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
     }
 
     private static byte[] bytes(byte value) {

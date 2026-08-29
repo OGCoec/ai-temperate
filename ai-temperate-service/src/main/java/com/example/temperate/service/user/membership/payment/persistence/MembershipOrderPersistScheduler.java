@@ -1,8 +1,8 @@
 package com.example.temperate.service.user.membership.payment.persistence;
 
-import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTraceContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentSchedulingConfiguration;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkerTrigger;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -17,30 +17,18 @@ import org.springframework.stereotype.Component;
         havingValue = "true")
 public final class MembershipOrderPersistScheduler {
 
-    private static final Logger LOGGER =
-            LoggerFactory.getLogger(MembershipOrderPersistScheduler.class);
-
-    private final MembershipOrderBatchPersistenceService batchService;
+    private final MembershipPaymentWorkerTrigger workerTrigger;
 
     public MembershipOrderPersistScheduler(
-            MembershipOrderBatchPersistenceService batchService) {
-        this.batchService = batchService;
+            MembershipPaymentWorkerTrigger workerTrigger) {
+        this.workerTrigger = java.util.Objects.requireNonNull(workerTrigger);
     }
 
     @Scheduled(
             fixedDelayString =
-                    "${app.membership-payment.order-persist.flush-interval-millis:5000}")
+                    "${app.membership-payment.order-persist.flush-interval-millis:5000}",
+            scheduler = MembershipPaymentSchedulingConfiguration.ORDER_PERSIST_TASK_SCHEDULER)
     public void flush() {
-        try (MembershipPaymentTraceContext traceContext =
-                MembershipPaymentTraceContext.open()) {
-            try {
-                batchService.flushOneRun();
-            } catch (RuntimeException exception) {
-                LOGGER.warn(
-                        "Membership order persistence flush stopped; traceId={} reason={}",
-                        traceContext.traceId(),
-                        exception.getClass().getSimpleName());
-            }
-        }
+        workerTrigger.signal(MembershipPaymentWorkType.ORDER_PERSIST);
     }
 }

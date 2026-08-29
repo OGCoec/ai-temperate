@@ -3,12 +3,12 @@ package com.example.temperate.service.user.membership.payment.loadtest;
 import java.util.List;
 
 /**
- * 该服务是来为本机会员支付边界调试签发四个既有账号的短期 Access Token，不负责创建账号或修改会员数据。
+ * 该服务是来为会员支付全天浸泡测试签发十六个固定账号的十五小时 Access Token，不负责创建账号或修改会员数据。
  */
 public interface MembershipPaymentLoadtestTokenService {
 
     /**
-     * 校验白名单账号当前可用且有会员额度后，使用统一 JWT 服务签发短期令牌。
+     * 校验白名单账号当前可用且有会员额度后，使用统一 JWT 服务签发十五小时令牌。
      */
     List<MembershipPaymentLoadtestToken> issueForAllowlistedUsers();
 

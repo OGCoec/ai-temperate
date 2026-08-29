@@ -2,18 +2,33 @@ local ready_key = KEYS[1]
 local processing_key = KEYS[2]
 local count = tonumber(ARGV[1])
 local ready_at = ARGV[2]
-local argument_index = 3
-local requeued = 0
+if count == 0 then
+    return 0
+end
 
+local members = {}
+local expected = {}
+local argument_index = 3
 for index = 1, count do
-    local callback_id = ARGV[argument_index]
-    local expected_score = ARGV[argument_index + 1]
+    members[index] = ARGV[argument_index]
+    expected[index] = tonumber(ARGV[argument_index + 1])
     argument_index = argument_index + 2
-    local current_score = redis.call('ZSCORE', processing_key, callback_id)
-    if current_score and tonumber(current_score) == tonumber(expected_score)
-            and redis.call('ZREM', processing_key, callback_id) == 1 then
-        redis.call('ZADD', ready_key, ready_at, callback_id)
+end
+
+local scores = redis.call('ZMSCORE', processing_key, unpack(members))
+local zrem = {'ZREM', processing_key}
+local zadd = {'ZADD', ready_key}
+local requeued = 0
+for index = 1, count do
+    if scores[index] and tonumber(scores[index]) == expected[index] then
+        zrem[#zrem + 1] = members[index]
+        zadd[#zadd + 1] = ready_at
+        zadd[#zadd + 1] = members[index]
         requeued = requeued + 1
     end
+end
+if requeued > 0 then
+    redis.call(unpack(zrem))
+    redis.call(unpack(zadd))
 end
 return requeued

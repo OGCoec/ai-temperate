@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 装配身份 Bloom 的安全参数与单线程后台重建执行器。
+ * 该配置是来装配身份 Bloom 的安全参数与单线程后台重建执行器。
  *
  * <p>单线程执行器把同一实例内的全量构建串行化；跨实例互斥仍由 Redis 构建租约保证。</p>
  */
@@ -25,7 +25,7 @@ public class IdentityPresenceBloomConfiguration {
             @Value("${app.identity-presence-bloom.counter-bytes:1}") int counterBytes,
             @Value("${app.identity-presence-bloom.counters-per-bucket:1000000}")
                     int countersPerBucket,
-            @Value("${app.identity-presence-bloom.build-batch-size:500}") int buildBatchSize,
+            @Value("${app.identity-presence-bloom.build-batch-size:100}") int buildBatchSize,
             @Value("${app.identity-presence-bloom.receipt-shards:256}") int receiptShards,
             @Value("${app.identity-presence-bloom.maximum-elements:100000}")
                     int maximumElements) {

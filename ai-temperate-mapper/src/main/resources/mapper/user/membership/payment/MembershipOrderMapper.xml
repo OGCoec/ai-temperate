@@ -24,6 +24,9 @@
         <result property="expiresAt" column="expires_at"/>
         <result property="closingDeadlineAt" column="closing_deadline_at"/>
         <result property="paidAt" column="paid_at"/>
+        <result property="entitlementResolution" column="entitlement_resolution"
+                javaType="com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution"/>
+        <result property="entitlementResolvedAt" column="entitlement_resolved_at"/>
         <result property="stateVersion" column="state_version"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -32,7 +35,8 @@
     <sql id="MembershipOrderColumns">
         id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
         status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
-        closing_deadline_at, paid_at, state_version, created_at, updated_at
+        closing_deadline_at, paid_at, entitlement_resolution,
+        entitlement_resolved_at, state_version, created_at, updated_at
     </sql>
 
     <insert id="insert"
@@ -40,7 +44,8 @@
         INSERT INTO membership_order (
             id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
             status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
-            closing_deadline_at, paid_at, state_version, created_at, updated_at
+            closing_deadline_at, paid_at, entitlement_resolution,
+            entitlement_resolved_at, state_version, created_at, updated_at
         )
         SELECT
             #{id,jdbcType=BINARY},
@@ -58,13 +63,112 @@
             #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{closingDeadlineAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{paidAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{entitlementResolution,jdbcType=VARCHAR},
+            #{entitlementResolvedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{stateVersion,jdbcType=BIGINT},
             #{createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         FROM userloginidentity
         WHERE id = #{loginIdentityId,jdbcType=BIGINT}
-        ON CONFLICT (idempotency_key) DO NOTHING
+        ON CONFLICT DO NOTHING
     </insert>
+
+    <select id="createOrResolve"
+            parameterType="com.example.temperate.model.user.membership.payment.MembershipOrder"
+            resultMap="MembershipOrderResultMap"
+            affectData="true"
+            flushCache="true"
+            useCache="false">
+        WITH creation_lock AS MATERIALIZED (
+            SELECT 1 AS acquired
+            FROM pg_advisory_xact_lock(
+                hashtextextended(
+                    'membership_order_creation:'
+                        || CAST(#{loginIdentityId,jdbcType=BIGINT} AS TEXT),
+                    0))
+        ),
+        existing_by_idempotency AS MATERIALIZED (
+            SELECT membership_order.*
+            FROM creation_lock
+            JOIN membership_order
+              ON membership_order.idempotency_key = #{idempotencyKey,
+                  javaType=java.util.UUID,
+                  jdbcType=OTHER,
+                  typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler}
+        ),
+        active_order AS MATERIALIZED (
+            SELECT membership_order.*
+            FROM creation_lock
+            JOIN LATERAL (
+                SELECT candidate.*
+                FROM membership_order AS candidate
+                WHERE candidate.login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+                  AND (
+                      candidate.status IN (0, 1)
+                      OR (candidate.status = 2
+                          AND candidate.entitlement_resolution IS NULL)
+                  )
+                ORDER BY candidate.created_at, candidate.id
+                LIMIT 1
+                FOR UPDATE
+            ) AS membership_order ON TRUE
+            WHERE NOT EXISTS (SELECT 1 FROM existing_by_idempotency)
+        ),
+        inserted AS (
+            INSERT INTO membership_order (
+                id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
+                status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
+                closing_deadline_at, paid_at, entitlement_resolution,
+                entitlement_resolved_at, state_version, created_at, updated_at
+            )
+            SELECT
+                #{id,jdbcType=BINARY},
+                #{loginIdentityId,jdbcType=BIGINT},
+                #{membershipTier,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipTierTypeHandler},
+                #{payAmountYuan,jdbcType=NUMERIC},
+                #{payType,jdbcType=VARCHAR},
+                #{status,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler},
+                #{idempotencyKey,
+                  javaType=java.util.UUID,
+                  jdbcType=OTHER,
+                  typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler},
+                #{providerTradeNo,jdbcType=VARCHAR},
+                #{paymentStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{expiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{closingDeadlineAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{paidAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{entitlementResolution,jdbcType=VARCHAR},
+                #{entitlementResolvedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{stateVersion,jdbcType=BIGINT},
+                #{createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            FROM creation_lock
+            JOIN userloginidentity
+              ON userloginidentity.id = #{loginIdentityId,jdbcType=BIGINT}
+            WHERE NOT EXISTS (SELECT 1 FROM existing_by_idempotency)
+              AND NOT EXISTS (SELECT 1 FROM active_order)
+            ON CONFLICT DO NOTHING
+            RETURNING *
+        ),
+        resolved AS (
+            SELECT 1 AS source_priority, existing_by_idempotency.*
+            FROM existing_by_idempotency
+            UNION ALL
+            SELECT 2 AS source_priority, active_order.*
+            FROM active_order
+            UNION ALL
+            SELECT 3 AS source_priority, inserted.*
+            FROM inserted
+        )
+        SELECT
+            id, login_identity_id, membership_tier, pay_amount_yuan, pay_type,
+            status, idempotency_key, provider_trade_no, payment_started_at, expires_at,
+            closing_deadline_at, paid_at, entitlement_resolution,
+            entitlement_resolved_at, state_version, created_at, updated_at
+        FROM resolved
+        ORDER BY source_priority
+        LIMIT 1
+    </select>
 
     <select id="findById" resultMap="MembershipOrderResultMap">
         SELECT <include refid="MembershipOrderColumns"/>
@@ -92,6 +196,16 @@
         RETURNING <include refid="MembershipOrderColumns"/>
     </select>
 
+    <select id="bindProviderTradeNoIfAbsent" resultMap="MembershipOrderResultMap">
+        UPDATE membership_order
+        SET provider_trade_no = #{providerTradeNo,jdbcType=VARCHAR}
+        WHERE id = #{orderId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND payment_started_at IS NOT NULL
+          AND provider_trade_no IS NULL
+        RETURNING <include refid="MembershipOrderColumns"/>
+    </select>
+
     <select id="findByIdempotencyKey" resultMap="MembershipOrderResultMap">
         SELECT <include refid="MembershipOrderColumns"/>
         FROM membership_order
@@ -101,12 +215,34 @@
                                   typeHandler=com.example.temperate.mapper.typehandler.PostgreSqlUuidTypeHandler}
     </select>
 
+    <select id="acquireCreationLock" resultType="int">
+        SELECT 1
+        FROM pg_advisory_xact_lock(
+            hashtextextended(
+                'membership_order_creation:'
+                    || CAST(#{loginIdentityId,jdbcType=BIGINT} AS TEXT),
+                0))
+    </select>
+
+    <select id="findActiveByLoginIdentityId" resultMap="MembershipOrderResultMap">
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND (
+              status IN (0, 1)
+              OR (status = 2 AND entitlement_resolution IS NULL)
+          )
+        ORDER BY created_at, id
+        LIMIT 1
+        FOR UPDATE
+    </select>
+
     <select id="findLatestPaidOrder" resultMap="MembershipOrderResultMap">
         SELECT <include refid="MembershipOrderColumns"/>
         FROM membership_order
         WHERE login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND membership_tier = #{membershipTier,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipTierTypeHandler}
-          AND status = #{paidStatus,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler}
+          AND status = 2
         ORDER BY paid_at DESC NULLS LAST, created_at DESC, id DESC
         LIMIT 1
     </select>
@@ -133,6 +269,8 @@
             membership_order.expires_at,
             membership_order.closing_deadline_at,
             membership_order.paid_at,
+            membership_order.entitlement_resolution,
+            membership_order.entitlement_resolved_at,
             membership_order.state_version,
             membership_order.created_at,
             membership_order.updated_at
@@ -141,6 +279,47 @@
           ON membership_order.id = requested.order_id
         ORDER BY requested.requested_ordinal
     </select>
+
+    <select id="findByIdsJsonForUpdate" resultMap="MembershipOrderResultMap">
+        WITH requested AS (
+            SELECT DECODE(requested_value, 'hex') AS order_id
+            FROM jsonb_array_elements_text(
+                CAST(#{idsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS requested(requested_value)
+        )
+        SELECT <include refid="MembershipOrderColumns"/>
+        FROM membership_order
+        JOIN requested
+          ON requested.order_id = membership_order.id
+        ORDER BY membership_order.id
+        FOR UPDATE OF membership_order
+    </select>
+
+    <select id="countByLoginIdentityIdRange" resultType="int">
+        SELECT COUNT(*)
+        FROM membership_order
+        WHERE login_identity_id &gt;= #{startInclusive,jdbcType=BIGINT}
+          AND login_identity_id &lt; #{endExclusive,jdbcType=BIGINT}
+    </select>
+
+    <select id="hashIdsByLoginIdentityIdRange" resultType="string">
+        SELECT MD5(COALESCE(STRING_AGG(ENCODE(id, 'hex'), '' ORDER BY id), ''))
+        FROM membership_order
+        WHERE login_identity_id &gt;= #{startInclusive,jdbcType=BIGINT}
+          AND login_identity_id &lt; #{endExclusive,jdbcType=BIGINT}
+    </select>
+
+    <delete id="deleteByIdsJson">
+        WITH requested AS (
+            SELECT DECODE(requested_value, 'hex') AS order_id
+            FROM jsonb_array_elements_text(
+                CAST(#{idsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS requested(requested_value)
+        )
+        DELETE FROM membership_order
+        USING requested
+        WHERE membership_order.id = requested.order_id
+    </delete>
 
     <update id="batchAdvanceState">
         WITH raw_snapshots AS (
@@ -181,18 +360,128 @@
         )
         UPDATE membership_order
         SET status = snapshots.status,
-            provider_trade_no = COALESCE(
-                snapshots.provider_trade_no,
-                membership_order.provider_trade_no),
+            provider_trade_no = CASE
+                WHEN snapshots.status IN (3, 4)
+                  AND COALESCE(snapshots.paid_at, membership_order.paid_at) IS NULL
+                THEN NULL
+                ELSE COALESCE(
+                    snapshots.provider_trade_no,
+                    membership_order.provider_trade_no)
+            END,
             payment_started_at = COALESCE(
                 snapshots.payment_started_at,
                 membership_order.payment_started_at),
             closing_deadline_at = snapshots.closing_deadline_at,
             paid_at = COALESCE(snapshots.paid_at, membership_order.paid_at),
+            entitlement_resolution = CASE
+                WHEN snapshots.status IN (3, 4)
+                  AND COALESCE(snapshots.paid_at, membership_order.paid_at) IS NULL
+                  AND membership_order.entitlement_resolution IS NULL
+                THEN 'NOT_GRANTED'
+                ELSE membership_order.entitlement_resolution
+            END,
+            entitlement_resolved_at = CASE
+                WHEN snapshots.status IN (3, 4)
+                  AND COALESCE(snapshots.paid_at, membership_order.paid_at) IS NULL
+                  AND membership_order.entitlement_resolution IS NULL
+                THEN snapshots.updated_at
+                ELSE membership_order.entitlement_resolved_at
+            END,
             state_version = snapshots.state_version,
             updated_at = snapshots.updated_at
         FROM snapshots
         WHERE membership_order.id = snapshots.order_id
-          AND membership_order.state_version &lt; snapshots.state_version
+          AND (
+              membership_order.state_version &lt; snapshots.state_version
+              OR (
+                  membership_order.state_version = snapshots.state_version
+                  AND membership_order.updated_at &lt;= snapshots.updated_at
+                  AND CASE membership_order.status
+                          WHEN 0 THEN 0
+                          WHEN 1 THEN 1
+                          ELSE 2
+                      END
+                      &lt; CASE snapshots.status
+                          WHEN 0 THEN 0
+                          WHEN 1 THEN 1
+                          ELSE 2
+                      END
+              )
+          )
+    </update>
+
+    <update id="batchResolveEntitlements">
+        WITH raw_entitlements AS (
+            SELECT
+                DECODE(raw."orderIdHex", 'hex') AS order_id,
+                raw."providerTradeNo" AS provider_trade_no,
+                raw.resolution,
+                raw."resolvedAt" AS resolved_at
+            FROM jsonb_to_recordset(
+                CAST(#{entitlementsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS raw(
+                "orderIdHex" TEXT,
+                "providerTradeNo" VARCHAR(128),
+                resolution TEXT,
+                "resolvedAt" TIMESTAMPTZ
+            )
+        ),
+        entitlements AS (
+            SELECT DISTINCT ON (order_id)
+                order_id,
+                provider_trade_no,
+                resolution,
+                resolved_at
+            FROM raw_entitlements
+            ORDER BY order_id
+        )
+        UPDATE membership_order
+        SET provider_trade_no = CASE
+                WHEN entitlements.resolution IN ('REFUND_REQUIRED', 'NOT_GRANTED')
+                THEN NULL
+                ELSE COALESCE(
+                    membership_order.provider_trade_no,
+                    entitlements.provider_trade_no)
+            END,
+            entitlement_resolution = CASE
+                WHEN membership_order.entitlement_resolution = 'NOT_GRANTED'
+                  AND entitlements.resolution = 'REFUND_REQUIRED'
+                THEN entitlements.resolution
+                ELSE COALESCE(
+                    membership_order.entitlement_resolution,
+                    entitlements.resolution)
+            END,
+            entitlement_resolved_at = CASE
+                WHEN membership_order.entitlement_resolution = 'NOT_GRANTED'
+                  AND entitlements.resolution = 'REFUND_REQUIRED'
+                THEN entitlements.resolved_at
+                ELSE COALESCE(
+                    membership_order.entitlement_resolved_at,
+                    entitlements.resolved_at)
+            END,
+            updated_at = CASE
+                WHEN membership_order.entitlement_resolution IS NULL
+                  OR (
+                      membership_order.entitlement_resolution = 'NOT_GRANTED'
+                      AND entitlements.resolution = 'REFUND_REQUIRED'
+                  )
+                THEN GREATEST(membership_order.updated_at, entitlements.resolved_at)
+                ELSE membership_order.updated_at
+            END
+        FROM entitlements
+        WHERE membership_order.id = entitlements.order_id
+          AND (
+              entitlements.resolution IN ('REFUND_REQUIRED', 'NOT_GRANTED')
+              OR membership_order.provider_trade_no IS NULL
+              OR membership_order.provider_trade_no = entitlements.provider_trade_no
+          )
+          AND (
+              membership_order.entitlement_resolution IS NULL
+              OR membership_order.entitlement_resolution = entitlements.resolution
+              OR (
+                  membership_order.entitlement_resolution = 'NOT_GRANTED'
+                  AND entitlements.resolution = 'REFUND_REQUIRED'
+              )
+          )
     </update>
 </mapper>

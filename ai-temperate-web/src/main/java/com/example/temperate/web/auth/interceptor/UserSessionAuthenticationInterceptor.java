@@ -50,6 +50,8 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
     private static final String PLATFORM_HEADER = "X-Client-Platform";
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
     private static final String CSRF_HEADER = "X-CSRF-Token";
+    private static final String MEMBERSHIP_PLAN_OFFERS_PATH =
+            "/api/user/membership-plan-offers";
 
     private final AccessSessionService accessSessionService;
     private final AuthCookieWriter cookieWriter;
@@ -136,7 +138,10 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
                 ? accessSessionService.authenticateOrRenew(command)
                 : accessSessionService.authenticateOrRenew(command, binding);
 
-        expireMembership(result.principal().userId());
+        // 报价接口必须保持只读；其转换策略会在内存中把已过期付费套餐按 FREE 计算，不触发惰性写库。
+        if (!isMembershipPlanOfferRead(request)) {
+            expireMembership(result.principal().userId());
+        }
 
         establishSecurityContext(request, result.principal());
         if (result.renewed()) {
@@ -165,6 +170,14 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
                     false,
                     exception);
         }
+    }
+
+    private static boolean isMembershipPlanOfferRead(HttpServletRequest request) {
+        String contextPath = request.getContextPath();
+        String expected = (contextPath == null ? "" : contextPath)
+                + MEMBERSHIP_PLAN_OFFERS_PATH;
+        return "GET".equals(request.getMethod())
+                && expected.equals(request.getRequestURI());
     }
 
     private PreAuthSessionBinding userPreAuthBinding(

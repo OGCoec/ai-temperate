@@ -3,6 +3,7 @@ package com.example.temperate.service.user.membership.payment.persistence;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -15,6 +16,7 @@ import com.example.temperate.model.user.membership.payment.MembershipOrderStatus
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentWorker;
 import com.example.temperate.service.user.membership.payment.persistence.impl.MembershipOrderBatchPersistenceServiceImpl;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.OrderPersistenceQueue;
@@ -47,6 +49,7 @@ final class MembershipOrderBatchPersistenceServiceImplTest {
     private OrderPersistenceQueue queue;
     private MembershipOrderSnapshotStore snapshotStore;
     private MembershipOrderPersistenceService persistenceService;
+    private MembershipPaymentMetrics metrics;
     private MembershipOrderBatchPersistenceService service;
     private OrderPersistToken token;
 
@@ -57,6 +60,7 @@ final class MembershipOrderBatchPersistenceServiceImplTest {
         queue = mock(OrderPersistenceQueue.class);
         snapshotStore = mock(MembershipOrderSnapshotStore.class);
         persistenceService = mock(MembershipOrderPersistenceService.class);
+        metrics = mock(MembershipPaymentMetrics.class);
         RedisKeyFactory keyFactory = new RedisKeyFactory("test");
         token = new OrderPersistToken(ORDER_ID, 2L, NOW.toEpochMilli());
         when(redissonClient.getLock(keyFactory.orderPersistenceLockKey())).thenReturn(lock);
@@ -73,7 +77,7 @@ final class MembershipOrderBatchPersistenceServiceImplTest {
                 persistenceService,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                mock(MembershipPaymentMetrics.class));
+                metrics);
     }
 
     @Test
@@ -84,6 +88,19 @@ final class MembershipOrderBatchPersistenceServiceImplTest {
         ordered.verify(persistenceService).persist(List.of(snapshot()));
         ordered.verify(queue).complete(List.of(token));
         ordered.verify(lock).unlock();
+    }
+
+    @Test
+    void reportsNaturalWorkerRunBatchAndClaimCounts() {
+        service.flushOneRun();
+
+        verify(metrics).workerRunCompleted(
+                org.mockito.ArgumentMatchers.eq(MembershipPaymentWorker.ORDER_PERSIST),
+                org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq("drained"),
+                anyLong(),
+                anyString());
     }
 
     @Test
@@ -100,7 +117,7 @@ final class MembershipOrderBatchPersistenceServiceImplTest {
     private static MembershipOrderSnapshot snapshot() {
         OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 ORDER_ID,
                 17L,
                 MembershipTier.PLUS,

@@ -6,6 +6,7 @@ import com.example.temperate.model.user.membership.payment.MembershipOrder;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentOrderLookupService;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
 import java.util.Objects;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,14 +24,17 @@ public final class MembershipPaymentOrderLookupServiceImpl
         implements MembershipPaymentOrderLookupService {
 
     private final MembershipOrderSnapshotStore snapshotStore;
+    private final MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator;
     private final MembershipOrderMapper orderMapper;
     private final HybridBase64UrlCodec base64UrlCodec;
 
     public MembershipPaymentOrderLookupServiceImpl(
             MembershipOrderSnapshotStore snapshotStore,
+            MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator,
             MembershipOrderMapper orderMapper,
             HybridBase64UrlCodec base64UrlCodec) {
         this.snapshotStore = Objects.requireNonNull(snapshotStore);
+        this.snapshotWriteCoordinator = Objects.requireNonNull(snapshotWriteCoordinator);
         this.orderMapper = Objects.requireNonNull(orderMapper);
         this.base64UrlCodec = Objects.requireNonNull(base64UrlCodec);
     }
@@ -51,8 +55,8 @@ public final class MembershipPaymentOrderLookupServiceImpl
         if (databaseSnapshot.status().terminal()) {
             return Optional.of(databaseSnapshot);
         }
-        snapshotStore.put(databaseSnapshot);
-        return snapshotStore.find(canonical).or(() -> Optional.of(databaseSnapshot));
+        // 回源后的单条 Lua 返回裁决后的当前快照，避免 put 后再次通过 HGETALL 读取同一订单。
+        return Optional.of(snapshotWriteCoordinator.putAndGet(databaseSnapshot));
     }
 
     private MembershipOrderSnapshot toSnapshot(MembershipOrder order) {

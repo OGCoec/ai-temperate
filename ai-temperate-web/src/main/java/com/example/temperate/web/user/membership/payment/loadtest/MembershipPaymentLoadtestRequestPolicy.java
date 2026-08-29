@@ -55,10 +55,11 @@ public final class MembershipPaymentLoadtestRequestPolicy {
                     + "}$");
     private static final String QUOTA_ROLLBACK_CONTROL =
             INFERENCE_STUB_ROOT + "/controls/quota-rollback";
+    // 80K 固定样本按每页五百个用户签发，共一百六十页；仅放行无前导零的 0～159。
     private static final Pattern BOUNDARY_TOKEN_PAGE =
             Pattern.compile(
                     "^" + BOUNDARY_ROOT
-                            + "/tokens/(?:[0-9]|[1-7][0-9])$");
+                            + "/tokens/(?:[0-9]|[1-9][0-9]|1[0-5][0-9])$");
     private static final Set<String> INFERENCE_STUB_POST_PATHS = Set.of(
             INFERENCE_STUB_ROOT + "/v1/chat/completions",
             INFERENCE_STUB_ROOT + "/v1/images/generations",
@@ -151,6 +152,7 @@ public final class MembershipPaymentLoadtestRequestPolicy {
                             && (INFERENCE_VIDEO_POLL.matcher(path).matches()
                                     || QUOTA_ROLLBACK_CONTROL.equals(path)))
                     || (INSPECTION_ROOT + "/queues").equals(path)
+                    || (INSPECTION_ROOT + "/runtime").equals(path)
                     || (CONTROL_ROOT + "/state").equals(path)
                     || (CONTROL_ROOT + "/queues").equals(path)
                     || (CONTROL_ROOT + "/faults").equals(path)
@@ -216,6 +218,8 @@ public final class MembershipPaymentLoadtestRequestPolicy {
         return HttpMethod.POST.matches(method)
                 && ((BOUNDARY_ROOT + "/prepare").equals(path)
                         || (BOUNDARY_ROOT + "/reset").equals(path)
+                        || (BOUNDARY_ROOT + "/failed-run-reset").equals(path)
+                        || (BOUNDARY_ROOT + "/segment-warmup-reset").equals(path)
                         || BOUNDARY_TOKEN_PAGE.matcher(path).matches());
     }
 

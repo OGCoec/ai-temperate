@@ -80,6 +80,13 @@ final class MembershipPaymentPropertiesTest {
     }
 
     @Test
+    void orderPersistBatchCannotExceedCrossKeyCompletionBoundary() {
+        assertThatThrownBy(() -> propertiesWithOrderPersistBatch(101))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("between 1 and 100");
+    }
+
+    @Test
     void callbackSafetyTtlsCannotDriftFromTheClosureContract() {
         MembershipPaymentProperties.Callback changed =
                 new MembershipPaymentProperties.Callback(
@@ -191,6 +198,36 @@ final class MembershipPaymentPropertiesTest {
                         Duration.ofSeconds(60),
                         Duration.ofMillis(100)),
                 rabbit);
+    }
+
+    private static MembershipPaymentProperties propertiesWithOrderPersistBatch(
+            int orderPersistBatchSize) {
+        return new MembershipPaymentProperties(
+                true,
+                Duration.ofMinutes(5),
+                Duration.ofMinutes(5),
+                new MembershipPaymentProperties.Simulator(
+                        false,
+                        "",
+                        "",
+                        Duration.ofMinutes(5),
+                        16_384,
+                        false),
+                new MembershipPaymentProperties.Callback(
+                        5_000L,
+                        100,
+                        20,
+                        Duration.ofSeconds(60),
+                        Duration.ofSeconds(30),
+                        Duration.ofMinutes(10),
+                        Duration.ofHours(6)),
+                new MembershipPaymentProperties.OrderPersist(
+                        5_000L,
+                        orderPersistBatchSize,
+                        20,
+                        Duration.ofSeconds(60),
+                        Duration.ofMillis(100)),
+                validRabbit());
     }
 
     private static MembershipPaymentProperties.Rabbit validRabbit() {

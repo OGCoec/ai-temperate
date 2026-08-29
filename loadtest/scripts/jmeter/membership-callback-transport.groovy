@@ -68,13 +68,25 @@ def authHeaders = [
 ]
 def createHeaders = new LinkedHashMap<>(authHeaders)
 createHeaders['Content-Type'] = 'application/json'
+Map offersResponse = request(
+        'GET',
+        '/api/user/membership-plan-offers',
+        authHeaders,
+        null)
+if (offersResponse.status != 200) {
+    throw new IllegalStateException('transport offer lookup failed: ' + offersResponse.status)
+}
+List offers = (List) ((Map) json.parseText(offersResponse.body)).offers
+if (offers == null || offers.isEmpty()) {
+    throw new IllegalStateException('transport account has no legal higher membership offer')
+}
 String idempotencyKey = UUID.randomUUID().toString()
 Map create = request(
         'POST',
         '/api/user/membership-orders',
         createHeaders,
         JsonOutput.toJson([
-                targetTier: 'GO',
+                targetTier: ((Map) offers.first()).targetTier,
                 payType: 'alipay',
                 idempotencyKey: idempotencyKey
         ]))

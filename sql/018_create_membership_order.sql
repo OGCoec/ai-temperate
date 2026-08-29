@@ -9,13 +9,15 @@ CREATE TABLE membership_order (
     status SMALLINT NOT NULL DEFAULT 0,
     idempotency_key UUID NOT NULL,
     provider_trade_no VARCHAR(128),
-    payment_started_at TIMESTAMPTZ,
-    expires_at TIMESTAMPTZ NOT NULL,
-    closing_deadline_at TIMESTAMPTZ,
-    paid_at TIMESTAMPTZ,
+    payment_started_at TIMESTAMPTZ(6),
+    expires_at TIMESTAMPTZ(6) NOT NULL,
+    closing_deadline_at TIMESTAMPTZ(6),
+    paid_at TIMESTAMPTZ(6),
+    entitlement_resolution VARCHAR(32),
+    entitlement_resolved_at TIMESTAMPTZ(6),
     state_version BIGINT NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT pk_membership_order
         PRIMARY KEY (id),
@@ -35,6 +37,24 @@ CREATE TABLE membership_order (
         CHECK (payment_started_at IS NULL OR payment_started_at < expires_at),
     CONSTRAINT chk_membership_order_status
         CHECK (status IN (0, 1, 2, 3, 4)),
+    CONSTRAINT chk_membership_order_entitlement_resolution
+        CHECK (
+            entitlement_resolution IS NULL
+            OR entitlement_resolution IN (
+                'APPLIED',
+                'NOT_GRANTED',
+                'REFUND_REQUIRED',
+                'LEGACY_NOT_GRANTED'
+            )
+        ),
+    CONSTRAINT chk_membership_order_entitlement_resolution_time
+        CHECK (
+            (entitlement_resolution IS NULL AND entitlement_resolved_at IS NULL)
+            OR (
+                entitlement_resolution IS NOT NULL
+                AND entitlement_resolved_at IS NOT NULL
+            )
+        ),
     CONSTRAINT chk_membership_order_pay_type
         CHECK (
             pay_type = BTRIM(pay_type)
@@ -68,6 +88,10 @@ COMMENT ON COLUMN membership_order.closing_deadline_at IS
     '固定等于 expires_at 加五分钟的硬关闭截止时间；不得按 RabbitMQ 实际消费时间向后延长';
 COMMENT ON COLUMN membership_order.paid_at IS
     '通过异步回调或主动查询确认支付成功的时间；尚未支付时为空';
+COMMENT ON COLUMN membership_order.entitlement_resolution IS
+    '订单权益裁决：APPLIED=已原子发放套餐，NOT_GRANTED=未付款终态且未发放，REFUND_REQUIRED=终态后确认付款且不得发放、需要退款，LEGACY_NOT_GRANTED=部署前历史已支付订单不自动补发；为空表示仍未裁决';
+COMMENT ON COLUMN membership_order.entitlement_resolved_at IS
+    '订单权益裁决完成时间；必须与 entitlement_resolution 同时为空或同时非空';
 COMMENT ON COLUMN membership_order.state_version IS
     'Redis 订单状态机每次有效迁移递增的单调版本；PostgreSQL 只接受更大版本，防止旧批次覆盖新状态';
 COMMENT ON COLUMN membership_order.created_at IS
@@ -78,10 +102,29 @@ COMMENT ON COLUMN membership_order.updated_at IS
 CREATE INDEX idx_membership_order_identity_created
     ON membership_order (login_identity_id, created_at DESC);
 
+CREATE INDEX idx_membership_order_latest_paid
+    ON membership_order (
+        login_identity_id,
+        membership_tier,
+        paid_at DESC NULLS LAST,
+        created_at DESC,
+        id DESC
+    )
+    WHERE status = 2;
+
+CREATE UNIQUE INDEX uk_membership_order_single_active_identity
+    ON membership_order (login_identity_id)
+    WHERE status IN (0, 1)
+       OR (status = 2 AND entitlement_resolution IS NULL);
+
 COMMENT ON CONSTRAINT uk_membership_order_provider_trade_no
     ON membership_order IS
     '保证同一个非空第三方支付交易流水号只能绑定一笔会员订单';
 COMMENT ON INDEX idx_membership_order_identity_created IS
     '支持按照用户登录身份查询会员订单，并按照订单创建时间倒序返回';
+COMMENT ON INDEX idx_membership_order_latest_paid IS
+    '支持按用户与当前会员等级直接取得最近已支付订单，索引顺序同时满足 paid_at、created_at 和 id 倒序 LIMIT 1';
+COMMENT ON INDEX uk_membership_order_single_active_identity IS
+    '每个用户最多保留一笔 PENDING_PAYMENT、CLOSING 或已支付但权益未决的活动订单；终态刷盘前仍保持占用';
 
 COMMIT;

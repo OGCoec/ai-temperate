@@ -22,15 +22,16 @@ import java.util.concurrent.locks.LockSupport;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来在本机压测启动阶段校验四个既有账号，并通过正式 JWT 签发器生成短期 Access Token。
+ * 该实现是来在压测阶段启动时校验十六个固定账号，并通过正式 JWT 签发器生成十五小时 Access Token。
  *
- * <p>白名单账号通过身份与额度两条批量 SQL 预检，签发只用于本机调试；该实现不保存令牌、不创建账号、
+ * <p>白名单账号通过身份与额度两条批量 SQL 预检，签发只用于受控 Runner；该实现不保存令牌、不创建账号、
  * 不改变账号状态或会员额度。</p>
  */
 @Service
 public final class MembershipPaymentLoadtestTokenServiceImpl
         implements MembershipPaymentLoadtestTokenService {
 
+    private static final Duration LOADTEST_ACCESS_TOKEN_TTL = Duration.ofHours(15);
     private static final long NON_ALLOWLISTED_TEST_USER_ID = Long.MAX_VALUE;
     private static final String EXPIRED_TOKEN_ID = "A".repeat(38);
 
@@ -85,7 +86,9 @@ public final class MembershipPaymentLoadtestTokenServiceImpl
         }
         return new MembershipPaymentLoadtestToken(
                 NON_ALLOWLISTED_TEST_USER_ID,
-                tokenService.issueAccessToken(NON_ALLOWLISTED_TEST_USER_ID));
+                tokenService.issueAccessToken(
+                        NON_ALLOWLISTED_TEST_USER_ID,
+                        LOADTEST_ACCESS_TOKEN_TTL));
     }
 
     @Override
@@ -101,7 +104,7 @@ public final class MembershipPaymentLoadtestTokenServiceImpl
             // 令牌只能由统一签名服务产生；直接修改 JWT 中间段会失去签名校验，不能作为测试凭据。
             tokens.add(new MembershipPaymentLoadtestToken(
                     userId,
-                    tokenService.issueAccessToken(userId)));
+                    tokenService.issueAccessToken(userId, LOADTEST_ACCESS_TOKEN_TTL)));
         }
         return List.copyOf(tokens);
     }
@@ -114,7 +117,7 @@ public final class MembershipPaymentLoadtestTokenServiceImpl
         final List<AuthenticationContext> contexts;
         final List<UserMembershipQuota> quotas;
         try {
-            // 两个集合查询各执行一次数据库 I/O，循环只在内存中核对四个固定白名单账号。
+            // 两个集合查询各执行一次数据库 I/O，循环只在内存中核对十六个固定白名单账号。
             contexts = identityMapper.findAuthenticationByIds(userIds);
             quotas = quotaMapper.findByLoginIdentityIds(userIds);
         } catch (RuntimeException exception) {

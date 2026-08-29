@@ -1,5 +1,6 @@
 package com.example.temperate.service.user.membership.payment.order;
 
+import com.example.temperate.model.user.membership.payment.MembershipOrder;
 import java.time.OffsetDateTime;
 
 /**
@@ -11,4 +12,9 @@ public interface MembershipPaymentAttemptTransactionService {
             long loginIdentityId,
             byte[] orderId,
             OffsetDateTime attemptedAt);
+
+    MembershipOrder bindProviderTradeNo(
+            long loginIdentityId,
+            byte[] orderId,
+            String providerTradeNo);
 }

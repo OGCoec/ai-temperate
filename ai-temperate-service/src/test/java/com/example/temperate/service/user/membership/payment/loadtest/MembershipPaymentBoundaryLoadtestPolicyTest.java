@@ -10,7 +10,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 /**
- * 用于验证四万用户毫秒边界测试的固定用户区间、时间分组和套餐映射不可被运行参数改变。
+ * 用于验证八万账号夹具及 40K、80K 两种固定运行规模的时间分组和套餐映射不可被运行参数改变。
  */
 class MembershipPaymentBoundaryLoadtestPolicyTest {
 
@@ -20,29 +20,30 @@ class MembershipPaymentBoundaryLoadtestPolicyTest {
     @Test
     void shouldExposeOnlyTheCanonicalUserRangeAndTokenPages() {
         assertThat(policy.firstUserId()).isEqualTo(70_000_000_000_000_000L);
-        assertThat(policy.lastUserId()).isEqualTo(70_000_000_000_039_999L);
-        assertThat(policy.totalUsers()).isEqualTo(40_000);
+        assertThat(policy.lastUserId()).isEqualTo(70_000_000_000_079_999L);
+        assertThat(policy.totalUsers()).isEqualTo(80_000);
         assertThat(policy.pageUserIds(0))
                 .hasSize(500)
                 .startsWith(70_000_000_000_000_000L)
                 .endsWith(70_000_000_000_000_499L);
-        assertThat(policy.pageUserIds(79))
+        assertThat(policy.pageUserIds(159))
                 .hasSize(500)
-                .startsWith(70_000_000_000_039_500L)
-                .endsWith(70_000_000_000_039_999L);
+                .startsWith(70_000_000_000_079_500L)
+                .endsWith(70_000_000_000_079_999L);
         assertThat(policy.isBoundaryUser(70_000_000_000_000_000L)).isTrue();
-        assertThat(policy.isBoundaryUser(70_000_000_000_039_999L)).isTrue();
+        assertThat(policy.isBoundaryUser(70_000_000_000_079_999L)).isTrue();
         assertThat(policy.isBoundaryUser(69_999_999_999_999_999L)).isFalse();
-        assertThat(policy.isBoundaryUser(70_000_000_000_040_000L)).isFalse();
+        assertThat(policy.isBoundaryUser(70_000_000_000_080_000L)).isFalse();
         assertThatThrownBy(() -> policy.pageUserIds(-1))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> policy.pageUserIds(80))
+        assertThatThrownBy(() -> policy.pageUserIds(160))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void shouldExposeEightImmutableBoundaryGroupsWithExactOffsets() {
-        List<MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup> groups = policy.groups();
+        List<MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup> groups =
+                policy.groups(MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K);
 
         assertThat(groups).hasSize(8);
         assertThat(groups).extracting(MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup::code)
@@ -82,31 +83,62 @@ class MembershipPaymentBoundaryLoadtestPolicyTest {
     }
 
     @Test
+    void shouldExposeEightTenThousandUserCapacityGroupsWithoutStretchingOffsets() {
+        List<MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup> groups =
+                policy.groups(MembershipPaymentBoundaryLoadtestPolicy.RunScale.CAPACITY_80K);
+
+        assertThat(groups).hasSize(8).allSatisfy(group -> {
+            assertThat(group.userIds()).hasSize(10_000);
+            assertThat(group.targetOffsetMillis()).hasSize(10_000);
+        });
+        assertThat(groups.getFirst().userIds())
+                .startsWith(70_000_000_000_000_000L)
+                .endsWith(70_000_000_000_009_999L);
+        assertThat(groups.getLast().userIds())
+                .startsWith(70_000_000_000_070_000L)
+                .endsWith(70_000_000_000_079_999L);
+        assertThat(groups.get(1).targetOffsetMillis())
+                .startsWith(-1_000L, -998L, -996L)
+                .containsSequence(-6L, -4L, -2L, -1_000L, -998L)
+                .endsWith(-6L, -4L, -2L);
+    }
+
+    @Test
     void shouldDistributeEveryGroupEquallyAcrossFourPersonalTiers() {
-        for (MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup group : policy.groups()) {
+        for (MembershipPaymentBoundaryLoadtestPolicy.RunScale scale
+                : MembershipPaymentBoundaryLoadtestPolicy.RunScale.values()) {
+            long expectedPerTier = scale == MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K
+                    ? 1_250L : 2_500L;
+            for (MembershipPaymentBoundaryLoadtestPolicy.BoundaryGroup group : policy.groups(scale)) {
             Map<MembershipTier, Long> counts = group.userIds().stream()
-                    .collect(Collectors.groupingBy(policy::targetTier, Collectors.counting()));
+                    .collect(Collectors.groupingBy(
+                            userId -> policy.targetTier(scale, userId), Collectors.counting()));
             assertThat(counts).containsExactlyInAnyOrderEntriesOf(Map.of(
-                    MembershipTier.GO, 1_250L,
-                    MembershipTier.PLUS, 1_250L,
-                    MembershipTier.PRO, 1_250L,
-                    MembershipTier.MAX, 1_250L));
+                    MembershipTier.GO, expectedPerTier,
+                    MembershipTier.PLUS, expectedPerTier,
+                    MembershipTier.PRO, expectedPerTier,
+                    MembershipTier.MAX, expectedPerTier));
+            }
         }
     }
 
     @Test
     void shouldExposeTwentyFiveDeterministicTeamRejectionUsersPerGroup() {
-        assertThat(policy.teamProbeUserIds(0))
+        assertThat(policy.teamProbeUserIds(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K, 0))
                 .hasSize(25)
                 .startsWith(70_000_000_000_000_000L)
                 .endsWith(70_000_000_000_000_024L);
-        assertThat(policy.teamProbeUserIds(7))
+        assertThat(policy.teamProbeUserIds(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.CAPACITY_80K, 7))
                 .hasSize(25)
-                .startsWith(70_000_000_000_035_000L)
-                .endsWith(70_000_000_000_035_024L);
-        assertThatThrownBy(() -> policy.teamProbeUserIds(-1))
+                .startsWith(70_000_000_000_070_000L)
+                .endsWith(70_000_000_000_070_024L);
+        assertThatThrownBy(() -> policy.teamProbeUserIds(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K, -1))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> policy.teamProbeUserIds(8))
+        assertThatThrownBy(() -> policy.teamProbeUserIds(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.CAPACITY_80K, 8))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

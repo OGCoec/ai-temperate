@@ -3,6 +3,7 @@ package com.example.temperate.service.user.membership.payment.order;
 import com.example.temperate.common.redis.key.MembershipOrderRedisId;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -32,7 +33,7 @@ public record MembershipOrderSnapshot(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
 
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     public MembershipOrderSnapshot {
         if (schemaVersion != CURRENT_SCHEMA_VERSION) {
@@ -50,7 +51,11 @@ public record MembershipOrderSnapshot(
         idempotencyKey = Objects.requireNonNull(
                 idempotencyKey, "idempotencyKey must not be null");
         providerTradeNo = optionalText("provider trade number", providerTradeNo, 128);
-        expiresAt = Objects.requireNonNull(expiresAt, "expiresAt must not be null");
+        paymentStartedAt = MembershipPaymentTime.normalizeNullable(paymentStartedAt);
+        expiresAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(expiresAt, "expiresAt must not be null"));
+        closingDeadlineAt = MembershipPaymentTime.normalizeNullable(closingDeadlineAt);
+        paidAt = MembershipPaymentTime.normalizeNullable(paidAt);
         if (paymentStartedAt != null && !paymentStartedAt.isBefore(expiresAt)) {
             throw new IllegalArgumentException(
                     "Membership payment must start before the order expires.");
@@ -58,8 +63,10 @@ public record MembershipOrderSnapshot(
         if (stateVersion <= 0) {
             throw new IllegalArgumentException("Membership order state version must be positive.");
         }
-        createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
-        updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
+        createdAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(createdAt, "createdAt must not be null"));
+        updatedAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(updatedAt, "updatedAt must not be null"));
     }
 
     /**

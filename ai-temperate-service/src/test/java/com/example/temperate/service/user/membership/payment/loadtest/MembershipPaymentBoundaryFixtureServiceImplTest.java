@@ -41,7 +41,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * 该测试是来锁定四万个持久边界账号只能在固定空区间内批量创建，并且每轮只清理清单内订单后恢复 FREE 基线。
+ * 该测试是来锁定八万个持久边界账号只能全量创建或从合法前 40K 扩容，并且每轮只清理清单内订单后恢复 FREE 基线。
  */
 final class MembershipPaymentBoundaryFixtureServiceImplTest {
 
@@ -70,7 +70,7 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
     }
 
     @Test
-    void createsAnEmptyFixedRangeInEightHundredBatchesAndRetainsInvalidEmails() {
+    void createsAnEmptyFixedRangeInOneHundredSixtyBatchesAndRetainsInvalidEmails() {
         when(identityMapper.findByIds(anyList())).thenReturn(List.of());
         when(profileMapper.findByLoginIdentityIds(anyList())).thenReturn(List.of());
         when(quotaMapper.findByLoginIdentityIds(anyList())).thenReturn(List.of());
@@ -81,18 +81,42 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
         MembershipPaymentBoundaryFixtureState result = service(true).prepare();
 
         assertThat(result.prepared()).isTrue();
-        assertThat(result.identityCount()).isEqualTo(40_000);
+        assertThat(result.identityCount()).isEqualTo(80_000);
         ArgumentCaptor<List<UserLoginIdentity>> batches = ArgumentCaptor.forClass(List.class);
-        verify(identityMapper, times(80)).batchInsertBoundaryFixtures(batches.capture());
+        verify(identityMapper, times(160)).batchInsertBoundaryFixtures(batches.capture());
         assertThat(batches.getAllValues()).allSatisfy(batch -> assertThat(batch).hasSize(500));
         assertThat(batches.getAllValues().stream().flatMap(List::stream))
                 .extracting(UserLoginIdentity::getEmail)
-                .hasSize(40_000)
+                .hasSize(80_000)
                 .doesNotHaveDuplicates()
                 .allMatch(email -> email.endsWith(".invalid"));
+        verify(profileMapper, times(160)).batchInsertBoundaryFixtures(anyList());
+        verify(quotaMapper, times(160)).batchInsertBoundaryFixtures(anyList());
+        verifyInvalidationInOneHundredSixtyPages();
+    }
+
+    @Test
+    void expandsOnlyAnExactLegacyFortyThousandFixtureAndResetsAllQuotas() {
+        when(identityMapper.findByIds(anyList())).thenAnswer(invocation -> existingLegacyRows(
+                invocation.getArgument(0), MembershipPaymentBoundaryFixtureServiceImplTest::identities));
+        when(profileMapper.findByLoginIdentityIds(anyList())).thenAnswer(invocation -> existingLegacyRows(
+                invocation.getArgument(0), MembershipPaymentBoundaryFixtureServiceImplTest::profiles));
+        when(quotaMapper.findByLoginIdentityIds(anyList())).thenAnswer(invocation -> existingLegacyRows(
+                invocation.getArgument(0), MembershipPaymentBoundaryFixtureServiceImplTest::quotas));
+        when(identityMapper.batchInsertBoundaryFixtures(anyList())).thenReturn(500);
+        when(profileMapper.batchInsertBoundaryFixtures(anyList())).thenReturn(500);
+        when(quotaMapper.batchInsertBoundaryFixtures(anyList())).thenReturn(500);
+        when(quotaMapper.batchGrantPaidMemberships(anyString())).thenReturn(500);
+
+        MembershipPaymentBoundaryFixtureState result = service(true).prepare();
+
+        assertThat(result.prepared()).isTrue();
+        assertThat(result.identityCount()).isEqualTo(80_000);
+        verify(identityMapper, times(80)).batchInsertBoundaryFixtures(anyList());
         verify(profileMapper, times(80)).batchInsertBoundaryFixtures(anyList());
         verify(quotaMapper, times(80)).batchInsertBoundaryFixtures(anyList());
-        verifyInvalidationInEightyPages();
+        verify(quotaMapper, times(160)).batchGrantPaidMemberships(anyString());
+        verifyInvalidationInOneHundredSixtyPages();
     }
 
     @Test
@@ -121,8 +145,8 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
         stubExactTemplates();
         byte[] closedId = bytes((byte) 21);
         byte[] paidId = bytes((byte) 22);
-        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 40_000L)).thenReturn(2, 0);
-        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 40_000L)).thenReturn(0);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L)).thenReturn(2, 0);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L)).thenReturn(0);
         when(orderMapper.findByIdsJsonForUpdate(anyString())).thenReturn(List.of(
                 order(closedId, FIRST_ID, MembershipOrderStatus.CLOSED,
                         MembershipOrderEntitlementResolution.NOT_GRANTED),
@@ -138,21 +162,62 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
         assertThat(result.prepared()).isTrue();
         verify(callbackMapper).deleteByOrderIdsJson(anyString());
         verify(orderMapper).deleteByIdsJson(anyString());
-        verify(quotaMapper, times(80)).batchGrantPaidMemberships(anyString());
-        verifyInvalidationInEightyPages();
+        verify(quotaMapper, times(160)).batchGrantPaidMemberships(anyString());
+        verifyInvalidationInOneHundredSixtyPages();
         assertThat(identityMapper.findByIds(allIds().subList(0, 500))).hasSize(500);
     }
 
     @Test
     void refusesActiveOrUnresolvedOrdersBeforeDeletingAnything() {
         byte[] activeId = bytes((byte) 31);
-        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 40_000L)).thenReturn(1);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L)).thenReturn(1);
         when(orderMapper.findByIdsJsonForUpdate(anyString())).thenReturn(List.of(
                 order(activeId, FIRST_ID, MembershipOrderStatus.CLOSING, null)));
 
         assertThatThrownBy(() -> service(true).reset(List.of(activeId)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("terminal");
+        verify(callbackMapper, never()).deleteByOrderIdsJson(anyString());
+        verify(orderMapper, never()).deleteByIdsJson(anyString());
+    }
+
+    @Test
+    void resetsOnlyExactPendingUnresolvedOrdersFromAnExplicitFailedRun() {
+        stubExactTemplates();
+        byte[] firstId = bytes((byte) 41);
+        byte[] secondId = bytes((byte) 42);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(2, 0);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(0);
+        when(orderMapper.findByIdsJsonForUpdate(anyString())).thenReturn(List.of(
+                order(firstId, FIRST_ID, MembershipOrderStatus.PENDING_PAYMENT, null),
+                order(secondId, FIRST_ID + 1L, MembershipOrderStatus.PENDING_PAYMENT, null)));
+        when(callbackMapper.deleteByOrderIdsJson(anyString())).thenReturn(0);
+        when(orderMapper.deleteByIdsJson(anyString())).thenReturn(2);
+        when(quotaMapper.batchGrantPaidMemberships(anyString())).thenReturn(500);
+
+        MembershipPaymentBoundaryFixtureState result =
+                service(true).resetFailedRun(List.of(firstId, secondId));
+
+        assertThat(result.prepared()).isTrue();
+        verify(callbackMapper).deleteByOrderIdsJson(anyString());
+        verify(orderMapper).deleteByIdsJson(anyString());
+        verify(quotaMapper, times(160)).batchGrantPaidMemberships(anyString());
+        verifyInvalidationInOneHundredSixtyPages();
+    }
+
+    @Test
+    void failedRunResetRefusesTerminalOrdersBeforeDeletingAnything() {
+        byte[] paidId = bytes((byte) 43);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L)).thenReturn(1);
+        when(orderMapper.findByIdsJsonForUpdate(anyString())).thenReturn(List.of(
+                order(paidId, FIRST_ID, MembershipOrderStatus.PAID,
+                        MembershipOrderEntitlementResolution.APPLIED)));
+
+        assertThatThrownBy(() -> service(true).resetFailedRun(List.of(paidId)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pending");
         verify(callbackMapper, never()).deleteByOrderIdsJson(anyString());
         verify(orderMapper, never()).deleteByIdsJson(anyString());
     }
@@ -175,9 +240,9 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
                 FIRST_ID + 2_000L,
                 MembershipOrderStatus.PAID,
                 MembershipOrderEntitlementResolution.APPLIED));
-        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 40_000L))
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
                 .thenReturn(2_001, 0);
-        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 40_000L))
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
                 .thenReturn(0);
         when(orderMapper.findByIdsJsonForUpdate(anyString()))
                 .thenReturn(firstBatch, secondBatch);
@@ -190,6 +255,122 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
         verify(orderMapper, times(2)).findByIdsJsonForUpdate(anyString());
         verify(callbackMapper, times(2)).deleteByOrderIdsJson(anyString());
         verify(orderMapper, times(2)).deleteByIdsJson(anyString());
+    }
+
+    @Test
+    void resetsOnlyTheCurrentFiveThousandOrderWarmupAndPreservesEarlierFormalFacts() {
+        stubExactTemplates();
+        long groupStart = FIRST_ID + 5_000L;
+        List<byte[]> warmupIds = java.util.stream.IntStream.range(0, 5_000)
+                .mapToObj(MembershipPaymentBoundaryFixtureServiceImplTest::indexedBytes)
+                .toList();
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(10_000, 5_000);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(10_000, 5_000);
+        when(orderMapper.countByLoginIdentityIdRange(groupStart, groupStart + 5_000L))
+                .thenReturn(5_000, 0);
+        when(callbackMapper.countByLoginIdentityIdRange(groupStart, groupStart + 5_000L))
+                .thenReturn(5_000, 0);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn(5_000, 5_000);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn(5_000, 5_000);
+        when(orderMapper.hashIdsByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn("formal-orders", "formal-orders");
+        when(callbackMapper.hashOrderIdsByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn("formal-callbacks", "formal-callbacks");
+        when(orderMapper.findByIdsJsonForUpdate(anyString())).thenAnswer(invocation -> {
+            int invocationIndex = org.mockito.Mockito.mockingDetails(orderMapper)
+                    .getInvocations().stream()
+                    .filter(item -> item.getMethod().getName().equals("findByIdsJsonForUpdate"))
+                    .toList().size();
+            int from = (invocationIndex - 1) * 2_000;
+            int to = Math.min(from + 2_000, warmupIds.size());
+            return java.util.stream.IntStream.range(from, to)
+                    .mapToObj(index -> order(
+                            warmupIds.get(index),
+                            groupStart + index,
+                            MembershipOrderStatus.PAID,
+                            MembershipOrderEntitlementResolution.APPLIED))
+                    .toList();
+        });
+        when(callbackMapper.deleteByOrderIdsJson(anyString())).thenReturn(2_000, 2_000, 1_000);
+        when(orderMapper.deleteByIdsJson(anyString())).thenReturn(2_000, 2_000, 1_000);
+        when(quotaMapper.batchGrantPaidMemberships(anyString())).thenReturn(500);
+
+        MembershipPaymentSegmentWarmupResetState result = service(true).resetSegmentWarmup(
+                MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K,
+                "E-PR",
+                "warmup-e-pr-attempt-1",
+                warmupIds);
+
+        assertThat(result.runScale()).isEqualTo("PERFORMANCE_40K");
+        assertThat(result.groupCode()).isEqualTo("E-PR");
+        assertThat(result.warmupRunId()).isEqualTo("warmup-e-pr-attempt-1");
+        assertThat(result.deletedOrderCount()).isEqualTo(5_000);
+        assertThat(result.deletedCallbackCount()).isEqualTo(5_000);
+        assertThat(result.resetQuotaCount()).isEqualTo(5_000);
+        assertThat(result.currentGroupOrderCount()).isZero();
+        assertThat(result.currentGroupCallbackCount()).isZero();
+        assertThat(result.retainedFormalOrderCount()).isEqualTo(5_000);
+        assertThat(result.retainedFormalCallbackCount()).isEqualTo(5_000);
+        verify(orderMapper, times(3)).findByIdsJsonForUpdate(anyString());
+        verify(orderMapper, times(3)).deleteByIdsJson(anyString());
+        verify(callbackMapper, times(3)).deleteByOrderIdsJson(anyString());
+        verify(quotaMapper, times(10)).batchGrantPaidMemberships(anyString());
+        verify(invalidationExecutor, times(10)).evictAfterCommit(anyList());
+    }
+
+    @Test
+    void refusesSegmentWarmupResetWhenEarlierFormalHashChanges() {
+        stubExactTemplates();
+        long groupStart = FIRST_ID + 5_000L;
+        List<byte[]> warmupIds = java.util.stream.IntStream.range(0, 5_000)
+                .mapToObj(MembershipPaymentBoundaryFixtureServiceImplTest::indexedBytes)
+                .toList();
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(10_000, 5_000);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, FIRST_ID + 80_000L))
+                .thenReturn(10_000, 5_000);
+        when(orderMapper.countByLoginIdentityIdRange(groupStart, groupStart + 5_000L))
+                .thenReturn(5_000, 0);
+        when(callbackMapper.countByLoginIdentityIdRange(groupStart, groupStart + 5_000L))
+                .thenReturn(5_000, 0);
+        when(orderMapper.countByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn(5_000, 5_000);
+        when(callbackMapper.countByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn(5_000, 5_000);
+        when(orderMapper.hashIdsByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn("before", "after");
+        when(callbackMapper.hashOrderIdsByLoginIdentityIdRange(FIRST_ID, groupStart))
+                .thenReturn("callbacks", "callbacks");
+        when(orderMapper.findByIdsJsonForUpdate(anyString())).thenAnswer(invocation -> {
+            int invocationIndex = org.mockito.Mockito.mockingDetails(orderMapper)
+                    .getInvocations().stream()
+                    .filter(item -> item.getMethod().getName().equals("findByIdsJsonForUpdate"))
+                    .toList().size();
+            int from = (invocationIndex - 1) * 2_000;
+            int to = Math.min(from + 2_000, warmupIds.size());
+            return java.util.stream.IntStream.range(from, to)
+                    .mapToObj(index -> order(
+                            warmupIds.get(index),
+                            groupStart + index,
+                            MembershipOrderStatus.PAID,
+                            MembershipOrderEntitlementResolution.APPLIED))
+                    .toList();
+        });
+        when(callbackMapper.deleteByOrderIdsJson(anyString())).thenReturn(2_000, 2_000, 1_000);
+        when(orderMapper.deleteByIdsJson(anyString())).thenReturn(2_000, 2_000, 1_000);
+        when(quotaMapper.batchGrantPaidMemberships(anyString())).thenReturn(500);
+
+        assertThatThrownBy(() -> service(true).resetSegmentWarmup(
+                MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K,
+                "E-PR",
+                "warmup-e-pr-attempt-1",
+                warmupIds))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("earlier formal");
     }
 
     private MembershipPaymentBoundaryFixtureService service(boolean enabled) {
@@ -214,20 +395,26 @@ final class MembershipPaymentBoundaryFixtureServiceImplTest {
     }
 
     private static List<Long> allIds() {
-        return java.util.stream.LongStream.range(FIRST_ID, FIRST_ID + 40_000L).boxed().toList();
+        return java.util.stream.LongStream.range(FIRST_ID, FIRST_ID + 80_000L).boxed().toList();
     }
 
-    private void verifyInvalidationInEightyPages() {
+    private void verifyInvalidationInOneHundredSixtyPages() {
         ArgumentCaptor<List<Long>> batches = ArgumentCaptor.forClass(List.class);
-        verify(invalidationExecutor, times(80)).evictAfterCommit(batches.capture());
+        verify(invalidationExecutor, times(160)).evictAfterCommit(batches.capture());
 
         MembershipPaymentBoundaryLoadtestPolicy policy =
                 new MembershipPaymentBoundaryLoadtestPolicy();
         assertThat(batches.getAllValues())
-                .containsExactlyElementsOf(java.util.stream.IntStream.range(0, 80)
+                .containsExactlyElementsOf(java.util.stream.IntStream.range(0, 160)
                         .mapToObj(policy::pageUserIds)
                         .toList())
                 .allSatisfy(batch -> assertThat(batch).hasSize(500));
+    }
+
+    private static <T> List<T> existingLegacyRows(
+            List<Long> ids,
+            java.util.function.Function<List<Long>, List<T>> factory) {
+        return ids.getFirst() < FIRST_ID + 40_000L ? factory.apply(ids) : List.of();
     }
 
     private static List<UserLoginIdentity> identities(List<Long> ids) {

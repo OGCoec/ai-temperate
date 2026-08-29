@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.stereotype.Service;
 
 /**
- * 实现身份联系方式的 HMAC 保护、三态查询、提交后幂等更新和后台全量重建。
+ * 该实现是来执行身份联系方式的 HMAC 保护、三态查询、提交后幂等更新和后台全量重建。
  *
  * <p>Redis 的任何异常都会转换为 UNAVAILABLE 并触发有限次数重建；数据库事务已提交后的 Bloom 更新
  * 失败不会反向伪装成数据库回滚。</p>
@@ -104,14 +104,22 @@ public final class IdentityPresenceFilterImpl implements IdentityPresenceFilter 
                 userId,
                 protect(EMAIL_HMAC_PURPOSE, normalizedEmail),
                 protect(PHONE_HMAC_PURPOSE, normalizedE164Phone));
+        long redisStartedNanos = System.nanoTime();
         try {
             IdentityPresenceMutationResult result = Objects.requireNonNull(
                     store.add(record),
                     "Identity Bloom store mutation result must not be null.");
+            observeRedisOperation(
+                    "add",
+                    result == IdentityPresenceMutationResult.UNAVAILABLE
+                            ? "unavailable" : "success",
+                    redisStartedNanos,
+                    1);
             observer.mutation(result);
             handleMutationFailure(result);
             return result;
         } catch (RuntimeException exception) {
+            observeRedisOperation("add", "failed", redisStartedNanos, 1);
             degradeAfterFailure("UPDATE_FAILED", exception);
             observer.mutation(IdentityPresenceMutationResult.UNAVAILABLE);
             return IdentityPresenceMutationResult.UNAVAILABLE;
@@ -142,10 +150,17 @@ public final class IdentityPresenceFilterImpl implements IdentityPresenceFilter 
         if (!settings.enabled()) {
             return IdentityPresenceDecision.UNAVAILABLE;
         }
+        long redisStartedNanos = System.nanoTime();
         try {
             IdentityPresenceDecision decision = Objects.requireNonNull(
                     store.check(kind, protectedIdentifier),
                     "Identity Bloom store query result must not be null.");
+            observeRedisOperation(
+                    "query",
+                    decision == IdentityPresenceDecision.UNAVAILABLE
+                            ? "unavailable" : "success",
+                    redisStartedNanos,
+                    1);
             observer.query(kind, decision);
             if (decision == IdentityPresenceDecision.UNAVAILABLE) {
                 // 构建锁持有者若中途退出，后续请求会以单飞方式重新安排租约竞争，避免永久停留在 BUILDING。
@@ -153,6 +168,7 @@ public final class IdentityPresenceFilterImpl implements IdentityPresenceFilter 
             }
             return decision;
         } catch (RuntimeException exception) {
+            observeRedisOperation("query", "failed", redisStartedNanos, 1);
             LOGGER.log(
                     System.Logger.Level.WARNING,
                     "event=identity_presence_bloom_query_failed kind=" + kind.name(),
@@ -247,9 +263,26 @@ public final class IdentityPresenceFilterImpl implements IdentityPresenceFilter 
                 }
                 List<ProtectedIdentityPresenceRecord> protectedPage =
                         protectPage(page);
-                IdentityPresenceMutationResult result = Objects.requireNonNull(
-                        store.addAll(protectedPage),
-                        "Identity Bloom build mutation result must not be null.");
+                long redisStartedNanos = System.nanoTime();
+                IdentityPresenceMutationResult result;
+                try {
+                    result = Objects.requireNonNull(
+                            store.addAll(protectedPage),
+                            "Identity Bloom build mutation result must not be null.");
+                } catch (RuntimeException failure) {
+                    observeRedisOperation(
+                            "add_batch",
+                            "failed",
+                            redisStartedNanos,
+                            protectedPage.size());
+                    throw failure;
+                }
+                observeRedisOperation(
+                        "add_batch",
+                        result == IdentityPresenceMutationResult.UNAVAILABLE
+                                ? "unavailable" : "success",
+                        redisStartedNanos,
+                        protectedPage.size());
                 if (result == IdentityPresenceMutationResult.OVERFLOW
                         || result == IdentityPresenceMutationResult.CAPACITY_EXCEEDED
                         || result == IdentityPresenceMutationResult.UNAVAILABLE) {
@@ -383,6 +416,25 @@ public final class IdentityPresenceFilterImpl implements IdentityPresenceFilter 
             LOGGER.log(
                     System.Logger.Level.WARNING,
                     "event=identity_presence_bloom_degraded_metric_failed",
+                    observationFailure);
+        }
+    }
+
+    private void observeRedisOperation(
+            String operation,
+            String outcome,
+            long startedNanos,
+            int itemCount) {
+        try {
+            observer.redisOperation(
+                    operation,
+                    outcome,
+                    Math.max(0L, System.nanoTime() - startedNanos),
+                    itemCount);
+        } catch (RuntimeException observationFailure) {
+            LOGGER.log(
+                    System.Logger.Level.WARNING,
+                    "event=identity_presence_bloom_redis_metric_failed",
                     observationFailure);
         }
     }

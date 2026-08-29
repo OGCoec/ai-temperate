@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证已注册身份 Bloom 参数与项目容量、误判率和批量边界保持一致。
+ * 该测试是来验证已注册身份 Bloom 参数与项目容量、误判率和批量边界保持一致。
  */
 class IdentityPresenceBloomSettingsTest {
 
@@ -25,7 +25,7 @@ class IdentityPresenceBloomSettingsTest {
     @Test
     void rejectsConfigurationThatExceedsProjectBoundaries() {
         assertThatThrownBy(() -> new IdentityPresenceBloomSettings(
-                true, 1_000_000, 7, 1, 1_000_000, 2_001, 256, 100_000))
+                true, 1_000_000, 7, 1, 1_000_000, 501, 256, 100_000))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IdentityPresenceBloomSettings(
                 true, 1_000_000, 7, 1, 1_000_000, 500, 8, 1_000_000))

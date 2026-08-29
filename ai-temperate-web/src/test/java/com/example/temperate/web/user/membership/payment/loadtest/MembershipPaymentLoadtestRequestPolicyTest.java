@@ -88,17 +88,33 @@ final class MembershipPaymentLoadtestRequestPolicyTest {
                 .isTrue();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/reset", "127.0.0.1"))
                 .isTrue();
+        assertThat(matchesToken(
+                boundaryPolicy, "POST", root + "/failed-run-reset", "127.0.0.1"))
+                .isTrue();
+        assertThat(matchesToken(
+                boundaryPolicy, "POST", root + "/segment-warmup-reset", "127.0.0.1"))
+                .isTrue();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/0", "127.0.0.1"))
                 .isTrue();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/79", "127.0.0.1"))
                 .isTrue();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/80", "127.0.0.1"))
+                .isTrue();
+        assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/159", "127.0.0.1"))
+                .isTrue();
+        assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/160", "127.0.0.1"))
                 .isFalse();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/tokens/080", "127.0.0.1"))
                 .isFalse();
         assertThat(matchesToken(boundaryPolicy, "GET", root + "/tokens/0", "127.0.0.1"))
                 .isFalse();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/prepare/extra", "127.0.0.1"))
+                .isFalse();
+        assertThat(matchesToken(
+                boundaryPolicy, "POST", root + "/failed-run-reset/extra", "127.0.0.1"))
+                .isFalse();
+        assertThat(matchesToken(
+                boundaryPolicy, "POST", root + "/segment-warmup-reset/extra", "127.0.0.1"))
                 .isFalse();
         assertThat(matchesToken(boundaryPolicy, "POST", root + "/prepare", "198.51.100.9"))
                 .isFalse();
@@ -154,8 +170,11 @@ final class MembershipPaymentLoadtestRequestPolicyTest {
         String root = "/internal/test/membership-payments/loadtest-inspection";
 
         assertThat(policy.matchesTokenMint(request("GET", root + "/queues"))).isTrue();
+        assertThat(policy.matchesTokenMint(request("GET", root + "/runtime"))).isTrue();
         assertThat(policy.matchesTokenMint(request("POST", root + "/state-batch"))).isTrue();
         assertThat(policy.matchesTokenMint(request("POST", root + "/queues"))).isFalse();
+        assertThat(policy.matchesTokenMint(request("POST", root + "/runtime"))).isFalse();
+        assertThat(policy.matchesTokenMint(request("GET", root + "/runtime/extra"))).isFalse();
         assertThat(policy.matchesTokenMint(request("GET", root + "/state-batch"))).isFalse();
         assertThat(policy.matchesTokenMint(request("POST", root + "/state-batch/extra")))
                 .isFalse();

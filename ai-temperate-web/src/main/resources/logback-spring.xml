@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+
+    <property name="MEMBERSHIP_PAYMENT_TIMING_LOG_PATH"
+              value="${MEMBERSHIP_PAYMENT_TIMING_LOG_PATH:-${user.dir}/logs/membership-payment-state-machine.log}"/>
+    <property name="MEMBERSHIP_ORDER_CREATE_HTTP_LOG_PATH"
+              value="${MEMBERSHIP_ORDER_CREATE_HTTP_LOG_PATH:-${user.dir}/logs/membership-order-create-http-events.log}"/>
+
+    <appender name="MEMBERSHIP_PAYMENT_TIMING_FILE"
+              class="ch.qos.logback.core.FileAppender">
+        <file>${MEMBERSHIP_PAYMENT_TIMING_LOG_PATH}</file>
+        <append>true</append>
+        <immediateFlush>true</immediateFlush>
+        <encoder>
+            <pattern>%msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="MEMBERSHIP_PAYMENT_TIMING_ASYNC"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>65536</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>false</neverBlock>
+        <maxFlushTime>30000</maxFlushTime>
+        <appender-ref ref="MEMBERSHIP_PAYMENT_TIMING_FILE"/>
+    </appender>
+
+    <logger name="membership.payment.state.timing" level="INFO" additivity="false">
+        <appender-ref ref="MEMBERSHIP_PAYMENT_TIMING_ASYNC"/>
+    </logger>
+
+    <appender name="MEMBERSHIP_ORDER_CREATE_HTTP_FILE"
+              class="ch.qos.logback.core.FileAppender">
+        <file>${MEMBERSHIP_ORDER_CREATE_HTTP_LOG_PATH}</file>
+        <append>true</append>
+        <immediateFlush>true</immediateFlush>
+        <encoder>
+            <pattern>%msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="MEMBERSHIP_ORDER_CREATE_HTTP_ASYNC"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>131072</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>false</neverBlock>
+        <maxFlushTime>30000</maxFlushTime>
+        <appender-ref ref="MEMBERSHIP_ORDER_CREATE_HTTP_FILE"/>
+    </appender>
+
+    <logger name="membership.payment.order.create.http" level="INFO" additivity="false">
+        <appender-ref ref="MEMBERSHIP_ORDER_CREATE_HTTP_ASYNC"/>
+    </logger>
+</configuration>

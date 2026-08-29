@@ -16,6 +16,7 @@ import com.example.temperate.service.user.membership.payment.config.MembershipPa
 import com.example.temperate.service.user.membership.payment.exception.MembershipPaymentInfrastructureException;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -27,7 +28,9 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoField;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -51,7 +54,10 @@ public final class PaymentCallbackReceiveServiceImpl
     private static final Set<String> PAY_TYPES = Set.of("alipay", "wxpay");
     private static final Pattern SAFE_TOKEN = Pattern.compile("^[A-Za-z0-9._:-]+$");
     private static final DateTimeFormatter LIUHAO_TIME =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            new DateTimeFormatterBuilder()
+                    .appendPattern("uuuu-MM-dd HH:mm:ss")
+                    .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
+                    .toFormatter();
 
     private final PaymentCallbackQueue callbackQueue;
     private final PaymentCallbackFingerprintService fingerprintService;
@@ -97,8 +103,7 @@ public final class PaymentCallbackReceiveServiceImpl
     private SimulatedLiuhaoCallbackResult receiveValidated(
             SimulatedLiuhaoCallbackCommand command) {
         SimulatedLiuhaoCallbackCommand valid = validate(command);
-        OffsetDateTime receivedAt = OffsetDateTime.ofInstant(
-                clock.instant(), ZoneOffset.UTC);
+        OffsetDateTime receivedAt = MembershipPaymentTime.now(clock);
         long requestTimestamp = parseEpochSecond(valid.timestamp());
         requireTimestampWindow(requestTimestamp, receivedAt.toInstant());
         OffsetDateTime addTime = parseLiuhaoTime(valid.addTime(), "addtime");
@@ -216,18 +221,18 @@ public final class PaymentCallbackReceiveServiceImpl
             try {
                 long seconds = Long.parseLong(value);
                 if (seconds > 0L && Long.toString(seconds).equals(value)) {
-                    return OffsetDateTime.ofInstant(
-                            Instant.ofEpochSecond(seconds), ZoneOffset.UTC);
+                    return MembershipPaymentTime.fromInstant(Instant.ofEpochSecond(seconds));
                 }
             } catch (RuntimeException ignored) {
                 throw invalid("Callback " + name + " is invalid.");
             }
         }
         try {
-            return OffsetDateTime.parse(value).withOffsetSameInstant(ZoneOffset.UTC);
+            return MembershipPaymentTime.normalize(OffsetDateTime.parse(value));
         } catch (DateTimeParseException ignored) {
             try {
-                return LocalDateTime.parse(value, LIUHAO_TIME).atOffset(ZoneOffset.UTC);
+                return MembershipPaymentTime.normalize(
+                        LocalDateTime.parse(value, LIUHAO_TIME).atOffset(ZoneOffset.UTC));
             } catch (DateTimeParseException exception) {
                 throw invalid("Callback " + name + " is invalid.");
             }

@@ -9,25 +9,62 @@ param(
     [string] $OutputRoot,
     [Parameter(Mandatory = $true)]
     [string] $SourceFingerprint,
+    [ValidatePattern('^$|^[A-Za-z0-9_-]{1,128}$')]
+    [string] $HttpEvidenceRunId = '',
+    [ValidateSet('PERFORMANCE_40K', 'CAPACITY_80K')]
+    [string] $RunScale = 'PERFORMANCE_40K',
+    [ValidateSet('WARMUP', 'FORMAL')]
+    [string] $ExecutionPhase = 'FORMAL',
+    [ValidateRange(0, 2)]
+    [int] $WarmupAttempt = 0,
+    [ValidateRange(0, [long]::MaxValue)]
+    [long] $FormalFirstRequestDeadlineEpochMillis = 0,
     [string] $HostName = '127.0.0.1',
     [int] $Port = 6655,
     [string] $Protocol = 'http',
-    [int] $CreationConcurrency = 4096,
-    [int] $HttpConcurrency = 4096
+    [ValidateSet(256)]
+    [int] $CreationConcurrency = 256,
+    [ValidateSet(256)]
+    [int] $HttpConcurrency = 256,
+    [ValidateSet(56)]
+    [int] $PaymentConcurrency = 56
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$HttpEvidenceRunId = if ([string]::IsNullOrWhiteSpace($HttpEvidenceRunId)) { $RunId } else { $HttpEvidenceRunId }
 . (Join-Path $PSScriptRoot 'MembershipBoundaryRedis.ps1')
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$groupsPath = Join-Path $repositoryRoot 'loadtest\input\membership-millisecond-boundary-groups.csv'
+$groupsFileName = if ($RunScale -eq 'PERFORMANCE_40K') {
+    'membership-millisecond-boundary-groups.csv'
+} else {
+    'membership-millisecond-boundary-groups-80k.csv'
+}
+$groupsPath = Join-Path $repositoryRoot "loadtest\input\$groupsFileName"
 $groupRows = @(Import-Csv -LiteralPath $groupsPath | Where-Object groupCode -eq $GroupCode)
 if ($groupRows.Count -ne 1) {
     throw "Boundary group configuration is missing or duplicated: $GroupCode"
 }
 $groupRow = $groupRows[0]
+$expectedOrderCount = [int]$groupRow.userCount
+$contractOrderCount = if ($RunScale -eq 'PERFORMANCE_40K') { 5000 } else { 10000 }
+if ($expectedOrderCount -ne $contractOrderCount) {
+    throw "Boundary group does not match fixed run scale: $RunScale/$GroupCode"
+}
 $WaveCode = [string]$groupRow.waveCode
-$waveRoot = Join-Path $OutputRoot $GroupCode
+if (($ExecutionPhase -eq 'WARMUP' -and $WarmupAttempt -notin @(1, 2)) -or
+        ($ExecutionPhase -eq 'FORMAL' -and $WarmupAttempt -ne 0)) {
+    throw 'Warmup attempts must be one or two, while the formal phase must use attempt zero.'
+}
+if (($ExecutionPhase -eq 'FORMAL' -and $FormalFirstRequestDeadlineEpochMillis -le 0L) -or
+        ($ExecutionPhase -eq 'WARMUP' -and $FormalFirstRequestDeadlineEpochMillis -ne 0L)) {
+    throw 'Only a formal wave must carry its positive first-request deadline.'
+}
+$waveRoot = if ($ExecutionPhase -eq 'WARMUP') {
+    Join-Path (Join-Path (Join-Path $OutputRoot $GroupCode) 'warmup') "attempt-$WarmupAttempt"
+} else {
+    Join-Path $OutputRoot $GroupCode
+}
 $tokenRoot = Join-Path $repositoryRoot 'loadtest\local\millisecond-boundary'
 $baseUrl = "$Protocol`://$HostName`:$Port"
 $forbiddenApplicationPort = [int]('80' + '80') # 80801 是静态合同哨兵，实际禁用端口由前两段拼接。
@@ -111,6 +148,42 @@ function Save-RabbitSnapshot([string] $Path) {
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Wait-RabbitMembershipQueueDrain(
+        [int] $TimeoutSeconds = 120,
+        [int] $RequiredZeroSamples = 3) {
+    $deadline = [datetimeoffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $consecutiveZeroSamples = 0
+    do {
+        $arguments = @('list_queues', '--formatter', 'json', 'name',
+            'messages_ready', 'messages_unacknowledged')
+        $raw = @(& docker exec rabbitmq1 rabbitmqctl @arguments 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) {
+            throw 'RabbitMQ queue drain inspection failed.'
+        }
+        $queues = @(($raw -join "`n") | ConvertFrom-Json)
+        $nonEmpty = @($queues | Where-Object {
+            $_.name -like 'membership.*' -and
+            ([long]$_.messages_ready -ne 0L -or
+                [long]$_.messages_unacknowledged -ne 0L)
+        })
+        if ($nonEmpty.Count -eq 0) {
+            $consecutiveZeroSamples += 1
+            if ($consecutiveZeroSamples -ge $RequiredZeroSamples) {
+                return $queues
+            }
+        } else {
+            $consecutiveZeroSamples = 0
+        }
+        if ([datetimeoffset]::UtcNow -ge $deadline) {
+            $details = $nonEmpty | ForEach-Object {
+                "$($_.name):ready=$($_.messages_ready),unacked=$($_.messages_unacknowledged)"
+            }
+            throw "RabbitMQ membership queues did not remain empty for $RequiredZeroSamples samples within ${TimeoutSeconds}s: $($details -join ', ')"
+        }
+        Start-Sleep -Milliseconds 500
+    } while ($true)
+}
+
 function Wait-RedisMembershipQueueDrain([int] $TimeoutSeconds = 120) {
     $deadline = [datetimeoffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
@@ -162,17 +235,15 @@ function Save-RedisSnapshot([string] $Path, [switch] $WaitForDrain) {
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-function Get-TokenPages([string] $Group) {
-    switch ($Group) {
-        'E-P1' { return @(0..9) }
-        'E-PR' { return @(10..19) }
-        'E-A1' { return @(20..29) }
-        'E-AR' { return @(30..39) }
-        'H-P1' { return @(40..49) }
-        'H-PR' { return @(50..59) }
-        'H-A1' { return @(60..69) }
-        'H-AR' { return @(70..79) }
+function Get-TokenPages([long] $FirstUserId, [int] $UserCount) {
+    $fixtureFirstUserId = 70000000000000000L
+    $offset = $FirstUserId - $fixtureFirstUserId
+    if ($offset -lt 0L -or $offset % 500L -ne 0L -or $UserCount -notin @(5000, 10000)) {
+        throw 'Fixed segment cannot be represented by canonical 500-user token pages.'
     }
+    $firstPage = [int]($offset / 500L)
+    $pageCount = [int]($UserCount / 500)
+    return @($firstPage..($firstPage + $pageCount - 1))
 }
 
 function Write-FailureVerdict([string] $Stage, [string] $Message) {
@@ -181,6 +252,8 @@ function Write-FailureVerdict([string] $Stage, [string] $Message) {
         runId = $RunId
         waveCode = $WaveCode
         groupCode = $GroupCode
+        executionPhase = $ExecutionPhase
+        warmupAttempt = $WarmupAttempt
         stage = $Stage
         message = $Message
         sourceFingerprint = $SourceFingerprint
@@ -194,8 +267,9 @@ function Wait-BoundarySettlement(
     [int] $TimeoutSeconds = 900) {
     $rows = @(Import-Csv -LiteralPath $ScenarioOrdersPath)
     $userIds = @($rows | ForEach-Object { [long]$_.user_id } | Sort-Object -Unique)
-    if ($userIds.Count -ne 5000 -or ($userIds[-1] - $userIds[0]) -ne 4999L) {
-        throw 'Settlement wait requires one contiguous 5,000-user segment.'
+    if ($userIds.Count -ne $expectedOrderCount -or
+            ($userIds[-1] - $userIds[0]) -ne ($expectedOrderCount - 1L)) {
+        throw 'Settlement wait requires one complete fixed contiguous segment.'
     }
 
     'captured_at,order_count,callback_count,unresolved_count,non_terminal_count' |
@@ -231,7 +305,7 @@ WHERE payment_order.login_identity_id BETWEEN $($userIds[0]) AND $($userIds[-1])
         ([datetimeoffset]::UtcNow.ToString('O'), $orderCount, $callbackCount,
             $unresolvedCount, $nonTerminalCount) -join ',' |
             Add-Content -LiteralPath $EvidencePath -Encoding UTF8
-        if ($orderCount -eq 5000 -and $callbackCount -eq 5000 `
+        if ($orderCount -eq $expectedOrderCount -and $callbackCount -eq $expectedOrderCount `
             -and $unresolvedCount -eq 0 -and $nonTerminalCount -eq 0) {
             return
         }
@@ -247,6 +321,7 @@ foreach ($command in @('git', 'jmeter', 'psql', 'docker')) {
     }
 }
 New-Item -ItemType Directory -Force -Path $waveRoot, $tokenRoot | Out-Null
+
 $stage = 'preflight'
 try {
     Assert-PortBoundary
@@ -266,7 +341,7 @@ try {
     Save-RedisSnapshot $redisBefore
 
     $stage = 'token-issuance'
-    $tokenPath = Join-Path $tokenRoot "$RunId-$GroupCode.csv"
+    $tokenPath = Join-Path $tokenRoot "$RunId-$GroupCode-$ExecutionPhase-$WarmupAttempt.csv"
     $partialTokenPath = "$tokenPath.partial"
     if (Test-Path -LiteralPath $tokenPath) {
         throw "Refusing to reuse an existing segment Token file: $tokenPath"
@@ -279,7 +354,9 @@ try {
             [Text.UTF8Encoding]::new($false))
         $tokenWriter.WriteLine('"userId","accessToken"')
         $tokenCount = 0
-        foreach ($page in (Get-TokenPages $GroupCode)) {
+        foreach ($page in (Get-TokenPages `
+                -FirstUserId ([long]$groupRow.firstUserId) `
+                -UserCount $expectedOrderCount)) {
             $pageResponse = Invoke-RestMethod -Method Post `
                 -Uri "$baseUrl/internal/test/membership-payments/millisecond-boundary/tokens/$page" `
                 -TimeoutSec 60
@@ -300,11 +377,11 @@ try {
             }
             if ($tokenCount % 1000 -eq 0) {
                 $tokenWriter.Flush()
-                Write-Output "TOKEN_PROGRESS group=$GroupCode rows=$tokenCount/5000"
+                Write-Output "TOKEN_PROGRESS group=$GroupCode rows=$tokenCount/$expectedOrderCount"
             }
         }
-        if ($tokenCount -ne 5000) {
-            throw "Group $GroupCode issued $tokenCount Tokens instead of 5,000."
+        if ($tokenCount -ne $expectedOrderCount) {
+            throw "Group $GroupCode issued $tokenCount Tokens instead of $expectedOrderCount."
         }
         $tokenWriter.Flush()
         $tokenWriter.Dispose()
@@ -316,6 +393,12 @@ try {
             Remove-Item -LiteralPath $partialTokenPath -Force
         }
         throw
+    }
+
+    if ($ExecutionPhase -eq 'FORMAL' -and
+            [datetimeoffset]::UtcNow.ToUnixTimeMilliseconds() -gt
+            $FormalFirstRequestDeadlineEpochMillis) {
+        throw "FORMAL_START_DEADLINE_EXPIRED: $GroupCode exceeded ten seconds before JMeter launch."
     }
 
     $scenarioOrders = Join-Path $waveRoot 'scenario-orders.csv'
@@ -331,10 +414,17 @@ try {
         runId = $RunId
         waveCode = $WaveCode
         groupCode = $GroupCode
+        executionPhase = $ExecutionPhase
+        warmupAttempt = $WarmupAttempt
         sourceFingerprint = $SourceFingerprint
         mode = 'loadtest-realtime'
         port = 6655
-        orderCount = 5000
+        runScale = $RunScale
+        httpEvidenceRunId = $HttpEvidenceRunId
+        orderCount = $expectedOrderCount
+        formalFirstRequestDeadlineEpochMillis = if ($ExecutionPhase -eq 'FORMAL') {
+            $FormalFirstRequestDeadlineEpochMillis
+        } else { $null }
         startedAt = [datetimeoffset]::UtcNow.ToString('O')
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifest -Encoding UTF8
 
@@ -345,23 +435,32 @@ try {
     & jmeter -n -t $jmx -l $jtl -j $jmeterLog `
         "-JMODE=loadtest-realtime" "-JHOST=$HostName" "-JPORT=6655" "-JPROTOCOL=$Protocol" `
         "-JRUN_ID=$RunId" "-JWAVE_CODE=$WaveCode" "-JGROUP_CODE=$GroupCode" `
+        "-JHTTP_EVIDENCE_RUN_ID=$HttpEvidenceRunId" `
+        "-JEXECUTION_PHASE=$ExecutionPhase" `
+        "-JFORMAL_FIRST_REQUEST_DEADLINE_EPOCH_MILLIS=$FormalFirstRequestDeadlineEpochMillis" `
         "-JUSERS_CSV=$tokenPath" `
         "-JGROUPS_CSV=$groups" "-JSCENARIO_ORDERS_CSV=$scenarioOrders" `
         "-JCALLBACK_DISPATCH_CSV=$callbackDispatch" "-JREQUEST_RESULTS_CSV=$requestResults" `
         "-JBOUNDARY_SCRIPT=$driver" `
-        "-JCREATION_CONCURRENCY=$CreationConcurrency" "-JHTTP_CONCURRENCY=$HttpConcurrency"
+        "-JCREATION_CONCURRENCY=$CreationConcurrency" "-JHTTP_CONCURRENCY=$HttpConcurrency" `
+        "-JPAYMENT_CONCURRENCY=$PaymentConcurrency"
     if ($LASTEXITCODE -ne 0) { throw 'JMeter boundary wave failed.' }
     $jtlGate = Join-Path $repositoryRoot 'loadtest\scripts\Assert-MembershipJmeterResults.ps1'
     & $jtlGate -Path $jtl -ExpectedSampleCount 1 `
         -ExpectedSamplerName 'Execute Real Millisecond Boundary Wave'
-    if (-not (Test-Path $scenarioOrders) -or @(Import-Csv $scenarioOrders).Count -ne 5000) {
-        throw 'JMeter did not produce exactly 5,000 scenario order rows.'
+    if (-not (Test-Path $scenarioOrders) -or
+            @(Import-Csv $scenarioOrders).Count -ne $expectedOrderCount) {
+        throw "JMeter did not produce exactly $expectedOrderCount scenario order rows."
     }
-    if (-not (Test-Path $callbackDispatch) -or @(Import-Csv $callbackDispatch).Count -ne 5000) {
-        throw 'JMeter did not produce exactly 5,000 callback dispatch rows.'
+    if (-not (Test-Path $callbackDispatch) -or
+            @(Import-Csv $callbackDispatch).Count -ne $expectedOrderCount) {
+        throw "JMeter did not produce exactly $expectedOrderCount callback dispatch rows."
     }
-    if (-not (Test-Path $requestResults) -or @(Import-Csv $requestResults).Count -ne 15025) {
-        throw 'JMeter did not produce exactly 15,025 request result rows.'
+    $teamProbeCount = if ($ExecutionPhase -eq 'FORMAL') { 25 } else { 0 }
+    $expectedRequestResults = $expectedOrderCount * 3 + $teamProbeCount
+    if (-not (Test-Path $requestResults) -or
+            @(Import-Csv $requestResults).Count -ne $expectedRequestResults) {
+        throw "JMeter did not produce exactly $expectedRequestResults request result rows."
     }
 
     $stage = 'settlement-wait'
@@ -372,10 +471,19 @@ try {
     $stage = 'postgres-verdict'
     $sqlTemplate = Get-Content -Raw -LiteralPath (
         Join-Path $repositoryRoot 'loadtest\sql\verify-membership-millisecond-boundary-wave.sql')
+    # 硬关闭前两组受本机调度抖动影响，不再用计划的 1ms 落点强制指定业务分支；
+    # 仍要求支付成功或需要退款二者之一完整收敛，硬关闭后的两组继续执行严格服务端时间裁决。
+    $boundaryVerdictMode = if ($GroupCode -in @('H-P1', 'H-PR')) {
+        'TERMINAL_OUTCOME'
+    } else {
+        'STRICT_SERVER_TIME'
+    }
     $scenarioSqlPath = (($scenarioOrders -replace '\\', '/') -replace "'", "''")
     $verdictSqlPath = (($serverVerdict -replace '\\', '/') -replace "'", "''")
     $sqlText = $sqlTemplate.Replace('__SCENARIO_ORDERS_CSV__', $scenarioSqlPath).
-        Replace('__SERVER_VERDICT_CSV__', $verdictSqlPath)
+        Replace('__SERVER_VERDICT_CSV__', $verdictSqlPath).
+        Replace('__EXPECTED_SEGMENT__', [string]$expectedOrderCount).
+        Replace('__BOUNDARY_VERDICT_MODE__', $boundaryVerdictMode)
     $runSql = Join-Path $waveRoot 'verify-wave-run.sql'
     $sqlOutput = Join-Path $waveRoot 'postgres-verification.txt'
     $sqlText | Set-Content -LiteralPath $runSql -Encoding UTF8
@@ -385,14 +493,16 @@ try {
         throw 'PostgreSQL server-time verification failed.'
     }
     Import-Csv $serverVerdict | Select-Object `
-        run_id, wave_code, group_code, user_id, order_id, target_offset_millis,
+        run_id, wave_code, group_code, boundary_verdict_mode, user_id, order_id, target_offset_millis,
         target_at, received_at, server_target_drift_micros,
         received_from_expires_micros, received_from_hard_close_micros |
         Export-Csv -LiteralPath $timeDrift -NoTypeInformation -Encoding UTF8
 
     $stage = 'final-evidence'
-    Save-RabbitSnapshot $rabbitAfter
+    # 数据库终态可以早于 Broker ACK；先让 Redis 与 Rabbit 连续收敛，再截取严格的最终快照。
     Save-RedisSnapshot $redisAfter -WaitForDrain
+    Wait-RabbitMembershipQueueDrain | Out-Null
+    Save-RabbitSnapshot $rabbitAfter
     if ((Get-SourceFingerprint) -ne $SourceFingerprint) {
         throw 'Source fingerprint changed during the wave.'
     }
@@ -401,8 +511,11 @@ try {
         runId = $RunId
         waveCode = $WaveCode
         groupCode = $GroupCode
-        orderCount = 5000
-        callbackCount = 5000
+        executionPhase = $ExecutionPhase
+        warmupAttempt = $WarmupAttempt
+        runScale = $RunScale
+        orderCount = $expectedOrderCount
+        callbackCount = $expectedOrderCount
         sourceFingerprint = $SourceFingerprint
         evidence = @(
             'scenario-orders.csv', 'callback-dispatch.csv', 'request-results.csv',

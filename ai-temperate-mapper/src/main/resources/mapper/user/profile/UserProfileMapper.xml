@@ -4,6 +4,15 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.example.temperate.mapper.user.profile.UserProfileMapper">
 
+    <resultMap id="UserProfileResultMap"
+               type="com.example.temperate.model.user.entity.UserProfile">
+        <id property="id" column="id"/>
+        <result property="loginIdentityId" column="login_identity_id"/>
+        <result property="displayName" column="display_name"/>
+        <result property="avatarUrl" column="avatar_url"/>
+        <result property="accountStatus" column="account_status"/>
+    </resultMap>
+
     <insert id="insert"
             parameterType="com.example.temperate.model.user.entity.UserProfile"
             useGeneratedKeys="true"
@@ -20,4 +29,35 @@
             #{accountStatus,jdbcType=SMALLINT}
         )
     </insert>
+
+    <insert id="batchInsertBoundaryFixtures">
+        INSERT INTO user_profile (
+            login_identity_id,
+            display_name,
+            account_status
+        )
+        VALUES
+        <foreach collection="profiles" item="profile" separator=",">
+            (
+                #{profile.loginIdentityId,jdbcType=BIGINT},
+                #{profile.displayName,jdbcType=VARCHAR},
+                #{profile.accountStatus,jdbcType=SMALLINT}
+            )
+        </foreach>
+    </insert>
+
+    <select id="findByLoginIdentityIds" resultMap="UserProfileResultMap">
+        SELECT
+            id,
+            login_identity_id,
+            display_name,
+            avatar_url,
+            account_status
+        FROM user_profile
+        WHERE login_identity_id IN
+        <foreach collection="loginIdentityIds" item="loginIdentityId" open="(" separator="," close=")">
+            #{loginIdentityId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY login_identity_id
+    </select>
 </mapper>

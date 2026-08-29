@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(
-        prefix = "app.membership-payment",
+        prefix = "app.membership-payment.simulator",
         name = "enabled",
         havingValue = "true")
 public final class RedisSimulatedPaymentProviderResultStore

@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $Jmx,
     [ValidateSet('loadtest-realtime')] [string] $Mode = 'loadtest-realtime',
     [string] $HostName = 'localhost',
-    [int] $Port = 8080,
+    [int] $Port = 6655,
     [string] $Protocol = 'http',
     [string] $UsersCsv = 'loadtest/local/loadtest-users.csv',
     [string] $OutputRoot = 'loadtest-output/runs',
@@ -27,19 +27,71 @@ function Require-Command([string] $Name, [string] $Alternative = '') {
 }
 
 function Get-ApprovedUserIds() {
-    return @('73014701344296960', '72659006262480896', '76721355290185728', '74891801495998464')
+    return @(
+        '72659006262480896',
+        '73014701344296960',
+        '74891801495998464',
+        '76721355290185728',
+        '84736921162616832',
+        '84739559597936640',
+        '84742296792338432',
+        '84745417706835968',
+        '84746552547086336',
+        '84753114204344320',
+        '84754367089086464',
+        '84755204414771200',
+        '84758509811535872',
+        '84758866549673984',
+        '84759380653903872',
+        '84760794662834176'
+    )
 }
 
 function Get-MinimumTestCases([string] $ScenarioName) {
     switch ($ScenarioName) {
         'membership-auth-boundary' { return 8 }
-        'membership-order-state-machine' { return 25 }
+        'membership-order-state-machine' { return 30 }
+        'membership-entitlement-resolution-matrix' { return 40 }
+        'membership-order-concurrency' { return 5 }
+        'membership-long-observation' { return 12 }
         'membership-callback-transport' { return 15 }
         'membership-callback-race-idempotency' { return 8 }
-        'membership-rabbit-state-timing' { return 6 }
+        'membership-callback-identity' { return 5 }
+        'membership-rabbit-state-timing' { return 11 }
+        'membership-marker-stage-matrix' { return 28 }
+        'membership-rejected-closing-matrix' { return 10 }
         'membership-persistence-batch' { return 6 }
-        'membership-recovery-terminal-cleanup' { return 7 }
+        'membership-recovery-terminal-cleanup' { return 12 }
         default { throw "Unknown membership loadtest scenario: $ScenarioName" }
+    }
+}
+
+function Get-ScenarioTestCaseCount(
+    [string] $ScenarioName,
+    [string] $RepositoryRoot,
+    [int] $ThreadCount) {
+    switch ($ScenarioName) {
+        'membership-order-concurrency' {
+            return @(Import-Csv -LiteralPath (
+                    Join-Path $RepositoryRoot 'loadtest/input/membership-order-concurrency-cases.csv')).Count
+        }
+        default { return $ThreadCount }
+    }
+}
+
+function Get-ExpectedEvidenceRows([string] $ScenarioName) {
+    switch ($ScenarioName) {
+        'membership-order-state-machine' { return 30 }
+        'membership-entitlement-resolution-matrix' { return 40 }
+        'membership-callback-transport' { return 15 }
+        'membership-callback-identity' { return 5 }
+        'membership-rabbit-state-timing' { return 11 }
+        'membership-marker-stage-matrix' { return 28 }
+        'membership-order-concurrency' { return 25 }
+        'membership-recovery-terminal-cleanup' { return 12 }
+        'membership-rejected-closing-matrix' { return 10 }
+        'membership-long-observation' { return 12 }
+        default { return 0 }
     }
 }
 
@@ -49,7 +101,7 @@ function Ensure-LoadtestUsersCsv([string] $Path) {
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
-    # 首次运行只建立四个已批准账号的占位清单；真实 Token 仍必须由应用签名端点签发。
+    # 首次运行建立十六个已批准账号的占位清单；真实 Token 仍必须由应用签名端点签发。
     $userRows = @()
     foreach ($userId in (Get-ApprovedUserIds)) {
         $userRows += [pscustomobject]@{
@@ -66,7 +118,7 @@ function Read-RequiredUsers([string] $Path, [switch] $RequireTokens) {
     $required = @(Get-ApprovedUserIds)
     $actual = @($rows | ForEach-Object { [string]$_.userId })
     if ($actual.Count -ne $required.Count -or @($required | Where-Object { $actual -notcontains $_ }).Count -ne 0) {
-        throw 'Token CSV must contain exactly the four approved existing user IDs.'
+        throw 'Token CSV must contain exactly the sixteen approved existing user IDs.'
     }
     if ($RequireTokens -and @($rows | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.accessToken) }).Count -gt 0) {
         throw 'Token CSV contains an empty accessToken; the runner never creates or modifies users.'
@@ -113,7 +165,7 @@ function Request-LoadtestTokens(
     }).Count
     $issuedShapeIsValid = ($issued.Count -eq $required.Count) -and ($missingIdCount -eq 0) -and ($emptyTokenCount -eq 0)
     if (-not $issuedShapeIsValid) {
-        throw 'Local token endpoint did not return exactly the four approved users with non-empty tokens.'
+        throw 'Local token endpoint did not return exactly the sixteen approved users with non-empty tokens.'
     }
 
     $tokenByUserId = @{}
@@ -193,7 +245,8 @@ function Invoke-RabbitCtlJson([string[]] $Arguments) {
                     -Uri ($managementBaseUrl + '/api/queues/%2F') `
                     -Headers $headers -TimeoutSec 10
                 return @($response | Select-Object `
-                    name, durable, type, arguments, messages_ready, messages_unacknowledged)
+                    name, durable, type, arguments, consumers,
+                    messages_ready, messages_unacknowledged)
             }
             'list_exchanges' {
                 $response = Invoke-RestMethod -Method Get `
@@ -214,7 +267,7 @@ function Invoke-RabbitCtlJson([string[]] $Arguments) {
 function Save-RabbitSnapshot([string] $Path) {
     $queues = @(Invoke-RabbitCtlJson @(
         'list_queues', 'name', 'durable', 'type', 'arguments',
-        'messages_ready', 'messages_unacknowledged'))
+        'consumers', 'messages_ready', 'messages_unacknowledged'))
     $exchanges = @(Invoke-RabbitCtlJson @(
         'list_exchanges', 'name', 'type', 'durable', 'auto_delete', 'arguments'))
     [ordered]@{
@@ -649,8 +702,9 @@ Ensure-LoadtestUsersCsv $usersPathCandidate
 $usersPath = (Resolve-Path $usersPathCandidate).Path
 $negativeTokensPath = Join-Path (Split-Path -Parent $usersPath) 'loadtest-auth-negative.json'
 $minimumTestCases = Get-MinimumTestCases $Scenario
-if ($Threads -lt $minimumTestCases) {
-    throw "Scenario $Scenario requires at least $minimumTestCases independent test cases; received $Threads."
+$actualTestCases = Get-ScenarioTestCaseCount $Scenario $repoRoot $Threads
+if ($actualTestCases -lt $minimumTestCases) {
+    throw "Scenario $Scenario requires at least $minimumTestCases independent test cases; received $actualTestCases."
 }
 $rows = Read-RequiredUsers $usersPath
 $baseUrl = "$Protocol`://$HostName`:$Port"
@@ -711,7 +765,7 @@ $allowedUserIds = if ([string]::IsNullOrWhiteSpace($env:MEMBERSHIP_PAYMENT_LOADT
 $expectedAllowedUserIds = @(Get-ApprovedUserIds) | Sort-Object
 $actualAllowedUserIds = @($allowedUserIds | Sort-Object)
 if (($actualAllowedUserIds -join ',') -ne ($expectedAllowedUserIds -join ',')) {
-    throw 'MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS must match the four approved existing user IDs.'
+    throw 'MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS must match the sixteen approved existing user IDs.'
 }
 $callbackPid = if ([string]::IsNullOrWhiteSpace($env:SIMULATED_PAYMENT_PID)) {
     'loadtest-merchant'
@@ -728,6 +782,9 @@ $callbackKey = if ([string]::IsNullOrWhiteSpace($env:SIMULATED_PAYMENT_CALLBACK_
     $null = Request-LoadtestTokens $baseUrl $usersPath $negativeTokensPath
     $rows = Read-RequiredUsers $usersPath -RequireTokens
     Save-RabbitSnapshot $rabbitBeforePath
+    $currentStage = 'rabbit-single-consumer-preflight'
+    & (Join-Path $PSScriptRoot 'Test-MembershipRabbitSingleConsumer.ps1') `
+        -SnapshotPath $rabbitBeforePath | Out-Null
     Save-RedisSnapshot $baseUrl $redisBeforePath
 
 $config = [ordered]@{
@@ -754,7 +811,7 @@ $reproduceCommand = ".\loadtest\scripts\Invoke-MembershipLoadtestScenario.ps1 " 
     $reproduceCommand,
     'Access Token、callback key 与基础设施密码由本机受限配置重新取得，不写入复现命令。'
 ) | Set-Content -LiteralPath (Join-Path $runDirPath 'reproduce-command.txt') -Encoding UTF8
-# 运行产物保留四个输入账号以便复现白名单选择，但 Access Token 始终使用固定脱敏占位符。
+# 运行产物保留十六个输入账号以便复现白名单选择，但 Access Token 始终使用固定脱敏占位符。
 $rows | ForEach-Object {
     [pscustomobject]@{
         userId = [string]$_.userId
@@ -763,16 +820,45 @@ $rows | ForEach-Object {
 } | Export-Csv -LiteralPath (Join-Path $runDirPath 'loadtest-users-redacted.csv') -NoTypeInformation -Encoding UTF8
 foreach ($inputName in @(
     'membership-state-scenarios.csv',
+    'membership-entitlement-resolution-cases.csv',
+    'membership-long-observation-cases.csv',
     'membership-callback-cases.csv',
+    'membership-callback-identity-cases.csv',
     'membership-batch-cases.csv',
     'membership-race-cases.csv',
     'membership-rabbit-cases.csv',
+    'membership-marker-stage-cases.csv',
+    'membership-rejected-closing-cases.csv',
+    'membership-order-concurrency-cases.csv',
     'membership-recovery-cases.csv')) {
     $inputPath = Join-Path $repoRoot "loadtest/input/$inputName"
     if (Test-Path -LiteralPath $inputPath) {
         Copy-Item -LiteralPath $inputPath -Destination (Join-Path $runDirPath $inputName)
     }
 }
+
+$stateCasesPath = switch ($Scenario) {
+    'membership-entitlement-resolution-matrix' {
+        Join-Path $repoRoot 'loadtest/input/membership-entitlement-resolution-cases.csv'
+    }
+    'membership-long-observation' {
+        Join-Path $repoRoot 'loadtest/input/membership-long-observation-cases.csv'
+    }
+    default {
+        Join-Path $repoRoot 'loadtest/input/membership-state-scenarios.csv'
+    }
+}
+$markerCasesPath = if ($Scenario -eq 'membership-rejected-closing-matrix') {
+    Join-Path $repoRoot 'loadtest/input/membership-rejected-closing-cases.csv'
+} else {
+    Join-Path $repoRoot 'loadtest/input/membership-marker-stage-cases.csv'
+}
+$raceCasesPath = if ($Scenario -eq 'membership-callback-identity') {
+    Join-Path $repoRoot 'loadtest/input/membership-callback-identity-cases.csv'
+} else {
+    Join-Path $repoRoot 'loadtest/input/membership-race-cases.csv'
+}
+$raceCaseCount = if ($Scenario -eq 'membership-callback-identity') { 4 } else { 8 }
 
 $jmeterArgs = @(
     '-n', '-t', $jmxPath, '-l', $jtlPath, '-j', $logPath, '-e', '-o', $reportPath,
@@ -782,16 +868,20 @@ $jmeterArgs = @(
     "-JUSERS_CSV=$usersPath", "-JSCENARIO_ORDERS_CSV=$scenarioCsvPath",
     "-JAUTH_NEGATIVE_TOKENS_FILE=$negativeTokensPath",
     "-JAUTH_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-auth-boundary.groovy')",
-    "-JSTATE_SCENARIOS_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-state-scenarios.csv')",
+    "-JSTATE_SCENARIOS_CSV=$stateCasesPath",
     "-JSTATE_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-state-machine-realtime.groovy')",
+    "-JORDER_CONCURRENCY_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-order-concurrency.groovy')",
     "-JTRANSPORT_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-callback-transport.groovy')",
     "-JRACE_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-callback-race-idempotency.groovy')",
     "-JRABBIT_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-rabbit-state-timing.groovy')",
+    "-JMARKER_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-marker-stage-matrix.groovy')",
     "-JBATCH_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-persistence-batch.groovy')",
     "-JRECOVERY_SCRIPT=$(Join-Path $repoRoot 'loadtest/scripts/jmeter/membership-recovery-terminal-cleanup.groovy')",
     "-JCALLBACK_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-callback-cases.csv')",
-    "-JRACE_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-race-cases.csv')",
+    "-JRACE_CASES_CSV=$raceCasesPath", "-JRACE_CASE_COUNT=$raceCaseCount",
     "-JRABBIT_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-rabbit-cases.csv')",
+    "-JMARKER_CASES_CSV=$markerCasesPath",
+    "-JORDER_CONCURRENCY_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-order-concurrency-cases.csv')",
     "-JRECOVERY_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-recovery-cases.csv')",
     "-JBATCH_CASES_CSV=$(Join-Path $repoRoot 'loadtest/input/membership-batch-cases.csv')",
     '-Jjmeter.save.saveservice.output_format=csv', '-Jjmeter.save.saveservice.print_field_names=true'
@@ -830,6 +920,13 @@ if (-not [string]::IsNullOrWhiteSpace($Money)) { $jmeterArgs += "-JMONEY=$Money"
     if (-not (Test-Path -LiteralPath $scenarioCsvPath)) {
         throw 'Scenario did not generate the required scenario-orders.csv evidence.'
     }
+    $expectedEvidenceRows = Get-ExpectedEvidenceRows $Scenario
+    if ($expectedEvidenceRows -gt 0) {
+        $actualEvidenceRows = @(Import-Csv -LiteralPath $scenarioCsvPath).Count
+        if ($actualEvidenceRows -ne $expectedEvidenceRows) {
+            throw "Scenario $Scenario requires exactly $expectedEvidenceRows evidence rows; received $actualEvidenceRows."
+        }
+    }
     $currentStage = 'postgresql-verification'
     if (Test-Path -LiteralPath $scenarioCsvPath) {
     $sqlFile = switch ($Scenario) {
@@ -837,6 +934,9 @@ if (-not [string]::IsNullOrWhiteSpace($Money)) { $jmeterArgs += "-JMONEY=$Money"
             'verify-membership-auth-boundary.sql'
         }
         'membership-callback-race-idempotency' {
+            'verify-membership-callback-race.sql'
+        }
+        'membership-callback-identity' {
             'verify-membership-callback-race.sql'
         }
         'membership-callback-transport' {
@@ -847,6 +947,21 @@ if (-not [string]::IsNullOrWhiteSpace($Money)) { $jmeterArgs += "-JMONEY=$Money"
         }
         'membership-rabbit-state-timing' {
             'verify-membership-rabbit-state-timing.sql'
+        }
+        'membership-marker-stage-matrix' {
+            'verify-membership-marker-stage-matrix.sql'
+        }
+        'membership-rejected-closing-matrix' {
+            'verify-membership-marker-stage-matrix.sql'
+        }
+        'membership-order-concurrency' {
+            'verify-membership-order-concurrency.sql'
+        }
+        'membership-long-observation' {
+            'verify-membership-long-observation.sql'
+        }
+        'membership-entitlement-resolution-matrix' {
+            'verify-membership-entitlement-resolution.sql'
         }
         'membership-recovery-terminal-cleanup' {
             'verify-membership-recovery-terminal-cleanup.sql'

@@ -21,9 +21,13 @@ import com.example.temperate.service.user.membership.payment.order.MembershipOrd
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
-import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckPublisher;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderInitializeCommand;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
-import com.example.temperate.service.user.membership.payment.store.SimulatedPaymentProviderResultStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import com.example.temperate.service.user.membership.purchase.MembershipPlanPriceService;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionCommand;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionDecision;
@@ -35,8 +39,6 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -46,7 +48,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来编排会员订单创建、Redis 优先所有权查询和原子取消，并在数据库已提交后恢复缓存与首段检查消息。
+ * 该实现是来编排会员订单创建、Redis 优先所有权查询和原子取消，并在数据库已提交后恢复缓存与最终检查消息。
  *
  * <p>本实现不修改会员权益、不处理支付回调，也不直接更新订单终态；实时状态迁移和批量刷盘由独立组件负责。</p>
  */
@@ -74,8 +76,9 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
     private final HybridSemaphoreIdWorker idWorker;
     private final HybridBase64UrlCodec base64UrlCodec;
     private final MembershipOrderSnapshotStore snapshotStore;
-    private final SimulatedPaymentProviderResultStore providerResultStore;
-    private final MembershipPaymentCheckPublisher paymentCheckPublisher;
+    private final MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator;
+    private final MembershipPaymentProviderRegistry providerRegistry;
+    private final MembershipPaymentFinalCheckScheduler finalCheckScheduler;
     private final MembershipPaymentProperties properties;
     private final Clock clock;
 
@@ -90,8 +93,9 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
             HybridSemaphoreIdWorker idWorker,
             HybridBase64UrlCodec base64UrlCodec,
             MembershipOrderSnapshotStore snapshotStore,
-            SimulatedPaymentProviderResultStore providerResultStore,
-            MembershipPaymentCheckPublisher paymentCheckPublisher,
+            MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator,
+            MembershipPaymentProviderRegistry providerRegistry,
+            MembershipPaymentFinalCheckScheduler finalCheckScheduler,
             MembershipPaymentProperties properties,
             Clock clock) {
         this.expirationService = Objects.requireNonNull(expirationService);
@@ -104,8 +108,9 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
         this.idWorker = Objects.requireNonNull(idWorker);
         this.base64UrlCodec = Objects.requireNonNull(base64UrlCodec);
         this.snapshotStore = Objects.requireNonNull(snapshotStore);
-        this.providerResultStore = Objects.requireNonNull(providerResultStore);
-        this.paymentCheckPublisher = Objects.requireNonNull(paymentCheckPublisher);
+        this.snapshotWriteCoordinator = Objects.requireNonNull(snapshotWriteCoordinator);
+        this.providerRegistry = Objects.requireNonNull(providerRegistry);
+        this.finalCheckScheduler = Objects.requireNonNull(finalCheckScheduler);
         this.properties = Objects.requireNonNull(properties);
         this.clock = Objects.requireNonNull(clock);
     }
@@ -146,7 +151,7 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
         MembershipOrderSnapshot currentSnapshot = restoreRealtimeState(databaseSnapshot);
         if (currentSnapshot.status() == MembershipOrderStatus.PENDING_PAYMENT) {
             initializeProvider(currentSnapshot);
-            publishFirstPaymentCheck(currentSnapshot.orderId());
+            publishFinalPaymentCheck(currentSnapshot);
         }
         return new MembershipOrderResult(currentSnapshot, databaseResult.created());
     }
@@ -216,9 +221,8 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
     private MembershipOrderSnapshot restoreRealtimeState(
             MembershipOrderSnapshot databaseSnapshot) {
         try {
-            // Lua 只接受更高版本替换，因此数据库旧快照不会覆盖 Redis 已经完成的并发状态迁移。
-            snapshotStore.put(databaseSnapshot);
-            return snapshotStore.find(databaseSnapshot.orderId()).orElse(databaseSnapshot);
+            // 单条 Lua 同时完成单调版本裁决并返回当前快照，数据库旧版本不会覆盖并发迁移，也不再额外 HGETALL。
+            return snapshotWriteCoordinator.putAndGet(databaseSnapshot);
         } catch (MembershipPaymentInfrastructureException exception) {
             throw redisUnavailable(exception);
         }
@@ -234,18 +238,19 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
 
     private void initializeProvider(MembershipOrderSnapshot snapshot) {
         try {
-            // CREATE_IF_MISSING 语义只补偿首次创建失败，绝不把已经 PAID 的模拟平台事实覆盖为 UNPAID。
-            providerResultStore.initializeUnpaid(snapshot.orderId(), snapshot.createdAt());
+            // 当前环境只能启用一个 Provider；订单创建仅初始化本地事实，BAR 实现必须保持无网络副作用。
+            MembershipPaymentProvider provider = providerRegistry.getRequired(
+                    properties.defaultProvider());
+            provider.initializeOrder(new PaymentProviderInitializeCommand(
+                    snapshot.orderId(), snapshot.createdAt()));
         } catch (MembershipPaymentInfrastructureException exception) {
             throw redisUnavailable(exception);
         }
     }
 
-    private void publishFirstPaymentCheck(String orderId) {
-        Duration delay = Duration.ofMillis(
-                properties.rabbit().paymentCheckDelaysMillis().get(0));
+    private void publishFinalPaymentCheck(MembershipOrderSnapshot snapshot) {
         try {
-            paymentCheckPublisher.publishNext(orderId, 0, delay);
+            finalCheckScheduler.schedulePending(snapshot.orderId(), snapshot.expiresAt());
         } catch (MembershipPaymentException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -265,8 +270,7 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
         }
         MembershipOrder latestPaid = orderMapper.findLatestPaidOrder(
                 loginIdentityId,
-                transition.effectiveCurrentTier(),
-                MembershipOrderStatus.PAID);
+                transition.effectiveCurrentTier());
         if (latestPaid == null
                 || latestPaid.getPaidAt() == null
                 || quota.getMembershipExpiresAt() == null) {
@@ -410,11 +414,9 @@ public final class MembershipOrderServiceImpl implements MembershipOrderService 
     }
 
     private OffsetDateTime now() {
-        // Redis 状态机时间戳以 epoch 毫秒保存；订单源时间先统一到相同精度，确保后续
-        // closingDeadlineAt 能与 PostgreSQL expiresAt + closingDuration 精确相等。
-        return OffsetDateTime.ofInstant(
-                clock.instant().truncatedTo(ChronoUnit.MILLIS),
-                ZoneOffset.UTC);
+        // 一个订单的 createdAt、updatedAt 与 expiresAt 必须从同一个微秒事实派生，
+        // 避免数据库往返后边界值发生纳秒舍入漂移。
+        return MembershipPaymentTime.now(clock);
     }
 
     private static MembershipPaymentException inputInvalid(String message) {

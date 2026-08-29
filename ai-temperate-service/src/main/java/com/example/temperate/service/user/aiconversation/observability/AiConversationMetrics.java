@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.stereotype.Component;
 
 /**
- * 记录 AI 会话请求、缓存、并发、压缩和计费的固定低基数指标。
+ * 该类是来记录 AI 会话请求、缓存、Redis 批量、并发、压缩和计费的固定低基数指标。
  *
  * <p>所有标签值都由本类白名单生成，禁止传入用户、会话、模型、Redis Key 或异常消息。</p>
  */
@@ -113,6 +113,34 @@ public final class AiConversationMetrics {
                 .tag("outcome", operationOutcome(outcome))
                 .register(registry)
                 .record(Math.max(0, bytes));
+    }
+
+    /**
+     * 记录上下文 Redis 操作耗时和有界批次规模；标签只接受固定操作与结果枚举。
+     */
+    public void redisOperation(
+            Duration elapsed,
+            String operation,
+            String outcome,
+            int batchCount,
+            int itemCount) {
+        String safeOperation = redisOperation(operation);
+        String safeOutcome = operationOutcome(outcome);
+        Timer.builder("ai.conversation.redis.operation.duration")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(elapsed);
+        DistributionSummary.builder("ai.conversation.redis.operation.batches")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(Math.max(0, batchCount));
+        DistributionSummary.builder("ai.conversation.redis.operation.items")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(Math.max(0, itemCount));
     }
 
     public void generationQueued() {
@@ -236,6 +264,15 @@ public final class AiConversationMetrics {
         return switch (value) {
             case "success", "failed", "skipped", "conflict" -> value;
             default -> "failed";
+        };
+    }
+
+    private static String redisOperation(String value) {
+        return switch (value) {
+            case "create", "build_create", "build_append", "build_promote",
+                    "append", "start_ephemeral", "save_interrupted", "commit",
+                    "replace_compaction" -> value;
+            default -> "append";
         };
     }
 

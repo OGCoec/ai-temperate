@@ -459,40 +459,40 @@ final class RedisKeyFactoryTest {
                 .identify("membership-callback-v1");
 
         assertEquals(
-                "ait:test:payment:membership-order:v1:snapshot:" + orderId.value(),
+                "ait:test:payment:membership-order:v2:snapshot:" + orderId.value(),
                 factory.membershipOrderSnapshotKey(orderId));
         assertEquals(
-                "ait:test:payment:callback:v1:data:" + callbackId.value(),
+                "ait:test:payment:callback:v2:data:" + callbackId.value(),
                 factory.paymentCallbackDataKey(callbackId));
         assertEquals(
-                "ait:test:payment:callback:v1:ready:all",
+                "ait:test:payment:callback:v2:ready:all",
                 factory.paymentCallbackReadyKey());
         assertEquals(
-                "ait:test:payment:callback:v1:processing:all",
+                "ait:test:payment:callback:v2:processing:all",
                 factory.paymentCallbackProcessingKey());
         assertEquals(
-                "ait:test:payment:callback:v1:idem:" + fingerprint.value(),
+                "ait:test:payment:callback:v2:idem:" + fingerprint.value(),
                 factory.paymentCallbackIdempotencyKey(fingerprint));
         assertEquals(
-                "ait:test:payment:callback:v1:order-idem:" + orderId.value(),
+                "ait:test:payment:callback:v2:order-idem:" + orderId.value(),
                 factory.paymentCallbackOrderIdempotencyKey(orderId));
         assertEquals(
-                "ait:test:payment:callback:v1:provider-idem:" + fingerprint.value(),
+                "ait:test:payment:callback:v2:provider-idem:" + fingerprint.value(),
                 factory.paymentCallbackProviderTradeIdempotencyKey(fingerprint));
         assertEquals(
-                "ait:test:payment:membership-order:v1:callback:" + orderId.value(),
+                "ait:test:payment:membership-order:v2:callback:" + orderId.value(),
                 factory.membershipOrderCallbackMarkerKey(orderId));
         assertEquals(
-                "ait:test:payment:provider-result:v1:status:" + orderId.value(),
+                "ait:test:payment:provider-result:v2:status:" + orderId.value(),
                 factory.simulatedPaymentProviderResultKey(orderId));
         assertEquals(
-                "ait:test:payment:order-persist:v1:dirty:all",
+                "ait:test:payment:order-persist:v2:dirty:all",
                 factory.orderPersistenceDirtyKey());
         assertEquals(
-                "ait:test:payment:order-persist:v1:processing:all",
+                "ait:test:payment:order-persist:v2:processing:all",
                 factory.orderPersistenceProcessingKey());
         assertEquals(
-                "ait:test:payment:order-persist:v1:lock:singleton",
+                "ait:test:payment:order-persist:v2:lock:singleton",
                 factory.orderPersistenceLockKey());
     }
 

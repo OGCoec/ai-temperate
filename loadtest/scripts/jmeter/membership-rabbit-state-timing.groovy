@@ -59,6 +59,19 @@ def waitUntil = { Instant target ->
     }
 }
 
+def nextTier = {
+    Map response = request('GET', '/api/user/membership-plan-offers', authHeaders, null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Rabbit offer lookup failed: ' + response.status)
+    }
+    Map body = (Map) json.parseText(response.body)
+    List offers = (List) body.offers
+    if (offers == null || offers.isEmpty()) {
+        throw new IllegalStateException('Rabbit account has no legal higher membership offer.')
+    }
+    return ((Map) offers.first()).targetTier as String
+}
+
 def getOrder = { String orderId ->
     Map response = request('GET', '/api/user/membership-orders/' + orderId, authHeaders, null)
     if (response.status != 200) {
@@ -87,9 +100,15 @@ def sign = { String tradeNo, String orderId ->
             mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8)))
 }
 
-def sendCallback = { Map order, String tradeNo ->
+def sendCallback = { Map order, String tradeNo, String resolution ->
     Instant now = Instant.now()
     String paidTime = formatter.format(now)
+    String callbackMoney = resolution == 'REJECTED'
+            ? new BigDecimal(order.payAmountYuan as String)
+                    .add(new BigDecimal('0.01'))
+                    .setScale(2)
+                    .toPlainString()
+            : order.payAmountYuan
     Map fields = [
             pid: callbackPid,
             trade_no: tradeNo,
@@ -100,7 +119,7 @@ def sendCallback = { Map order, String tradeNo ->
             addtime: paidTime,
             endtime: paidTime,
             name: 'membership-rabbit',
-            money: order.payAmountYuan,
+            money: callbackMoney,
             param: vars.get('caseName'),
             buyer: 'rabbit-buyer',
             timestamp: Long.toString(now.epochSecond),
@@ -121,16 +140,74 @@ def sendCallback = { Map order, String tradeNo ->
     }
 }
 
-def appendOrder = { String idempotencyKey, Map order, String expectedStatus ->
+def markerHold = { String action, String orderId, Integer seconds ->
+    String encoded = URLEncoder.encode(orderId, StandardCharsets.UTF_8)
+    String query = '?orderId=' + encoded
+    if (seconds != null) {
+        query += '&maxHoldSeconds=' + seconds
+    }
+    String method = action == 'inspect' ? 'GET' : 'POST'
+    String suffix = action == 'inspect' ? '' : '/' + action
+    Map response = request(
+            method,
+            '/internal/test/membership-payments/loadtest-control/callback-hold' + suffix + query,
+            ['Accept': 'application/json'],
+            null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Rabbit Marker hold failed: ' + action)
+    }
+    return (Map) json.parseText(response.body)
+}
+
+def waitForMarker = { String orderId ->
+    Instant deadline = Instant.now().plusSeconds(20L)
+    Map probe = [:]
+    while (Instant.now().isBefore(deadline)) {
+        probe = markerHold('inspect', orderId, null)
+        if (probe.markerPresent) {
+            return probe
+        }
+        Thread.sleep(250L)
+    }
+    throw new IllegalStateException('Rabbit callback Marker was not written: ' + probe)
+}
+
+def runMarkerCase = { Map order, Instant targetAt, Instant hardCloseAt,
+                      String resolution, String tradeNo ->
+    waitUntil(targetAt.minusSeconds(3L))
+    markerHold('arm', order.orderId, 180)
+    try {
+        sendCallback(order, tradeNo, resolution)
+        waitForMarker(order.orderId)
+        waitUntil(targetAt.plusSeconds(15L))
+        Map held = markerHold('inspect', order.orderId, null)
+        if (!held.armed || !held.markerPresent) {
+            throw new IllegalStateException('Marker did not cover the target Rabbit stage.')
+        }
+    } finally {
+        markerHold('release', order.orderId, null)
+    }
+    String expected = resolution == 'APPLIED' ? 'PAID' : 'CLOSED'
+    Instant deadline = expected == 'PAID'
+            ? Instant.now().plusSeconds(120L)
+            : hardCloseAt.plusSeconds(180L)
+    waitForStatus(order.orderId, expected, deadline)
+    return expected
+}
+
+def appendOrder = { String idempotencyKey, Map order, String expectedStatus,
+                    String expectedResolution, String tradeNo ->
     Path output = Path.of(props.getProperty('SCENARIO_ORDERS_CSV'))
-    String header = 'run_id,user_id,idempotency_key,order_id,scenario,expected_status\n'
+    String header = 'run_id,user_id,idempotency_key,order_id,scenario,expected_status,expected_resolution,provider_trade_no\n'
     String row = [
             props.getProperty('RUN_ID', 'local'),
             vars.get('userId'),
             idempotencyKey,
             order.orderId,
             vars.get('caseName'),
-            expectedStatus
+            expectedStatus,
+            expectedResolution,
+            tradeNo
     ].join(',') + '\n'
     synchronized (props) {
         Files.createDirectories(output.parent)
@@ -150,7 +227,7 @@ try {
             '/api/user/membership-orders',
             headers,
             JsonOutput.toJson([
-                    targetTier: 'GO',
+                    targetTier: nextTier(),
                     payType: 'alipay',
                     idempotencyKey: idempotencyKey
             ]))
@@ -184,7 +261,7 @@ try {
         if (cancel.status != 200) {
             throw new IllegalStateException('Rabbit probe order cleanup failed')
         }
-        appendOrder(idempotencyKey, order, 'CANCELLED')
+        appendOrder(idempotencyKey, order, 'CANCELLED', 'NONE', '')
     } else if (vars.get('rabbitMode') == 'FIRST_PENDING_SEGMENT') {
         waitUntil(createdAt.plusSeconds(12L))
         if (getOrder(order.orderId).status != 'PENDING_PAYMENT') {
@@ -196,17 +273,17 @@ try {
         if (cancel.status != 200) {
             throw new IllegalStateException('first segment cleanup failed')
         }
-        appendOrder(idempotencyKey, order, 'CANCELLED')
+        appendOrder(idempotencyKey, order, 'CANCELLED', 'NONE', '')
     } else if (vars.get('rabbitMode') == 'PENDING_TO_CLOSING') {
         waitUntil(expiresAt.plusSeconds(1L))
         waitForStatus(order.orderId, 'CLOSING', hardCloseAt.minusMillis(250L))
         waitUntil(hardCloseAt.plusSeconds(1L))
         waitForStatus(order.orderId, 'CLOSED', Instant.now().plusSeconds(60L))
-        appendOrder(idempotencyKey, order, 'CLOSED')
+        appendOrder(idempotencyKey, order, 'CLOSED', 'NONE', '')
     } else if (vars.get('rabbitMode') == 'CLOSING_TO_CLOSED') {
         waitUntil(hardCloseAt.plusSeconds(1L))
         waitForStatus(order.orderId, 'CLOSED', Instant.now().plusSeconds(60L))
-        appendOrder(idempotencyKey, order, 'CLOSED')
+        appendOrder(idempotencyKey, order, 'CLOSED', 'NONE', '')
     } else {
         Map attempt = request(
                 'POST',
@@ -216,10 +293,32 @@ try {
         if (!(attempt.status in [200, 201])) {
             throw new IllegalStateException('marker payment attempt failed')
         }
-        waitUntil(hardCloseAt.minusSeconds(1L))
-        sendCallback(order, 'RABBIT-' + props.getProperty('RUN_ID', 'local') + '-marker')
-        waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
-        appendOrder(idempotencyKey, order, 'PAID')
+        String tradeNo = ('RABBIT-' + props.getProperty('RUN_ID', 'local') + '-' +
+                vars.get('caseName')).take(120)
+        String mode = vars.get('rabbitMode')
+        if (mode == 'CALLBACK_MARKER_CLOSE_RACE') {
+            waitUntil(hardCloseAt.minusSeconds(1L))
+            sendCallback(order, tradeNo, 'APPLIED')
+            waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
+            appendOrder(idempotencyKey, order, 'PAID', 'APPLIED', tradeNo)
+        } else {
+            String resolution = mode in [
+                    'PENDING_MARKER_REJECTED',
+                    'CLOSING_MARKER_REJECTED',
+                    'FINALIZE_MARKER_REJECTED_RACE'] ? 'REJECTED' : 'APPLIED'
+            Instant targetAt
+            if (mode in ['PENDING_MARKER_APPLIED', 'PENDING_MARKER_REJECTED']) {
+                targetAt = createdAt.plusSeconds(10L)
+            } else if (mode in ['CLOSING_MARKER_APPLIED', 'CLOSING_MARKER_REJECTED']) {
+                targetAt = expiresAt.plusSeconds(30L)
+            } else if (mode == 'FINALIZE_MARKER_REJECTED_RACE') {
+                targetAt = hardCloseAt
+            } else {
+                throw new IllegalStateException('Unknown Rabbit Marker mode: ' + mode)
+            }
+            String expected = runMarkerCase(order, targetAt, hardCloseAt, resolution, tradeNo)
+            appendOrder(idempotencyKey, order, expected, resolution, tradeNo)
+        }
     }
 
     SampleResult.setResponseCode('200')

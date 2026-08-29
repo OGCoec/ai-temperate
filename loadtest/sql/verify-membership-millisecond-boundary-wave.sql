@@ -4,6 +4,7 @@ CREATE TEMP TABLE membership_millisecond_boundary_scope (
     run_id TEXT NOT NULL,
     wave_code TEXT NOT NULL,
     group_code TEXT NOT NULL,
+    trace_id TEXT NOT NULL,
     user_id BIGINT NOT NULL,
     target_tier TEXT NOT NULL,
     order_id TEXT NOT NULL,
@@ -17,11 +18,11 @@ CREATE TEMP TABLE membership_millisecond_boundary_scope (
 
 DO $$
 BEGIN
-    IF (SELECT COUNT(*) FROM membership_millisecond_boundary_scope) <> 5000 THEN
-        RAISE EXCEPTION 'One boundary segment must contain exactly 5,000 evidence rows.';
+    IF (SELECT COUNT(*) FROM membership_millisecond_boundary_scope) <> __EXPECTED_SEGMENT__ THEN
+        RAISE EXCEPTION 'One boundary segment must contain exactly __EXPECTED_SEGMENT__ evidence rows.';
     END IF;
-    IF (SELECT COUNT(DISTINCT user_id) FROM membership_millisecond_boundary_scope) <> 5000
-       OR (SELECT COUNT(DISTINCT order_id) FROM membership_millisecond_boundary_scope) <> 5000 THEN
+    IF (SELECT COUNT(DISTINCT user_id) FROM membership_millisecond_boundary_scope) <> __EXPECTED_SEGMENT__
+       OR (SELECT COUNT(DISTINCT order_id) FROM membership_millisecond_boundary_scope) <> __EXPECTED_SEGMENT__ THEN
         RAISE EXCEPTION 'Boundary evidence contains duplicate users or orders.';
     END IF;
 END
@@ -29,6 +30,7 @@ $$;
 
 CREATE TEMP VIEW membership_millisecond_boundary_facts AS
 SELECT test.*,
+       '__BOUNDARY_VERDICT_MODE__'::TEXT AS boundary_verdict_mode,
        payment_order.id AS internal_order_id,
        payment_order.login_identity_id AS actual_user_id,
        payment_order.status AS actual_status,
@@ -79,27 +81,55 @@ SELECT facts.*,
            WHEN internal_order_id IS NULL THEN 'MISSING_ORDER'
            WHEN actual_user_id IS DISTINCT FROM user_id THEN 'ORDER_USER_MISMATCH'
            WHEN callback_id IS NULL THEN 'MISSING_CALLBACK'
-           WHEN order_provider_trade_no IS NULL OR length(order_provider_trade_no) > 128
-                OR order_provider_trade_no NOT LIKE group_code || '-MMB-%'
+           WHEN callback_provider_trade_no IS NULL OR length(callback_provider_trade_no) > 128
+                OR callback_provider_trade_no NOT LIKE group_code || '-MMB-%'
                THEN 'INVALID_PROVIDER_TRADE_PREFIX'
-           WHEN callback_provider_trade_no IS DISTINCT FROM order_provider_trade_no
+           -- 退款兜底会清空订单流水并在回调表保留支付事实；应用终态才要求两侧流水一致。
+           WHEN callback_resolution = 'REFUND_REQUIRED'
+                AND order_provider_trade_no IS NOT NULL
+               THEN 'REFUND_PROVIDER_TRADE_NOT_CLEARED'
+           WHEN callback_resolution = 'APPLIED'
+                AND order_provider_trade_no IS DISTINCT FROM callback_provider_trade_no
                THEN 'PROVIDER_TRADE_MISMATCH'
-           WHEN state_version <= 0 THEN 'INVALID_STATE_VERSION'
-           WHEN expires_at IS DISTINCT FROM planned_expires_at THEN 'EXPIRES_AT_CHANGED'
+            WHEN state_version <= 0 THEN 'INVALID_STATE_VERSION'
+            WHEN expires_at IS DISTINCT FROM planned_expires_at THEN 'EXPIRES_AT_CHANGED'
            -- 未进入 CLOSING 就完成支付时 deadline 可以为空；只裁决已经写入的 deadline 是否准确。
-           WHEN closing_deadline_at IS NOT NULL
-                AND closing_deadline_at IS DISTINCT FROM planned_hard_close_at
-               THEN 'HARD_CLOSE_AT_CHANGED'
-           WHEN callback_resolution IS DISTINCT FROM expected_resolution THEN 'CALLBACK_RESOLUTION_MISMATCH'
-           WHEN entitlement_resolution IS DISTINCT FROM expected_resolution THEN 'ENTITLEMENT_RESOLUTION_MISMATCH'
-           WHEN entitlement_resolved_at IS NULL OR callback_resolved_at IS NULL THEN 'UNRESOLVED_FACT'
-           WHEN expected_resolution = 'APPLIED' AND actual_status <> 2 THEN 'APPLIED_ORDER_NOT_PAID'
-           WHEN expected_resolution = 'REFUND_REQUIRED' AND actual_status <> 4 THEN 'REFUND_ORDER_NOT_CLOSED'
-           WHEN expected_resolution = 'APPLIED'
-                AND actual_membership_tier IS DISTINCT FROM expected_membership_tier
-               THEN 'MEMBERSHIP_NOT_GRANTED'
-           WHEN expected_resolution = 'REFUND_REQUIRED' AND actual_membership_tier <> 0
-               THEN 'REFUND_CHANGED_MEMBERSHIP'
+            WHEN closing_deadline_at IS NOT NULL
+                 AND closing_deadline_at IS DISTINCT FROM planned_hard_close_at
+                THEN 'HARD_CLOSE_AT_CHANGED'
+            WHEN boundary_verdict_mode NOT IN ('STRICT_SERVER_TIME', 'TERMINAL_OUTCOME')
+                THEN 'INVALID_BOUNDARY_VERDICT_MODE'
+            WHEN boundary_verdict_mode = 'STRICT_SERVER_TIME'
+                 AND callback_resolution IS DISTINCT FROM expected_resolution
+                THEN 'CALLBACK_RESOLUTION_MISMATCH'
+            -- H-P1/H-PR 的计划落点会受本机调度抖动影响；允许任一业务终态，但禁止未裁决或未知终态。
+            WHEN boundary_verdict_mode = 'TERMINAL_OUTCOME'
+                 AND (callback_resolution IS NULL
+                      OR callback_resolution NOT IN ('APPLIED', 'REFUND_REQUIRED'))
+                THEN 'NON_TERMINAL_CALLBACK_RESOLUTION'
+            WHEN boundary_verdict_mode = 'STRICT_SERVER_TIME'
+                 AND entitlement_resolution IS DISTINCT FROM expected_resolution
+                THEN 'ENTITLEMENT_RESOLUTION_MISMATCH'
+            WHEN boundary_verdict_mode = 'TERMINAL_OUTCOME'
+                 AND entitlement_resolution IS DISTINCT FROM callback_resolution
+                THEN 'ENTITLEMENT_RESOLUTION_MISMATCH'
+            WHEN entitlement_resolved_at IS NULL OR callback_resolved_at IS NULL THEN 'UNRESOLVED_FACT'
+            WHEN ((boundary_verdict_mode = 'STRICT_SERVER_TIME' AND expected_resolution = 'APPLIED')
+                  OR (boundary_verdict_mode = 'TERMINAL_OUTCOME' AND callback_resolution = 'APPLIED'))
+                 AND actual_status <> 2
+                THEN 'APPLIED_ORDER_NOT_PAID'
+            WHEN ((boundary_verdict_mode = 'STRICT_SERVER_TIME' AND expected_resolution = 'REFUND_REQUIRED')
+                  OR (boundary_verdict_mode = 'TERMINAL_OUTCOME' AND callback_resolution = 'REFUND_REQUIRED'))
+                 AND actual_status <> 4
+                THEN 'REFUND_ORDER_NOT_CLOSED'
+            WHEN ((boundary_verdict_mode = 'STRICT_SERVER_TIME' AND expected_resolution = 'APPLIED')
+                  OR (boundary_verdict_mode = 'TERMINAL_OUTCOME' AND callback_resolution = 'APPLIED'))
+                 AND actual_membership_tier IS DISTINCT FROM expected_membership_tier
+                THEN 'MEMBERSHIP_NOT_GRANTED'
+            WHEN ((boundary_verdict_mode = 'STRICT_SERVER_TIME' AND expected_resolution = 'REFUND_REQUIRED')
+                  OR (boundary_verdict_mode = 'TERMINAL_OUTCOME' AND callback_resolution = 'REFUND_REQUIRED'))
+                 AND actual_membership_tier IS DISTINCT FROM 0
+                THEN 'REFUND_CHANGED_MEMBERSHIP'
            ELSE NULL
        END AS failure
 FROM membership_millisecond_boundary_facts AS facts;
@@ -112,7 +142,7 @@ BEGIN
     SELECT COUNT(callback_id), COUNT(*) FILTER (WHERE failure IS NOT NULL)
       INTO callback_count, failure_count
     FROM membership_millisecond_boundary_verdict;
-    IF callback_count <> 5000 THEN
+    IF callback_count <> __EXPECTED_SEGMENT__ THEN
         RAISE EXCEPTION 'Boundary segment callback cardinality is invalid: %', callback_count;
     END IF;
     IF EXISTS (
@@ -131,6 +161,6 @@ BEGIN
 END
 $$;
 
-\copy (SELECT run_id, wave_code, group_code, user_id, target_tier, order_id, order_provider_trade_no, callback_provider_trade_no, target_offset_millis, to_char(target_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS target_at, to_char(payment_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS payment_started_at, to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires_at, to_char(closing_deadline_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS closing_deadline_at, to_char(order_paid_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_paid_at, to_char(entitlement_resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS entitlement_resolved_at, to_char(order_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_created_at, to_char(order_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_updated_at, to_char(callback_paid_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS callback_paid_at, to_char(received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS received_at, to_char(callback_resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS callback_resolved_at, server_target_drift_micros, received_from_expires_micros, received_from_hard_close_micros, expected_resolution, callback_resolution, entitlement_resolution, actual_status, failure FROM membership_millisecond_boundary_verdict ORDER BY user_id) TO '__SERVER_VERDICT_CSV__' CSV HEADER
+\copy (SELECT run_id, wave_code, group_code, boundary_verdict_mode, user_id, target_tier, order_id, order_provider_trade_no, callback_provider_trade_no, target_offset_millis, to_char(target_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS target_at, to_char(payment_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS payment_started_at, to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires_at, to_char(closing_deadline_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS closing_deadline_at, to_char(order_paid_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_paid_at, to_char(entitlement_resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS entitlement_resolved_at, to_char(order_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_created_at, to_char(order_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS order_updated_at, to_char(callback_paid_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS callback_paid_at, to_char(received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS received_at, to_char(callback_resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS callback_resolved_at, server_target_drift_micros, received_from_expires_micros, received_from_hard_close_micros, expected_resolution, callback_resolution, entitlement_resolution, actual_status, failure FROM membership_millisecond_boundary_verdict ORDER BY user_id) TO '__SERVER_VERDICT_CSV__' CSV HEADER
 
 SELECT 'PASS' AS verdict;

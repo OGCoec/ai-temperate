@@ -1,6 +1,7 @@
 package com.example.temperate.service.user.apichat.billing.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -28,9 +29,10 @@ import com.example.temperate.service.user.aiinference.api.ApiInferenceReservatio
 import com.example.temperate.service.user.aiinference.api.ApiInferenceProtocol;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceUsage;
 import com.example.temperate.service.user.apichat.ApiChatRequest;
+import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.ValidatedApiChatRequest;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
-import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationService;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -62,6 +64,7 @@ final class ApiChatBillingServiceImplTest {
     private AiModelApiUsageMapper usageMapper;
     private AiModelApiUsageDetailMapper detailMapper;
     private UserProfileCacheInvalidationExecutor invalidationExecutor;
+    private MembershipQuotaPeriodActivationService quotaPeriodActivationService;
     private HybridSemaphoreIdWorker idWorker;
     private ApiChatBillingServiceImpl service;
 
@@ -72,6 +75,7 @@ final class ApiChatBillingServiceImplTest {
         usageMapper = mock(AiModelApiUsageMapper.class);
         detailMapper = mock(AiModelApiUsageDetailMapper.class);
         invalidationExecutor = mock(UserProfileCacheInvalidationExecutor.class);
+        quotaPeriodActivationService = mock(MembershipQuotaPeriodActivationService.class);
         idWorker = mock(HybridSemaphoreIdWorker.class);
         when(idWorker.nextId()).thenReturn(USAGE_ID.clone(), DETAIL_ID.clone());
         service = new ApiChatBillingServiceImpl(
@@ -80,7 +84,7 @@ final class ApiChatBillingServiceImplTest {
                 usageMapper,
                 detailMapper,
                 new AiConversationQuotaCalculator(),
-                mock(MembershipQuotaPlanService.class),
+                quotaPeriodActivationService,
                 invalidationExecutor,
                 idWorker,
                 CLOCK,
@@ -106,6 +110,9 @@ final class ApiChatBillingServiceImplTest {
         assertThat(reservation.usageId()).containsExactly(USAGE_ID);
         assertThat(reservation.reservedMinor()).isEqualTo(2L);
         assertThat(quota.getQuotaBalanceMinor()).isEqualTo(8L);
+        verify(quotaPeriodActivationService).activateIfDue(
+                quota,
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
         ArgumentCaptor<AiModelApiUsageDetail> detail =
                 ArgumentCaptor.forClass(AiModelApiUsageDetail.class);
         verify(detailMapper).insert(detail.capture());
@@ -113,6 +120,18 @@ final class ApiChatBillingServiceImplTest {
         assertThat(detail.getValue().getUsageId()).containsExactly(USAGE_ID);
         assertThat(detail.getValue().getReservedQuotaMinor()).isEqualTo(2L);
         verify(invalidationExecutor).evictAfterCommit(17L);
+    }
+
+    @Test
+    void failedAuthorizationNeverStartsTheQuotaPeriod() throws Exception {
+        when(apiKeyMapper.findReservationAuthorizationForUpdate(API_KEY_ID, 23L))
+                .thenReturn(null);
+
+        assertThatThrownBy(() -> service.reserve(principal(), validatedRequest()))
+                .isInstanceOf(ApiChatException.class);
+
+        verify(quotaPeriodActivationService, never()).activateIfDue(any(), any());
+        verify(quotaMapper, never()).findByLoginIdentityIdForUpdate(17L);
     }
 
     @Test

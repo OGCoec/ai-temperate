@@ -91,6 +91,46 @@ final class PaymentCallbackReceiveServiceImplTest {
     }
 
     @Test
+    void acceptsLocalCallbackTimeWithMicrosecondsAndPreservesSixDigits() {
+        SimulatedLiuhaoCallbackCommand base = validCommand();
+        SimulatedLiuhaoCallbackCommand fractional = new SimulatedLiuhaoCallbackCommand(
+                base.pid(), base.tradeNo(), base.outTradeNo(), base.apiTradeNo(),
+                base.type(), base.tradeStatus(),
+                "2026-08-20 11:59:50.123456",
+                "2026-08-20 11:59:55.654321",
+                base.name(), base.money(), base.param(), base.buyer(),
+                base.timestamp(), base.sign(), base.signType());
+
+        service.receive(fractional);
+
+        ArgumentCaptor<PaymentCallbackSnapshot> snapshotCaptor =
+                ArgumentCaptor.forClass(PaymentCallbackSnapshot.class);
+        verify(callbackQueue).enqueue(snapshotCaptor.capture(), any(), any());
+        assertThat(snapshotCaptor.getValue().paidAt().toString())
+                .isEqualTo("2026-08-20T11:59:55.654321Z");
+    }
+
+    @Test
+    void truncatesNanosecondCallbackTimeToPostgresMicrosecondPrecision() {
+        SimulatedLiuhaoCallbackCommand base = validCommand();
+        SimulatedLiuhaoCallbackCommand fractional = new SimulatedLiuhaoCallbackCommand(
+                base.pid(), base.tradeNo(), base.outTradeNo(), base.apiTradeNo(),
+                base.type(), base.tradeStatus(),
+                "2026-08-20 11:59:50.123456789",
+                "2026-08-20 11:59:55.987654999",
+                base.name(), base.money(), base.param(), base.buyer(),
+                base.timestamp(), base.sign(), base.signType());
+
+        service.receive(fractional);
+
+        ArgumentCaptor<PaymentCallbackSnapshot> snapshotCaptor =
+                ArgumentCaptor.forClass(PaymentCallbackSnapshot.class);
+        verify(callbackQueue).enqueue(snapshotCaptor.capture(), any(), any());
+        assertThat(snapshotCaptor.getValue().paidAt().toString())
+                .isEqualTo("2026-08-20T11:59:55.987654Z");
+    }
+
+    @Test
     void callbackOutsideTimestampWindowIsRejectedBeforeRedis() {
         SimulatedLiuhaoCallbackCommand value = validCommand();
         SimulatedLiuhaoCallbackCommand expired = new SimulatedLiuhaoCallbackCommand(

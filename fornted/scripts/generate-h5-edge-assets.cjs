@@ -1,6 +1,23 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+const DEFAULT_H5_RELEASE_ROOT = path.resolve(
+	__dirname,
+	'..',
+	'unpackage',
+	'dist',
+	'build',
+	'h5'
+)
+const LEGACY_WEB_RELEASE_ROOT = path.resolve(
+	__dirname,
+	'..',
+	'unpackage',
+	'dist',
+	'build',
+	'web'
+)
+
 const PUBLIC_ROOTS = new Set(['assets', 'static'])
 const PUBLIC_EXTENSIONS = new Set([
 	'.avif',
@@ -77,9 +94,29 @@ function argument(name) {
 	return index >= 0 ? process.argv[index + 1] : undefined
 }
 
+function assertSupportedH5ReleaseRoot(root, options = {}) {
+	const resolvedRoot = path.resolve(root)
+	const legacySuffix = path.normalize(
+		path.join('unpackage', 'dist', 'build', 'web')
+	).toLowerCase()
+	if (resolvedRoot.toLowerCase().endsWith(legacySuffix)) {
+		throw new Error(
+			`Legacy web output cannot be published; use the canonical H5 release directory: ${DEFAULT_H5_RELEASE_ROOT}`
+		)
+	}
+	if (!options.allowNonCanonicalRoot
+		&& resolvedRoot.toLowerCase() !== DEFAULT_H5_RELEASE_ROOT.toLowerCase()) {
+		throw new Error(
+			`Only the canonical H5 release directory can be published: ${DEFAULT_H5_RELEASE_ROOT}`
+		)
+	}
+	return resolvedRoot
+}
+
 function main() {
-	const root = path.resolve(argument('--dir')
-		|| path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'web'))
+	const root = assertSupportedH5ReleaseRoot(
+		argument('--dir') || DEFAULT_H5_RELEASE_ROOT
+	)
 	const output = path.resolve(argument('--out')
 		|| path.join(
 			__dirname,
@@ -99,6 +136,9 @@ function main() {
 if (require.main === module) main()
 
 module.exports = {
+	DEFAULT_H5_RELEASE_ROOT,
+	LEGACY_WEB_RELEASE_ROOT,
+	assertSupportedH5ReleaseRoot,
 	collectPublicAssetPaths,
 	renderAssetManifest
 }

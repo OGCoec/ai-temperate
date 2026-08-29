@@ -28,11 +28,9 @@ final class MembershipTransitionPolicyImplTest {
             new MembershipTransitionPolicyImpl(CLOCK);
 
     @Test
-    void freeCanStartAnyPaidMembership() {
+    void freeCanStartAnyPersonalPaidMembership() {
         for (MembershipTier target : List.of(
                 MembershipTier.GO,
-                MembershipTier.EDU,
-                MembershipTier.TEAM,
                 MembershipTier.PLUS,
                 MembershipTier.PRO,
                 MembershipTier.MAX)) {
@@ -46,6 +44,17 @@ final class MembershipTransitionPolicyImplTest {
                     .isEqualTo(MembershipTransitionType.NEW_PURCHASE);
             assertThat(decision.rejectionReason())
                     .isEqualTo(MembershipTransitionRejectionReason.NONE);
+        }
+    }
+
+    @Test
+    void freeCannotUseThePersonalPurchaseApiForEducationOrTeam() {
+        for (MembershipTier target : List.of(
+                MembershipTier.EDU, MembershipTier.TEAM)) {
+            assertRejected(
+                    MembershipTier.FREE,
+                    target,
+                    MembershipTransitionRejectionReason.CROSS_CHAIN_NOT_ALLOWED);
         }
     }
 

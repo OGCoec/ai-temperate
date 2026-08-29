@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
 /**
  * 该实现是来显式建模个人套餐升级链，并把已到期或缺少到期时间的付费等级按 FREE 判断。
  *
- * <p>EDU、TEAM 不参与个人等级排序；显式等级表避免数据库编码顺序被错误解释为升级顺序。</p>
+ * <p>EDU、TEAM 不参与个人等级排序，也不能作为个人购买目标；显式等级表避免数据库编码顺序被错误解释为升级顺序。</p>
  */
 @Service
 public final class MembershipTransitionPolicyImpl
@@ -50,9 +50,6 @@ public final class MembershipTransitionPolicyImpl
                     MembershipTransitionRejectionReason
                             .TARGET_FREE_NOT_PURCHASABLE);
         }
-        if (current == MembershipTier.FREE) {
-            return allowed(current, target, MembershipTransitionType.NEW_PURCHASE);
-        }
         if (LOCKED_TIERS.contains(current)) {
             return rejected(
                     current,
@@ -65,6 +62,9 @@ public final class MembershipTransitionPolicyImpl
                     current,
                     target,
                     MembershipTransitionRejectionReason.CROSS_CHAIN_NOT_ALLOWED);
+        }
+        if (current == MembershipTier.FREE) {
+            return allowed(current, target, MembershipTransitionType.NEW_PURCHASE);
         }
         if (current == target) {
             return rejected(

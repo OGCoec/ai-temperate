@@ -12,6 +12,9 @@ import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.web.edgeproxy.TrustedEdgeNetworkContext;
 import com.example.temperate.web.edgeproxy.TrustedEdgeNetworkContextResolver;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestInferenceStubProperties;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.URI;
@@ -28,6 +31,36 @@ import reactor.core.publisher.Mono;
  * 该测试是来约束 API Key IP 门禁只信任 Worker 验签属性，并在权威情报不可用时返回可重试的失败关闭响应。
  */
 final class ApiKeyIpRiskFilterTest {
+
+    @Test
+    void skipsPublicIpRiskOnlyForEnabledLoopbackInferenceClient() throws Exception {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        MembershipPaymentLoadtestRequestPolicy policy =
+                new MembershipPaymentLoadtestRequestPolicy(
+                        new MembershipPaymentLoadtestProperties(
+                                true, List.of(73014701344296960L)),
+                        new MembershipPaymentLoadtestInferenceStubProperties(
+                                true, "https://sandbox.example.test/video.mp4"));
+        ApiKeyIpRiskFilter filter = new ApiKeyIpRiskFilter(
+                new TrustedEdgeNetworkContextResolver(),
+                ip -> Mono.error(new AssertionError("risk lookup must be skipped")),
+                properties,
+                networkRiskProperties(),
+                new OpenAiErrorResponseWriter(new ObjectMapper()),
+                new SimpleMeterRegistry(),
+                policy);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/chat/completions");
+        request.setRemoteAddr("127.0.0.1");
+        AtomicBoolean chainCalled = new AtomicBoolean();
+
+        filter.doFilter(
+                request,
+                new MockHttpServletResponse(),
+                (ignoredRequest, ignoredResponse) -> chainCalled.set(true));
+
+        assertThat(chainCalled).isTrue();
+    }
 
     @Test
     void trustScoreBelowSixtyIsRejectedAndSixtyIsAllowed() throws Exception {

@@ -14,6 +14,8 @@ user_membership_quota.login_identity_id 逻辑关联 userloginidentity.id，业�
 注册业务使用统一 UTC 时钟把 quota_period_ends_at 初始化为当前时间，并保持 quota_period_started_at 为空；
 该状态表示额度尚未开始消耗，后续首次模型调用通过已经到期的结束时间开启正式周期。
 
+会员支付成功时，权益结算事务会把等级替换为订单目标套餐、把余额重置为目标套餐完整额度、把 `membership_expires_at` 写为 `UTC(paidAt).plusMonths(1)`，同时保持 `quota_period_started_at` 为空并把 `quota_period_ends_at` 写为 `paidAt` 哨兵。旧额度余额和旧七天周期不会累计到新套餐。API Key 与 H5/Android 的文本、图片、视频预扣统一调用 `MembershipQuotaPeriodActivationService`；只有认证、模型权限和幂等检查通过后，才在已锁定额度行上把首次调用时间写成周期起点，并在同一事务扣除本次预扣。
+
 ## 删除顺序
 
 删除用户时必须在同一个 PostgreSQL 本地事务中先删除 user_membership_quota，再删除 user_profile，

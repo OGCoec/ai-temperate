@@ -2,7 +2,10 @@ package com.example.temperate.service.user.membership.payment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -12,15 +15,19 @@ import com.example.temperate.common.redis.key.PaymentCallbackRedisId;
 import com.example.temperate.common.redis.key.RedisKeyFactory;
 import com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper;
 import com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper;
+import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution;
+import com.example.temperate.service.user.membership.MembershipQuotaPlan;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackBatchService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackFingerprintService;
-import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackFlushScheduler;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackPersistenceService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackReceiveService;
-import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundRequiredTrigger;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundService;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackResumeService;
+import com.example.temperate.service.user.membership.payment.callback.PaymentFactReconciliationService;
 import com.example.temperate.service.user.membership.payment.callback.SimulatedLiuhaoCallbackCommand;
 import com.example.temperate.service.user.membership.payment.callback.SimulatedLiuhaoCallbackResult;
 import com.example.temperate.service.user.membership.payment.callback.impl.PaymentCallbackBatchServiceImpl;
@@ -29,19 +36,22 @@ import com.example.temperate.service.user.membership.payment.callback.impl.Payme
 import com.example.temperate.service.user.membership.payment.callback.impl.PaymentCallbackPersistenceServiceImpl;
 import com.example.temperate.service.user.membership.payment.callback.impl.PaymentCallbackReceiveServiceImpl;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
+import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentEntitlementSettlementService;
+import com.example.temperate.service.user.membership.payment.entitlement.impl.MembershipPaymentEntitlementSettlementServiceImpl;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestFaultGate;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentOrderLookupService;
 import com.example.temperate.service.user.membership.payment.order.impl.MembershipPaymentOrderLookupServiceImpl;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderBatchPersistenceService;
-import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderPersistScheduler;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderPersistenceService;
 import com.example.temperate.service.user.membership.payment.persistence.impl.MembershipOrderBatchPersistenceServiceImpl;
 import com.example.temperate.service.user.membership.payment.persistence.impl.MembershipOrderPersistenceServiceImpl;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentStatusQueryService;
-import com.example.temperate.service.user.membership.payment.provider.impl.SimulatedPaymentStatusQueryServiceImpl;
-import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckPublisher;
+import com.example.temperate.service.user.membership.payment.store.MembershipPaymentUnappliedCallbackStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteRuntimeSnapshot;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckPublisher;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
@@ -50,7 +60,7 @@ import com.example.temperate.service.user.membership.payment.rabbit.impl.Members
 import com.example.temperate.service.user.membership.payment.store.impl.RedisMembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisOrderPersistenceQueue;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisPaymentCallbackQueue;
-import com.example.temperate.service.user.membership.payment.store.impl.RedisSimulatedPaymentProviderResultStore;
+import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import java.io.IOException;
@@ -98,7 +108,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * 该联合集成测试是来贯通 Rabbit 最终检查、回调五秒批任务和订单五秒批任务，并验证 PostgreSQL 提交后终态才退出 Redis。
+ * 该联合集成测试是来贯通 Rabbit 最终检查、回调批处理和订单批量刷盘，并验证 PostgreSQL 提交后终态才退出 Redis。
  */
 @Testcontainers(disabledWithoutDocker = true)
 final class MembershipPaymentPipelineIntegrationTest {
@@ -180,7 +190,7 @@ final class MembershipPaymentPipelineIntegrationTest {
     }
 
     @Test
-    void rabbitRecoveryThenBothSchedulersPersistPaidAndRemoveTerminalRedisState()
+    void callbackMarkerStopsRabbitTimelineThenWorkerGrantsAndPersistsPaid()
             throws Exception {
         MembershipOrder databaseOrder = order();
         assertThat(orderMapper.insert(databaseOrder)).isEqualTo(1);
@@ -192,49 +202,68 @@ final class MembershipPaymentPipelineIntegrationTest {
         assertThat(redisTemplate.opsForZSet().zCard(KEYS.paymentCallbackReadyKey()))
                 .isEqualTo(1L);
 
-        // 模拟首次 ready 调度信号丢失；Rabbit 最终查询必须依据平台事实把仍存在的回调 Hash 重新放回 ready。
-        assertThat(redisTemplate.opsForZSet().remove(
-                KEYS.paymentCallbackReadyKey(), callbackId)).isEqualTo(1L);
         assertThat(redisTemplate.hasKey(KEYS.paymentCallbackDataKey(
                 new PaymentCallbackRedisId(callbackId)))).isTrue();
 
-        MembershipClosingCheckPublisher closingPublisher =
-                mock(MembershipClosingCheckPublisher.class);
+        MembershipPaymentFinalCheckScheduler finalCheckScheduler =
+                mock(MembershipPaymentFinalCheckScheduler.class);
+        MembershipPaymentProviderRegistry providerRegistry =
+                mock(MembershipPaymentProviderRegistry.class);
+        PaymentFactReconciliationService reconciliationService = (order, fact) ->
+                fact.callbackId() != null
+                        && callbackQueue.ensureReady(fact.callbackId(), CLOCK.millis());
         new MembershipPaymentCheckConsumerServiceImpl(
                 realLookupService(),
                 orderStore,
-                realStatusQueryService(),
-                callbackQueue,
+                providerRegistry,
+                reconciliationService,
                 mock(MembershipPaymentCheckPublisher.class),
-                closingPublisher,
+                finalCheckScheduler,
                 properties,
                 CLOCK,
                 metrics)
                 .process(paymentEnvelope(8));
 
-        verify(closingPublisher).publishNext(
-                ORDER_ID, 0, 0, Duration.ofSeconds(30));
+        verify(providerRegistry, never()).getRequired(any());
+        verify(finalCheckScheduler, never()).scheduleClosing(
+                any(), any(), anyInt());
         assertThat(redisTemplate.opsForZSet().zCard(KEYS.paymentCallbackReadyKey()))
                 .isEqualTo(1L);
         assertThat(orderStore.find(ORDER_ID)).get()
                 .satisfies(value -> {
-                    assertThat(value.status()).isEqualTo(MembershipOrderStatus.CLOSING);
-                    assertThat(value.stateVersion()).isEqualTo(2L);
+                    assertThat(value.status())
+                            .isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+                    assertThat(value.stateVersion()).isEqualTo(1L);
                 });
-        assertThat(orderPersistenceQueue.dirtySize()).isEqualTo(1L);
+        assertThat(orderPersistenceQueue.dirtySize()).isZero();
 
-        new PaymentCallbackFlushScheduler(realCallbackBatchService()).flush();
+        realCallbackBatchService().flushOneRun();
 
         assertThat(callbackRowCount()).isEqualTo(1L);
-        assertThat(orderMapper.findById(ORDER_BYTES).getStatus())
-                .isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+        MembershipOrder granted = orderMapper.findById(ORDER_BYTES);
+        assertThat(granted.getStatus()).isEqualTo(MembershipOrderStatus.PAID);
+        assertThat(granted.getEntitlementResolution())
+                .isEqualTo(MembershipOrderEntitlementResolution.APPLIED);
+        assertThat(sqlSession.getMapper(UserMembershipQuotaMapper.class)
+                        .findByLoginIdentityId(17L))
+                .satisfies(quota -> {
+                    assertThat(quota.getMembershipTier())
+                            .isEqualTo(MembershipTier.PLUS.ordinal());
+                    assertThat(quota.getQuotaBalanceMinor()).isEqualTo(200_000L);
+                    assertThat(quota.getQuotaPeriodStartedAt()).isNull();
+                    assertThat(quota.getQuotaPeriodEndsAt())
+                            .isEqualTo(OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+                    assertThat(quota.getMembershipExpiresAt())
+                            .isEqualTo(OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)
+                                    .plusMonths(1));
+                });
         assertThat(orderStore.find(ORDER_ID)).get()
                 .satisfies(value -> {
                     assertThat(value.status()).isEqualTo(MembershipOrderStatus.PAID);
-                    assertThat(value.stateVersion()).isEqualTo(3L);
+                    assertThat(value.stateVersion()).isEqualTo(2L);
                     assertThat(value.providerTradeNo()).isEqualTo("provider-trade-1");
                 });
-        assertThat(orderPersistenceQueue.dirtySize()).isEqualTo(2L);
+        assertThat(orderPersistenceQueue.dirtySize()).isEqualTo(1L);
         assertThat(callbackQueue.processingSize()).isZero();
         assertThat(redisTemplate.opsForZSet().zCard(KEYS.paymentCallbackReadyKey()))
                 .isZero();
@@ -257,11 +286,11 @@ final class MembershipPaymentPipelineIntegrationTest {
                         CLOCK,
                         metrics);
 
-        new MembershipOrderPersistScheduler(orderBatchService).flush();
+        orderBatchService.flushOneRun();
 
         MembershipOrder persisted = orderMapper.findById(ORDER_BYTES);
         assertThat(persisted.getStatus()).isEqualTo(MembershipOrderStatus.PAID);
-        assertThat(persisted.getStateVersion()).isEqualTo(3L);
+        assertThat(persisted.getStateVersion()).isEqualTo(2L);
         assertThat(persisted.getProviderTradeNo()).isEqualTo("provider-trade-1");
         assertThat(orderPersistenceQueue.dirtySize()).isZero();
         assertThat(orderPersistenceQueue.processingSize()).isZero();
@@ -290,10 +319,13 @@ final class MembershipPaymentPipelineIntegrationTest {
         return new PaymentCallbackBatchServiceImpl(
                 callbackQueue,
                 orderStore,
+                mock(MembershipPaymentUnappliedCallbackStore.class),
                 orderMapper,
                 realCallbackPersistenceService(),
+                realEntitlementSettlementService(),
                 new MembershipPaymentCallbackDecisionServiceImpl(properties),
-                mock(MembershipPaymentRefundRequiredTrigger.class),
+                mock(MembershipPaymentRefundService.class),
+                mock(MembershipPaymentRejectedCallbackResumeService.class),
                 mock(MembershipPaymentLoadtestFaultGate.class),
                 Base64URL,
                 objectMapper,
@@ -307,6 +339,20 @@ final class MembershipPaymentPipelineIntegrationTest {
                 sqlSession.getMapper(MembershipPaymentCallbackMapper.class);
         return new PaymentCallbackPersistenceServiceImpl(
                 callbackMapper,
+                Base64URL,
+                objectMapper());
+    }
+
+    private MembershipPaymentEntitlementSettlementService
+            realEntitlementSettlementService() {
+        return new MembershipPaymentEntitlementSettlementServiceImpl(
+                orderMapper,
+                sqlSession.getMapper(MembershipPaymentCallbackMapper.class),
+                sqlSession.getMapper(UserMembershipQuotaMapper.class),
+                tier -> new MembershipQuotaPlan(
+                        tier == MembershipTier.PLUS ? 200_000L : 5_000L,
+                        Duration.ofDays(7)),
+                mock(UserProfileCacheInvalidationExecutor.class),
                 Base64URL,
                 objectMapper());
     }
@@ -326,14 +372,27 @@ final class MembershipPaymentPipelineIntegrationTest {
     }
 
     private MembershipPaymentOrderLookupService realLookupService() {
-        return new MembershipPaymentOrderLookupServiceImpl(
-                orderStore, orderMapper, Base64URL);
-    }
+        MembershipOrderSnapshotWriteCoordinator coordinator =
+                new MembershipOrderSnapshotWriteCoordinator() {
+                    @Override
+                    public MembershipOrderSnapshot putAndGet(MembershipOrderSnapshot snapshot) {
+                        return orderStore.putAndGet(snapshot);
+                    }
 
-    private SimulatedPaymentStatusQueryService realStatusQueryService() {
-        return new SimulatedPaymentStatusQueryServiceImpl(
-                new RedisSimulatedPaymentProviderResultStore(redisTemplate, KEYS),
-                CLOCK);
+                    @Override
+                    public MembershipOrderSnapshot patchPaymentAttempt(
+                            MembershipOrderSnapshot databaseSnapshot) {
+                        return orderStore.putAndGet(databaseSnapshot);
+                    }
+
+                    @Override
+                    public MembershipOrderSnapshotWriteRuntimeSnapshot runtimeSnapshot() {
+                        return new MembershipOrderSnapshotWriteRuntimeSnapshot(
+                                        true, 128, 2, 256, 0, 256, java.util.List.of(0, 0));
+                    }
+                };
+        return new MembershipPaymentOrderLookupServiceImpl(
+                orderStore, coordinator, orderMapper, Base64URL);
     }
 
     private long callbackRowCount() throws SQLException {
@@ -366,7 +425,7 @@ final class MembershipPaymentPipelineIntegrationTest {
 
     private static MembershipOrderSnapshot snapshot(MembershipOrder order) {
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 ORDER_ID,
                 order.getLoginIdentityId(),
                 order.getMembershipTier(),
@@ -467,6 +526,18 @@ final class MembershipPaymentPipelineIntegrationTest {
                     INSERT INTO userloginidentity (id)
                     VALUES (17)
                     """);
+            statement.execute(read("sql/005_create_user_membership_quota.sql"));
+            statement.execute("""
+                    INSERT INTO user_membership_quota (
+                        login_identity_id,
+                        membership_tier,
+                        quota_balance_minor,
+                        quota_period_started_at,
+                        quota_period_ends_at,
+                        membership_expires_at
+                    )
+                    VALUES (17, 0, 5000, NULL, '2026-08-20T12:00:00Z', NULL)
+                    """);
             statement.execute(read("sql/018_create_membership_order.sql"));
             statement.execute(read("sql/019_create_membership_payment_callback.sql"));
         }
@@ -484,6 +555,7 @@ final class MembershipPaymentPipelineIntegrationTest {
                 dataSource);
         Configuration configuration = new Configuration(environment);
         addMapper(configuration, "mapper/user/membership/payment/MembershipOrderMapper.xml");
+        addMapper(configuration, "mapper/user/membership/UserMembershipQuotaMapper.xml");
         addMapper(
                 configuration,
                 "mapper/user/membership/payment/MembershipPaymentCallbackMapper.xml");

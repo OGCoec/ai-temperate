@@ -11,6 +11,7 @@ import com.example.temperate.service.auth.session.authentication.enums.SessionAu
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.token.dto.result.VerifiedAccessToken;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentBoundaryLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import java.util.Objects;
 import java.util.Set;
@@ -26,6 +27,8 @@ public final class MembershipPaymentLoadtestAccessServiceImpl
         implements MembershipPaymentLoadtestAccessService {
 
     private final MembershipPaymentLoadtestProperties properties;
+    private final MembershipPaymentBoundaryLoadtestProperties boundaryProperties;
+    private final MembershipPaymentBoundaryLoadtestPolicy boundaryPolicy;
     private final AuthTokenService tokenService;
     private final PublicIdCodec publicIdCodec;
     private final UserLoginIdentityMapper identityMapper;
@@ -34,11 +37,15 @@ public final class MembershipPaymentLoadtestAccessServiceImpl
 
     public MembershipPaymentLoadtestAccessServiceImpl(
             MembershipPaymentLoadtestProperties properties,
+            MembershipPaymentBoundaryLoadtestProperties boundaryProperties,
+            MembershipPaymentBoundaryLoadtestPolicy boundaryPolicy,
             AuthTokenService tokenService,
             PublicIdCodec publicIdCodec,
             UserLoginIdentityMapper identityMapper,
             UserMembershipQuotaMapper quotaMapper) {
         this.properties = Objects.requireNonNull(properties);
+        this.boundaryProperties = Objects.requireNonNull(boundaryProperties);
+        this.boundaryPolicy = Objects.requireNonNull(boundaryPolicy);
         this.tokenService = Objects.requireNonNull(tokenService);
         this.publicIdCodec = Objects.requireNonNull(publicIdCodec);
         this.identityMapper = Objects.requireNonNull(identityMapper);
@@ -75,7 +82,9 @@ public final class MembershipPaymentLoadtestAccessServiceImpl
         }
 
         // 白名单必须先于数据库读取，避免任意合法用户借压测分支探测账号或会员记录。
-        if (!allowedUserIds.contains(userId)) {
+        boolean fixedBoundaryUser = boundaryProperties.enabled()
+                && boundaryPolicy.isBoundaryUser(userId);
+        if (!allowedUserIds.contains(userId) && !fixedBoundaryUser) {
             throw error(
                     SessionAuthenticationErrorCode.ACCOUNT_UNAVAILABLE,
                     "Account is unavailable for membership payment loadtest.");

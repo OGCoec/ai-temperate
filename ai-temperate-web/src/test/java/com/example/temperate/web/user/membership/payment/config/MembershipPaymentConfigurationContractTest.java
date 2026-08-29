@@ -21,12 +21,30 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.boot.autoconfigure.amqp.ConnectionFactoryCustomizer;
 import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertySourcesPropertyResolver;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * 该配置契约测试是来锁定会员支付 YAML 紧邻中文注释以及持久 delayed exchange、Quorum 队列和独立 DLQ。
  */
 final class MembershipPaymentConfigurationContractTest {
+
+    @Test
+    void hikariUsesTheApprovedSingleInstanceLoadtestCapacity() throws IOException {
+        MutablePropertySources sources = new MutablePropertySources();
+        new YamlPropertySourceLoader()
+                .load("application.yml", new ClassPathResource("application.yml"))
+                .forEach(sources::addLast);
+        PropertySourcesPropertyResolver resolver = new PropertySourcesPropertyResolver(sources);
+
+        assertThat(resolver.getProperty(
+                "spring.datasource.hikari.maximum-pool-size", Integer.class)).isEqualTo(96);
+        assertThat(resolver.getProperty(
+                "spring.datasource.hikari.minimum-idle", Integer.class)).isEqualTo(8);
+    }
 
     @Test
     void everyMembershipPaymentYamlLineHasAnAdjacentChineseComment()

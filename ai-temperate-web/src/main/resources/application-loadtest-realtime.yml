@@ -6,16 +6,16 @@ spring:
     activate:
       # 真实时间压测 Profile 名称必须与启动守卫白名单一致。
       on-profile: loadtest-realtime
-  # 会员支付压测对 AMQP 发布通道施加独立背压，避免四千零九十六个 HTTP 请求同时耗尽 Broker Channel。
+  # 会员支付压测对 AMQP 发布通道施加独立背压，避免二百五十六个 HTTP 请求同时耗尽 Broker Channel。
   rabbitmq:
-    # 客户端显式请求一万六千三百八十四个可协商通道，避免沿用 Java 客户端二千零四十七默认值压低 Broker 上限。
-    requested-channel-max: ${MEMBERSHIP_LOADTEST_RABBIT_REQUESTED_CHANNEL_MAX:16384}
+    # 五百一十二个可协商通道覆盖九十六个固定消费者、二百五十六个发布通道及预热管理余量。
+    requested-channel-max: ${MEMBERSHIP_LOADTEST_RABBIT_REQUESTED_CHANNEL_MAX:512}
     # Channel 缓存用于复用已确认发布后的通道，并限制生产者同时占用的通道数量。
     cache:
       # Channel 维度与单连接模式保持一致，不额外创建 RabbitMQ 连接池。
       channel:
-        # 五百一十二个通道形成发布并发硬上限，JMeter 的四千零九十六 HTTP 并发保持不变。
-        size: ${MEMBERSHIP_LOADTEST_RABBIT_CHANNEL_CACHE_SIZE:512}
+        # 二百五十六个缓存通道与 HTTP 并发上限一致，额外消费者不使用发布缓存额度。
+        size: ${MEMBERSHIP_LOADTEST_RABBIT_CHANNEL_CACHE_SIZE:256}
         # 通道池耗尽时最多等待三十秒，通过有界背压代替继续创建新通道直至 Broker 拒绝。
         checkout-timeout: ${MEMBERSHIP_LOADTEST_RABBIT_CHANNEL_CHECKOUT_TIMEOUT:30s}
 
@@ -23,20 +23,34 @@ spring:
 server:
   # 仅供 loadtest-realtime 本机调试使用的 HTTP 端口。
   port: ${SERVER_PORT:6655}
-  # 真实并发回调测试使用独立 Tomcat 容量，避免五百条同时建连被默认一百长度的监听队列误判为业务失败。
+  # 真实并发回调测试使用二百五十六连接的有界 Tomcat 容量，超出部分在客户端公平等待。
   tomcat:
-    # 压测连接接收队列与统一四千零九十六并发上限一致，只影响该受控压测 Profile。
-    accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:4096}
-    # 压测同时连接上限统一为四千零九十六，不改变普通及生产 Profile 的连接配置。
-    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:4096}
-    # Tomcat 工作线程上限按本轮明确的压测合同统一为四千零九十六，仅用于受控本机压测。
+    # 压测连接接收队列与二百五十六并发上限一致，只影响该受控压测 Profile。
+    accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:256}
+    # 三百二十个连接为二百五十六正式请求预留六十四个采样、探针和管理连接，避免观测连接挤占实验并发。
+    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:320}
+    # Tomcat 工作线程上限按本轮明确的压测合同统一为二百五十六，仅用于受控本机压测。
     threads:
       # 高线程上限只定义容量边界，正式运行仍必须监控线程、内存、CPU 和请求超时。
-      max: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_THREADS:4096}
+      max: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_THREADS:256}
+
   # 实时压测仍使用本机 HTTP，避免继承默认 TLS 配置导致必须准备证书。
   ssl:
     # 仅在 loadtest-realtime 下关闭 Web 服务器 TLS，回调和 JMeter 均走回环 HTTP。
     enabled: false
+
+# 本机正式复测只为 Hikari 连接获取与占用耗时发布受控分位数，不开放 Actuator 指标端点。
+management:
+  # Micrometer 分布配置用于内部回环采样服务读取累计 P95/P99。
+  metrics:
+    # 只为两个固定 Hikari Timer 启用分位数，避免为所有指标增加内存成本。
+    distribution:
+      # 固定 Timer 名称的分位数不包含用户、订单或连接等高基数标签。
+      percentiles:
+        # 连接获取耗时用于判断连接等待是否成为数据库尾延迟的主要组成部分。
+        hikaricp.connections.acquire: 0.95,0.99
+        # 连接占用耗时用于关联高并发期间数据库工作时长与连接池容量。
+        hikaricp.connections.usage: 0.95,0.99
 
 # 真实时间压测只启用会员模拟支付闭环，不接入真实支付、会员升级或退款平台。
 app:
@@ -52,6 +66,46 @@ app:
   membership-payment:
     # 该 Profile 明确打开会员模拟支付，普通 Profile 仍由基础配置保持关闭。
     enabled: true
+    # 真实时间压测使用生产微批实现限制进入 Lettuce 的订单快照写入量。
+    redis-write:
+      # 每个 Pipeline 最多包含六十四条独立单订单 Lua，与生产默认批量保持一致。
+      batch-size: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_BATCH_SIZE:64}
+      # 正式复测固定六条 lane，每条 lane 最多一个 Pipeline 批次在途。
+      lane-count: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_LANE_COUNT:6}
+      # 第一条进入批次后最多等待一毫秒，满批时立即提交。
+      flush-window: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_FLUSH_WINDOW:1ms}
+      # 最多三百八十四条逻辑写入同时处于队列或 Redis 执行阶段。
+      maximum-inflight: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_MAXIMUM_INFLIGHT:384}
+      # HTTP 请求取得许可与等待结果共享三十秒截止时间。
+      submit-timeout: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_SUBMIT_TIMEOUT:30s}
+      # 停止压测应用时最多等待五秒排空已接收写入。
+      shutdown-timeout: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_SHUTDOWN_TIMEOUT:5s}
+    # 正式压测在 readiness 前执行无订单、无消息副作用的基础设施技术预热。
+    warmup:
+      # 本 Profile 显式打开 Redis Lua 与 Rabbit 拓扑预热。
+      enabled: ${MEMBERSHIP_PAYMENT_WARMUP_ENABLED:true}
+      # 预热失败时启动失败，禁止在依赖未就绪时采集正式性能样本。
+      fail-fast: ${MEMBERSHIP_PAYMENT_WARMUP_FAIL_FAST:true}
+    # 实时压测需要逐条关联HTTP、Rabbit和回调Worker耗时。
+    observability:
+      # 压测保持全量聚合指标和AOP计时开启。
+      enabled: true
+      # 第二轮关闭旧全量明细开关，避免回调空轮询和查询类操作重新把固定日志放大到GB级。
+      detail-log-enabled: ${MEMBERSHIP_PAYMENT_TIMING_DETAIL_LOG_ENABLED:false}
+      # 正式复测关闭普通成功采样，HTTP关键入口由下方强制列表输出，其他操作仍保留慢请求和失败证据。
+      sample-rate: ${MEMBERSHIP_PAYMENT_TIMING_SAMPLE_RATE:0}
+      # 任意操作超过一秒都必须输出，强制列表不会覆盖该慢请求规则。
+      slow-threshold: ${MEMBERSHIP_PAYMENT_TIMING_SLOW_THRESHOLD:PT1S}
+      # 订单创建和支付发起始终输出以比较前后耗时，正常快速PENDING与CLOSING不再全量放大日志。
+      force-log-operations: ${MEMBERSHIP_PAYMENT_TIMING_FORCE_LOG_OPERATIONS:ORDER_CREATE,PAYMENT_ATTEMPT}
+      # 正式运行必须注入唯一批次号，使固定日志文件中的多次运行可以严格隔离。
+      run-id: ${MEMBERSHIP_PAYMENT_TIMING_RUN_ID:unavailable}
+      # 受控四万用户压测允许输出22字符公共订单ID，便于逐订单关联数据库证据。
+      include-public-order-id: true
+    # 真实订单创建 HTTP 墙钟证据只有编排器显式开启时才注册，普通本机调试也不会产生资格日志。
+    order-create-http-evidence:
+      # 正式 40K/80K 运行由启动脚本设置为 true，并同时把服务绑定到回环地址。
+      enabled: ${MEMBERSHIP_ORDER_CREATE_HTTP_EVIDENCE_ENABLED:false}
     # 本地实时压测允许创建支付尝试。
     checkout-enabled: true
     # 本地实时压测只使用项目内模拟 Provider，绝不连接 BAR。

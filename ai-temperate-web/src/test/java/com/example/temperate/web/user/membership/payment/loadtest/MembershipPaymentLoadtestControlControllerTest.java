@@ -106,6 +106,47 @@ final class MembershipPaymentLoadtestControlControllerTest {
     }
 
     @Test
+    void loopbackCanArmInspectAndReleaseCallbackHold() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        var armed = new MembershipPaymentLoadtestControlService.CallbackHoldProbe(
+                true, false, 60_000L);
+        var held = new MembershipPaymentLoadtestControlService.CallbackHoldProbe(
+                true, true, 55_000L);
+        var released = new MembershipPaymentLoadtestControlService.CallbackHoldProbe(
+                false, true, 0L);
+        when(controlService.armCallbackHold(orderId, 60)).thenReturn(armed);
+        when(controlService.inspectCallbackHold(orderId)).thenReturn(held);
+        when(controlService.releaseCallbackHold(orderId)).thenReturn(released);
+
+        assertThat(controller.armCallbackHold(
+                orderId, 60, request("POST", "127.0.0.1")).getBody())
+                .isEqualTo(armed);
+        assertThat(controller.callbackHold(
+                orderId, request("GET", "::1")).getBody())
+                .isEqualTo(held);
+        assertThat(controller.releaseCallbackHold(
+                orderId, request("POST", "127.0.0.1")).getBody())
+                .isEqualTo(released);
+    }
+
+    @Test
+    void loopbackCanPauseAndResumeBothWorkers() {
+        var paused = new MembershipPaymentLoadtestControlService.WorkerPauseProbe(
+                true, 60_000L, true, 60_000L);
+        var resumed = new MembershipPaymentLoadtestControlService.WorkerPauseProbe(
+                false, 0L, false, 0L);
+        when(controlService.pauseWorkers(60)).thenReturn(paused);
+        when(controlService.resumeWorkers()).thenReturn(resumed);
+
+        assertThat(controller.pauseWorkers(
+                60, request("POST", "127.0.0.1")).getBody())
+                .isEqualTo(paused);
+        assertThat(controller.resumeWorkers(
+                request("POST", "127.0.0.1")).getBody())
+                .isEqualTo(resumed);
+    }
+
+    @Test
     void remoteAddressIsRejectedBeforeAnyControlAction() {
         assertThatThrownBy(() -> controller.flush(request("POST", "192.0.2.10")))
                 .isInstanceOfSatisfying(ResponseStatusException.class,

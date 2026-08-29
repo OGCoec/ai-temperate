@@ -77,3 +77,10 @@ test('credential import never accepts client-controlled expiration', () => {
 	assert.match(sheet, /导入后有效 7 天/)
 	assert.match(sheet, /导入后有效 1 个月/)
 })
+
+test('credential console reports partial capacity rejection without blocking full-pool upserts', () => {
+	const page = source('components/admin/workspace/ip2location-keys-panel.vue')
+
+	assert.match(page, /capacityRejectedCount/)
+	assert.doesNotMatch(page, /if \(this\.allKeys\.length >= 100\)/)
+})

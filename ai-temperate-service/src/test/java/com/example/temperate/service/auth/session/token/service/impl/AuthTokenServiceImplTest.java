@@ -72,6 +72,18 @@ class AuthTokenServiceImplTest {
     }
 
     @Test
+    void issuesAnExplicitlyBoundAccessTokenWithoutChangingTheDefaultTtl() {
+        Claims longLived = jwtUtils.parseToken(
+                service.issueAccessToken(10001L, Duration.ofHours(15)));
+        Claims normal = jwtUtils.parseToken(service.issueAccessToken(10001L));
+
+        assertThat(longLived.getExpiration().toInstant().getEpochSecond()
+                - longLived.getIssuedAt().toInstant().getEpochSecond()).isEqualTo(54_000L);
+        assertThat(normal.getExpiration().toInstant().getEpochSecond()
+                - normal.getIssuedAt().toInstant().getEpochSecond()).isEqualTo(600L);
+    }
+
+    @Test
     void verifiesActiveAndExpiredTokensWithoutSkippingSignatureVerification() {
         String active = service.issueAccessToken(10001L);
 

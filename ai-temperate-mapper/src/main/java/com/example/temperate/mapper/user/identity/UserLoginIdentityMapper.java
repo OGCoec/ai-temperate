@@ -66,6 +66,9 @@ public interface UserLoginIdentityMapper {
     List<AuthenticationContext> findAuthenticationByIds(
             @Param("identityIds") List<Long> identityIds);
 
+    /** 按固定测试用户 ID 批量读取身份模板，禁止调用方退化为逐条查询。 */
+    List<UserLoginIdentity> findByIds(@Param("identityIds") List<Long> identityIds);
+
     /**
      * 按已认证用户 ID 读取当前 TOTP 状态和密文；调用方必须在服务层完成解密与状态一致性校验。
      */
@@ -81,6 +84,12 @@ public interface UserLoginIdentityMapper {
     boolean existsById(@Param("identityId") long identityId);
 
     int insert(UserLoginIdentity identity);
+
+    /**
+     * 一次插入一批受控毫秒边界测试身份；调用方必须把批次限制在 500 条以内并先验证固定 ID 区间。
+     */
+    int batchInsertBoundaryFixtures(
+            @Param("identities") List<UserLoginIdentity> identities);
 
     /**
      * 尝试插入 OAuth 首次登录账号；任一唯一约束已被并发请求占用时返回零并保持当前事务可继续查询。

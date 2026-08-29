@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.membership.payment.provider.impl;
 
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
+
 import com.example.temperate.common.redis.key.MembershipOrderRedisId;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
@@ -17,7 +19,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 @ConditionalOnProperty(
-        prefix = "app.membership-payment",
+        prefix = "app.membership-payment.simulator",
         name = "enabled",
         havingValue = "true")
 public final class SimulatedPaymentStatusQueryServiceImpl
@@ -45,6 +47,6 @@ public final class SimulatedPaymentStatusQueryServiceImpl
                         null,
                         null,
                         null,
-                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)));
+                        MembershipPaymentTime.now(clock)));
     }
 }

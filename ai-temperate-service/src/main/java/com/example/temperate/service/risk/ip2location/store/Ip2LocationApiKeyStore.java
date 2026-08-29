@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 定义 IP2Location 两个 Redis Hash 的原子写入、随机扣减、分页读取和删除边界。
+ * 该接口是来定义 IP2Location 两个 Redis Hash 的有界写入、随机扣减、分页读取和删除边界。
  */
 public interface Ip2LocationApiKeyStore {
 
@@ -25,7 +25,8 @@ public interface Ip2LocationApiKeyStore {
     record BatchWriteResult(
             int createdCount,
             int updatedCount,
-            int duplicateCount) {
+            int duplicateCount,
+            int capacityRejectedCount) {
     }
 
     record AcquiredEnvelope(

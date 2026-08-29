@@ -4,73 +4,71 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentRabbitPublishBreakdown;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTimingRecorder;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitConfirmCoordinator;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageDeliveryMode;
-import org.springframework.amqp.core.MessagePostProcessor;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.connection.CorrelationData;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 /**
- * 该单元测试是来约束会员支付消息强制持久化、携带 x-delay，并且只有 Publisher Confirm ACK 才返回成功。
+ * 该单元测试是来约束既有 Sender 接口完整委托有界 Confirm 协调器，并原样传播对应消息的受控失败。
  */
 final class ConfirmedMembershipPaymentRabbitSenderTest {
 
     @Test
-    void ackedMessageIsPersistentAndCarriesDelay() {
-        RabbitTemplate template = mock(RabbitTemplate.class);
-        AtomicReference<Message> sent = new AtomicReference<>();
-        doAnswer(invocation -> {
-            MessagePostProcessor processor = invocation.getArgument(3);
-            CorrelationData correlation = invocation.getArgument(4);
-            sent.set(processor.postProcessMessage(
-                    new Message(new byte[0], new MessageProperties())));
-            correlation.getFuture().complete(new CorrelationData.Confirm(true, null));
-            return null;
-        }).when(template).convertAndSend(
-                anyString(), anyString(), any(), any(MessagePostProcessor.class),
-                any(CorrelationData.class));
+    void delegatesExactMessageAndDelayToBoundedConfirmCoordinator() {
+        MembershipPaymentRabbitConfirmCoordinator coordinator =
+                mock(MembershipPaymentRabbitConfirmCoordinator.class);
+        MembershipPaymentTimingRecorder recorder = mock(MembershipPaymentTimingRecorder.class);
+        MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope = envelope();
+        MembershipPaymentRabbitPublishBreakdown breakdown =
+                new MembershipPaymentRabbitPublishBreakdown(3L, 5L, 1);
+        org.mockito.Mockito.when(coordinator.publishAndAwait(
+                        MembershipPaymentRabbitNames.PAYMENT_EXCHANGE,
+                        MembershipPaymentRabbitNames.PAYMENT_ROUTING_KEY,
+                        envelope,
+                        Duration.ofSeconds(10)))
+                .thenReturn(breakdown);
 
-        new ConfirmedMembershipPaymentRabbitSender(template).send(
+        new ConfirmedMembershipPaymentRabbitSender(coordinator, recorder).send(
                 MembershipPaymentRabbitNames.PAYMENT_EXCHANGE,
                 MembershipPaymentRabbitNames.PAYMENT_ROUTING_KEY,
-                envelope(),
+                envelope,
                 Duration.ofSeconds(10));
+        verify(recorder).recordRabbitPublishBreakdown(breakdown);
 
-        assertThat(sent.get().getMessageProperties().getDeliveryMode())
-                .isEqualTo(MessageDeliveryMode.PERSISTENT);
-        Object delayHeader = sent.get().getMessageProperties().getHeader("x-delay");
-        assertThat(delayHeader).isEqualTo(10_000L);
+        verify(coordinator).publishAndAwait(
+                MembershipPaymentRabbitNames.PAYMENT_EXCHANGE,
+                MembershipPaymentRabbitNames.PAYMENT_ROUTING_KEY,
+                envelope,
+                Duration.ofSeconds(10));
     }
 
     @Test
     void brokerNackProducesControlledRabbitUnavailableError() {
-        RabbitTemplate template = mock(RabbitTemplate.class);
-        doAnswer(invocation -> {
-            CorrelationData correlation = invocation.getArgument(4);
-            correlation.getFuture().complete(
-                    new CorrelationData.Confirm(false, "test-nack"));
-            return null;
-        }).when(template).convertAndSend(
-                anyString(), anyString(), any(), any(MessagePostProcessor.class),
-                any(CorrelationData.class));
+        MembershipPaymentRabbitConfirmCoordinator coordinator =
+                mock(MembershipPaymentRabbitConfirmCoordinator.class);
+        MembershipPaymentTimingRecorder recorder = mock(MembershipPaymentTimingRecorder.class);
+        doThrow(new MembershipPaymentException(
+                MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE,
+                "not confirmed"))
+                .when(coordinator)
+                .publishAndAwait(anyString(), anyString(), any(), any());
 
-        assertThatThrownBy(() -> new ConfirmedMembershipPaymentRabbitSender(template).send(
+        assertThatThrownBy(() -> new ConfirmedMembershipPaymentRabbitSender(coordinator, recorder).send(
                 MembershipPaymentRabbitNames.PAYMENT_EXCHANGE,
                 MembershipPaymentRabbitNames.PAYMENT_ROUTING_KEY,
                 envelope(),

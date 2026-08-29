@@ -5,11 +5,14 @@ import com.example.temperate.service.user.membership.payment.config.MembershipPa
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTraceContext;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentWorker;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderBatchPersistenceService;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderPersistenceService;
 import com.example.temperate.service.user.membership.payment.persistence.OrderPersistToken;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.OrderPersistenceQueue;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkerOutcome;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkerRunResult;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -71,7 +74,10 @@ public final class MembershipOrderBatchPersistenceServiceImpl
     }
 
     @Override
-    public void flushOneRun() {
+    public MembershipPaymentWorkerRunResult flushOneRun() {
+        long startedNanos = System.nanoTime();
+        MembershipPaymentWorkerRunResult runResult = MembershipPaymentWorkerRunResult.empty(
+                MembershipPaymentWorkerOutcome.LOCK_UNAVAILABLE);
         RLock lock = redissonClient.getLock(keyFactory.orderPersistenceLockKey());
         boolean acquired = false;
         try {
@@ -80,11 +86,17 @@ public final class MembershipOrderBatchPersistenceServiceImpl
                     Math.max(1L, properties.lockWait().toMillis()),
                     TimeUnit.MILLISECONDS);
             if (!acquired) {
-                return;
+                return runResult;
             }
-            flushWhileLocked();
+            runResult = flushWhileLocked();
         } catch (InterruptedException exception) {
+            runResult = MembershipPaymentWorkerRunResult.empty(
+                    MembershipPaymentWorkerOutcome.RETRY);
             Thread.currentThread().interrupt();
+        } catch (RuntimeException exception) {
+            runResult = MembershipPaymentWorkerRunResult.empty(
+                    MembershipPaymentWorkerOutcome.FAILED);
+            throw exception;
         } finally {
             if (acquired && lock.isHeldByCurrentThread()) {
                 try {
@@ -98,24 +110,53 @@ public final class MembershipOrderBatchPersistenceServiceImpl
                 }
             }
             updateQueueGauges();
+            recordWorkerRun(runResult, startedNanos);
         }
+        return runResult;
     }
 
-    private void flushWhileLocked() {
+    private MembershipPaymentWorkerRunResult flushWhileLocked() {
         long now = clock.millis();
         persistenceQueue.recoverTimedOut(
                 now - properties.processingTimeout().toMillis(),
                 properties.batchSize(),
                 now);
+        int batches = 0;
+        int claimedItems = 0;
         for (int batch = 0; batch < properties.maxBatchesPerRun(); batch++) {
             List<OrderPersistToken> tokens = persistenceQueue.claim(
                     properties.batchSize(), clock.millis());
             if (tokens.isEmpty()) {
-                return;
+                return new MembershipPaymentWorkerRunResult(
+                        batches, claimedItems, MembershipPaymentWorkerOutcome.DRAINED);
             }
+            batches++;
+            claimedItems += tokens.size();
             if (!persist(tokens)) {
-                return;
+                return new MembershipPaymentWorkerRunResult(
+                        batches, claimedItems, MembershipPaymentWorkerOutcome.RETRY);
             }
+        }
+        return new MembershipPaymentWorkerRunResult(
+                batches, claimedItems, MembershipPaymentWorkerOutcome.CAPACITY);
+    }
+
+    private void recordWorkerRun(
+            MembershipPaymentWorkerRunResult result,
+            long startedNanos) {
+        try {
+            metrics.workerRunCompleted(
+                    MembershipPaymentWorker.ORDER_PERSIST,
+                    result.batches(),
+                    result.claimedItems(),
+                    result.outcome().name().toLowerCase(java.util.Locale.ROOT),
+                    System.nanoTime() - startedNanos,
+                    Thread.currentThread().getName());
+        } catch (RuntimeException exception) {
+            // 压测观测不得影响锁释放和刷盘语义；采样缺失由正式测试门禁单独裁决。
+            LOGGER.debug(
+                    "Membership order persistence worker observation failed; traceId={}",
+                    MembershipPaymentTraceContext.currentTraceId());
         }
     }
 
@@ -186,4 +227,5 @@ public final class MembershipOrderBatchPersistenceServiceImpl
                     MembershipPaymentTraceContext.currentTraceId());
         }
     }
+
 }

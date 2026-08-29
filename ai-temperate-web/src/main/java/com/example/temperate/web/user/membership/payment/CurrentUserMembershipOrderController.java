@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 该 Controller 是来为已认证 H5、Android、curl 和 Apifox 客户端创建、查询及取消当前用户会员支付订单。
  *
- * <p>接口只编排订单状态，不接收客户端价格、不发放会员权益，也不提供模拟支付页面或真实支付跳转。</p>
+ * <p>接口不接收客户端价格、不发放会员权益；支付发起可返回 BAR 沙箱的短时签名 POST 提交描述，但不接入真实资金渠道。</p>
  */
 @RestController
 @RequestMapping("/api/user/membership-orders")
@@ -40,7 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
         havingValue = "true")
 @Tag(
         name = "会员-支付订单",
-        description = "供已通过会话认证的用户创建服务端定价的会员模拟支付订单、查询 Redis 优先的实时状态及取消待支付订单；接口执行资源级所有权校验，不负责真实支付、退款或会员权益发放。")
+        description = "供已通过会话认证的用户创建服务端定价的会员模拟支付订单、查询 Redis 优先实时状态、取消待支付订单及获取当前 Provider 的短时提交描述；接口执行资源级所有权校验，不发生真实资金操作或会员权益发放。")
 public final class CurrentUserMembershipOrderController {
 
     private static final String CDN_CACHE_CONTROL = "CDN-Cache-Control";
@@ -114,9 +114,9 @@ public final class CurrentUserMembershipOrderController {
 
     @PostMapping("/{orderId}/payment-attempts")
     @Operation(
-            summary = "记录当前用户发起会员支付",
-            description = "仅未过期的 PENDING_PAYMENT 可首次记录并返回 201；有效期内幂等重放返回原 paymentStartedAt 和 200，其余状态返回 409。")
-    public ResponseEntity<MembershipOrderResponse> startPayment(
+            summary = "发起当前用户会员模拟支付",
+            description = "仅未过期的 PENDING_PAYMENT 可首次记录并返回 201；有效期内幂等重放返回 200。BAR 环境返回一次短时签名 POST 提交描述，供浏览器立即提交；Local 环境明确返回 checkoutSubmission:null。")
+    public ResponseEntity<MembershipPaymentAttemptResponse> startPayment(
             @AuthenticationPrincipal SessionPrincipal principal,
             @PathVariable
             @Parameter(schema = @Schema(
@@ -131,7 +131,7 @@ public final class CurrentUserMembershipOrderController {
                 .status(result.started() ? HttpStatus.CREATED : HttpStatus.OK)
                 .cacheControl(noStore())
                 .header(CDN_CACHE_CONTROL, "no-store")
-                .body(MembershipOrderResponse.from(result.snapshot()));
+                .body(MembershipPaymentAttemptResponse.from(result));
     }
 
     private static ResponseEntity<MembershipOrderResponse> response(

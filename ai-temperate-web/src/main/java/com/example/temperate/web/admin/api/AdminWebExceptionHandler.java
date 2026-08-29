@@ -2,7 +2,6 @@ package com.example.temperate.web.admin.api;
 
 import com.example.temperate.service.admin.AdminErrorCode;
 import com.example.temperate.service.admin.AdminException;
-import com.example.temperate.service.risk.ip2location.exception.Ip2LocationApiKeyCapacityExceededException;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.web.admin.security.AdminClientPlatformResolver;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
@@ -80,26 +79,6 @@ public final class AdminWebExceptionHandler {
                 .body(new ApiErrorResponse(
                         exception.code().name(),
                         message(exception.code()),
-                        clock.instant()));
-    }
-
-    /**
-     * 将 Redis 原子容量竞争转换为稳定冲突响应，不向管理员端回显本批 Key 或内部 Hash 信息。
-     */
-    @ExceptionHandler(Ip2LocationApiKeyCapacityExceededException.class)
-    public ResponseEntity<ApiErrorResponse> handleIp2LocationCapacity(
-            Ip2LocationApiKeyCapacityExceededException exception) {
-        HttpStatus httpStatus = HttpStatus.CONFLICT;
-        exceptionLogger.logKnown(
-                "admin_ip2location_key_capacity_reached",
-                "IP2LOCATION_KEY_LIMIT_EXCEEDED",
-                httpStatus,
-                exception);
-        return ResponseEntity.status(httpStatus)
-                .cacheControl(CacheControl.noStore().cachePrivate())
-                .body(new ApiErrorResponse(
-                        "IP2LOCATION_KEY_LIMIT_EXCEEDED",
-                        "IP2Location 凭据池已达到 100 条上限，请先删除不再使用的凭据。",
                         clock.instant()));
     }
 

@@ -114,6 +114,10 @@ spring:
     driver-class-name: org.postgresql.Driver
     # HikariCP 连接池等待和 PostgreSQL JDBC 网络读取必须有界，避免 Rabbit 消息长期停留在 Unacked。
     hikari:
+      # 单实例数据库连接池最多允许九十六条连接；该压测值接近 PostgreSQL 百连接上限，部署多实例前必须按实例数重新下调。
+      maximum-pool-size: ${POSTGRES_POOL_MAXIMUM_SIZE:96}
+      # 常驻空闲连接固定为八条，避免仅提高最大值后长期占用九十六条数据库会话。
+      minimum-idle: ${POSTGRES_POOL_MINIMUM_IDLE:8}
       # 获取数据库连接最多等待十秒，连接池耗尽时尽快失败并交给上层有限重试。
       connection-timeout: ${POSTGRES_POOL_CONNECTION_TIMEOUT_MS:10000}
       # 连接存活检查最多等待五秒，避免失效连接长期占用消费线程。
@@ -264,9 +268,47 @@ app:
   membership-payment:
     # 总开关默认关闭，只有受控测试环境完成依赖和密钥配置后才允许开启。
     enabled: ${MEMBERSHIP_PAYMENT_ENABLED:false}
+    # 订单快照跨请求微批配置，用有界应用层排队代替无界堆积到 Lettuce 命令队列。
+    redis-write:
+      # 单次 Pipeline 最多提交六十四条独立单订单 Lua，降低大批次的队头阻塞且不把多个订单合进同一脚本。
+      batch-size: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_BATCH_SIZE:64}
+      # 生产默认六条有界 Pipeline lane，每条 lane 串行且同一订单依稳定哈希保持顺序。
+      lane-count: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_LANE_COUNT:6}
+      # 第一条进入批次后最多等待一毫秒，批次满六十四条时立即发送。
+      flush-window: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_FLUSH_WINDOW:1ms}
+      # 排队中与执行中的逻辑写入总数最多三百八十四，允许六个六十四条 Pipeline 同时周转。
+      maximum-inflight: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_MAXIMUM_INFLIGHT:384}
+      # 取得许可和等待写入结果共用三十秒总截止时间，禁止两个阶段重复计算超时。
+      submit-timeout: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_SUBMIT_TIMEOUT:30s}
+      # 应用停止时最多用五秒排空已接受写入，超时后让剩余请求受控失败。
+      shutdown-timeout: ${MEMBERSHIP_PAYMENT_REDIS_WRITE_SHUTDOWN_TIMEOUT:5s}
+    # 无业务副作用技术预热只建立连接、加载 Lua 并被动检查 Rabbit 拓扑，不创建订单或发送消息。
+    warmup:
+      # 普通环境默认关闭，受控压测 Profile 显式打开后才阻塞 readiness 执行预热。
+      enabled: ${MEMBERSHIP_PAYMENT_WARMUP_ENABLED:false}
+      # 预热失败默认阻止已经启用会员支付的实例进入可用状态，避免带病接收支付请求。
+      fail-fast: ${MEMBERSHIP_PAYMENT_WARMUP_FAIL_FAST:true}
+    # 支付全链路耗时观测配置，诊断旁路不得改变状态机、ACK或外部调用结果。
+    observability:
+      # 默认启用全量聚合指标；关闭时不创建AOP计时上下文。
+      enabled: ${MEMBERSHIP_PAYMENT_OBSERVABILITY_ENABLED:true}
+      # 生产默认关闭逐条明细，测试Profile可显式开启以复盘每次状态迁移。
+      detail-log-enabled: ${MEMBERSHIP_PAYMENT_TIMING_DETAIL_LOG_ENABLED:false}
+      # 普通成功链路默认按Trace稳定采样百分之一，失败和慢请求不受采样限制。
+      sample-rate: ${MEMBERSHIP_PAYMENT_TIMING_SAMPLE_RATE:0.01}
+      # 单次入口超过一秒时必须输出慢请求日志，便于定位BAR或基础设施尾延迟。
+      slow-threshold: ${MEMBERSHIP_PAYMENT_TIMING_SLOW_THRESHOLD:PT1S}
+      # 普通环境未绑定正式压测批次，日志使用安全占位值避免错误归属到其他运行。
+      run-id: ${MEMBERSHIP_PAYMENT_TIMING_RUN_ID:unavailable}
+      # 生产默认禁止输出可关联订单的公共ID，仅受控压测Profile显式覆盖。
+      include-public-order-id: ${MEMBERSHIP_PAYMENT_TIMING_INCLUDE_PUBLIC_ORDER_ID:false}
+    # 支付发起可独立暂停；关闭后仍保留 BAR 回调、主动查询、关单和退款处理能力。
+    checkout-enabled: ${MEMBERSHIP_PAYMENT_CHECKOUT_ENABLED:true}
+    # 当前环境只选择一个 Provider，切换前必须先清空或等待旧 Provider 非终态订单结束。
+    default-provider: ${MEMBERSHIP_PAYMENT_DEFAULT_PROVIDER:LOCAL_SIMULATOR}
     # 压测认证默认关闭，允许列表只从本地受限环境变量绑定，不写入仓库或生产默认配置。
     loadtest:
-      # 仅在 local-dev、test、loadtest-fast 或 loadtest-realtime Profile 中允许开启 AT-only 路径。
+      # 仅在本地专用 Profile 或 prod 与 loadtest-bar 的严格组合中允许开启 AT-only 路径。
       enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_ENABLED:false}
       # 现有用户白名单使用环境变量 MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS 提供，禁止在 YAML 硬编码账号。
       allowed-user-ids: ${MEMBERSHIP_PAYMENT_LOADTEST_ALLOWED_USER_IDS:}
@@ -288,14 +330,38 @@ app:
       timestamp-tolerance: ${SIMULATED_PAYMENT_TIMESTAMP_TOLERANCE:PT5M}
       # GET Query、POST 表单或 JSON 的最大 UTF-8 载荷限制为十六 KiB。
       request-max-bytes: ${SIMULATED_PAYMENT_REQUEST_MAX_BYTES:16384}
+    # BAR 沙箱通过真实 HTTPS 完成创建、查询、关单、退款和异步回调，但不发生真实资金行为。
+    bar:
+      # BAR 默认关闭；启用时必须同时关闭本地模拟器并提供完整商户配置。
+      enabled: ${BAR_PAYMENT_ENABLED:false}
+      # BAR Origin 固定为公开沙箱 HTTPS 默认四四三端口，禁止请求级覆盖。
+      base-url: ${BAR_PAYMENT_BASE_URL:https://ihaveagoddamnplan.com}
+      # BAR 商户号只从环境变量读取，仓库不提供共享默认值。
+      pid: ${BAR_PAYMENT_PID:}
+      # 活动密钥版本用于所有出站请求，旧版本仍通过版本 Map 保留给历史回调验签。
+      active-key-version: ${BAR_PAYMENT_ACTIVE_KEY_VERSION:0}
+      # BAR API Key 按明确版本号绑定，避免依赖环境变量尾部推断整数 Map 键。
+      api-keys:
+        # BAR 第一版 API Key 只从系统环境变量读取，仓库不保存密钥。
+        1: ${APP_MEMBERSHIP_PAYMENT_BAR_API_KEYS_1:}
+      # BAR 服务器回调地址必须是 niko000o.site 的固定 GET 路径。
+      notify-url: ${BAR_PAYMENT_NOTIFY_URL:}
+      # BAR H5 完成后返回地址必须使用 niko000o.site HTTPS 默认端口。
+      return-url: ${BAR_PAYMENT_RETURN_URL:}
+      # BAR 建连最多等待两秒，超时稳定映射为网关超时。
+      connect-timeout: ${BAR_PAYMENT_CONNECT_TIMEOUT:PT2S}
+      # BAR 响应最多等待五秒，保证回调内权威查询不超过对方十秒等待边界。
+      read-timeout: ${BAR_PAYMENT_READ_TIMEOUT:PT5S}
+      # BAR JSON 正文硬限制六十四 KiB，超过后在 Jackson 建树前拒绝。
+      response-max-bytes: ${BAR_PAYMENT_RESPONSE_MAX_BYTES:65536}
     # 回调 ready/processing 双 ZSET 每五秒执行有界领取、恢复与批量落库。
     callback:
       # 调度固定延迟默认五秒，上一轮未完成时不会并发启动同一实例的新一轮。
       flush-interval-millis: ${MEMBERSHIP_PAYMENT_CALLBACK_FLUSH_INTERVAL_MILLIS:5000}
       # 每批最多领取一百个回调，禁止超过 Redis 批量边界五百。
       batch-size: ${MEMBERSHIP_PAYMENT_CALLBACK_BATCH_SIZE:100}
-      # 单轮最多处理二十批，避免调度线程被持续流量永久占用。
-      max-batches-per-run: ${MEMBERSHIP_PAYMENT_CALLBACK_MAX_BATCHES_PER_RUN:20}
+      # 单轮最多处理五十个百条批次，使五千条正式区段无需跨越额外五秒调度间隔，同时保持严格有界。
+      max-batches-per-run: ${MEMBERSHIP_PAYMENT_CALLBACK_MAX_BATCHES_PER_RUN:50}
       # processing 领取超过六十秒未完成时允许恢复到 ready。
       processing-timeout: ${MEMBERSHIP_PAYMENT_CALLBACK_PROCESSING_TIMEOUT:PT60S}
       # 传输层 HMAC 短期幂等固定三十秒，数据库唯一键继续承担最终幂等。
@@ -310,8 +376,8 @@ app:
       flush-interval-millis: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_FLUSH_INTERVAL_MILLIS:5000}
       # 每批最多领取一百个版本化 dirty 令牌。
       batch-size: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_BATCH_SIZE:100}
-      # 单轮最多处理二十批，避免持有 Redisson 协调锁时间无界增长。
-      max-batches-per-run: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_MAX_BATCHES_PER_RUN:20}
+      # 单轮最多处理五十个百条批次，使五千条正式区段可在一次独立调度中完成且不会无界占用线程。
+      max-batches-per-run: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_MAX_BATCHES_PER_RUN:50}
       # processing 令牌超过六十秒未提交时允许恢复。
       processing-timeout: ${MEMBERSHIP_PAYMENT_ORDER_PERSIST_PROCESSING_TIMEOUT:PT60S}
       # Redisson 看门狗锁最多等待一百毫秒，未取得时跳过本轮而不阻塞线程。
@@ -1285,8 +1351,8 @@ app:
     counter-bytes: ${IDENTITY_PRESENCE_BLOOM_COUNTER_BYTES:1}
     # 每个 Redis String Bucket 保存一百万个计数器，当前约占一 MiB。
     counters-per-bucket: ${IDENTITY_PRESENCE_BLOOM_COUNTERS_PER_BUCKET:1000000}
-    # PostgreSQL 初始化使用五百条游标分页，避免一次加载全表。
-    build-batch-size: ${IDENTITY_PRESENCE_BLOOM_BUILD_BATCH_SIZE:500}
+    # PostgreSQL 初始化默认使用一百条游标分页，缩短单次原子 Bloom 变更占用 Redis 主线程的时间。
+    build-batch-size: ${IDENTITY_PRESENCE_BLOOM_BUILD_BATCH_SIZE:100}
     # 用户 ID 幂等凭据拆成二百五十六个 Set，控制单 Key 成员数量。
     receipt-shards: ${IDENTITY_PRESENCE_BLOOM_RECEIPT_SHARDS:256}
     # 单个过滤器最多按十万条规划，达到边界后必须扩容并重建。

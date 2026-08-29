@@ -14,6 +14,8 @@ import com.example.temperate.service.user.membership.payment.exception.Membershi
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
 import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkAvailableEvent;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkType;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,6 +27,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -45,6 +48,7 @@ import org.springframework.stereotype.Component;
 public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
 
     private static final int MAXIMUM_BATCH = 500;
+    private static final int PIPELINE_BATCH_SIZE = 50;
     private static final long IDEMPOTENCY_TTL_MILLIS = Duration.ofSeconds(30).toMillis();
     private static final long CALLBACK_TTL_MILLIS = Duration.ofHours(6).toMillis();
     private static final long MARKER_TTL_MILLIS = Duration.ofMinutes(10).toMillis();
@@ -61,18 +65,21 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
     private final long idempotencyTtlMillis;
     private final long callbackTtlMillis;
     private final long markerTtlMillis;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     public RedisPaymentCallbackQueue(
             StringRedisTemplate redisTemplate,
             RedisKeyFactory keyFactory,
-            MembershipPaymentProperties properties) {
+            MembershipPaymentProperties properties,
+            ApplicationEventPublisher eventPublisher) {
         this(
                 redisTemplate,
                 keyFactory,
                 properties.callback().dedupeTtl().toMillis(),
                 properties.callback().dataTtl().toMillis(),
-                properties.callback().markerTtl().toMillis());
+                properties.callback().markerTtl().toMillis(),
+                eventPublisher);
     }
 
     public RedisPaymentCallbackQueue(
@@ -83,7 +90,8 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
                 keyFactory,
                 IDEMPOTENCY_TTL_MILLIS,
                 CALLBACK_TTL_MILLIS,
-                MARKER_TTL_MILLIS);
+                MARKER_TTL_MILLIS,
+                event -> { });
     }
 
     private RedisPaymentCallbackQueue(
@@ -91,12 +99,14 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
             RedisKeyFactory keyFactory,
             long idempotencyTtlMillis,
             long callbackTtlMillis,
-            long markerTtlMillis) {
+            long markerTtlMillis,
+            ApplicationEventPublisher eventPublisher) {
         this.redisTemplate = Objects.requireNonNull(redisTemplate);
         this.keyFactory = Objects.requireNonNull(keyFactory);
         this.idempotencyTtlMillis = requireTtl(idempotencyTtlMillis);
         this.callbackTtlMillis = requireTtl(callbackTtlMillis);
         this.markerTtlMillis = requireTtl(markerTtlMillis);
+        this.eventPublisher = Objects.requireNonNull(eventPublisher);
     }
 
     @Override
@@ -159,9 +169,13 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
             throw unavailable("Redis payment callback enqueue result is malformed.");
         }
         try {
-            return new PaymentCallbackEnqueueResult(
+            PaymentCallbackEnqueueResult result = new PaymentCallbackEnqueueResult(
                     PaymentCallbackEnqueueOutcome.valueOf(parts[0]),
                     parts[1]);
+            if (result.outcome() == PaymentCallbackEnqueueOutcome.ENQUEUED) {
+                signalWork();
+            }
+            return result;
         } catch (IllegalArgumentException exception) {
             throw unavailable("Redis payment callback enqueue result is invalid.", exception);
         }
@@ -171,7 +185,7 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
     public boolean ensureReady(String callbackId, long readyAtEpochMillis) {
         PaymentCallbackRedisId validCallbackId = new PaymentCallbackRedisId(callbackId);
         requireEpochMillis(readyAtEpochMillis, "ensure ready time");
-        return executeLong(
+        boolean ready = executeLong(
                         ENSURE_READY,
                         List.of(
                                 keyFactory.paymentCallbackDataKey(validCallbackId),
@@ -180,6 +194,15 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
                         validCallbackId.value(),
                         Long.toString(readyAtEpochMillis))
                 == 1L;
+        if (ready) {
+            signalWork();
+        }
+        return ready;
+    }
+
+    private void signalWork() {
+        eventPublisher.publishEvent(new MembershipPaymentWorkAvailableEvent(
+                MembershipPaymentWorkType.CALLBACK));
     }
 
     @Override
@@ -294,28 +317,79 @@ public final class RedisPaymentCallbackQueue implements PaymentCallbackQueue {
         if (valid.isEmpty()) {
             return 0;
         }
-        List<String> keys = new ArrayList<>();
-        keys.add(keyFactory.paymentCallbackProcessingKey());
-        List<Object> arguments = new ArrayList<>();
-        arguments.add(Integer.toString(valid.size()));
-        valid.forEach(completion -> {
-            PaymentCallbackClaim claim = completion.claim();
-            String callbackDataKey = keyFactory.paymentCallbackDataKey(
-                    new PaymentCallbackRedisId(claim.callbackId()));
-            keys.add(callbackDataKey);
-            keys.add(completion.orderId() == null
-                    ? callbackDataKey
-                    : keyFactory.membershipOrderCallbackMarkerKey(
-                            new MembershipOrderRedisId(completion.orderId())));
-            keys.add(completion.orderId() == null
-                    ? callbackDataKey
-                    : keyFactory.simulatedPaymentProviderResultKey(
-                            new MembershipOrderRedisId(completion.orderId())));
-            arguments.add(claim.callbackId());
-            arguments.add(Long.toString(claim.claimedAtEpochMillis()));
-            arguments.add(completion.providerResultAction().name());
-        });
-        return Math.toIntExact(executeLong(COMPLETE, keys, arguments.toArray()));
+        int completed = 0;
+        for (int start = 0; start < valid.size(); start += PIPELINE_BATCH_SIZE) {
+            List<PaymentCallbackCompletion> batch = valid.subList(
+                    start, Math.min(start + PIPELINE_BATCH_SIZE, valid.size()));
+            for (Object response : executeCompletePipeline(batch)) {
+                long value = number(response);
+                if (value < 0L || value > 1L) {
+                    throw unavailable("Redis payment callback completion result is invalid.");
+                }
+                completed = Math.addExact(completed, Math.toIntExact(value));
+            }
+        }
+        return completed;
+    }
+
+    private List<Object> executeCompletePipeline(
+            List<PaymentCallbackCompletion> batch) {
+        try {
+            // 每个回调只保持自己的 claim 代次原子性；Pipeline 部分成功时可依靠 score 精确匹配幂等重试。
+            List<Object> responses = redisTemplate.executePipelined(new SessionCallback<>() {
+                @Override
+                @SuppressWarnings({"rawtypes", "unchecked"})
+                public Object execute(RedisOperations operations) {
+                    for (PaymentCallbackCompletion completion : batch) {
+                        PaymentCallbackClaim claim = completion.claim();
+                        String callbackDataKey = keyFactory.paymentCallbackDataKey(
+                                new PaymentCallbackRedisId(claim.callbackId()));
+                        boolean hasOrder = completion.orderId() != null;
+                        String markerKey = callbackDataKey;
+                        String providerResultKey = callbackDataKey;
+                        if (hasOrder) {
+                            MembershipOrderRedisId orderId =
+                                    new MembershipOrderRedisId(completion.orderId());
+                            markerKey = keyFactory.membershipOrderCallbackMarkerKey(orderId);
+                            providerResultKey =
+                                    keyFactory.simulatedPaymentProviderResultKey(orderId);
+                        }
+                        operations.execute(
+                                COMPLETE,
+                                List.of(
+                                        keyFactory.paymentCallbackProcessingKey(),
+                                        callbackDataKey,
+                                        markerKey,
+                                        providerResultKey),
+                                claim.callbackId(),
+                                Long.toString(claim.claimedAtEpochMillis()),
+                                completion.providerResultAction().name(),
+                                hasOrder ? "1" : "0");
+                    }
+                    return null;
+                }
+            });
+            if (responses.size() != batch.size()) {
+                throw unavailable(
+                        "Redis payment callback completion pipeline result is incomplete.");
+            }
+            return responses;
+        } catch (MembershipPaymentInfrastructureException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable("Redis payment callback completion pipeline failed.", exception);
+        }
+    }
+
+    private static long number(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(text(value));
+        } catch (NumberFormatException exception) {
+            throw unavailable("Redis payment callback result is not numeric.", exception);
+        }
     }
 
     private static void appendFields(

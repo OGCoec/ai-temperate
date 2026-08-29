@@ -6,7 +6,18 @@
 			</view>
 			<view class="identity-copy">
 				<text class="identity-label">邮箱</text>
-				<text class="identity-value" selectable>{{ email }}</text>
+				<view class="identity-value-line">
+					<text class="identity-value" selectable>{{ email }}</text>
+					<button
+						v-if="showEmailRestart"
+						class="identity-restart"
+						type="button"
+						:disabled="restartDisabled"
+						@click="$emit('restart')"
+					>
+						重新填写
+					</button>
+				</view>
 			</view>
 		</view>
 
@@ -31,10 +42,21 @@
 						/ {{ phonePresentation.countryIso2 }}
 					</text>
 				</view>
-				<text class="identity-value identity-phone" selectable>
-					<text class="identity-dial-code">{{ phonePresentation.dialCode }}</text>
-					{{ phonePresentation.nationalDisplay }}
-				</text>
+				<view class="identity-value-line">
+					<text class="identity-value identity-phone" selectable>
+						<text class="identity-dial-code">{{ phonePresentation.dialCode }}</text>
+						{{ phonePresentation.nationalDisplay }}
+					</text>
+					<button
+						v-if="showPhoneRestart"
+						class="identity-restart"
+						type="button"
+						:disabled="restartDisabled"
+						@click="$emit('restart')"
+					>
+						重新填写
+					</button>
+				</view>
 			</view>
 		</view>
 	</view>
@@ -43,12 +65,14 @@
 <script>
 	export default {
 		name: 'VerificationIdentitySummary',
+		emits: ['restart'],
 		props: {
 			email: { type: String, default: '' },
 			phonePresentation: {
 				type: Object,
 				default: () => null
-			}
+			},
+			restartDisabled: { type: Boolean, default: false }
 		},
 		data() {
 			return {
@@ -56,6 +80,12 @@
 			}
 		},
 		computed: {
+			showEmailRestart() {
+				return Boolean(this.email && !this.phonePresentation)
+			},
+			showPhoneRestart() {
+				return Boolean(this.phonePresentation)
+			},
 			ariaLabel() {
 				if (this.email && this.phonePresentation) return '本次验证的只读邮箱和手机号'
 				if (this.email) return '本次验证的只读邮箱'
@@ -127,8 +157,16 @@
 		line-height: 1.4;
 	}
 	.identity-country-code { color: #8b9690; }
+	.identity-value-line {
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
 	.identity-value {
 		margin-top: 4px;
+		min-width: 0;
+		flex: 1;
 		color: #f3f5f4;
 		font-size: 15px;
 		line-height: 1.45;
@@ -140,9 +178,47 @@
 		color: #65c7c2;
 		font-weight: 700;
 	}
+	.identity-restart {
+		min-width: 72px;
+		min-height: 44px;
+		margin: 0 -8px 0 0;
+		padding: 0 8px;
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		border-radius: 10px;
+		background: transparent;
+		color: #a9b5af;
+		font-size: 13px;
+		font-weight: 600;
+		line-height: 1.4;
+		box-sizing: border-box;
+		touch-action: manipulation;
+	}
+	.identity-restart::after { border: 0; }
+	.identity-restart:active:not([disabled]) {
+		background: #1b201d;
+		color: #37d39a;
+	}
+	.identity-restart:focus-visible {
+		outline: 2px solid rgba(55, 211, 154, .72);
+		outline-offset: 2px;
+	}
+	.identity-restart[disabled] {
+		color: #667069;
+		opacity: 1;
+	}
 	.identity-divider {
 		height: 1px;
 		margin-left: 67px;
 		background: #303733;
+	}
+	@media (hover: hover) and (pointer: fine) {
+		.identity-restart:not([disabled]):hover {
+			background: #1b201d;
+			color: #37d39a;
+		}
 	}
 </style>

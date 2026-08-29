@@ -36,6 +36,7 @@ def authHeaders = [
         'Authorization': 'Bearer ' + vars.get('accessToken'),
         'Accept': 'application/json'
 ]
+Map<String, Map<String, String>> orderAuthById = new LinkedHashMap<>()
 
 def request = { String method, String path, Map<String, String> headers, String body ->
     HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection()
@@ -60,16 +61,29 @@ def request = { String method, String path, Map<String, String> headers, String 
     return [status: status, body: responseBody, contentType: contentType]
 }
 
-def createOrder = {
+def nextTier = { Map<String, String> selectedAuthHeaders ->
+    Map response = request(
+            'GET', '/api/user/membership-plan-offers', selectedAuthHeaders, null)
+    if (response.status != 200) {
+        throw new IllegalStateException('race membership offer lookup failed: ' + response.status)
+    }
+    List offers = (List) ((Map) json.parseText(response.body)).offers
+    if (offers == null || offers.isEmpty()) {
+        throw new IllegalStateException('race account has no legal higher membership offer')
+    }
+    return ((Map) offers.first()).targetTier as String
+}
+
+def createOrder = { Map<String, String> selectedAuthHeaders ->
     String idempotencyKey = UUID.randomUUID().toString()
-    Map headers = new LinkedHashMap<>(authHeaders)
+    Map headers = new LinkedHashMap<>(selectedAuthHeaders)
     headers['Content-Type'] = 'application/json'
     Map response = request(
             'POST',
             '/api/user/membership-orders',
             headers,
             JsonOutput.toJson([
-                    targetTier: 'GO',
+                    targetTier: nextTier(selectedAuthHeaders),
                     payType: 'alipay',
                     idempotencyKey: idempotencyKey
             ]))
@@ -81,7 +95,7 @@ def createOrder = {
     Map attempt = request(
             'POST',
             '/api/user/membership-orders/' + value.orderId + '/payment-attempts',
-            authHeaders,
+            selectedAuthHeaders,
             null)
     if (!(attempt.status in [200, 201])) {
         throw new IllegalStateException('race payment attempt failed: ' + attempt.status)
@@ -92,16 +106,47 @@ def createOrder = {
     while (Instant.now().epochSecond <= attemptResponseSecond) {
         Thread.sleep(25L)
     }
+    orderAuthById.put(value.orderId as String, Map.copyOf(selectedAuthHeaders))
     return value
 }
 
 def getOrder = { String orderId ->
+    Map<String, String> selectedAuthHeaders = orderAuthById.get(orderId)
+    if (selectedAuthHeaders == null) {
+        throw new IllegalStateException('race order authentication binding is missing')
+    }
     Map response = request(
-            'GET', '/api/user/membership-orders/' + orderId, authHeaders, null)
+            'GET', '/api/user/membership-orders/' + orderId, selectedAuthHeaders, null)
     if (response.status != 200) {
         throw new IllegalStateException('race order lookup failed: ' + response.status)
     }
     return (Map) json.parseText(response.body)
+}
+
+def secondaryAuthHeaders = {
+    Path usersPath = Path.of(props.getProperty('USERS_CSV'))
+    List<String> lines = Files.readAllLines(usersPath, StandardCharsets.UTF_8)
+    List<String> approvedRows = lines.drop(1)
+    int reservedPrimaryCount = Integer.parseInt(
+            props.getProperty('RACE_CASE_COUNT', '4'))
+    if (reservedPrimaryCount < 1 || approvedRows.size() <= reservedPrimaryCount) {
+        throw new IllegalStateException('A reserved secondary test account is unavailable.')
+    }
+    // 前四行由四个并发身份案例占用；第五行专供双订单案例，避免扫描并复用仍有活动订单的主线程账号。
+    String line = approvedRows[reservedPrimaryCount]
+    List<String> cells = line.split(',', -1).collect { cell ->
+        String trimmed = cell.trim()
+        return trimmed.startsWith('"') && trimmed.endsWith('"')
+                ? trimmed.substring(1, trimmed.length() - 1).replace('""', '"')
+                : trimmed
+    }
+    if (cells.size() < 2 || cells[0] == vars.get('userId') || cells[1].isBlank()) {
+        throw new IllegalStateException('The reserved secondary test account is invalid.')
+    }
+    return [
+            'Authorization': 'Bearer ' + cells[1],
+            'Accept': 'application/json'
+    ]
 }
 
 def waitUntil = { Instant target ->
@@ -231,7 +276,7 @@ def appendEvidence = { Map order, String role, String expectedStatus,
 }
 
 try {
-    Map primary = createOrder()
+    Map primary = createOrder(authHeaders)
     Map secondary = null
     Instant expiresAt = OffsetDateTime.parse(primary.expiresAt).toInstant()
     Instant hardCloseAt = expiresAt.plusSeconds(300L)
@@ -248,7 +293,7 @@ try {
     if (mode == 'SAME_ORDER_SAME_TRADE_SEQUENTIAL') {
         concurrency.times { callback(primary, sharedTrade, 'GET', 0) }
     } else if (mode == 'DIFFERENT_ORDER_SAME_TRADE_PARALLEL') {
-        secondary = createOrder()
+        secondary = createOrder(secondaryAuthHeaders())
         invokeParallel((0..<concurrency).collect { index ->
             Map selected = index % 2 == 0 ? primary : secondary
             return { -> callback(selected, sharedTrade, 'GET', 0) } as Callable<Boolean>
@@ -298,7 +343,7 @@ try {
         Map loser = first.status == 'PAID' ? secondary : primary
         Map cancel = request(
                 'POST', '/api/user/membership-orders/' + loser.orderId + '/cancel',
-                authHeaders, null)
+                orderAuthById.get(loser.orderId as String), null)
         if (cancel.status != 200) {
             throw new IllegalStateException('losing order cancellation failed: ' + cancel.status)
         }

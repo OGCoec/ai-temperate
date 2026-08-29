@@ -14,11 +14,18 @@ if current_version and current_version == incoming_version then
 end
 
 local existed = redis.call('EXISTS', snapshot_key) == 1
-redis.call('UNLINK', snapshot_key)
+if existed then
+    redis.call('UNLINK', snapshot_key)
+end
 local argument_index = 4
+local fields = {}
 for index = 1, field_count do
-    redis.call('HSET', snapshot_key, ARGV[argument_index], ARGV[argument_index + 1])
+    fields[#fields + 1] = ARGV[argument_index]
+    fields[#fields + 1] = ARGV[argument_index + 1]
     argument_index = argument_index + 2
+end
+if #fields > 0 then
+    redis.call('HSET', snapshot_key, unpack(fields))
 end
 redis.call('PEXPIRE', snapshot_key, ttl_millis)
 return existed and 'REPLACED' or 'CREATED'

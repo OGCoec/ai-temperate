@@ -1,6 +1,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const {
+	DEFAULT_H5_RELEASE_ROOT,
+	assertSupportedH5ReleaseRoot,
 	collectPublicAssetPaths
 } = require('./generate-h5-edge-assets.cjs')
 
@@ -16,6 +18,11 @@ const DEFAULT_ASSET_MANIFEST = path.resolve(
 	'h5-assets.js')
 const PUBLIC_HTML_PREVIEW_ORIGIN = 'https://ai-temperate-html-preview.pages.dev'
 const API_KEY_ULID_CONTRACT_SOURCE = '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+const REQUIRED_UNI_COMPONENT_IMPLEMENTATIONS = [
+	{ re: /\bname\s*:\s*["']uniPopup["']/, label: 'UniPopup' },
+	{ re: /\bname\s*:\s*["']uniTransition["']/, label: 'UniTransition' },
+	{ re: /\bname\s*:\s*["']UniSearchBar["']/, label: 'UniSearchBar' }
+]
 const FORBIDDEN_FILE_PATTERNS = [
 	{ re: /\.vue(?:$|[?#])/, label: 'Vue source module' },
 	{ re: /\.map$/, label: 'source map' },
@@ -158,8 +165,15 @@ function verifyIndexAssetReferences(indexSource, assetPaths, errors) {
 }
 
 function verifyH5ReleaseArtifacts(options = {}) {
-	const root = path.resolve(options.root || path.join(__dirname, '..', 'unpackage', 'dist', 'build', 'web'))
+	const root = path.resolve(options.root || DEFAULT_H5_RELEASE_ROOT)
 	const errors = []
+	try {
+		assertSupportedH5ReleaseRoot(root, {
+			allowNonCanonicalRoot: options.allowNonCanonicalRoot === true
+		})
+	} catch (error) {
+		return { root, errors: [error.message] }
+	}
 
 	if (!fs.existsSync(root)) {
 		return { root, errors: [`H5 release directory does not exist: ${root}`] }
@@ -188,6 +202,7 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	walk(root, files)
 	let previewOriginFoundInScript = false
 	let apiKeyUlidContractFoundInScript = false
+	const bundledUniComponents = new Set()
 	for (const file of files) {
 		const relative = normalizeRelative(path.relative(root, file))
 		for (const pattern of FORBIDDEN_FILE_PATTERNS) {
@@ -202,6 +217,11 @@ function verifyH5ReleaseArtifacts(options = {}) {
 		if (/\.js$/.test(relative) && source.includes(API_KEY_ULID_CONTRACT_SOURCE)) {
 			apiKeyUlidContractFoundInScript = true
 		}
+		if (/\.js$/.test(relative)) {
+			for (const component of REQUIRED_UNI_COMPONENT_IMPLEMENTATIONS) {
+				if (component.re.test(source)) bundledUniComponents.add(component.label)
+			}
+		}
 		for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
 			if (pattern.re.test(source)) errors.push(`${pattern.label} reference found in ${relative}`)
 		}
@@ -213,6 +233,12 @@ function verifyH5ReleaseArtifacts(options = {}) {
 	if (!apiKeyUlidContractFoundInScript) {
 		errors.push(
 			'H5 JavaScript bundle must include the 26-character API Key ULID contract')
+	}
+	for (const component of REQUIRED_UNI_COMPONENT_IMPLEMENTATIONS) {
+		if (!bundledUniComponents.has(component.label)) {
+			errors.push(
+				`H5 JavaScript bundle must include the ${component.label} implementation`)
+		}
 	}
 
 	return { root, errors }

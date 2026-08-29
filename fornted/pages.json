@@ -106,6 +106,20 @@
 				"backgroundColor": "#0b0d0c"
 			}
 		},
+		{
+			"path": "pages/account/membership-plans",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
+		{
+			"path": "pages/account/payment-result",
+			"style": {
+				"navigationStyle": "custom",
+				"backgroundColor": "#0b0d0c"
+			}
+		},
 		// #endif
 		{
 			"path": "pages/account/totp-security",

@@ -9,7 +9,6 @@ import com.example.temperate.model.ai.entity.AiModelApiUsage;
 import com.example.temperate.model.ai.entity.AiModelApiUsageDetail;
 import com.example.temperate.model.ai.entity.ApiKeyReservationAuthorization;
 import com.example.temperate.model.ai.enums.AiModelBillingStatus;
-import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.user.aiconversation.billing.impl.AiConversationQuotaCalculator;
 import com.example.temperate.service.user.aiinference.api.ApiInferenceExecutionRequest;
@@ -20,8 +19,8 @@ import com.example.temperate.service.user.apichat.ApiChatErrorCode;
 import com.example.temperate.service.user.apichat.ApiChatException;
 import com.example.temperate.service.user.apichat.billing.ApiChatBillingService;
 import com.example.temperate.service.user.apikey.authentication.ApiKeyPrincipal;
-import com.example.temperate.service.user.membership.MembershipQuotaPlan;
-import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationException;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationService;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.security.MessageDigest;
@@ -48,7 +47,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
     private final AiModelApiUsageMapper usageMapper;
     private final AiModelApiUsageDetailMapper detailMapper;
     private final AiConversationQuotaCalculator quotaCalculator;
-    private final MembershipQuotaPlanService quotaPlanService;
+    private final MembershipQuotaPeriodActivationService quotaPeriodActivationService;
     private final UserProfileCacheInvalidationExecutor cacheInvalidationExecutor;
     private final HybridSemaphoreIdWorker idWorker;
     private final Clock clock;
@@ -60,7 +59,7 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
             AiModelApiUsageMapper usageMapper,
             AiModelApiUsageDetailMapper detailMapper,
             AiConversationQuotaCalculator quotaCalculator,
-            MembershipQuotaPlanService quotaPlanService,
+            MembershipQuotaPeriodActivationService quotaPeriodActivationService,
             UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
             HybridSemaphoreIdWorker idWorker,
             Clock clock,
@@ -70,7 +69,8 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         this.usageMapper = Objects.requireNonNull(usageMapper);
         this.detailMapper = Objects.requireNonNull(detailMapper);
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
-        this.quotaPlanService = Objects.requireNonNull(quotaPlanService);
+        this.quotaPeriodActivationService =
+                Objects.requireNonNull(quotaPeriodActivationService);
         this.cacheInvalidationExecutor = Objects.requireNonNull(cacheInvalidationExecutor);
         this.idWorker = Objects.requireNonNull(idWorker);
         this.clock = Objects.requireNonNull(clock);
@@ -104,7 +104,14 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
         if (quota == null) {
             throw insufficient(request.protocol());
         }
-        activateExpiredPeriod(quota, now);
+        try {
+            quotaPeriodActivationService.activateIfDue(quota, now);
+        } catch (MembershipQuotaPeriodActivationException exception) {
+            throw new ApiChatException(
+                    ApiChatErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+                    "The account quota rule is unavailable.",
+                    null);
+        }
         if (quota.getQuotaBalanceMinor() < reservedMinor) {
             throw insufficient(request.protocol());
         }
@@ -349,24 +356,6 @@ public final class ApiChatBillingServiceImpl implements ApiChatBillingService {
 
     private static boolean sameVendor(String left, String right) {
         return left != null && right != null && left.equalsIgnoreCase(right);
-    }
-
-    private void activateExpiredPeriod(UserMembershipQuota quota, OffsetDateTime now) {
-        if (quota.getQuotaPeriodEndsAt() != null
-                && quota.getQuotaPeriodEndsAt().isAfter(now)) {
-            return;
-        }
-        Integer code = quota.getMembershipTier();
-        if (code == null || code < 0 || code >= MembershipTier.values().length) {
-            throw new ApiChatException(
-                    ApiChatErrorCode.INFRASTRUCTURE_UNAVAILABLE,
-                    "The account quota rule is unavailable.",
-                    null);
-        }
-        MembershipQuotaPlan plan = quotaPlanService.getRequired(MembershipTier.values()[code]);
-        quota.setQuotaBalanceMinor(plan.totalMinor());
-        quota.setQuotaPeriodStartedAt(now);
-        quota.setQuotaPeriodEndsAt(now.plus(plan.period()));
     }
 
     private OffsetDateTime now() {

@@ -39,6 +39,8 @@ SELECT
     expires_at,
     closing_deadline_at,
     paid_at,
+    entitlement_resolution,
+    entitlement_resolved_at,
     state_version,
     created_at,
     updated_at

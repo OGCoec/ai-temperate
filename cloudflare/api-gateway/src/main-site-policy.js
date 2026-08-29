@@ -12,6 +12,8 @@ export const H5_PAGE_PATHS = Object.freeze([
 	'/pages/ai-chat/index',
 	'/pages/account/profile',
 	'/pages/account/api-keys',
+	'/pages/account/membership-plans',
+	'/pages/account/payment-result',
 	'/pages/account/totp-security',
 	'/pages/ai-models/catalog',
 	'/pages/ai-models/detail',
@@ -154,6 +156,11 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/auth/session/bootstrap', ['POST']),
 	route('/api/auth/session/logout', ['POST']),
 	route('/api/auth/session/logout-all', ['POST']),
+	route('/api/payment/bar/notify', ['GET'], {
+		providerCallback: true
+	}),
+	route('/api/user/membership-plan-offers', ['GET']),
+	route('/api/user/membership-orders', ['POST']),
 	route('/api/users/me', ['GET']),
 	route('/api/users/me/voice/session-tickets', ['POST']),
 	route('/api/users/me/avatar/preuploads', ['POST']),
@@ -202,6 +209,30 @@ function templateRoute(pattern, invalidPattern, allowedMethods, options = {}) {
 }
 
 const TEMPLATE_ROOT_ROUTES = Object.freeze([
+	templateRoute(
+		new RegExp(`^/api/user/membership-orders/(${PUBLIC_ID_22})$`),
+		/^\/api\/user\/membership-orders\/[^/]+$/,
+		['GET'],
+		{
+			parameterType: 'PUBLIC_ID_22',
+			routeTemplate: '/api/user/membership-orders/{orderId}'
+		}),
+	templateRoute(
+		new RegExp(`^/api/user/membership-orders/(${PUBLIC_ID_22})/cancel$`),
+		/^\/api\/user\/membership-orders\/[^/]+\/cancel$/,
+		['POST'],
+		{
+			parameterType: 'PUBLIC_ID_22',
+			routeTemplate: '/api/user/membership-orders/{orderId}/cancel'
+		}),
+	templateRoute(
+		new RegExp(`^/api/user/membership-orders/(${PUBLIC_ID_22})/payment-attempts$`),
+		/^\/api\/user\/membership-orders\/[^/]+\/payment-attempts$/,
+		['POST'],
+		{
+			parameterType: 'PUBLIC_ID_22',
+			routeTemplate: '/api/user/membership-orders/{orderId}/payment-attempts'
+		}),
 	templateRoute(
 		/^\/api\/auth\/oauth2\/authorization\/(google|github)$/,
 		/^\/api\/auth\/oauth2\/authorization\/[^/]+$/,

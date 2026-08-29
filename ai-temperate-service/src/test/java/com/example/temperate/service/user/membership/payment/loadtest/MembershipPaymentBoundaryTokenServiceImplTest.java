@@ -24,7 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该测试是来验证四万固定用户只能按八十个五百人分页批量校验并签发十五小时令牌。
+ * 该测试是来验证八万固定用户只能按一百六十个五百人分页批量校验并签发十五小时令牌。
  */
 final class MembershipPaymentBoundaryTokenServiceImplTest {
 
@@ -43,14 +43,14 @@ final class MembershipPaymentBoundaryTokenServiceImplTest {
 
     @Test
     void pageReturnsCanonicalFiveHundredUsersInOrderWithTwoBulkReads() {
-        List<Long> ids = policy.pageUserIds(79);
+        List<Long> ids = policy.pageUserIds(159);
         when(identityMapper.findAuthenticationByIds(ids)).thenReturn(activeContexts(ids));
         when(quotaMapper.findByLoginIdentityIds(ids)).thenReturn(quotas(ids));
         when(tokenService.issueAccessToken(any(Long.class), any(Duration.class)))
                 .thenAnswer(invocation -> "token-" + invocation.getArgument(0));
         MembershipPaymentBoundaryTokenService service = service(true);
 
-        List<MembershipPaymentLoadtestToken> result = service.issuePage(79);
+        List<MembershipPaymentLoadtestToken> result = service.issuePage(159);
 
         assertThat(result).hasSize(500);
         assertThat(result).extracting(MembershipPaymentLoadtestToken::userId)
@@ -121,7 +121,7 @@ final class MembershipPaymentBoundaryTokenServiceImplTest {
 
     @Test
     void pageOutsideFixedRangeIsRejectedBeforeReads() {
-        assertThatThrownBy(() -> service(true).issuePage(80))
+        assertThatThrownBy(() -> service(true).issuePage(160))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(identityMapper, quotaMapper, tokenService);
     }

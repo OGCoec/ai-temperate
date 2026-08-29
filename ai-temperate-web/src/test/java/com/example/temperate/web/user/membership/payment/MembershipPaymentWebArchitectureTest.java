@@ -9,7 +9,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该静态架构测试是来锁定模拟回调的 GET/POST 双协议、精确安全豁免、条件开关和 Java/前端完全分离边界。
+ * 该静态架构测试是来锁定本地模拟与 BAR 回调的协议、精确安全豁免、条件开关和 Java/前端完全分离边界。
  */
 final class MembershipPaymentWebArchitectureTest {
 
@@ -49,6 +49,41 @@ final class MembershipPaymentWebArchitectureTest {
                 .contains("HttpMethod.POST")
                 .contains("request.getContextPath() + SIMULATED_PAYMENT_CALLBACK_PATH")
                 .doesNotContain("/internal/test/**");
+    }
+
+    @Test
+    void barCallbackOnlyDeclaresGetAndContainsNoFrontendCode() throws IOException {
+        String controller = read(
+                "ai-temperate-web/src/main/java/com/example/temperate/web/user/"
+                        + "membership/payment/callback/BarPaymentCallbackController.java");
+        String security = read(
+                "ai-temperate-web/src/main/java/com/example/temperate/web/auth/"
+                        + "config/SecurityConfiguration.java");
+
+        assertThat(controller)
+                .contains("@GetMapping", "app.membership-payment.bar")
+                .doesNotContain("@PostMapping", "<html", "<style", "<script", "javascript:");
+        assertThat(security)
+                .contains("HttpMethod.GET, BAR_PAYMENT_CALLBACK_PATH")
+                .doesNotContain("HttpMethod.POST, BAR_PAYMENT_CALLBACK_PATH");
+    }
+
+    @Test
+    void membershipOfferControllerIsReadOnlyAndContainsNoFrontendCode()
+            throws IOException {
+        String controller = read(
+                "ai-temperate-web/src/main/java/com/example/temperate/web/user/"
+                        + "membership/payment/CurrentUserMembershipPlanOfferController.java");
+
+        assertThat(controller)
+                .contains("@GetMapping", "@Tag", "@Operation", "CacheControl.noStore()")
+                .doesNotContain("@PostMapping", "<html", "<style", "<script", "javascript:")
+                .doesNotContain("MembershipOrderMapper", "UserMembershipQuotaMapper");
+        String exceptionHandler = read(
+                "ai-temperate-web/src/main/java/com/example/temperate/web/user/"
+                        + "membership/payment/MembershipPaymentExceptionHandler.java");
+        assertThat(exceptionHandler)
+                .contains("CurrentUserMembershipPlanOfferController.class");
     }
 
     private static String read(String relativePath) throws IOException {

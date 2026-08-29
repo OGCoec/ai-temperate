@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Membership Marker Stage Matrix Realtime" enabled="true">
+      <stringProp name="TestPlan.comments">PENDING 0～8 与 CLOSING 0～4 的 APPLIED/REJECTED Marker 全矩阵；同账号由脚本互斥，避免伪造双活动订单。</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Variables" enabled="true"><collectionProp name="Arguments.arguments"/></elementProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Twenty Eight Marker Stage Cases" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true"><boolProp name="LoopController.continue_forever">false</boolProp><stringProp name="LoopController.loops">1</stringProp></elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(THREADS,28)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(RAMP_UP,2)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Approved Users" enabled="true"><stringProp name="delimiter">,</stringProp><stringProp name="fileEncoding">UTF-8</stringProp><stringProp name="filename">${__P(USERS_CSV)}</stringProp><boolProp name="ignoreFirstLine">true</boolProp><boolProp name="quotedData">true</boolProp><boolProp name="recycle">true</boolProp><boolProp name="stopThread">true</boolProp><stringProp name="shareMode">shareMode.all</stringProp><stringProp name="variableNames">userId,accessToken</stringProp></CSVDataSet><hashTree/>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Marker Matrix Cases" enabled="true"><stringProp name="delimiter">,</stringProp><stringProp name="fileEncoding">UTF-8</stringProp><stringProp name="filename">${__P(MARKER_CASES_CSV)}</stringProp><boolProp name="ignoreFirstLine">true</boolProp><boolProp name="quotedData">true</boolProp><boolProp name="recycle">false</boolProp><boolProp name="stopThread">true</boolProp><stringProp name="shareMode">shareMode.all</stringProp><stringProp name="variableNames">caseName,markerPhase,targetStage,markerResolution</stringProp></CSVDataSet><hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Execute Marker Stage Case" enabled="true"><stringProp name="cacheKey">membership-marker-stage-v1</stringProp><stringProp name="filename">${__P(MARKER_SCRIPT)}</stringProp><stringProp name="parameters"></stringProp><stringProp name="scriptLanguage">groovy</stringProp></JSR223Sampler><hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

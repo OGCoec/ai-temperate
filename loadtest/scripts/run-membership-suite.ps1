@@ -3,7 +3,7 @@ param(
     [ValidateSet('loadtest-realtime')][string]$Mode='loadtest-realtime',
     [int]$Threads=4,
     [string]$HostName='localhost',
-    [int]$Port=8080,
+    [int]$Port=6655,
     [string]$Protocol='http',
     [switch]$Cleanup
 )
@@ -24,7 +24,7 @@ foreach ($scriptName in $scripts) {
     $path = Join-Path $PSScriptRoot $scriptName
     $minimumThreads = switch ($scriptName) {
         'run-membership-auth-boundary.ps1' { 8 }
-        'run-membership-order-state-machine.ps1' { 25 }
+        'run-membership-order-state-machine.ps1' { 30 }
         'run-membership-callback-transport.ps1' { 15 }
         'run-membership-callback-race-idempotency.ps1' { 8 }
         'run-membership-rabbit-state-timing.ps1' { 6 }

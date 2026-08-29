@@ -1,15 +1,17 @@
 local snapshot_key = KEYS[1]
 local marker_key = KEYS[2]
 local dirty_key = KEYS[3]
-local changed_at = ARGV[1]
-local ttl_millis = tonumber(ARGV[2])
-local order_id = ARGV[3]
+local changed_at_micros = ARGV[1]
+local dirty_score_millis = ARGV[2]
+local ttl_millis = tonumber(ARGV[3])
+local order_id = ARGV[4]
 
-if redis.call('EXISTS', snapshot_key) == 0 then
+local snapshot = redis.call('HMGET', snapshot_key, 'status', 'stateVersion')
+local status = snapshot[1]
+local current_version = tonumber(snapshot[2])
+if not snapshot[1] and not snapshot[2] then
     return 'MISSING||0'
 end
-local status = redis.call('HGET', snapshot_key, 'status')
-local current_version = tonumber(redis.call('HGET', snapshot_key, 'stateVersion'))
 if not status or not current_version then
     return 'NOT_ALLOWED||0'
 end
@@ -28,7 +30,7 @@ redis.call('HSET', snapshot_key,
         'status', 'CANCELLED',
         'closingDeadlineAt', '',
         'stateVersion', tostring(next_version),
-        'updatedAt', changed_at)
+        'updatedAt', changed_at_micros)
 redis.call('PEXPIRE', snapshot_key, ttl_millis)
-redis.call('ZADD', dirty_key, changed_at, order_id .. '#' .. next_version)
+redis.call('ZADD', dirty_key, dirty_score_millis, order_id .. '#' .. next_version)
 return 'APPLIED|CANCELLED|' .. next_version

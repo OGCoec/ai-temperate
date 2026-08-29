@@ -10,8 +10,10 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentBoundaryFixtureService;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentBoundaryFixtureState;
+import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentBoundaryLoadtestPolicy;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentBoundaryTokenService;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestToken;
+import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentSegmentWarmupResetState;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 该测试是来锁定四万用户夹具、重置和分页 Token 接口仅供回环 Runner 使用且响应禁止缓存。
+ * 该测试是来锁定八万用户夹具、重置和分页 Token 接口仅供回环 Runner 使用且响应禁止缓存。
  */
 final class MembershipPaymentBoundaryLoadtestControllerTest {
 
@@ -41,7 +43,7 @@ final class MembershipPaymentBoundaryLoadtestControllerTest {
 
     @Test
     void loopbackPrepareAndStateReturnOnlyCountsWithNoStore() {
-        MembershipPaymentBoundaryFixtureState state = state(true, 40_000, 0);
+        MembershipPaymentBoundaryFixtureState state = state(true, 80_000, 0);
         when(fixtureService.prepare()).thenReturn(state);
         when(fixtureService.state()).thenReturn(state);
 
@@ -63,7 +65,7 @@ final class MembershipPaymentBoundaryLoadtestControllerTest {
         second[15] = 2;
         when(orderIdCodec.decode("order-one")).thenReturn(first);
         when(orderIdCodec.decode("order-two")).thenReturn(second);
-        MembershipPaymentBoundaryFixtureState state = state(true, 40_000, 0);
+        MembershipPaymentBoundaryFixtureState state = state(true, 80_000, 0);
         when(fixtureService.reset(List.of(first, second))).thenReturn(state);
 
         var response = controller.reset(
@@ -74,6 +76,64 @@ final class MembershipPaymentBoundaryLoadtestControllerTest {
         assertThat(response.getBody()).isEqualTo(state);
         assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
         verify(fixtureService).reset(List.of(first, second));
+    }
+
+    @Test
+    void failedRunResetUsesItsDedicatedServiceContractAndKeepsNoStore() {
+        byte[] orderId = new byte[16];
+        orderId[15] = 3;
+        when(orderIdCodec.decode("failed-order")).thenReturn(orderId);
+        MembershipPaymentBoundaryFixtureState state = state(true, 80_000, 0);
+        when(fixtureService.resetFailedRun(List.of(orderId))).thenReturn(state);
+
+        var response = controller.resetFailedRun(
+                request("POST", "127.0.0.1"),
+                new MembershipPaymentBoundaryLoadtestController.ResetRequest(
+                        List.of("failed-order")));
+
+        assertThat(response.getBody()).isEqualTo(state);
+        assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
+        verify(fixtureService).resetFailedRun(List.of(orderId));
+    }
+
+    @Test
+    void segmentWarmupResetPassesOnlyFixedScaleGroupRunAndDecodedManifest() {
+        byte[] orderId = new byte[16];
+        orderId[15] = 4;
+        when(orderIdCodec.decode("warmup-order")).thenReturn(orderId);
+        MembershipPaymentSegmentWarmupResetState state =
+                new MembershipPaymentSegmentWarmupResetState(
+                        "PERFORMANCE_40K",
+                        "E-P1",
+                        "warmup-e-p1-attempt-1",
+                        5_000,
+                        5_000,
+                        5_000,
+                        0,
+                        0,
+                        0,
+                        0);
+        when(fixtureService.resetSegmentWarmup(
+                MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K,
+                "E-P1",
+                "warmup-e-p1-attempt-1",
+                List.of(orderId))).thenReturn(state);
+
+        var response = controller.resetSegmentWarmup(
+                request("POST", "127.0.0.1"),
+                new MembershipPaymentBoundaryLoadtestController.SegmentWarmupResetRequest(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K,
+                        "E-P1",
+                        "warmup-e-p1-attempt-1",
+                        List.of("warmup-order")));
+
+        assertThat(response.getBody()).isEqualTo(state);
+        assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
+        verify(fixtureService).resetSegmentWarmup(
+                MembershipPaymentBoundaryLoadtestPolicy.RunScale.PERFORMANCE_40K,
+                "E-P1",
+                "warmup-e-p1-attempt-1",
+                List.of(orderId));
     }
 
     @Test
@@ -90,12 +150,29 @@ final class MembershipPaymentBoundaryLoadtestControllerTest {
     }
 
     @Test
-    void resetManifestAcceptsExactlyFortyThousandOrdersButNoMore() {
+    void resetManifestAcceptsExactlyEightyThousandOrdersButNoMore() {
         assertThat(new MembershipPaymentBoundaryLoadtestController.ResetRequest(
-                java.util.Collections.nCopies(40_000, "order-id")).orderIds())
-                .hasSize(40_000);
+                java.util.Collections.nCopies(80_000, "order-id")).orderIds())
+                .hasSize(80_000);
         assertThatThrownBy(() -> new MembershipPaymentBoundaryLoadtestController.ResetRequest(
-                java.util.Collections.nCopies(40_001, "order-id")))
+                java.util.Collections.nCopies(80_001, "order-id")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void segmentWarmupManifestNeverAcceptsMoreThanTenThousandOrders() {
+        assertThat(new MembershipPaymentBoundaryLoadtestController.SegmentWarmupResetRequest(
+                MembershipPaymentBoundaryLoadtestPolicy.RunScale.CAPACITY_80K,
+                "H-AR",
+                "warmup-h-ar-attempt-1",
+                java.util.Collections.nCopies(10_000, "order-id")).orderIds())
+                .hasSize(10_000);
+        assertThatThrownBy(() ->
+                new MembershipPaymentBoundaryLoadtestController.SegmentWarmupResetRequest(
+                        MembershipPaymentBoundaryLoadtestPolicy.RunScale.CAPACITY_80K,
+                        "H-AR",
+                        "warmup-h-ar-attempt-1",
+                        java.util.Collections.nCopies(10_001, "order-id")))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

@@ -42,7 +42,7 @@ public class MembershipPaymentRabbitConfiguration {
      * 将受控 Profile 中的通道协商上限显式写入 Rabbit Java Client。
      *
      * <p>Spring Boot 3.5 不会自动把该扩展键绑定到底层客户端，因此必须在创建连接前完成定制；
-     * 这只改变协商容量，实际并发仍由五百一十二通道缓存的有界背压控制。</p>
+     * 这只改变协商容量，实际发布并发仍由受控 Profile 的二百五十六通道缓存背压控制。</p>
      */
     @Bean
     ConnectionFactoryCustomizer membershipPaymentConnectionFactoryCustomizer(

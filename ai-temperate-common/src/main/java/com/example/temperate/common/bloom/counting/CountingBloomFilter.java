@@ -16,7 +16,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 计数布隆过滤器工具类
+ * 该类是来兼容旧版单 Key 计数 Bloom 调用，并为存量调用提供有界的原子增删查能力。
  * <p>
  * 基于 Redis String（1 Byte per counter）实现。
  * 每个 bucket 对应 String 中的一个字节（0~255），通过 Lua 脚本保证原子性。
@@ -34,6 +34,8 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Component
 public class CountingBloomFilter {
+
+    private static final int LEGACY_MAX_BATCH_SIZE = 100;
 
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -539,10 +541,12 @@ public class CountingBloomFilter {
      * @param items 要添加的元素列表（String）
      * @return 成功添加的元素数量
      */
+    @Deprecated(forRemoval = true)
     public long addAllItems(String key, List<String> items) {
         if (items == null || items.isEmpty()) {
             return 0;
         }
+        requireLegacyBatch(items);
         FilterMeta meta = getMeta(key);
 
         // ARGV[0] = hashCount, ARGV[1..N*k] = 所有 bucket 偏移量
@@ -567,7 +571,9 @@ public class CountingBloomFilter {
     /**
      * 批量添加多个元素（byte[] 类型 ID 列表）
      */
+    @Deprecated(forRemoval = true)
     public long addAll(String key, List<byte[]> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (byte[] id : ids) {
             items.add(new String(id, StandardCharsets.UTF_8));
@@ -578,7 +584,9 @@ public class CountingBloomFilter {
     /**
      * 批量添加多个元素（Long 类型 ID 列表）
      */
+    @Deprecated(forRemoval = true)
     public long addAllLongs(String key, List<Long> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (Long id : ids) {
             items.add(String.valueOf(id));
@@ -633,10 +641,12 @@ public class CountingBloomFilter {
      * @param items 要删除的元素列表（String）
      * @return 成功删除的元素数量，0 表示整批失败
      */
+    @Deprecated(forRemoval = true)
     public long deleteAllItems(String key, List<String> items) {
         if (items == null || items.isEmpty()) {
             return 0;
         }
+        requireLegacyBatch(items);
         FilterMeta meta = getMeta(key);
 
         String[] args = new String[1 + items.size() * meta.hashCount];
@@ -660,7 +670,9 @@ public class CountingBloomFilter {
     /**
      * 批量安全删除多个元素（byte[] 类型 ID 列表）
      */
+    @Deprecated(forRemoval = true)
     public long deleteAll(String key, List<byte[]> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (byte[] id : ids) {
             items.add(new String(id, StandardCharsets.UTF_8));
@@ -671,7 +683,9 @@ public class CountingBloomFilter {
     /**
      * 批量安全删除多个元素（Long 类型 ID 列表）
      */
+    @Deprecated(forRemoval = true)
     public long deleteAllLongs(String key, List<Long> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (Long id : ids) {
             items.add(String.valueOf(id));
@@ -722,10 +736,12 @@ public class CountingBloomFilter {
      * @param items 要检查的元素列表（String）
      * @return true: 所有元素可能存在, false: 至少有一个一定不存在
      */
+    @Deprecated(forRemoval = true)
     public Boolean existsAllItems(String key, List<String> items) {
         if (items == null || items.isEmpty()) {
             return true;
         }
+        requireLegacyBatch(items);
         FilterMeta meta = getMeta(key);
 
         // ARGV[0] = hashCount, ARGV[1..N*k] = 所有 bucket 偏移量
@@ -754,7 +770,9 @@ public class CountingBloomFilter {
      * @param ids 要检查的 ID 列表（byte[]）
      * @return true: 所有元素可能存在, false: 至少有一个一定不存在
      */
+    @Deprecated(forRemoval = true)
     public Boolean existsAll(String key, List<byte[]> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (byte[] id : ids) {
             items.add(new String(id, StandardCharsets.UTF_8));
@@ -769,7 +787,9 @@ public class CountingBloomFilter {
      * @param ids 要检查的 ID 列表（Long）
      * @return true: 所有元素可能存在, false: 至少有一个一定不存在
      */
+    @Deprecated(forRemoval = true)
     public Boolean existsAllLongs(String key, List<Long> ids) {
+        requireLegacyBatch(ids);
         List<String> items = new ArrayList<>(ids.size());
         for (Long id : ids) {
             items.add(String.valueOf(id));
@@ -798,6 +818,21 @@ public class CountingBloomFilter {
     // ========================== 内部工具 ==========================
 
     /**
+     * 旧实现仍以整批 Lua 独占 Redis，因此必须在构造参数和脚本之前拒绝无界输入。
+     */
+    private static void requireLegacyBatch(List<?> items) {
+        if (items == null) {
+            throw new IllegalArgumentException("Legacy Counting Bloom batch must not be null");
+        }
+        if (items.size() > LEGACY_MAX_BATCH_SIZE) {
+            throw new IllegalArgumentException(
+                    "Legacy Counting Bloom batch must not exceed "
+                            + LEGACY_MAX_BATCH_SIZE
+                            + " items");
+        }
+    }
+
+    /**
      * long[] → String[]（作为 Lua 脚本 ARGV 参数）
      */
     private String[] toStringArray(long[] buckets) {
@@ -812,4 +847,3 @@ public class CountingBloomFilter {
         return args;
     }
 }
-

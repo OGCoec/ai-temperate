@@ -26,15 +26,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该测试是来锁定本机压测 Token 必须由应用现有 JWT 签发器生成，并且只服务四个既有可用账号。
+ * 该测试是来锁定本机压测 Token 必须由应用现有 JWT 签发器生成，并且只服务十六个明确批准的可用账号。
  */
 final class MembershipPaymentLoadtestTokenServiceImplTest {
 
     private static final List<Long> USER_IDS = List.of(
-            73014701344296960L,
             72659006262480896L,
+            73014701344296960L,
+            74891801495998464L,
             76721355290185728L,
-            74891801495998464L);
+            84736921162616832L,
+            84739559597936640L,
+            84742296792338432L,
+            84745417706835968L,
+            84746552547086336L,
+            84753114204344320L,
+            84754367089086464L,
+            84755204414771200L,
+            84758509811535872L,
+            84758866549673984L,
+            84759380653903872L,
+            84760794662834176L);
 
     private AuthTokenService tokenService;
     private UserLoginIdentityMapper identityMapper;
@@ -65,7 +77,8 @@ final class MembershipPaymentLoadtestTokenServiceImplTest {
             UserMembershipQuota quota = new UserMembershipQuota();
             quota.setLoginIdentityId(userId);
             quotas.add(quota);
-            when(tokenService.issueAccessToken(userId)).thenReturn("signed-token-" + userId);
+            when(tokenService.issueAccessToken(userId, Duration.ofHours(15)))
+                    .thenReturn("signed-token-" + userId);
         }
         when(identityMapper.findAuthenticationByIds(USER_IDS)).thenReturn(contexts);
         when(quotaMapper.findByLoginIdentityIds(USER_IDS)).thenReturn(quotas);
@@ -82,11 +95,9 @@ final class MembershipPaymentLoadtestTokenServiceImplTest {
         assertThat(result).extracting(MembershipPaymentLoadtestToken::userId)
                 .containsExactlyElementsOf(USER_IDS);
         assertThat(result).extracting(MembershipPaymentLoadtestToken::accessToken)
-                .containsExactly(
-                        "signed-token-73014701344296960",
-                        "signed-token-72659006262480896",
-                        "signed-token-76721355290185728",
-                        "signed-token-74891801495998464");
+                .containsExactlyElementsOf(USER_IDS.stream()
+                        .map(userId -> "signed-token-" + userId)
+                        .toList());
     }
 
     @Test
@@ -101,13 +112,14 @@ final class MembershipPaymentLoadtestTokenServiceImplTest {
 
     @Test
     void issuesSignedTokenWhoseIdIsOutsideTheAllowlist() {
-        when(tokenService.issueAccessToken(Long.MAX_VALUE))
+        when(tokenService.issueAccessToken(Long.MAX_VALUE, Duration.ofHours(15)))
                 .thenReturn("non-allowlisted-token");
 
         MembershipPaymentLoadtestToken result = service.issueNonAllowlistedToken();
 
         assertThat(result.userId()).isEqualTo(Long.MAX_VALUE);
         assertThat(result.accessToken()).isEqualTo("non-allowlisted-token");
+        verify(tokenService).issueAccessToken(Long.MAX_VALUE, Duration.ofHours(15));
     }
 
     @Test

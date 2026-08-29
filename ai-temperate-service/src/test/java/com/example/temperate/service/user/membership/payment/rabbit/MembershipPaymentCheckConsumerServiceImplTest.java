@@ -1,28 +1,35 @@
 package com.example.temperate.service.user.membership.payment.rabbit;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.service.user.membership.payment.callback.PaymentFactReconciliationService;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
+import com.example.temperate.service.user.membership.payment.exception.MembershipPaymentInfrastructureException;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentOrderLookupService;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentStatusQueryService;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.rabbit.impl.MembershipClosingCheckConsumerServiceImpl;
 import com.example.temperate.service.user.membership.payment.rabbit.impl.MembershipPaymentCheckConsumerServiceImpl;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
-import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -37,10 +44,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 
 /**
- * 该单元测试是来约束 RabbitMQ 中间阶段不主动查询、最终阶段才查询，以及 UNKNOWN 耗尽后保持 CLOSING 并进入 DLQ。
+ * 该单元测试是来约束 RabbitMQ 全阶段先执行回调 marker 门禁、中间阶段不主动访问支付方，以及最终阶段安全收敛或进入 DLQ。
  */
 final class MembershipPaymentCheckConsumerServiceImplTest {
 
@@ -51,20 +60,25 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
     private MembershipPaymentOrderLookupService lookupService;
     private MembershipOrderSnapshotStore orderStore;
-    private SimulatedPaymentStatusQueryService queryService;
-    private PaymentCallbackQueue callbackQueue;
+    private MembershipPaymentProvider provider;
+    private MembershipPaymentProviderRegistry providerRegistry;
+    private PaymentFactReconciliationService reconciliationService;
     private MembershipPaymentCheckPublisher paymentPublisher;
     private MembershipClosingCheckPublisher closingPublisher;
+    private MembershipPaymentFinalCheckScheduler finalCheckScheduler;
     private MembershipPaymentProperties properties;
 
     @BeforeEach
     void setUp() {
         lookupService = mock(MembershipPaymentOrderLookupService.class);
         orderStore = mock(MembershipOrderSnapshotStore.class);
-        queryService = mock(SimulatedPaymentStatusQueryService.class);
-        callbackQueue = mock(PaymentCallbackQueue.class);
+        provider = mock(MembershipPaymentProvider.class);
+        providerRegistry = mock(MembershipPaymentProviderRegistry.class);
+        reconciliationService = mock(PaymentFactReconciliationService.class);
+        when(providerRegistry.getRequired(any())).thenReturn(provider);
         paymentPublisher = mock(MembershipPaymentCheckPublisher.class);
         closingPublisher = mock(MembershipClosingCheckPublisher.class);
+        finalCheckScheduler = mock(MembershipPaymentFinalCheckScheduler.class);
         properties = properties();
     }
 
@@ -91,15 +105,62 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         verify(paymentPublisher).publishNext(
                 ORDER_ID, nextStage, Duration.ofMillis(nextDelayMillis));
-        verify(queryService, never()).query(ORDER_ID);
+        verify(provider, never()).queryPayment(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 4, 5, 6, 7, 8})
+    void everyPendingStageStopsWhenCallbackMarkerExists(int stage) {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.PENDING_PAYMENT)));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(true);
+
+        pendingService().process(paymentEnvelope(stage));
+
+        InOrder ordered = inOrder(lookupService, orderStore);
+        ordered.verify(lookupService).find(ORDER_ID);
+        ordered.verify(orderStore).callbackInProgress(ORDER_ID);
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                paymentPublisher, closingPublisher, finalCheckScheduler);
+        verify(orderStore, never()).startClosing(anyString(), any(), any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = MembershipOrderStatus.class,
+            names = {"CLOSING", "PAID", "CANCELLED", "CLOSED"})
+    void pendingConsumerDoesNotReadMarkerForInactiveOrder(
+            MembershipOrderStatus status) {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(status)));
+
+        pendingService().process(paymentEnvelope(0));
+
+        verify(orderStore, never()).callbackInProgress(ORDER_ID);
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                paymentPublisher, closingPublisher, finalCheckScheduler);
     }
 
     @Test
-    void pendingFinalStageQueriesThenStartsClosingAndPublishesFirstClosingCheck() {
+    void pendingMarkerReadFailurePropagatesBeforePublishingOrQuerying() {
+        MembershipPaymentInfrastructureException failure =
+                new MembershipPaymentInfrastructureException("redis unavailable");
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.PENDING_PAYMENT)));
-        when(queryService.query(ORDER_ID)).thenReturn(provider(
-                SimulatedPaymentProviderStatus.UNPAID));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenThrow(failure);
+
+        assertThatThrownBy(() -> pendingService().process(paymentEnvelope(8)))
+                .isSameAs(failure);
+
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                paymentPublisher, closingPublisher, finalCheckScheduler);
+        verify(orderStore, never()).startClosing(anyString(), any(), any());
+    }
+
+    @Test
+    void pendingFinalStageQueriesThenStartsClosingAndSchedulesFinalClosingCheck() {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.PENDING_PAYMENT)));
+        when(provider.queryPayment(any())).thenReturn(provider(PaymentProviderStatus.PENDING));
         when(orderStore.startClosing(
                 ORDER_ID,
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
@@ -111,16 +172,16 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         pendingService().process(paymentEnvelope(8));
 
-        verify(queryService).query(ORDER_ID);
-        verify(closingPublisher).publishNext(
-                ORDER_ID, 0, 0, Duration.ofSeconds(30));
+        verify(provider).queryPayment(any());
+        verify(finalCheckScheduler).scheduleClosing(
+                ORDER_ID, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC), 0);
     }
 
     @Test
     void pendingFinalPaidQueryOnlyEnsuresUnifiedCallbackReadyBeforeClosing() {
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.PENDING_PAYMENT)));
-        when(queryService.query(ORDER_ID)).thenReturn(paidProvider());
+        when(provider.queryPayment(any())).thenReturn(paidProvider());
         when(orderStore.startClosing(
                 ORDER_ID,
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
@@ -132,14 +193,14 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         pendingService().process(paymentEnvelope(8));
 
-        InOrder ordered = inOrder(callbackQueue, orderStore, closingPublisher);
-        ordered.verify(callbackQueue).ensureReady(CALLBACK_ID, NOW.toEpochMilli());
+        InOrder ordered = inOrder(reconciliationService, orderStore, finalCheckScheduler);
+        ordered.verify(reconciliationService).reconcilePaid(any(), any());
         ordered.verify(orderStore).startClosing(
                 ORDER_ID,
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
-        ordered.verify(closingPublisher).publishNext(
-                ORDER_ID, 0, 0, Duration.ofSeconds(30));
+        ordered.verify(finalCheckScheduler).scheduleClosing(
+                ORDER_ID, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC), 0);
         verify(orderStore, never()).markPaid(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
@@ -166,7 +227,57 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         verify(closingPublisher).publishNext(
                 ORDER_ID, nextStage, 0, Duration.ofMillis(nextDelayMillis));
-        verify(queryService, never()).query(ORDER_ID);
+        verify(provider, never()).closePayment(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 4})
+    void everyClosingStageStopsWhenCallbackMarkerExists(int stage) {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.CLOSING)));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(true);
+
+        closingService().process(closingEnvelope(stage, 3));
+
+        InOrder ordered = inOrder(lookupService, orderStore);
+        ordered.verify(lookupService).find(ORDER_ID);
+        ordered.verify(orderStore).callbackInProgress(ORDER_ID);
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                closingPublisher);
+        verify(orderStore, never()).finalizeClosing(
+                eq(ORDER_ID), any(PaymentProviderStatus.class), any(OffsetDateTime.class));
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = MembershipOrderStatus.class,
+            names = {"PENDING_PAYMENT", "PAID", "CANCELLED", "CLOSED"})
+    void closingConsumerDoesNotReadMarkerForInactiveOrder(
+            MembershipOrderStatus status) {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(status)));
+
+        closingService().process(closingEnvelope(0, 0));
+
+        verify(orderStore, never()).callbackInProgress(ORDER_ID);
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                closingPublisher);
+    }
+
+    @Test
+    void closingMarkerReadFailurePropagatesBeforePublishingOrClosing() {
+        MembershipPaymentInfrastructureException failure =
+                new MembershipPaymentInfrastructureException("redis unavailable");
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.CLOSING)));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenThrow(failure);
+
+        assertThatThrownBy(() -> closingService().process(closingEnvelope(4, 0)))
+                .isSameAs(failure);
+
+        verifyNoInteractions(providerRegistry, provider, reconciliationService,
+                closingPublisher);
+        verify(orderStore, never()).finalizeClosing(
+                eq(ORDER_ID), any(PaymentProviderStatus.class), any(OffsetDateTime.class));
     }
 
     @Test
@@ -174,19 +285,23 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.CLOSING)));
         when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
-        when(queryService.query(ORDER_ID)).thenReturn(paidProvider());
-        when(callbackQueue.ensureReady(CALLBACK_ID, NOW.toEpochMilli()))
-                .thenReturn(true);
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.PAID, "123456789"));
+        when(provider.queryPayment(any())).thenReturn(paidProvider());
+        when(reconciliationService.reconcilePaid(any(), any())).thenReturn(true);
 
         closingService().process(closingEnvelope(4, 0));
 
-        InOrder ordered = inOrder(queryService, callbackQueue, closingPublisher);
-        ordered.verify(queryService).query(ORDER_ID);
-        ordered.verify(callbackQueue).ensureReady(CALLBACK_ID, NOW.toEpochMilli());
+        InOrder ordered = inOrder(provider, reconciliationService, closingPublisher);
+        ordered.verify(provider).closePayment(any());
+        ordered.verify(provider).queryPayment(any());
+        ordered.verify(reconciliationService).reconcilePaid(any(), any());
         ordered.verify(closingPublisher).publishNext(
                 ORDER_ID, 4, 1, Duration.ofSeconds(30));
         verify(orderStore, never()).finalizeClosing(
-                ORDER_ID, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+                org.mockito.ArgumentMatchers.eq(ORDER_ID),
+                any(),
+                org.mockito.ArgumentMatchers.eq(OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)));
     }
 
     @Test
@@ -194,8 +309,8 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.CLOSING)));
         when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
-        when(queryService.query(ORDER_ID)).thenReturn(provider(
-                SimulatedPaymentProviderStatus.UNKNOWN));
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.UNKNOWN, null));
         MembershipClosingCheckConsumerService service = closingService();
 
         service.process(closingEnvelope(4, 0));
@@ -204,19 +319,22 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         assertThatThrownBy(() -> service.process(closingEnvelope(4, 3)))
                 .isInstanceOf(MembershipPaymentTerminalQueryExhaustedException.class);
-        verify(orderStore, never()).finalizeClosing(ORDER_ID, OffsetDateTime.ofInstant(
-                NOW, ZoneOffset.UTC));
+        verify(orderStore, never()).finalizeClosing(
+                org.mockito.ArgumentMatchers.eq(ORDER_ID),
+                any(),
+                org.mockito.ArgumentMatchers.eq(OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)));
     }
 
     @Test
-    void explicitUnpaidWithoutMarkerIsTheOnlyFinalClosingPath() {
+    void explicitClosedWithoutMarkerAllowsFinalClosing() {
         OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.CLOSING)));
         when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
-        when(queryService.query(ORDER_ID)).thenReturn(provider(
-                SimulatedPaymentProviderStatus.UNPAID));
-        when(orderStore.finalizeClosing(ORDER_ID, now)).thenReturn(
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.CLOSED, "123456789"));
+        when(orderStore.finalizeClosing(
+                ORDER_ID, PaymentProviderStatus.CLOSED, now)).thenReturn(
                 new MembershipOrderTransitionResult(
                         MembershipOrderTransitionOutcome.APPLIED,
                         MembershipOrderStatus.CLOSED,
@@ -224,17 +342,77 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         closingService().process(closingEnvelope(4, 0));
 
-        verify(orderStore).finalizeClosing(ORDER_ID, now);
+        verify(orderStore).finalizeClosing(
+                ORDER_ID, PaymentProviderStatus.CLOSED, now);
+    }
+
+    @Test
+    void callbackMarkerCreatedDuringProviderCloseStopsWithoutTerminalRetry() {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.CLOSING)));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.CLOSED, "123456789"));
+        when(orderStore.finalizeClosing(
+                ORDER_ID, PaymentProviderStatus.CLOSED, now)).thenReturn(
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS,
+                        MembershipOrderStatus.CLOSING,
+                        2L));
+
+        closingService().process(closingEnvelope(4, 0));
+
+        verify(provider).closePayment(any());
+        verify(provider, never()).queryPayment(any());
+        verify(orderStore).finalizeClosing(
+                ORDER_ID, PaymentProviderStatus.CLOSED, now);
+        verifyNoInteractions(closingPublisher);
+    }
+
+    @Test
+    void pendingFinalMessageBeforeExpiryReschedulesWithoutQueryingProvider() {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.PENDING_PAYMENT,
+                now.plusNanos(1_000),
+                null);
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
+
+        pendingService().process(paymentEnvelope(8));
+
+        verify(finalCheckScheduler).schedulePending(ORDER_ID, early.expiresAt());
+        verify(provider, never()).queryPayment(any());
+        verify(orderStore, never()).startClosing(anyString(), any(), any());
+    }
+
+    @Test
+    void closingFinalMessageBeforeDeadlineReschedulesWithoutClosingProvider() {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.CLOSING,
+                now.minusMinutes(5),
+                now.plusNanos(1_000));
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
+
+        closingService().process(closingEnvelope(4, 2));
+
+        verify(finalCheckScheduler).scheduleClosing(
+                ORDER_ID, early.closingDeadlineAt(), 2);
+        verify(provider, never()).closePayment(any());
+        verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
     }
 
     private MembershipPaymentCheckConsumerService pendingService() {
         return new MembershipPaymentCheckConsumerServiceImpl(
                 lookupService,
                 orderStore,
-                queryService,
-                callbackQueue,
+                providerRegistry,
+                reconciliationService,
                 paymentPublisher,
-                closingPublisher,
+                finalCheckScheduler,
                 properties,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 mock(MembershipPaymentMetrics.class));
@@ -244,9 +422,10 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
         return new MembershipClosingCheckConsumerServiceImpl(
                 lookupService,
                 orderStore,
-                queryService,
-                callbackQueue,
+                providerRegistry,
+                reconciliationService,
                 closingPublisher,
+                finalCheckScheduler,
                 properties,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 mock(MembershipPaymentMetrics.class));
@@ -276,8 +455,19 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
     private static MembershipOrderSnapshot order(MembershipOrderStatus status) {
         OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        return orderWithDeadlines(
+                status,
+                now.minusMinutes(5),
+                status == MembershipOrderStatus.CLOSING ? now : null);
+    }
+
+    private static MembershipOrderSnapshot orderWithDeadlines(
+            MembershipOrderStatus status,
+            OffsetDateTime expiresAt,
+            OffsetDateTime closingDeadlineAt) {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 ORDER_ID,
                 17L,
                 MembershipTier.PLUS,
@@ -286,37 +476,35 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
                 status,
                 UUID.fromString("550e8400-e29b-41d4-a716-446655440000"),
                 null,
-                now.minusMinutes(5),
-                status == MembershipOrderStatus.CLOSING ? now : null,
+                expiresAt,
+                closingDeadlineAt,
                 null,
                 status == MembershipOrderStatus.CLOSING ? 2L : 1L,
                 now.minusMinutes(10),
                 now.minusMinutes(5));
     }
 
-    private static SimulatedPaymentProviderResult provider(
-            SimulatedPaymentProviderStatus status) {
-        return new SimulatedPaymentProviderResult(
-                1,
+    private static PaymentQueryResult provider(
+            PaymentProviderStatus status) {
+        return new PaymentQueryResult(
                 ORDER_ID,
+                null,
+                null,
                 status,
                 null,
                 null,
-                null,
-                null,
-                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+                null);
     }
 
-    private static SimulatedPaymentProviderResult paidProvider() {
-        return new SimulatedPaymentProviderResult(
-                1,
+    private static PaymentQueryResult paidProvider() {
+        return new PaymentQueryResult(
                 ORDER_ID,
-                SimulatedPaymentProviderStatus.PAID,
-                CALLBACK_ID,
-                "provider-trade-1",
-                "alipay",
+                "123456789",
+                "BAR-P-123456790",
+                PaymentProviderStatus.PAID,
                 new BigDecimal("20.00"),
-                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
+                CALLBACK_ID);
     }
 
     private static String id(byte value) {

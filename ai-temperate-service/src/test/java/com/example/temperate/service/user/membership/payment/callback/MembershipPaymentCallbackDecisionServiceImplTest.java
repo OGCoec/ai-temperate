@@ -183,7 +183,7 @@ final class MembershipPaymentCallbackDecisionServiceImplTest {
             MembershipOrderStatus status,
             OffsetDateTime paymentStartedAt) {
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 ORDER_ID,
                 17L,
                 MembershipTier.PLUS,
@@ -220,7 +220,7 @@ final class MembershipPaymentCallbackDecisionServiceImplTest {
             BigDecimal paidAmountYuan,
             String payType) {
         return new PaymentCallbackSnapshot(
-                1,
+                PaymentCallbackSnapshot.CURRENT_SCHEMA_VERSION,
                 CALLBACK_ID,
                 ORDER_ID,
                 "merchant-test",

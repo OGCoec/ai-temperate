@@ -15,9 +15,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * 该处理器是来把会员订单受控异常映射为稳定的 400、404、409 或 503 响应，并隐藏订单归属与基础设施细节。
+ * 该处理器是来把会员套餐报价和订单受控异常映射为稳定 HTTP 响应，并隐藏订单归属与基础设施细节。
  */
-@RestControllerAdvice(assignableTypes = CurrentUserMembershipOrderController.class)
+@RestControllerAdvice(assignableTypes = {
+        CurrentUserMembershipOrderController.class,
+        CurrentUserMembershipPlanOfferController.class
+})
 @ConditionalOnProperty(
         prefix = "app.membership-payment",
         name = "enabled",
@@ -41,8 +44,16 @@ public final class MembershipPaymentExceptionHandler {
                     MEMBERSHIP_TRANSITION_REJECTED,
                     MEMBERSHIP_UPGRADE_HISTORY_MISSING,
                     MEMBERSHIP_PAYMENT_AMOUNT_MISMATCH,
-                    MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT -> HttpStatus.CONFLICT;
+                    MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT,
+                    BAR_ORDER_CONFLICT -> HttpStatus.CONFLICT;
+            case BAR_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case BAR_AUTH_FAILED,
+                    BAR_RESPONSE_INVALID,
+                    BAR_SIGNATURE_INVALID -> HttpStatus.BAD_GATEWAY;
             case FEATURE_DISABLED,
+                    PAYMENT_CHECKOUT_DISABLED,
+                    PAYMENT_PROVIDER_UNSUPPORTED,
+                    BAR_UNAVAILABLE,
                     MEMBERSHIP_PAYMENT_REDIS_UNAVAILABLE,
                     MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case INPUT_INVALID -> HttpStatus.BAD_REQUEST;
@@ -65,6 +76,14 @@ public final class MembershipPaymentExceptionHandler {
             case MEMBERSHIP_UPGRADE_HISTORY_MISSING -> "缺少可信的历史支付周期，暂时无法计算升级价格。";
             case MEMBERSHIP_PAYMENT_REDIS_UNAVAILABLE -> "会员支付状态暂时不可用，请稍后重试。";
             case MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE -> "会员支付检查暂时无法提交，请原样重试。";
+            case PAYMENT_CHECKOUT_DISABLED -> "会员支付发起已暂停，请稍后重试。";
+            case PAYMENT_PROVIDER_UNSUPPORTED -> "当前支付提供方暂不可用。";
+            case BAR_TIMEOUT -> "BAR 沙箱响应超时，请原样重试。";
+            case BAR_UNAVAILABLE -> "BAR 沙箱暂时不可用，请稍后重试。";
+            case BAR_AUTH_FAILED,
+                    BAR_RESPONSE_INVALID,
+                    BAR_SIGNATURE_INVALID -> "BAR 沙箱返回了无法信任的响应。";
+            case BAR_ORDER_CONFLICT -> "BAR 沙箱订单与当前订单冲突。";
             case FEATURE_DISABLED -> "会员支付功能暂未启用。";
             case INPUT_INVALID -> "会员支付请求参数无效。";
             default -> "会员支付订单状态冲突，请刷新后重试。";

@@ -1,6 +1,7 @@
 package com.example.temperate.service.user.membership.payment.loadtest;
 
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackCompletion;
+import java.time.Duration;
 import java.util.Collection;
 
 /**
@@ -16,4 +17,28 @@ public interface MembershipPaymentLoadtestFaultGate {
             Collection<PaymentCallbackCompletion> completions);
 
     long callbackCompleteFailureCount();
+
+    void armCallbackHold(String orderId, Duration duration);
+
+    boolean callbackHeld(String orderId);
+
+    long callbackHoldRemainingMillis(String orderId);
+
+    void releaseCallbackHold(String orderId);
+
+    void pauseCallbackWorker(Duration duration);
+
+    void resumeCallbackWorker();
+
+    boolean callbackWorkerPaused();
+
+    long callbackWorkerPauseRemainingMillis();
+
+    void pauseOrderPersistenceWorker(Duration duration);
+
+    void resumeOrderPersistenceWorker();
+
+    boolean orderPersistenceWorkerPaused();
+
+    long orderPersistenceWorkerPauseRemainingMillis();
 }

@@ -4,6 +4,19 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper">
 
+    <resultMap id="MembershipPaymentCallbackResultMap"
+               type="com.example.temperate.model.user.membership.payment.MembershipPaymentCallback">
+        <id property="id" column="id"/>
+        <result property="orderId" column="order_id"/>
+        <result property="providerTradeNo" column="provider_trade_no"/>
+        <result property="tradeStatus" column="trade_status"/>
+        <result property="paidAmountYuan" column="paid_amount_yuan"/>
+        <result property="paidAt" column="paid_at"/>
+        <result property="receivedAt" column="received_at"/>
+        <result property="resolution" column="resolution"/>
+        <result property="resolvedAt" column="resolved_at"/>
+    </resultMap>
+
     <resultMap id="CallbackWriteResultMap"
                type="com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult">
         <result property="ordinal" column="ordinal"/>
@@ -14,6 +27,9 @@
         <result property="providerTradeNo" column="provider_trade_no"/>
         <result property="tradeStatus" column="trade_status"/>
         <result property="resolution" column="resolution"/>
+        <result property="orderEntitlementResolution"
+                column="order_entitlement_resolution"
+                javaType="com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution"/>
         <result property="outcome" column="outcome"/>
         <result property="inserted" column="inserted"/>
         <result property="duplicate" column="duplicate"/>
@@ -21,7 +37,25 @@
         <result property="orderMismatch" column="order_mismatch"/>
     </resultMap>
 
-    <select id="batchInsertOrResolve" resultMap="CallbackWriteResultMap">
+    <resultMap id="RefundTerminalFactResultMap"
+               type="com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact">
+        <id property="callbackId" column="callback_id"/>
+        <result property="orderId" column="order_id"/>
+        <result property="providerTradeNo" column="provider_trade_no"/>
+        <result property="callbackResolution" column="callback_resolution"/>
+        <result property="orderStatus" column="order_status"
+                typeHandler="com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler"/>
+        <result property="orderEntitlementResolution"
+                column="order_entitlement_resolution"
+                javaType="com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution"/>
+        <result property="orderProviderTradeNo" column="order_provider_trade_no"/>
+    </resultMap>
+
+    <select id="batchInsertOrResolve"
+            resultMap="CallbackWriteResultMap"
+            affectData="true"
+            flushCache="true"
+            useCache="false">
         WITH callback_input AS (
             SELECT
                 raw.ordinal,
@@ -75,104 +109,202 @@
                 resolution,
                 resolved_at
         ),
-        callback_facts AS (
-            SELECT
-                id,
-                order_id,
-                provider_trade_no,
-                trade_status,
-                resolution
-            FROM inserted
-            UNION ALL
-            SELECT
-                id,
-                order_id,
-                provider_trade_no,
-                trade_status,
-                resolution
-            FROM membership_payment_callback
-        ),
         resolved AS (
             SELECT
                 callback_input.ordinal,
                 callback_input.callback_id,
                 callback_input.order_id AS requested_order_id,
                 COALESCE(
-                    order_fact.id,
-                    provider_fact.id,
-                    id_fact.id
+                    inserted_by_order_id.id,
+                    stored_by_order_id.id,
+                    inserted_by_provider_trade_no.id,
+                    stored_by_provider_trade_no.id,
+                    inserted_by_callback_id.id,
+                    stored_by_callback_id.id
                 ) AS persisted_callback_id,
                 COALESCE(
-                    order_fact.order_id,
-                    provider_fact.order_id,
-                    id_fact.order_id
+                    inserted_by_order_id.order_id,
+                    stored_by_order_id.order_id,
+                    inserted_by_provider_trade_no.order_id,
+                    stored_by_provider_trade_no.order_id,
+                    inserted_by_callback_id.order_id,
+                    stored_by_callback_id.order_id
                 ) AS persisted_order_id,
                 callback_input.provider_trade_no,
                 callback_input.trade_status,
                 COALESCE(
-                    order_fact.resolution,
-                    provider_fact.resolution,
-                    id_fact.resolution
+                    inserted_by_order_id.resolution,
+                    stored_by_order_id.resolution,
+                    inserted_by_provider_trade_no.resolution,
+                    stored_by_provider_trade_no.resolution,
+                    inserted_by_callback_id.resolution,
+                    stored_by_callback_id.resolution
                 ) AS resolution,
-                inserted_for_input.id AS inserted_id,
-                order_fact.id AS order_fact_id,
-                order_fact.provider_trade_no AS order_fact_provider_trade_no,
-                provider_fact.id AS provider_fact_id,
-                provider_fact.order_id AS provider_fact_order_id,
-                id_fact.id AS id_fact_id
+                inserted_by_callback_id.id AS inserted_id,
+                COALESCE(
+                    inserted_by_order_id.id,
+                    stored_by_order_id.id
+                ) AS order_fact_id,
+                COALESCE(
+                    inserted_by_order_id.provider_trade_no,
+                    stored_by_order_id.provider_trade_no
+                ) AS order_fact_provider_trade_no,
+                COALESCE(
+                    inserted_by_provider_trade_no.id,
+                    stored_by_provider_trade_no.id
+                ) AS provider_fact_id,
+                COALESCE(
+                    inserted_by_provider_trade_no.order_id,
+                    stored_by_provider_trade_no.order_id
+                ) AS provider_fact_order_id,
+                COALESCE(
+                    inserted_by_callback_id.id,
+                    stored_by_callback_id.id
+                ) AS id_fact_id
             FROM callback_input
-            LEFT JOIN callback_facts order_fact
-              ON order_fact.order_id = callback_input.order_id
-            LEFT JOIN callback_facts provider_fact
-              ON provider_fact.provider_trade_no = callback_input.provider_trade_no
-            LEFT JOIN callback_facts id_fact
-              ON id_fact.id = callback_input.callback_id
-            LEFT JOIN inserted inserted_for_input
-              ON inserted_for_input.id = callback_input.callback_id
+            LEFT JOIN inserted inserted_by_callback_id
+              ON inserted_by_callback_id.id = callback_input.callback_id
+            LEFT JOIN inserted inserted_by_order_id
+              ON inserted_by_order_id.order_id = callback_input.order_id
+            LEFT JOIN inserted inserted_by_provider_trade_no
+              ON inserted_by_provider_trade_no.provider_trade_no = callback_input.provider_trade_no
+            LEFT JOIN membership_payment_callback stored_by_callback_id
+              ON stored_by_callback_id.id = callback_input.callback_id
+            LEFT JOIN membership_payment_callback stored_by_order_id
+              ON stored_by_order_id.order_id = callback_input.order_id
+            LEFT JOIN membership_payment_callback stored_by_provider_trade_no
+              ON stored_by_provider_trade_no.provider_trade_no = callback_input.provider_trade_no
         )
         SELECT
-            ordinal,
-            callback_id,
-            requested_order_id,
-            persisted_order_id,
-            persisted_callback_id,
-            provider_trade_no,
-            trade_status,
-            resolution,
+            resolved.ordinal,
+            resolved.callback_id,
+            resolved.requested_order_id,
+            resolved.persisted_order_id,
+            resolved.persisted_callback_id,
+            resolved.provider_trade_no,
+            resolved.trade_status,
+            resolved.resolution,
+            persisted_order.entitlement_resolution
+                AS order_entitlement_resolution,
             CASE
-                WHEN inserted_id IS NOT NULL THEN 'INSERTED'
-                WHEN order_fact_id IS NOT NULL
-                     AND provider_fact_id IS NOT NULL
-                     AND order_fact_id &lt;&gt; provider_fact_id THEN 'IDENTITY_CONFLICT'
-                WHEN order_fact_id IS NOT NULL
-                     AND order_fact_provider_trade_no &lt;&gt; provider_trade_no
+                WHEN resolved.inserted_id IS NOT NULL THEN 'INSERTED'
+                WHEN resolved.order_fact_id IS NOT NULL
+                     AND resolved.provider_fact_id IS NOT NULL
+                     AND resolved.order_fact_id &lt;&gt; resolved.provider_fact_id THEN 'IDENTITY_CONFLICT'
+                WHEN resolved.order_fact_id IS NOT NULL
+                     AND resolved.order_fact_provider_trade_no &lt;&gt; resolved.provider_trade_no
                     THEN 'ORDER_DUPLICATE'
-                WHEN provider_fact_id IS NOT NULL
-                     AND provider_fact_order_id &lt;&gt; requested_order_id
+                WHEN resolved.provider_fact_id IS NOT NULL
+                     AND resolved.provider_fact_order_id &lt;&gt; resolved.requested_order_id
                     THEN 'PROVIDER_TRADE_REUSED'
-                WHEN id_fact_id IS NOT NULL
-                     AND persisted_order_id &lt;&gt; requested_order_id
+                WHEN resolved.id_fact_id IS NOT NULL
+                     AND resolved.persisted_order_id &lt;&gt; resolved.requested_order_id
                     THEN 'CALLBACK_ID_REUSED'
                 ELSE 'DUPLICATE'
             END AS outcome,
-            inserted_id IS NOT NULL AS inserted,
-            inserted_id IS NULL
-                AND order_fact_id IS NOT NULL
+            resolved.inserted_id IS NOT NULL AS inserted,
+            resolved.inserted_id IS NULL
+                AND resolved.order_fact_id IS NOT NULL
                 AND NOT (
-                    provider_fact_id IS NOT NULL
-                    AND order_fact_id &lt;&gt; provider_fact_id
+                    resolved.provider_fact_id IS NOT NULL
+                    AND resolved.order_fact_id &lt;&gt; resolved.provider_fact_id
                 ) AS duplicate,
-            persisted_callback_id = callback_id AS same_callback,
+            resolved.persisted_callback_id = resolved.callback_id AS same_callback,
             (
-                provider_fact_id IS NOT NULL
-                AND provider_fact_order_id &lt;&gt; requested_order_id
+                resolved.provider_fact_id IS NOT NULL
+                AND resolved.provider_fact_order_id &lt;&gt; resolved.requested_order_id
             ) OR (
-                id_fact_id IS NOT NULL
-                AND persisted_order_id &lt;&gt; requested_order_id
+                resolved.id_fact_id IS NOT NULL
+                AND resolved.persisted_order_id &lt;&gt; resolved.requested_order_id
             ) AS order_mismatch
         FROM resolved
-        ORDER BY ordinal
+        LEFT JOIN membership_order AS persisted_order
+          ON persisted_order.id = resolved.persisted_order_id
+        ORDER BY resolved.ordinal
     </select>
+
+    <select id="findByIdsJsonForUpdate"
+            resultMap="MembershipPaymentCallbackResultMap">
+        WITH requested AS (
+            SELECT DECODE(requested_value, 'hex') AS callback_id
+            FROM jsonb_array_elements_text(
+                CAST(#{idsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS requested(requested_value)
+        )
+        SELECT
+            membership_payment_callback.id,
+            membership_payment_callback.order_id,
+            membership_payment_callback.provider_trade_no,
+            membership_payment_callback.trade_status,
+            membership_payment_callback.paid_amount_yuan,
+            membership_payment_callback.paid_at,
+            membership_payment_callback.received_at,
+            membership_payment_callback.resolution,
+            membership_payment_callback.resolved_at
+        FROM membership_payment_callback
+        JOIN requested
+          ON requested.callback_id = membership_payment_callback.id
+        ORDER BY membership_payment_callback.id
+        FOR UPDATE OF membership_payment_callback
+    </select>
+
+    <select id="findRefundTerminalFactsByIdsJson"
+            resultMap="RefundTerminalFactResultMap">
+        WITH requested AS (
+            SELECT DISTINCT DECODE(requested_value, 'hex') AS callback_id
+            FROM jsonb_array_elements_text(
+                CAST(#{idsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS requested(requested_value)
+        )
+        SELECT
+            membership_payment_callback.id AS callback_id,
+            membership_payment_callback.order_id,
+            membership_payment_callback.provider_trade_no,
+            membership_payment_callback.resolution AS callback_resolution,
+            membership_order.status AS order_status,
+            membership_order.entitlement_resolution AS order_entitlement_resolution,
+            membership_order.provider_trade_no AS order_provider_trade_no
+        FROM requested
+        INNER JOIN membership_payment_callback
+          ON membership_payment_callback.id = requested.callback_id
+        INNER JOIN membership_order
+          ON membership_order.id = membership_payment_callback.order_id
+        ORDER BY membership_payment_callback.id
+    </select>
+
+    <select id="countByLoginIdentityIdRange" resultType="int">
+        SELECT COUNT(*)
+        FROM membership_payment_callback
+        INNER JOIN membership_order
+          ON membership_order.id = membership_payment_callback.order_id
+        WHERE membership_order.login_identity_id &gt;= #{startInclusive,jdbcType=BIGINT}
+          AND membership_order.login_identity_id &lt; #{endExclusive,jdbcType=BIGINT}
+    </select>
+
+    <select id="hashOrderIdsByLoginIdentityIdRange" resultType="string">
+        SELECT MD5(COALESCE(
+            STRING_AGG(
+                ENCODE(membership_payment_callback.order_id, 'hex'),
+                '' ORDER BY membership_payment_callback.order_id),
+            ''))
+        FROM membership_payment_callback
+        INNER JOIN membership_order
+          ON membership_order.id = membership_payment_callback.order_id
+        WHERE membership_order.login_identity_id &gt;= #{startInclusive,jdbcType=BIGINT}
+          AND membership_order.login_identity_id &lt; #{endExclusive,jdbcType=BIGINT}
+    </select>
+
+    <delete id="deleteByOrderIdsJson">
+        WITH requested AS (
+            SELECT DECODE(requested_value, 'hex') AS order_id
+            FROM jsonb_array_elements_text(
+                CAST(#{orderIdsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS requested(requested_value)
+        )
+        DELETE FROM membership_payment_callback
+        USING requested
+        WHERE membership_payment_callback.order_id = requested.order_id
+    </delete>
 
     <update id="batchResolve">
         WITH raw_resolutions AS (

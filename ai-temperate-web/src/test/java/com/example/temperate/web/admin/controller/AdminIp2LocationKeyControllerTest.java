@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.temperate.service.risk.ip2location.domain.Ip2LocationImportMode;
@@ -33,7 +34,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
- * 验证管理员 IP2Location Key 导入的套餐白名单、文件边界和脱敏响应约束。
+ * 该测试是来验证管理员 IP2Location Key 导入的套餐白名单、部分接受、文件边界和脱敏响应约束。
  */
 class AdminIp2LocationKeyControllerTest {
 
@@ -54,7 +55,7 @@ class AdminIp2LocationKeyControllerTest {
             throws Exception {
         Ip2LocationApiKeyService service = mock(Ip2LocationApiKeyService.class);
         when(service.importBatch(any())).thenReturn(
-                new Ip2LocationKeyBatchResult(2, 2, 0, 0));
+                new Ip2LocationKeyBatchResult(2, 2, 0, 0, 0));
         AdminIp2LocationKeyController controller =
                 new AdminIp2LocationKeyController(service);
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -78,10 +79,35 @@ class AdminIp2LocationKeyControllerTest {
         assertThat(command.getValue().planType()).isEqualTo(Ip2LocationPlanType.FREE);
         assertThat(command.getValue().apiKeys())
                 .containsExactly("first-api-key", "second-api-key");
-        assertThat(result).isEqualTo(new Ip2LocationKeyBatchResult(2, 2, 0, 0));
+        assertThat(result).isEqualTo(new Ip2LocationKeyBatchResult(2, 2, 0, 0, 0));
         assertThat(result.toString())
                 .doesNotContain("first-api-key", "second-api-key");
         assertThat(response.getHeader("Cache-Control")).contains("no-store");
+    }
+
+    @Test
+    void capacityPartialAcceptanceReturnsHttpOkAndStatistics() throws Exception {
+        Ip2LocationApiKeyService service = mock(Ip2LocationApiKeyService.class);
+        when(service.importBatch(any())).thenReturn(
+                new Ip2LocationKeyBatchResult(2, 2, 0, 0, 3));
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new AdminIp2LocationKeyController(service))
+                .build();
+
+        mockMvc.perform(post("/api/admin/risk/ip2location/keys/batch")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "planType": "FREE",
+                                  "initialQuota": 50000,
+                                  "mode": "CREATE_ONLY",
+                                  "apiKeys": ["key-0001", "key-0002", "key-0003", "key-0004", "key-0005"]
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.acceptedCount").value(2))
+                .andExpect(jsonPath("$.capacityRejectedCount").value(3));
     }
 
     @Test

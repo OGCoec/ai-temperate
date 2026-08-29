@@ -76,6 +76,8 @@ public class SecurityConfiguration {
     private static final String WEBRTC_REPORT_PATH = "/api/_edge/webrtc/report";
     private static final String SIMULATED_PAYMENT_CALLBACK_PATH =
             "/internal/test/membership-payments/liuhao/notify";
+    private static final String BAR_PAYMENT_CALLBACK_PATH =
+            "/api/payment/bar/notify";
     private static final String MEMBERSHIP_LOADTEST_CONTROL_ROOT =
             "/internal/test/membership-payments/loadtest-control";
 
@@ -117,14 +119,16 @@ public class SecurityConfiguration {
             ApiKeyProperties properties,
             NetworkRiskProperties networkRiskProperties,
             OpenAiErrorResponseWriter errorWriter,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
         return new ApiKeyIpRiskFilter(
                 edgeContextResolver,
                 ipIntelligenceService,
                 properties,
                 networkRiskProperties,
                 errorWriter,
-                meterRegistry);
+                meterRegistry,
+                loadtestRequestPolicy);
     }
 
     @Bean
@@ -466,6 +470,9 @@ public class SecurityConfiguration {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
+                        // BAR 精确 GET 通知免除用户会话，但仍由版本化 HMAC 认证；验签失败不会返回 success。
+                        .requestMatchers(HttpMethod.GET, BAR_PAYMENT_CALLBACK_PATH)
+                        .permitAll()
                         // 模拟支付回调只对 GET/POST 精确路径公开，业务认证由常量时间测试密钥校验完成。
                         .requestMatchers(
                                 HttpMethod.GET,
@@ -527,6 +534,34 @@ public class SecurityConfiguration {
                         || (request.getContextPath()
                                         + MEMBERSHIP_LOADTEST_CONTROL_ROOT
                                         + "/rabbit-poison")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/arm-callback-complete-failure")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/callback-hold/arm")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/callback-hold/release")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/workers/pause")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/workers/resume")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/restricted-fixtures/prepare")
+                                .equals(request.getRequestURI())
+                        || (request.getContextPath()
+                                        + MEMBERSHIP_LOADTEST_CONTROL_ROOT
+                                        + "/restricted-fixtures/restore")
                                 .equals(request.getRequestURI()));
     }
 

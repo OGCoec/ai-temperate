@@ -459,7 +459,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "membership-order",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_ORDER_SNAPSHOT,
                 Objects.requireNonNull(orderId).value());
     }
@@ -469,7 +469,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_DATA,
                 Objects.requireNonNull(callbackId).value());
     }
@@ -479,7 +479,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_READY,
                 "all");
     }
@@ -489,7 +489,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_PROCESSING,
                 "all");
     }
@@ -499,7 +499,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_IDEMPOTENCY,
                 requireHmacIdentifier(fingerprint));
     }
@@ -509,7 +509,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_ORDER_IDEMPOTENCY,
                 Objects.requireNonNull(orderId).value());
     }
@@ -519,7 +519,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "callback",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_CALLBACK_PROVIDER_IDEMPOTENCY,
                 requireHmacIdentifier(fingerprint));
     }
@@ -529,7 +529,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "membership-order",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_ORDER_CALLBACK,
                 Objects.requireNonNull(orderId).value());
     }
@@ -539,7 +539,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "provider-result",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_PROVIDER_RESULT_STATUS,
                 Objects.requireNonNull(orderId).value());
     }
@@ -549,7 +549,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "order-persist",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_ORDER_PERSIST_DIRTY,
                 "all");
     }
@@ -559,7 +559,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "order-persist",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_ORDER_PERSIST_PROCESSING,
                 "all");
     }
@@ -569,7 +569,7 @@ public final class RedisKeyFactory {
         return create(
                 "payment",
                 "order-persist",
-                "v1",
+                "v2",
                 IdentifierType.PAYMENT_ORDER_PERSIST_LOCK,
                 "singleton");
     }

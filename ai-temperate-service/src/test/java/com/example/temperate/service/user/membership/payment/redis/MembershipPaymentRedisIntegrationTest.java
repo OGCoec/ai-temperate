@@ -1,7 +1,10 @@
 package com.example.temperate.service.user.membership.payment.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
+import com.example.temperate.common.redis.key.MembershipOrderRedisId;
 import com.example.temperate.common.redis.key.RedisKeyFactory;
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.common.security.hmac.HmacSha256Identifier;
@@ -12,21 +15,34 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentCal
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackEnqueueResult;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackSnapshot;
 import com.example.temperate.service.user.membership.payment.callback.PaymentProviderResultCompletionAction;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundRequiredFinalizationCommand;
+import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackReleaseCommand;
+import com.example.temperate.service.user.membership.payment.order.MembershipOrderPaidCommand;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
 import com.example.temperate.service.user.membership.payment.persistence.OrderPersistToken;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisMembershipOrderSnapshotStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipPaymentMissingSnapshotReleaseOutcome;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCommand;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteMode;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteOutcome;
+import com.example.temperate.service.user.membership.payment.store.MembershipProviderTradeNoPatchOutcome;
+import com.example.temperate.service.user.membership.payment.store.impl.RedisMembershipPaymentUnappliedCallbackStore;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisOrderPersistenceQueue;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisPaymentCallbackQueue;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisSimulatedPaymentProviderResultStore;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -64,6 +80,7 @@ final class MembershipPaymentRedisIntegrationTest {
     private static StringRedisTemplate redisTemplate;
 
     private RedisMembershipOrderSnapshotStore orderStore;
+    private RedisMembershipPaymentUnappliedCallbackStore unappliedCallbackStore;
     private RedisPaymentCallbackQueue callbackQueue;
     private RedisOrderPersistenceQueue persistenceQueue;
     private RedisSimulatedPaymentProviderResultStore providerStore;
@@ -91,9 +108,184 @@ final class MembershipPaymentRedisIntegrationTest {
             connection.serverCommands().flushAll();
         }
         orderStore = new RedisMembershipOrderSnapshotStore(redisTemplate, KEYS);
+        unappliedCallbackStore =
+                new RedisMembershipPaymentUnappliedCallbackStore(redisTemplate, KEYS);
         callbackQueue = new RedisPaymentCallbackQueue(redisTemplate, KEYS);
         persistenceQueue = new RedisOrderPersistenceQueue(redisTemplate, KEYS);
         providerStore = new RedisSimulatedPaymentProviderResultStore(redisTemplate, KEYS);
+    }
+
+    @Test
+    void putAndGetReturnsTheMonotonicRedisWinnerWithoutAnExtraRead() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        MembershipOrderSnapshot initial = order(orderId);
+
+        assertThat(orderStore.putAndGet(initial)).isEqualTo(initial);
+
+        MembershipOrderSnapshot closing = new MembershipOrderSnapshot(
+                initial.schemaVersion(),
+                initial.orderId(),
+                initial.loginIdentityId(),
+                initial.membershipTier(),
+                initial.payAmountYuan(),
+                initial.payType(),
+                MembershipOrderStatus.CLOSING,
+                initial.idempotencyKey(),
+                initial.providerTradeNo(),
+                initial.paymentStartedAt(),
+                initial.expiresAt(),
+                NOW.plusMinutes(10),
+                null,
+                2L,
+                initial.createdAt(),
+                NOW.plusMinutes(5));
+
+        assertThat(orderStore.putAndGet(closing)).isEqualTo(closing);
+        assertThat(orderStore.putAndGet(initial)).isEqualTo(closing);
+        assertThat(orderStore.putAndGet(closing)).isEqualTo(closing);
+    }
+
+    @Test
+    void paymentAttemptPatchUsesMonotonicVersionAndReturnsTheCurrentSnapshot() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        MembershipOrderSnapshot initial = order(orderId);
+        orderStore.put(initial);
+        MembershipOrderSnapshot paymentStarted = paymentAttemptSnapshot(
+                initial, initial.loginIdentityId(), 2L, NOW.plusSeconds(1));
+
+        assertThat(orderStore.writeAll(List.of(new MembershipOrderSnapshotWriteCommand(
+                        MembershipOrderSnapshotWriteMode.PAYMENT_ATTEMPT_PATCH,
+                        paymentStarted))))
+                .singleElement()
+                .satisfies(result -> {
+                    assertThat(result.outcome())
+                            .isEqualTo(MembershipOrderSnapshotWriteOutcome.APPLIED);
+                    assertThat(result.snapshot()).isEqualTo(paymentStarted);
+                });
+        assertThat(orderStore.writeAll(List.of(new MembershipOrderSnapshotWriteCommand(
+                        MembershipOrderSnapshotWriteMode.PAYMENT_ATTEMPT_PATCH,
+                        paymentStarted))))
+                .singleElement()
+                .extracting(result -> result.outcome())
+                .isEqualTo(MembershipOrderSnapshotWriteOutcome.UNCHANGED);
+
+        MembershipOrderSnapshot stale = paymentAttemptSnapshot(
+                initial, initial.loginIdentityId(), 1L, NOW.plusSeconds(1));
+        assertThat(orderStore.writeAll(List.of(new MembershipOrderSnapshotWriteCommand(
+                        MembershipOrderSnapshotWriteMode.PAYMENT_ATTEMPT_PATCH,
+                        stale))))
+                .singleElement()
+                .satisfies(result -> {
+                    assertThat(result.outcome())
+                            .isEqualTo(MembershipOrderSnapshotWriteOutcome.STALE);
+                    assertThat(result.snapshot()).isEqualTo(paymentStarted);
+                });
+
+        MembershipOrderSnapshot versionGap = paymentAttemptSnapshot(
+                initial, initial.loginIdentityId(), 4L, NOW.plusSeconds(2));
+        assertThat(orderStore.writeAll(List.of(new MembershipOrderSnapshotWriteCommand(
+                        MembershipOrderSnapshotWriteMode.PAYMENT_ATTEMPT_PATCH,
+                        versionGap))))
+                .singleElement()
+                .extracting(result -> result.outcome())
+                .isEqualTo(MembershipOrderSnapshotWriteOutcome.REQUIRES_RESTORE);
+
+        MembershipOrderSnapshot wrongOwner = paymentAttemptSnapshot(
+                initial, 18L, 3L, NOW.plusSeconds(2));
+        assertThat(orderStore.writeAll(List.of(new MembershipOrderSnapshotWriteCommand(
+                        MembershipOrderSnapshotWriteMode.PAYMENT_ATTEMPT_PATCH,
+                        wrongOwner))))
+                .singleElement()
+                .extracting(result -> result.outcome())
+                .isEqualTo(MembershipOrderSnapshotWriteOutcome.CONFLICT);
+    }
+
+    @Test
+    void providerTradePatchIsConditionalAndNeverChangesTheStateVersion() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        MembershipOrderSnapshot initial = order(orderId);
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.MISSING);
+
+        orderStore.put(initial);
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.APPLIED);
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.UNCHANGED);
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId, initial.loginIdentityId(), "provider-trade-2"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.CONFLICT);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.providerTradeNo()).isEqualTo("provider-trade-1");
+            assertThat(snapshot.stateVersion()).isEqualTo(1L);
+        });
+
+        orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.CONFLICT);
+    }
+
+    @Test
+    void oneCoordinatorBatchOfPutAndGetResultsPreservesAllOneHundredNinetyTwoItems() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        List<MembershipOrderSnapshot> snapshots = IntStream.range(0, 192)
+                .mapToObj(index -> order(codec.encode(ByteBuffer.allocate(16)
+                        .putLong(11L)
+                        .putLong(index + 1L)
+                        .array())))
+                .toList();
+
+        List<MembershipOrderSnapshot> first = orderStore.putAndGetAll(snapshots);
+        List<MembershipOrderSnapshot> replay = orderStore.putAndGetAll(snapshots);
+
+        assertThat(first).containsExactlyElementsOf(snapshots);
+        assertThat(replay).containsExactlyElementsOf(snapshots);
+        assertThat(first.get(191).orderId()).isEqualTo(snapshots.get(191).orderId());
+    }
+
+    @Test
+    void coordinatorRejectsOneHundredNinetyThreeItemsBeforeSubmittingRedisCommands() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        List<MembershipOrderSnapshot> snapshots = IntStream.range(0, 193)
+                .mapToObj(index -> order(codec.encode(ByteBuffer.allocate(16)
+                        .putLong(13L)
+                        .putLong(index + 1L)
+                        .array())))
+                .toList();
+
+        assertThatThrownBy(() -> orderStore.putAndGetAll(snapshots))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exceeds 192 snapshots");
+    }
+
+    @Test
+    void coordinatorPipelineUsesEvalShaAndReloadsAfterScriptCacheFlush() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        List<MembershipOrderSnapshot> snapshots = IntStream.range(0, 64)
+                .mapToObj(index -> order(codec.encode(ByteBuffer.allocate(16)
+                        .putLong(12L)
+                        .putLong(index + 1L)
+                        .array())))
+                .toList();
+        try (RedisConnection connection = connectionFactory.getConnection()) {
+            connection.scriptingCommands().scriptFlush();
+            connection.serverCommands().resetConfigStats();
+        }
+
+        assertThat(orderStore.putAndGetAll(snapshots)).containsExactlyElementsOf(snapshots);
+        assertThat(commandCalls("eval")).isZero();
+        assertThat(commandCalls("evalsha")).isEqualTo(64L);
+
+        try (RedisConnection connection = connectionFactory.getConnection()) {
+            connection.scriptingCommands().scriptFlush();
+        }
+        assertThat(orderStore.putAndGetAll(snapshots)).containsExactlyElementsOf(snapshots);
+        assertThat(commandCalls("eval")).isZero();
+        assertThat(commandCalls("evalsha")).isEqualTo(192L);
     }
 
     @Test
@@ -133,6 +325,113 @@ final class MembershipPaymentRedisIntegrationTest {
                 .isEqualTo(3L);
         assertThat(persistenceQueue.complete(paidClaim)).isEqualTo(1);
         assertThat(orderStore.find(orderId)).isEmpty();
+    }
+
+    @Test
+    void fiveHundredOrdersUseBoundedPipelinesAndRemainIdempotent() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        List<MembershipOrderSnapshot> snapshots = IntStream.range(0, 500)
+                .mapToObj(index -> order(codec.encode(ByteBuffer.allocate(16)
+                        .putLong(1L)
+                        .putLong(index + 1L)
+                        .array())))
+                .toList();
+        orderStore.putAll(snapshots);
+        assertThat(orderStore.findAll(snapshots.stream()
+                        .map(MembershipOrderSnapshot::orderId)
+                        .toList()))
+                .hasSize(500)
+                .containsKeys(
+                        snapshots.get(0).orderId(),
+                        snapshots.get(127).orderId(),
+                        snapshots.get(128).orderId(),
+                        snapshots.get(499).orderId());
+
+        List<MembershipOrderPaidCommand> commands = IntStream.range(0, 500)
+                .mapToObj(index -> new MembershipOrderPaidCommand(
+                        codec.encode(ByteBuffer.allocate(16)
+                                .putLong(2L)
+                                .putLong(index + 1L)
+                                .array()),
+                        snapshots.get(index).orderId(),
+                        "provider-trade-" + index,
+                        new BigDecimal("20.00"),
+                        NOW.plusMinutes(1),
+                        NOW.plusMinutes(1)))
+                .toList();
+
+        assertThat(orderStore.markPaidAll(commands.subList(0, 50)))
+                .hasSize(50)
+                .allSatisfy((callbackId, result) -> assertThat(result.applied()).isTrue());
+        assertThat(orderStore.markPaidAll(commands))
+                .hasSize(500)
+                .satisfies(results -> {
+                    assertThat(results.values())
+                            .filteredOn(result -> "ALREADY_APPLIED".equals(
+                                    result.outcome().name()))
+                            .hasSize(50);
+                    assertThat(results.values())
+                            .filteredOn(MembershipOrderTransitionResult::applied)
+                            .hasSize(450);
+                });
+        assertThat(orderStore.markPaidAll(commands))
+                .hasSize(500)
+                .allSatisfy((callbackId, result) ->
+                        assertThat(result.outcome().name()).isEqualTo("ALREADY_APPLIED"));
+    }
+
+    @Test
+    void fiveHundredCallbackCompletionsRejectOldClaimsAcrossPipelineBoundaries() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        Map<String, String> orderByCallback = IntStream.range(0, 500)
+                .mapToObj(index -> {
+                    String orderId = codec.encode(ByteBuffer.allocate(16)
+                            .putLong(3L)
+                            .putLong(index + 1L)
+                            .array());
+                    String callbackId = codec.encode(ByteBuffer.allocate(16)
+                            .putLong(4L)
+                            .putLong(index + 1L)
+                            .array());
+                    PaymentCallbackSnapshot snapshot = callback(
+                            callbackId,
+                            orderId,
+                            "provider-batch-" + index,
+                            HMAC.identify("callback-batch-" + index).value());
+                    assertThat(callbackQueue.enqueue(
+                                    snapshot,
+                                    HmacIdentifier.fromProtectedValue(
+                                            snapshot.idempotencyFingerprint()),
+                                    HMAC.identify(snapshot.providerTradeNo()))
+                            .enqueued()).isTrue();
+                    return Map.entry(callbackId, orderId);
+                })
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue));
+        long firstClaimedAt = NOW.toInstant().toEpochMilli();
+        List<PaymentCallbackClaim> oldClaims = callbackQueue.claim(
+                500, firstClaimedAt);
+        assertThat(oldClaims).hasSize(500);
+        assertThat(callbackQueue.recoverTimedOut(
+                firstClaimedAt,
+                500,
+                firstClaimedAt + 1_000L)).isEqualTo(500);
+        List<PaymentCallbackClaim> currentClaims = callbackQueue.claim(
+                500, firstClaimedAt + 2_000L);
+        assertThat(currentClaims).hasSize(500);
+
+        List<PaymentCallbackCompletion> oldCompletions = oldClaims.stream()
+                .map(claim -> new PaymentCallbackCompletion(
+                        claim, orderByCallback.get(claim.callbackId())))
+                .toList();
+        List<PaymentCallbackCompletion> currentCompletions = currentClaims.stream()
+                .map(claim -> new PaymentCallbackCompletion(
+                        claim, orderByCallback.get(claim.callbackId())))
+                .toList();
+        assertThat(callbackQueue.complete(oldCompletions)).isZero();
+        assertThat(callbackQueue.complete(currentCompletions)).isEqualTo(500);
+        assertThat(callbackQueue.complete(currentCompletions)).isZero();
     }
 
     @Test
@@ -240,12 +539,386 @@ final class MembershipPaymentRedisIntegrationTest {
     }
 
     @Test
+    void refundRequiredFinalizationClosesOrderAndKeepsClaimForRefundRetry() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("refund-required-finalization").value());
+        orderStore.put(order(orderId));
+        orderStore.startClosing(orderId, hardCloseAt, NOW.plusMinutes(5));
+        assertThat(callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo())).enqueued()).isTrue();
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, hardCloseAt.toInstant().toEpochMilli()).getFirst();
+
+        MembershipOrderTransitionResult result = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                claim,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt)))
+                .get(callbackId);
+
+        assertThat(result.applied()).isTrue();
+        assertThat(result.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+        assertThat(result.stateVersion()).isEqualTo(3L);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+            assertThat(snapshot.closingDeadlineAt()).isEqualTo(hardCloseAt);
+            assertThat(snapshot.updatedAt()).isEqualTo(hardCloseAt);
+        });
+        assertThat(orderStore.callbackInProgress(orderId)).isFalse();
+        assertThat(callbackQueue.processingSize()).isEqualTo(1L);
+        assertThat(providerStore.find(orderId)).get().satisfies(provider -> {
+            assertThat(provider.status()).isEqualTo(SimulatedPaymentProviderStatus.UNPAID);
+            assertThat(provider.callbackId()).isNull();
+        });
+        MembershipOrderTransitionResult replay = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                claim,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt.plusSeconds(1))))
+                .get(callbackId);
+        assertThat(replay.outcome().name()).isEqualTo("ALREADY_APPLIED");
+        assertThat(replay.stateVersion()).isEqualTo(3L);
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::updatedAt)
+                .isEqualTo(hardCloseAt);
+    }
+
+    @Test
+    void refundRequiredFinalizationCanClosePendingOrderAtHardBoundary() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("pending-refund-required-finalization").value());
+        orderStore.put(order(orderId));
+        callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo()));
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, hardCloseAt.toInstant().toEpochMilli()).getFirst();
+
+        MembershipOrderTransitionResult result = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                claim,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt)))
+                .get(callbackId);
+
+        assertThat(result.applied()).isTrue();
+        assertThat(result.stateVersion()).isEqualTo(2L);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+            assertThat(snapshot.closingDeadlineAt()).isEqualTo(hardCloseAt);
+            assertThat(snapshot.updatedAt()).isEqualTo(hardCloseAt);
+        });
+    }
+
+    @Test
+    void missingSnapshotRefundReleaseCleansOwnedFactsButKeepsProcessingClaim() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("missing-refund-required-release").value());
+        assertThat(callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo())).enqueued()).isTrue();
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, hardCloseAt.toInstant().toEpochMilli()).getFirst();
+        MembershipPaymentRefundRequiredFinalizationCommand command =
+                new MembershipPaymentRefundRequiredFinalizationCommand(
+                        claim,
+                        orderId,
+                        callback.providerTradeNo(),
+                        hardCloseAt,
+                        hardCloseAt);
+
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(List.of(command)))
+                .containsEntry(
+                        callbackId,
+                        MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED);
+
+        assertThat(orderStore.find(orderId)).isEmpty();
+        assertThat(orderStore.callbackInProgress(orderId)).isFalse();
+        assertThat(callbackQueue.processingSize()).isEqualTo(1L);
+        assertThat(providerStore.find(orderId)).get().satisfies(provider -> {
+            assertThat(provider.status()).isEqualTo(SimulatedPaymentProviderStatus.UNPAID);
+            assertThat(provider.callbackId()).isNull();
+        });
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(List.of(command)))
+                .containsEntry(
+                        callbackId,
+                        MembershipPaymentMissingSnapshotReleaseOutcome.ALREADY_RELEASED);
+        assertThat(callbackQueue.processingSize()).isEqualTo(1L);
+    }
+
+    @Test
+    void fourHundredMissingSnapshotRefundClaimsConvergeAcrossPipelineBoundaries() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        Map<String, PaymentCallbackSnapshot> callbacks = IntStream.range(0, 400)
+                .mapToObj(index -> {
+                    String orderId = codec.encode(ByteBuffer.allocate(16)
+                            .putLong(21L)
+                            .putLong(index + 1L)
+                            .array());
+                    String callbackId = codec.encode(ByteBuffer.allocate(16)
+                            .putLong(22L)
+                            .putLong(index + 1L)
+                            .array());
+                    PaymentCallbackSnapshot callback = callback(
+                            callbackId,
+                            orderId,
+                            "provider-missing-refund-" + index,
+                            HMAC.identify("missing-refund-batch-" + index).value());
+                    assertThat(callbackQueue.enqueue(
+                                    callback,
+                                    HmacIdentifier.fromProtectedValue(
+                                            callback.idempotencyFingerprint()),
+                                    HMAC.identify(callback.providerTradeNo()))
+                            .enqueued()).isTrue();
+                    return callback;
+                })
+                .collect(Collectors.toMap(
+                        PaymentCallbackSnapshot::callbackId,
+                        callback -> callback));
+        long claimedAt = NOW.plusMinutes(10).toInstant().toEpochMilli();
+        List<PaymentCallbackClaim> claims = callbackQueue.claim(400, claimedAt);
+        assertThat(claims).hasSize(400);
+        List<MembershipPaymentRefundRequiredFinalizationCommand> commands = claims.stream()
+                .map(claim -> {
+                    PaymentCallbackSnapshot callback = callbacks.get(claim.callbackId());
+                    return new MembershipPaymentRefundRequiredFinalizationCommand(
+                            claim,
+                            callback.orderId(),
+                            callback.providerTradeNo(),
+                            NOW.plusMinutes(10),
+                            NOW.plusMinutes(10));
+                })
+                .toList();
+
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(commands))
+                .hasSize(400)
+                .allSatisfy((callbackId, outcome) -> assertThat(outcome)
+                        .isEqualTo(MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED));
+        assertThat(redisTemplate.opsForZSet().zCard(KEYS.paymentCallbackReadyKey())).isZero();
+        assertThat(callbackQueue.processingSize()).isEqualTo(400L);
+
+        List<PaymentCallbackCompletion> completions = claims.stream()
+                .map(claim -> new PaymentCallbackCompletion(
+                        claim,
+                        callbacks.get(claim.callbackId()).orderId(),
+                        PaymentProviderResultCompletionAction.RESET_UNPAID))
+                .toList();
+        assertThat(callbackQueue.complete(completions)).isEqualTo(400);
+        assertThat(redisTemplate.opsForZSet().zCard(KEYS.paymentCallbackReadyKey())).isZero();
+        assertThat(callbackQueue.processingSize()).isZero();
+        assertThat(callbackQueue.findAll(callbacks.keySet())).isEmpty();
+    }
+
+    @Test
+    void missingSnapshotRefundReleaseRejectsStaleClaimAndForeignCallbackFacts() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("missing-refund-required-conflict").value());
+        callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo()));
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, hardCloseAt.toInstant().toEpochMilli()).getFirst();
+        PaymentCallbackClaim stale = new PaymentCallbackClaim(
+                callbackId, claim.claimedAtEpochMillis() + 1L);
+
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(List.of(
+                new MembershipPaymentRefundRequiredFinalizationCommand(
+                        stale,
+                        orderId,
+                        callback.providerTradeNo(),
+                        hardCloseAt,
+                        hardCloseAt))))
+                .containsEntry(
+                        callbackId,
+                        MembershipPaymentMissingSnapshotReleaseOutcome.CLAIM_MISMATCH);
+
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                "AaAjECcaAQGqi_h2Rl1Pig");
+        MembershipPaymentRefundRequiredFinalizationCommand command =
+                new MembershipPaymentRefundRequiredFinalizationCommand(
+                        claim,
+                        orderId,
+                        callback.providerTradeNo(),
+                        hardCloseAt,
+                        hardCloseAt);
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(List.of(command)))
+                .containsEntry(
+                        callbackId,
+                        MembershipPaymentMissingSnapshotReleaseOutcome.CALLBACK_CONFLICT);
+
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                callbackId);
+        redisTemplate.opsForHash().put(
+                KEYS.simulatedPaymentProviderResultKey(new MembershipOrderRedisId(orderId)),
+                "callbackId",
+                "AaAjECcaAQGqi_h2Rl1Pig");
+        assertThat(unappliedCallbackStore.releaseMissingRefundRequired(List.of(command)))
+                .containsEntry(
+                        callbackId,
+                        MembershipPaymentMissingSnapshotReleaseOutcome.CALLBACK_CONFLICT);
+        assertThat(orderStore.callbackInProgress(orderId)).isTrue();
+        assertThat(callbackQueue.processingSize()).isEqualTo(1L);
+    }
+
+    @Test
+    void refundRequiredFinalizationRejectsActiveOrderBeforeHardBoundary() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("early-refund-required-finalization").value());
+        orderStore.put(order(orderId));
+        callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo()));
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, NOW.plusMinutes(9).toInstant().toEpochMilli()).getFirst();
+
+        MembershipOrderTransitionResult result = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                claim,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt.minusNanos(1_000L))))
+                .get(callbackId);
+
+        assertThat(result.outcome().name()).isEqualTo("TOO_EARLY");
+        assertThat(orderStore.callbackInProgress(orderId)).isTrue();
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+    }
+
+    @Test
+    void rejectedReleaseClearsOwnMarkerWithoutCompletingClaimOrChangingOrder() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("rejected-release").value());
+        orderStore.put(order(orderId));
+        assertThat(callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo())).enqueued()).isTrue();
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, NOW.plusSeconds(1).toInstant().toEpochMilli()).getFirst();
+
+        assertThat(unappliedCallbackStore.releaseRejected(List.of(
+                new MembershipPaymentRejectedCallbackReleaseCommand(claim, orderId))))
+                .containsExactly(callbackId);
+
+        assertThat(orderStore.callbackInProgress(orderId)).isFalse();
+        assertThat(callbackQueue.processingSize()).isEqualTo(1L);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.status()).isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+            assertThat(snapshot.stateVersion()).isEqualTo(1L);
+        });
+        assertThat(providerStore.find(orderId)).get().satisfies(provider -> {
+            assertThat(provider.status()).isEqualTo(SimulatedPaymentProviderStatus.UNPAID);
+            assertThat(provider.callbackId()).isNull();
+        });
+    }
+
+    @Test
+    void staleClaimAndForeignMarkerCannotFinalizeRefundRequiredOrder() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String callbackId = "AaAjECcaAQGqi_h2Rl1PiQ";
+        OffsetDateTime hardCloseAt = NOW.plusMinutes(10);
+        PaymentCallbackSnapshot callback = callback(
+                callbackId,
+                orderId,
+                HMAC.identify("refund-required-conflict").value());
+        orderStore.put(order(orderId));
+        orderStore.startClosing(orderId, hardCloseAt, NOW.plusMinutes(5));
+        callbackQueue.enqueue(
+                callback,
+                HmacIdentifier.fromProtectedValue(callback.idempotencyFingerprint()),
+                HMAC.identify(callback.providerTradeNo()));
+        PaymentCallbackClaim claim = callbackQueue.claim(
+                10, hardCloseAt.toInstant().toEpochMilli()).getFirst();
+        PaymentCallbackClaim stale = new PaymentCallbackClaim(
+                callbackId, claim.claimedAtEpochMillis() + 1L);
+
+        MembershipOrderTransitionResult staleResult = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                stale,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt)))
+                .get(callbackId);
+        assertThat(staleResult.outcome().name()).isEqualTo("NOT_ALLOWED");
+
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                "AaAjECcaAQGqi_h2Rl1Pig");
+        MembershipOrderTransitionResult markerResult = unappliedCallbackStore
+                .finalizeRefundRequired(List.of(
+                        new MembershipPaymentRefundRequiredFinalizationCommand(
+                                claim,
+                                orderId,
+                                callback.providerTradeNo(),
+                                hardCloseAt,
+                                hardCloseAt)))
+                .get(callbackId);
+
+        assertThat(markerResult.outcome().name()).isEqualTo("CALLBACK_IN_PROGRESS");
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.CLOSING);
+    }
+
+    @Test
     void unknownProviderResultCannotCloseOrderButExplicitUnpaidCan() {
         String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
         orderStore.put(order(orderId));
         orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
         providerStore.put(new SimulatedPaymentProviderResult(
-                1,
+                SimulatedPaymentProviderResult.CURRENT_SCHEMA_VERSION,
                 orderId,
                 SimulatedPaymentProviderStatus.UNKNOWN,
                 null,
@@ -263,7 +936,7 @@ final class MembershipPaymentRedisIntegrationTest {
                 .isEqualTo(MembershipOrderStatus.CLOSING);
 
         providerStore.put(new SimulatedPaymentProviderResult(
-                1,
+                SimulatedPaymentProviderResult.CURRENT_SCHEMA_VERSION,
                 orderId,
                 SimulatedPaymentProviderStatus.UNPAID,
                 null,
@@ -366,7 +1039,7 @@ final class MembershipPaymentRedisIntegrationTest {
                 orderStore.startClosing(
                         orderId, NOW.plusMinutes(2), NOW.plusMinutes(1));
                 providerStore.put(new SimulatedPaymentProviderResult(
-                        1,
+                        SimulatedPaymentProviderResult.CURRENT_SCHEMA_VERSION,
                         orderId,
                         SimulatedPaymentProviderStatus.UNPAID,
                         null,
@@ -398,7 +1071,7 @@ final class MembershipPaymentRedisIntegrationTest {
 
     private static MembershipOrderSnapshot order(String orderId) {
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 orderId,
                 17L,
                 MembershipTier.PLUS,
@@ -415,6 +1088,30 @@ final class MembershipPaymentRedisIntegrationTest {
                 NOW);
     }
 
+    private static MembershipOrderSnapshot paymentAttemptSnapshot(
+            MembershipOrderSnapshot source,
+            long loginIdentityId,
+            long stateVersion,
+            OffsetDateTime paymentStartedAt) {
+        return new MembershipOrderSnapshot(
+                source.schemaVersion(),
+                source.orderId(),
+                loginIdentityId,
+                source.membershipTier(),
+                source.payAmountYuan(),
+                source.payType(),
+                source.status(),
+                source.idempotencyKey(),
+                source.providerTradeNo(),
+                paymentStartedAt,
+                source.expiresAt(),
+                source.closingDeadlineAt(),
+                source.paidAt(),
+                stateVersion,
+                source.createdAt(),
+                paymentStartedAt);
+    }
+
     private static PaymentCallbackSnapshot callback(
             String callbackId,
             String orderId,
@@ -428,7 +1125,7 @@ final class MembershipPaymentRedisIntegrationTest {
             String providerTradeNo,
             String fingerprint) {
         return new PaymentCallbackSnapshot(
-                1,
+                PaymentCallbackSnapshot.CURRENT_SCHEMA_VERSION,
                 callbackId,
                 orderId,
                 "merchant-test",
@@ -450,5 +1147,19 @@ final class MembershipPaymentRedisIntegrationTest {
         return claims.stream()
                 .map(claim -> new PaymentCallbackCompletion(claim, orderId))
                 .toList();
+    }
+
+    private static long commandCalls(String command) {
+        try (RedisConnection connection = connectionFactory.getConnection()) {
+            String statistics = connection.serverCommands()
+                    .info("commandstats")
+                    .getProperty("cmdstat_" + command, "calls=0");
+            return java.util.Arrays.stream(statistics.split(","))
+                    .filter(field -> field.startsWith("calls="))
+                    .map(field -> field.substring("calls=".length()))
+                    .mapToLong(Long::parseLong)
+                    .findFirst()
+                    .orElse(0L);
+        }
     }
 }

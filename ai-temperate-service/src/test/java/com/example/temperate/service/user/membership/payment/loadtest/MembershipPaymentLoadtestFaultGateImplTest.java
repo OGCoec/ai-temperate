@@ -7,6 +7,7 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentCal
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackCompletion;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.loadtest.impl.MembershipPaymentLoadtestFaultGateImpl;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +45,75 @@ final class MembershipPaymentLoadtestFaultGateImplTest {
         assertThatThrownBy(() -> gate.armCallbackCompleteFailure(FIRST_ORDER_ID))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("disabled");
+    }
+
+    @Test
+    void callbackHoldOnlyMatchesTargetAndReleaseIsIdempotent() {
+        MembershipPaymentLoadtestFaultGate gate = new MembershipPaymentLoadtestFaultGateImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(17L)));
+
+        gate.armCallbackHold(FIRST_ORDER_ID, Duration.ofSeconds(60));
+
+        assertThat(gate.callbackHeld(FIRST_ORDER_ID)).isTrue();
+        assertThat(gate.callbackHeld(SECOND_ORDER_ID)).isFalse();
+        assertThat(gate.callbackHoldRemainingMillis(FIRST_ORDER_ID)).isPositive();
+
+        gate.releaseCallbackHold(FIRST_ORDER_ID);
+        gate.releaseCallbackHold(FIRST_ORDER_ID);
+
+        assertThat(gate.callbackHeld(FIRST_ORDER_ID)).isFalse();
+        assertThat(gate.callbackHoldRemainingMillis(FIRST_ORDER_ID)).isZero();
+    }
+
+    @Test
+    void callbackHoldsCanCoverMultipleFixedOrdersConcurrently() {
+        MembershipPaymentLoadtestFaultGate gate = new MembershipPaymentLoadtestFaultGateImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(17L)));
+
+        gate.armCallbackHold(FIRST_ORDER_ID, Duration.ofSeconds(60));
+        gate.armCallbackHold(SECOND_ORDER_ID, Duration.ofSeconds(60));
+
+        assertThat(gate.callbackHeld(FIRST_ORDER_ID)).isTrue();
+        assertThat(gate.callbackHeld(SECOND_ORDER_ID)).isTrue();
+
+        gate.releaseCallbackHold(FIRST_ORDER_ID);
+
+        assertThat(gate.callbackHeld(FIRST_ORDER_ID)).isFalse();
+        assertThat(gate.callbackHeld(SECOND_ORDER_ID)).isTrue();
+    }
+
+    @Test
+    void workerPauseCanBeObservedAndExplicitlyReleased() {
+        MembershipPaymentLoadtestFaultGate gate = new MembershipPaymentLoadtestFaultGateImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(17L)));
+
+        gate.pauseCallbackWorker(Duration.ofSeconds(60));
+        gate.pauseOrderPersistenceWorker(Duration.ofSeconds(60));
+
+        assertThat(gate.callbackWorkerPaused()).isTrue();
+        assertThat(gate.orderPersistenceWorkerPaused()).isTrue();
+        assertThat(gate.callbackWorkerPauseRemainingMillis()).isPositive();
+        assertThat(gate.orderPersistenceWorkerPauseRemainingMillis()).isPositive();
+
+        gate.resumeCallbackWorker();
+        gate.resumeOrderPersistenceWorker();
+
+        assertThat(gate.callbackWorkerPaused()).isFalse();
+        assertThat(gate.orderPersistenceWorkerPaused()).isFalse();
+    }
+
+    @Test
+    void holdAndPauseRejectDurationsOutsideBoundedWindow() {
+        MembershipPaymentLoadtestFaultGate gate = new MembershipPaymentLoadtestFaultGateImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(17L)));
+
+        assertThatThrownBy(() -> gate.armCallbackHold(
+                        FIRST_ORDER_ID, Duration.ofSeconds(181)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("180");
+        assertThatThrownBy(() -> gate.pauseCallbackWorker(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("between 1 and 180 seconds");
     }
 
     private static PaymentCallbackCompletion completion(String orderId) {

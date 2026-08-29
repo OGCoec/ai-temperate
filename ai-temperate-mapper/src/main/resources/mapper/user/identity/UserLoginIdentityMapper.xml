@@ -177,6 +177,17 @@
         ORDER BY uli.id
     </select>
 
+    <select id="findByIds" resultMap="UserLoginIdentityResultMap">
+        SELECT
+        <include refid="IdentityColumns"/>
+        FROM userloginidentity
+        WHERE id IN
+        <foreach collection="identityIds" item="identityId" open="(" separator="," close=")">
+            #{identityId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY id
+    </select>
+
     <select id="findTotpCredentialById"
             resultMap="TotpCredentialResultMap">
         SELECT
@@ -274,6 +285,32 @@
             #{phone,jdbcType=VARCHAR},
             #{passwordHash,jdbcType=VARCHAR}
         )
+    </insert>
+
+    <insert id="batchInsertBoundaryFixtures">
+        INSERT INTO userloginidentity (
+            id,
+            registration_source,
+            github_subject,
+            google_subject,
+            email,
+            email_verified,
+            phone,
+            password_hash
+        )
+        VALUES
+        <foreach collection="identities" item="identity" separator=",">
+            (
+                #{identity.id,jdbcType=BIGINT},
+                #{identity.registrationSource.databaseCode,jdbcType=SMALLINT},
+                #{identity.githubSubject,jdbcType=VARCHAR},
+                #{identity.googleSubject,jdbcType=VARCHAR},
+                #{identity.email,jdbcType=VARCHAR},
+                #{identity.emailVerified,jdbcType=BOOLEAN},
+                #{identity.phone,jdbcType=VARCHAR},
+                #{identity.passwordHash,jdbcType=VARCHAR}
+            )
+        </foreach>
     </insert>
 
     <insert id="insertOAuthIdentityIfAbsent"

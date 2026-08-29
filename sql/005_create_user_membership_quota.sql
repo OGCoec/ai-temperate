@@ -23,8 +23,8 @@ COMMENT ON COLUMN user_membership_quota.id IS 'BIGINT 自增主键，对外使�
 COMMENT ON COLUMN user_membership_quota.login_identity_id IS '逻辑关联 userloginidentity.id，不建立物理外键';
 COMMENT ON COLUMN user_membership_quota.membership_tier IS '会员等级：0=FREE，1=GO，2=EDU，3=TEAM，4=PLUS，5=PRO，6=MAX';
 COMMENT ON COLUMN user_membership_quota.quota_balance_minor IS '可用额度的最小单位整数值；固定缩放比例为 100，数据库值 5000 表示实际额度 50.00';
-COMMENT ON COLUMN user_membership_quota.quota_period_started_at IS '当前额度周期实际开始时间；新用户尚未消费额度时为空';
-COMMENT ON COLUMN user_membership_quota.quota_period_ends_at IS '当前额度周期结束时间；新用户注册时由业务服务写入当前 UTC 时间，使首次模型调用进入新周期';
+COMMENT ON COLUMN user_membership_quota.quota_period_started_at IS '当前额度周期实际开始时间；新注册用户或刚完成付费但尚未消费新套餐时为空';
+COMMENT ON COLUMN user_membership_quota.quota_period_ends_at IS '当前额度周期结束时间；未激活时保存注册或支付完成的 UTC 哨兵时间，使第一次成功预扣原子开启七天周期';
 COMMENT ON COLUMN user_membership_quota.membership_expires_at IS '当前付费会员订阅到期时间；FREE 允许为空，付费等级为空时由惰性过期逻辑降级为 FREE';
 
 COMMIT;

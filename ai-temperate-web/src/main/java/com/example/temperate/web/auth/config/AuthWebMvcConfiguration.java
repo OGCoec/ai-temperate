@@ -18,6 +18,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class AuthWebMvcConfiguration implements WebMvcConfigurer {
 
+    private static final String BAR_PAYMENT_CALLBACK_PATH =
+            "/api/payment/bar/notify";
     private static final int REGISTRATION_FLOW_ORDER =
             Ordered.HIGHEST_PRECEDENCE + 20;
     private static final int BROWSER_SESSION_SECURITY_ORDER =
@@ -67,6 +69,8 @@ public class AuthWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/_edge/risk-challenge",
                         "/api/_edge/webrtc/start",
                         "/api/_edge/webrtc/report",
+                        // BAR 服务器不具备用户 RT/AT；该精确入口改由版本化 HMAC 和权威主动查询完成身份确认。
+                        BAR_PAYMENT_CALLBACK_PATH,
                         "/api/health");
         // 全设备退出虽然位于认证路由下，仍必须先通过 RT-first 会话认证确定撤销目标用户。
         registry.addInterceptor(userSessionInterceptor)

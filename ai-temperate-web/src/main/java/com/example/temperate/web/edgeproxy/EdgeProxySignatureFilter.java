@@ -68,7 +68,8 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         if (loadtestRequestPolicy.matchesTokenMint(request)
-                || loadtestRequestPolicy.matches(request)) {
+                || loadtestRequestPolicy.matches(request)
+                || loadtestRequestPolicy.matchesInferenceClient(request)) {
             // loadtest Profile 的认证、白名单和回调密钥在后续边界完成；这里不能把旁路扩大到其他 API。
             return true;
         }

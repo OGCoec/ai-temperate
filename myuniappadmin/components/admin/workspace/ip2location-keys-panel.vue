@@ -159,10 +159,6 @@ export default {
 			}
 		},
 		openImport() {
-			if (this.allKeys.length >= 100) {
-				this.banner = { type: 'warning', message: '凭据池已达到 100 条上限，请先删除不再使用的凭据。' }
-				return
-			}
 			this.importError = ''
 			this.importOpen = true
 		},
@@ -178,9 +174,10 @@ export default {
 				const result = await adminIp2LocationKeyApi.importBatch(command)
 				this.$refs.importSheet?.resetSensitiveInput()
 				this.importOpen = false
+				const capacityRejectedCount = result.capacityRejectedCount || 0
 				this.banner = {
-					type: 'success',
-					message: `导入完成：新增 ${result.createdCount || 0}，更新 ${result.updatedCount || 0}，重复 ${result.duplicateCount || 0}。`
+					type: capacityRejectedCount > 0 ? 'warning' : 'success',
+					message: `导入完成：新增 ${result.createdCount || 0}，更新 ${result.updatedCount || 0}，重复 ${result.duplicateCount || 0}，容量拒绝 ${capacityRejectedCount}。`
 				}
 				await this.loadKeys()
 			} catch (error) {

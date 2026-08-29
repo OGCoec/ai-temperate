@@ -22,6 +22,7 @@ public class MembershipPaymentCallbackWriteResult {
     private String providerTradeNo;
     private String tradeStatus;
     private String resolution;
+    private MembershipOrderEntitlementResolution orderEntitlementResolution;
     private String outcome;
     private Boolean inserted;
     private Boolean duplicate;

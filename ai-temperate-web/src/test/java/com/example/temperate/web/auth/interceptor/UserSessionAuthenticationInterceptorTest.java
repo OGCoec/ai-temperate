@@ -109,6 +109,24 @@ class UserSessionAuthenticationInterceptorTest {
     }
 
     @Test
+    void membershipOfferReadDoesNotMutateLazyExpirationState() {
+        MockHttpServletRequest request = request("H5");
+        request.setMethod("GET");
+        request.setRequestURI("/api/user/membership-plan-offers");
+        request.setCookies(
+                new Cookie(AuthCookieWriter.ACCESS_COOKIE, "browser-at"),
+                new Cookie(AuthCookieWriter.REFRESH_COOKIE, "browser-rt"));
+        when(service.authenticateOrRenew(any(SessionAccessCommand.class)))
+                .thenReturn(result(false));
+
+        interceptor.preHandle(request, new MockHttpServletResponse(), new Object());
+
+        verifyNoInteractions(membershipExpirationService);
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
+                .isEqualTo(result(false).principal());
+    }
+
+    @Test
     void androidReadsOnlyHeadersAndReturnsRenewedAccessHeader() {
         MockHttpServletRequest request = request("ANDROID");
         request.addHeader("Authorization", "Bearer android-at");

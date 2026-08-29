@@ -62,10 +62,9 @@
 				<verification-identity-summary
 					:email="lockedEmail"
 					:phone-presentation="lockedPhonePresentation"
+					:restart-disabled="busy"
+					@restart="restartIdentityVerification"
 				/>
-				<view class="auth-links">
-					<button class="auth-link" type="button" :disabled="busy" @click="restartIdentityVerification">重新填写</button>
-				</view>
 				<view class="auth-field">
 					<label class="auth-label" for="auth-reset-code">{{ channel === 'SMS' ? '手机验证码' : '邮箱验证码' }}</label>
 					<view class="auth-control" :class="{ invalid: fieldErrors.code }">

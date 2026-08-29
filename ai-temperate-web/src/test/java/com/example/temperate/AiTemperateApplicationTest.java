@@ -30,6 +30,8 @@ import com.example.temperate.mapper.audit.access.AccessRequestAuditMapper;
 import com.example.temperate.mapper.user.avatar.UserAvatarMapper;
 import com.example.temperate.mapper.user.identity.UserLoginIdentityMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
+import com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper;
+import com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper;
 import com.example.temperate.mapper.user.profile.UserProfileMapper;
 import com.example.temperate.service.auth.session.authentication.dto.command.SessionBootstrapCommand;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
@@ -54,9 +56,11 @@ import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
 import org.springframework.boot.availability.ReadinessState;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -102,6 +106,12 @@ class AiTemperateApplicationTest {
     private RedisMessageListenerContainer redisMessageListenerContainer;
 
     @MockitoBean
+    private ConnectionFactory rabbitConnectionFactory;
+
+    @MockitoBean
+    private SimpleRabbitListenerContainerFactoryConfigurer rabbitListenerConfigurer;
+
+    @MockitoBean
     private AiConversationGenerationOutputStore aiConversationGenerationOutputStore;
 
     @MockitoBean
@@ -112,6 +122,12 @@ class AiTemperateApplicationTest {
 
     @MockitoBean
     private UserMembershipQuotaMapper userMembershipQuotaMapper;
+
+    @MockitoBean
+    private MembershipOrderMapper membershipOrderMapper;
+
+    @MockitoBean
+    private MembershipPaymentCallbackMapper membershipPaymentCallbackMapper;
 
     @MockitoBean
     private AiConversationMapper aiConversationMapper;

@@ -6,10 +6,10 @@ CREATE TABLE membership_payment_callback (
     provider_trade_no VARCHAR(128) NOT NULL,
     trade_status VARCHAR(32) NOT NULL,
     paid_amount_yuan NUMERIC(12, 2) NOT NULL,
-    paid_at TIMESTAMPTZ NOT NULL,
-    received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    paid_at TIMESTAMPTZ(6) NOT NULL,
+    received_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolution VARCHAR(32),
-    resolved_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ(6),
 
     CONSTRAINT pk_membership_payment_callback
         PRIMARY KEY (id),

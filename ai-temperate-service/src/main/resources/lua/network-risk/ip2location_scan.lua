@@ -2,18 +2,31 @@
 local scanned = redis.call('HSCAN', KEYS[1], ARGV[1], 'COUNT', ARGV[2])
 local result = {scanned[1]}
 local entries = scanned[2]
+local fields = {}
 
 for index = 1, #entries, 2 do
-    local field = entries[index]
-    local encrypted = entries[index + 1]
-    local quota = redis.call('HGET', KEYS[2], field)
+    fields[#fields + 1] = entries[index]
+end
+
+local quotas = {}
+if #fields > 0 then
+    quotas = redis.call('HMGET', KEYS[2], unpack(fields))
+end
+local orphaned = {}
+for field_index = 1, #fields do
+    local field = fields[field_index]
+    local encrypted = entries[field_index * 2]
+    local quota = quotas[field_index]
     if quota then
         table.insert(result, field)
         table.insert(result, encrypted)
         table.insert(result, quota)
     else
-        redis.call('HDEL', KEYS[1], field)
+        orphaned[#orphaned + 1] = field
     end
+end
+if #orphaned > 0 then
+    redis.call('HDEL', KEYS[1], unpack(orphaned))
 end
 
 return result

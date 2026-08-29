@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,9 +25,12 @@ import com.example.temperate.service.user.membership.payment.MembershipPaymentEx
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.exception.MembershipPaymentInfrastructureException;
 import com.example.temperate.service.user.membership.payment.order.impl.MembershipOrderServiceImpl;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckPublisher;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
-import com.example.temperate.service.user.membership.payment.store.SimulatedPaymentProviderResultStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
 import com.example.temperate.service.user.membership.purchase.MembershipPlanPriceService;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionDecision;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionPolicy;
@@ -64,8 +68,10 @@ final class MembershipOrderServiceImplTest {
     private MembershipOrderCreationTransactionService creationTransactionService;
     private HybridSemaphoreIdWorker idWorker;
     private MembershipOrderSnapshotStore snapshotStore;
-    private SimulatedPaymentProviderResultStore providerResultStore;
-    private MembershipPaymentCheckPublisher publisher;
+    private MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator;
+    private MembershipPaymentProviderRegistry providerRegistry;
+    private MembershipPaymentProvider provider;
+    private MembershipPaymentFinalCheckScheduler finalCheckScheduler;
     private MembershipOrderServiceImpl service;
 
     @BeforeEach
@@ -79,8 +85,13 @@ final class MembershipOrderServiceImplTest {
         creationTransactionService = mock(MembershipOrderCreationTransactionService.class);
         idWorker = mock(HybridSemaphoreIdWorker.class);
         snapshotStore = mock(MembershipOrderSnapshotStore.class);
-        providerResultStore = mock(SimulatedPaymentProviderResultStore.class);
-        publisher = mock(MembershipPaymentCheckPublisher.class);
+        snapshotWriteCoordinator = mock(MembershipOrderSnapshotWriteCoordinator.class);
+        when(snapshotWriteCoordinator.putAndGet(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        providerRegistry = mock(MembershipPaymentProviderRegistry.class);
+        provider = mock(MembershipPaymentProvider.class);
+        when(providerRegistry.getRequired(any())).thenReturn(provider);
+        finalCheckScheduler = mock(MembershipPaymentFinalCheckScheduler.class);
         service = new MembershipOrderServiceImpl(
                 expirationService,
                 quotaMapper,
@@ -92,14 +103,15 @@ final class MembershipOrderServiceImplTest {
                 idWorker,
                 new HybridBase64UrlCodec(),
                 snapshotStore,
-                providerResultStore,
-                publisher,
+                snapshotWriteCoordinator,
+                providerRegistry,
+                finalCheckScheduler,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
-    void freeUserCreatesPendingOrderThenInitializesRedisAndPublishesFirstCheck() {
+    void freeUserCreatesPendingOrderThenInitializesRedisAndSchedulesFinalCheck() {
         UserMembershipQuota quota = quota(MembershipTier.FREE);
         when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota);
         when(transitionPolicy.evaluate(any())).thenReturn(new MembershipTransitionDecision(
@@ -113,8 +125,6 @@ final class MembershipOrderServiceImplTest {
         when(creationTransactionService.createOrGet(any()))
                 .thenAnswer(invocation -> new MembershipOrderCreationResult(
                         invocation.getArgument(0), true));
-        when(snapshotStore.find(anyString())).thenReturn(Optional.empty());
-
         MembershipOrderResult result = service.create(
                 17L,
                 new MembershipOrderCreateCommand(
@@ -126,13 +136,62 @@ final class MembershipOrderServiceImplTest {
         assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
         assertThat(result.snapshot().payAmountYuan()).isEqualByComparingTo("20.00");
         verify(expirationService).expireIfDue(17L);
-        verify(snapshotStore).put(result.snapshot());
-        verify(providerResultStore).initializeUnpaid(result.snapshot().orderId(), result.snapshot().createdAt());
-        verify(publisher).publishNext(result.snapshot().orderId(), 0, Duration.ofSeconds(10));
+        verify(snapshotWriteCoordinator).putAndGet(result.snapshot());
+        verify(provider).initializeOrder(any());
+        verify(finalCheckScheduler).schedulePending(
+                result.snapshot().orderId(), result.snapshot().expiresAt());
     }
 
     @Test
-    void creationNormalizesStateMachineTimestampsToRedisMillisecondPrecision() {
+    void concurrentHigherRedisVersionPreventsStaleProviderInitializationAndPublish() {
+        when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota(MembershipTier.FREE));
+        when(transitionPolicy.evaluate(any())).thenReturn(new MembershipTransitionDecision(
+                MembershipTier.FREE,
+                MembershipTier.PLUS,
+                MembershipTransitionType.NEW_PURCHASE,
+                MembershipTransitionRejectionReason.NONE));
+        when(priceService.getRequiredPrice(MembershipTier.PLUS))
+                .thenReturn(new BigDecimal("20.00"));
+        when(idWorker.nextId()).thenReturn(ORDER_ID);
+        when(creationTransactionService.createOrGet(any()))
+                .thenAnswer(invocation -> new MembershipOrderCreationResult(
+                        invocation.getArgument(0), true));
+        when(snapshotWriteCoordinator.putAndGet(any())).thenAnswer(invocation -> {
+            MembershipOrderSnapshot database = invocation.getArgument(0);
+            return new MembershipOrderSnapshot(
+                    database.schemaVersion(),
+                    database.orderId(),
+                    database.loginIdentityId(),
+                    database.membershipTier(),
+                    database.payAmountYuan(),
+                    database.payType(),
+                    MembershipOrderStatus.CLOSING,
+                    database.idempotencyKey(),
+                    database.providerTradeNo(),
+                    database.paymentStartedAt(),
+                    database.expiresAt(),
+                    database.expiresAt().plusMinutes(5),
+                    null,
+                    database.stateVersion() + 1L,
+                    database.createdAt(),
+                    database.updatedAt().plusNanos(1_000L));
+        });
+
+        MembershipOrderResult result = service.create(
+                17L,
+                new MembershipOrderCreateCommand(
+                        MembershipTier.PLUS,
+                        "alipay",
+                        UUID.fromString("4b6a6142-6b43-44d8-a53d-df2fe483b95e")));
+
+        assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.CLOSING);
+        assertThat(result.snapshot().stateVersion()).isEqualTo(2L);
+        verify(providerRegistry, never()).getRequired(any());
+        verify(finalCheckScheduler, never()).schedulePending(anyString(), any());
+    }
+
+    @Test
+    void creationNormalizesStateMachineTimestampsToPostgresMicrosecondPrecision() {
         Instant preciseNow = Instant.parse("2026-08-20T12:00:00.123456789Z");
         service = new MembershipOrderServiceImpl(
                 expirationService,
@@ -145,8 +204,9 @@ final class MembershipOrderServiceImplTest {
                 idWorker,
                 new HybridBase64UrlCodec(),
                 snapshotStore,
-                providerResultStore,
-                publisher,
+                snapshotWriteCoordinator,
+                providerRegistry,
+                finalCheckScheduler,
                 properties(),
                 Clock.fixed(preciseNow, ZoneOffset.UTC));
         when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota(MembershipTier.FREE));
@@ -161,8 +221,6 @@ final class MembershipOrderServiceImplTest {
         when(creationTransactionService.createOrGet(any()))
                 .thenAnswer(invocation -> new MembershipOrderCreationResult(
                         invocation.getArgument(0), true));
-        when(snapshotStore.find(anyString())).thenReturn(Optional.empty());
-
         MembershipOrderResult result = service.create(
                 17L,
                 new MembershipOrderCreateCommand(
@@ -171,9 +229,9 @@ final class MembershipOrderServiceImplTest {
                         UUID.fromString("3d0dc5d6-8d85-4fa5-8288-6a8af490eb61")));
 
         assertThat(result.snapshot().createdAt())
-                .isEqualTo(OffsetDateTime.parse("2026-08-20T12:00:00.123Z"));
+                .isEqualTo(OffsetDateTime.parse("2026-08-20T12:00:00.123456Z"));
         assertThat(result.snapshot().expiresAt())
-                .isEqualTo(OffsetDateTime.parse("2026-08-20T12:05:00.123Z"));
+                .isEqualTo(OffsetDateTime.parse("2026-08-20T12:05:00.123456Z"));
     }
 
     @Test
@@ -191,10 +249,9 @@ final class MembershipOrderServiceImplTest {
         when(creationTransactionService.createOrGet(any()))
                 .thenAnswer(invocation -> new MembershipOrderCreationResult(
                         invocation.getArgument(0), false));
-        when(snapshotStore.find(anyString())).thenReturn(Optional.empty());
-        doThrow(new MembershipPaymentInfrastructureException("redis unavailable"))
-                .doNothing()
-                .when(snapshotStore).put(any());
+        when(snapshotWriteCoordinator.putAndGet(any()))
+                .thenThrow(new MembershipPaymentInfrastructureException("redis unavailable"))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         MembershipOrderCreateCommand command = new MembershipOrderCreateCommand(
                 MembershipTier.GO,
                 "alipay",
@@ -207,7 +264,8 @@ final class MembershipOrderServiceImplTest {
 
         MembershipOrderResult recovered = service.create(17L, command);
         assertThat(recovered.created()).isFalse();
-        verify(publisher).publishNext(recovered.snapshot().orderId(), 0, Duration.ofSeconds(10));
+        verify(finalCheckScheduler).schedulePending(
+                recovered.snapshot().orderId(), recovered.snapshot().expiresAt());
     }
 
     @Test
@@ -225,13 +283,12 @@ final class MembershipOrderServiceImplTest {
         when(creationTransactionService.createOrGet(any()))
                 .thenAnswer(invocation -> new MembershipOrderCreationResult(
                         invocation.getArgument(0), false));
-        when(snapshotStore.find(anyString())).thenReturn(Optional.empty());
         doThrow(new MembershipPaymentException(
                         MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_RABBIT_UNAVAILABLE,
                         "confirm failed"))
                 .doNothing()
-                .when(publisher)
-                .publishNext(anyString(), anyInt(), any(Duration.class));
+                .when(finalCheckScheduler)
+                .schedulePending(anyString(), any());
         MembershipOrderCreateCommand command = new MembershipOrderCreateCommand(
                 MembershipTier.GO,
                 "alipay",
@@ -306,7 +363,7 @@ final class MembershipOrderServiceImplTest {
         latestPaid.setPaidAt(NOW.atOffset(ZoneOffset.UTC).minusDays(15));
         latestPaid.setPayAmountYuan(new BigDecimal("20.00"));
         when(orderMapper.findLatestPaidOrder(
-                        17L, MembershipTier.PLUS, MembershipOrderStatus.PAID))
+                        17L, MembershipTier.PLUS))
                 .thenReturn(latestPaid);
         when(quoteService.quote(any())).thenReturn(new MembershipUpgradeQuote(
                 MembershipTier.PLUS,
@@ -321,8 +378,6 @@ final class MembershipOrderServiceImplTest {
         when(creationTransactionService.createOrGet(any()))
                 .thenAnswer(invocation -> new MembershipOrderCreationResult(
                         invocation.getArgument(0), true));
-        when(snapshotStore.find(anyString())).thenReturn(Optional.empty());
-
         MembershipOrderResult result = service.create(
                 17L,
                 new MembershipOrderCreateCommand(
@@ -346,7 +401,7 @@ final class MembershipOrderServiceImplTest {
                 MembershipTransitionType.UPGRADE,
                 MembershipTransitionRejectionReason.NONE));
         when(orderMapper.findLatestPaidOrder(
-                        17L, MembershipTier.PLUS, MembershipOrderStatus.PAID))
+                        17L, MembershipTier.PLUS))
                 .thenReturn(null);
 
         assertThatThrownBy(() -> service.create(
@@ -374,7 +429,7 @@ final class MembershipOrderServiceImplTest {
             MembershipOrderStatus status) {
         String orderId = new HybridBase64UrlCodec().encode(ORDER_ID);
         return new MembershipOrderSnapshot(
-                1,
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 orderId,
                 userId,
                 MembershipTier.PLUS,

@@ -3,7 +3,7 @@ package com.example.temperate.service.auth.identity.bloom;
 import com.example.temperate.common.bloom.counting.CountingBloomLayout;
 
 /**
- * 定义已注册邮箱与手机号计数布隆过滤器的容量、分片和数据库构建批量边界。
+ * 该记录是来定义已注册邮箱与手机号计数布隆过滤器的容量、分片和数据库构建批量边界。
  */
 public record IdentityPresenceBloomSettings(
         boolean enabled,
@@ -17,9 +17,9 @@ public record IdentityPresenceBloomSettings(
 
     public IdentityPresenceBloomSettings {
         new CountingBloomLayout(capacity, hashCount, counterBytes, countersPerBucket);
-        if (buildBatchSize < 1 || buildBatchSize > 2_000) {
+        if (buildBatchSize < 1 || buildBatchSize > 500) {
             throw new IllegalArgumentException(
-                    "Identity Bloom build batch size must be between 1 and 2000.");
+                    "Identity Bloom build batch size must be between 1 and 500.");
         }
         if (receiptShards < 1
                 || receiptShards > 1_000

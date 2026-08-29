@@ -11,6 +11,7 @@ import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.NetworkRiskWebMvcConfiguration;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationInterceptor;
 import com.example.temperate.web.risk.webrtc.WebRtcWebMvcConfiguration;
+import com.example.temperate.web.user.membership.payment.callback.BarPaymentCallbackController;
 import com.example.temperate.web.user.membership.payment.callback.SimulatedLiuhaoPaymentCallbackController;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,7 @@ import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.ServletRequestPathUtils;
 
 /**
- * 该路径测试是来确认当前用户会员订单进入网络风险、WebRTC 和 RT-first 会话拦截器，而内部模拟回调只走独立测试密钥边界。
+ * 该路径测试是来确认当前用户会员购买接口进入网络风险、WebRTC 和 RT-first 会话拦截器，而支付回调只走各自签名边界。
  */
 final class MembershipPaymentInterceptorPathTest {
 
@@ -54,8 +55,10 @@ final class MembershipPaymentInterceptorPathTest {
     void allCurrentUserMembershipOrderRoutesUseTheThreeBusinessInterceptors() {
         for (String path : List.of(
                 "/api/user/membership-orders",
+                "/api/user/membership-plan-offers",
                 "/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA",
-                "/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/cancel")) {
+                "/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/cancel",
+                "/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/payment-attempts")) {
             assertThat(matching(authInterceptors, path))
                     .as("RT-first session interceptor for %s", path)
                     .contains(userSessionInterceptor);
@@ -71,6 +74,18 @@ final class MembershipPaymentInterceptorPathTest {
     @Test
     void internalCallbackDoesNotAccidentallyEnterCurrentUserInterceptors() {
         String callbackPath = SimulatedLiuhaoPaymentCallbackController.CALLBACK_PATH;
+
+        assertThat(matching(authInterceptors, callbackPath))
+                .doesNotContain(userSessionInterceptor);
+        assertThat(matching(networkInterceptors, callbackPath))
+                .doesNotContain(networkRiskInterceptor);
+        assertThat(matching(webRtcInterceptors, callbackPath))
+                .doesNotContain(webRtcInterceptor);
+    }
+
+    @Test
+    void barCallbackDoesNotRequireBrowserSessionOrBrowserRiskContext() {
+        String callbackPath = BarPaymentCallbackController.CALLBACK_PATH;
 
         assertThat(matching(authInterceptors, callbackPath))
                 .doesNotContain(userSessionInterceptor);

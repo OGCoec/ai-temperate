@@ -1,25 +1,32 @@
 package com.example.temperate.service.user.membership.payment.rabbit.impl;
 
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.service.user.membership.payment.callback.PaymentFactReconciliationService;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentOrderLookupService;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
-import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentStatusQueryService;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
+import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCloseCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.provider.PaymentQueryCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckConsumerService;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckPublisher;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentTerminalQueryExhaustedException;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
-import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -28,9 +35,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来处理 CLOSING 的五段五分钟检查；最终只有平台明确 UNPAID、无 marker 且截止时间到达才允许 Lua 转为 CLOSED。
+ * 该实现是来让新订单在 CLOSING 最终边界直接关单，同时兼容部署前已经发布的五段消息链。
  *
- * <p>PAID、UNKNOWN、查询异常和 marker 均使用三次三十秒有限重试；耗尽后抛出专用异常进入 DLQ，订单保持 CLOSING。</p>
+ * <p>Marker 命中时立即结束当前 MQ 时间链；PAID、UNKNOWN、查询异常和其他不安全结果仍使用有限重试，耗尽后进入 DLQ。</p>
  */
 @Service
 @ConditionalOnProperty(
@@ -45,9 +52,10 @@ public final class MembershipClosingCheckConsumerServiceImpl
 
     private final MembershipPaymentOrderLookupService lookupService;
     private final MembershipOrderSnapshotStore orderStore;
-    private final SimulatedPaymentStatusQueryService statusQueryService;
-    private final PaymentCallbackQueue callbackQueue;
+    private final MembershipPaymentProviderRegistry providerRegistry;
+    private final PaymentFactReconciliationService reconciliationService;
     private final MembershipClosingCheckPublisher closingPublisher;
+    private final MembershipPaymentFinalCheckScheduler finalCheckScheduler;
     private final MembershipPaymentProperties properties;
     private final Clock clock;
     private final MembershipPaymentMetrics metrics;
@@ -55,17 +63,19 @@ public final class MembershipClosingCheckConsumerServiceImpl
     public MembershipClosingCheckConsumerServiceImpl(
             MembershipPaymentOrderLookupService lookupService,
             MembershipOrderSnapshotStore orderStore,
-            SimulatedPaymentStatusQueryService statusQueryService,
-            PaymentCallbackQueue callbackQueue,
+            MembershipPaymentProviderRegistry providerRegistry,
+            PaymentFactReconciliationService reconciliationService,
             MembershipClosingCheckPublisher closingPublisher,
+            MembershipPaymentFinalCheckScheduler finalCheckScheduler,
             MembershipPaymentProperties properties,
             Clock clock,
             MembershipPaymentMetrics metrics) {
         this.lookupService = Objects.requireNonNull(lookupService);
         this.orderStore = Objects.requireNonNull(orderStore);
-        this.statusQueryService = Objects.requireNonNull(statusQueryService);
-        this.callbackQueue = Objects.requireNonNull(callbackQueue);
+        this.providerRegistry = Objects.requireNonNull(providerRegistry);
+        this.reconciliationService = Objects.requireNonNull(reconciliationService);
         this.closingPublisher = Objects.requireNonNull(closingPublisher);
+        this.finalCheckScheduler = Objects.requireNonNull(finalCheckScheduler);
         this.properties = Objects.requireNonNull(properties);
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
@@ -82,6 +92,10 @@ public final class MembershipClosingCheckConsumerServiceImpl
         if (order == null || order.status() != MembershipOrderStatus.CLOSING) {
             return;
         }
+        // 回调 marker 表示第三方成功通知已经交给回调 Worker；所有 CLOSING 阶段都必须停止续发和外部关单。
+        if (orderStore.callbackInProgress(message.orderId())) {
+            return;
+        }
         int lastStage = delays.size() - 1;
         if (message.stageIndex() < lastStage) {
             int nextStage = message.stageIndex() + 1;
@@ -92,34 +106,43 @@ public final class MembershipClosingCheckConsumerServiceImpl
                     Duration.ofMillis(delays.get(nextStage)));
             return;
         }
-        if (orderStore.callbackInProgress(message.orderId())) {
+        OffsetDateTime boundaryCheckAt = MembershipPaymentTime.now(clock);
+        if (order.closingDeadlineAt() == null) {
             retryTerminal(message);
             return;
         }
-
-        SimulatedPaymentProviderResult provider = queryOrUnknown(
-                message.orderId(), envelope.traceId(), envelope.messageId());
-        if (provider.status() == SimulatedPaymentProviderStatus.PAID) {
-            if (provider.callbackId() == null
-                    || !callbackQueue.ensureReady(provider.callbackId(), clock.millis())) {
-                retryTerminal(message);
-                return;
-            }
+        if (boundaryCheckAt.isBefore(order.closingDeadlineAt())) {
+            // 在任何外部关单副作用之前复核真实硬截止；早到消息只重新调度同一最终阶段。
+            finalCheckScheduler.scheduleClosing(
+                    message.orderId(),
+                    order.closingDeadlineAt(),
+                    message.terminalRetryCount());
+            return;
+        }
+        PaymentCloseResult close = closeOrUnknown(
+                order, envelope.traceId(), envelope.messageId());
+        if (close.status() == PaymentProviderStatus.PAID) {
+            PaymentQueryResult paid = queryOrUnknown(
+                    order, envelope.traceId(), envelope.messageId());
+            reconciliationService.reconcilePaid(order, paid);
             retryTerminal(message);
             return;
         }
-        if (provider.status() != SimulatedPaymentProviderStatus.UNPAID) {
+        if (!safeClosedStatus(close.status())) {
             retryTerminal(message);
             return;
         }
 
         MembershipOrderTransitionResult transition = orderStore.finalizeClosing(
                 message.orderId(),
-                java.time.OffsetDateTime.ofInstant(
-                        clock.instant(), java.time.ZoneOffset.UTC));
+                close.status(),
+                MembershipPaymentTime.now(clock));
+        // 前置检查与 Lua 终态迁移之间仍可能并发写入 marker；此时同样把收敛权交给回调 Worker，禁止重新发布终态消息。
+        if (transition.outcome()
+                == MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS) {
+            return;
+        }
         if (transition.outcome() == MembershipOrderTransitionOutcome.TOO_EARLY
-                || transition.outcome()
-                        == MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS
                 || transition.outcome()
                         == MembershipOrderTransitionOutcome.PROVIDER_STATUS_UNSAFE
                 || transition.outcome() == MembershipOrderTransitionOutcome.MISSING) {
@@ -127,31 +150,53 @@ public final class MembershipClosingCheckConsumerServiceImpl
         }
     }
 
-    private SimulatedPaymentProviderResult queryOrUnknown(
-            String orderId,
+    private PaymentCloseResult closeOrUnknown(
+            MembershipOrderSnapshot order,
             String traceId,
             String messageId) {
         try {
-            metrics.paymentQuery();
-            return statusQueryService.query(orderId);
+            MembershipPaymentProvider provider = providerRegistry.getRequired(
+                    properties.defaultProvider());
+            return provider.closePayment(new PaymentCloseCommand(
+                    order.orderId(), order.providerTradeNo()));
         } catch (RuntimeException exception) {
             LOGGER.warn(
-                    "Membership closing provider query was UNKNOWN; "
+                    "Membership closing provider close was UNKNOWN; "
                             + "traceId={} messageId={} reason={}",
                     traceId,
                     messageId,
                     exception.getClass().getSimpleName());
-            return new SimulatedPaymentProviderResult(
-                    SimulatedPaymentProviderResult.CURRENT_SCHEMA_VERSION,
-                    orderId,
-                    SimulatedPaymentProviderStatus.UNKNOWN,
-                    null,
-                    null,
-                    null,
-                    null,
-                    java.time.OffsetDateTime.ofInstant(
-                            clock.instant(), java.time.ZoneOffset.UTC));
+            return new PaymentCloseResult(
+                    PaymentProviderStatus.UNKNOWN, order.providerTradeNo());
         }
+    }
+
+    private PaymentQueryResult queryOrUnknown(
+            MembershipOrderSnapshot order,
+            String traceId,
+            String messageId) {
+        try {
+            metrics.paymentQuery();
+            MembershipPaymentProvider provider = providerRegistry.getRequired(
+                    properties.defaultProvider());
+            return provider.queryPayment(new PaymentQueryCommand(
+                    order.orderId(), order.providerTradeNo()));
+        } catch (RuntimeException exception) {
+            LOGGER.warn(
+                    "Membership closing paid query was UNKNOWN; "
+                            + "traceId={} messageId={} reason={}",
+                    traceId,
+                    messageId,
+                    exception.getClass().getSimpleName());
+            return PaymentQueryResult.unknown(order.orderId());
+        }
+    }
+
+    private static boolean safeClosedStatus(PaymentProviderStatus status) {
+        return status == PaymentProviderStatus.CLOSED
+                || status == PaymentProviderStatus.EXPIRED
+                || status == PaymentProviderStatus.FAILED
+                || status == PaymentProviderStatus.REFUNDED;
     }
 
     private void retryTerminal(MembershipClosingCheckMessage message) {

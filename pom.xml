@@ -40,7 +40,6 @@
         <aliyun-dypnsapi.version>2.0.0</aliyun-dypnsapi.version>
         <aliyun-oss-v2.version>0.3.1</aliyun-oss-v2.version>
         <aliyun-async-core.version>0.2.15-beta</aliyun-async-core.version>
-        <wechatpay.version>0.4.9</wechatpay.version>
         <testcontainers.version>2.0.5</testcontainers.version>
         <libphonenumber.version>8.13.55</libphonenumber.version>
         <ip2location-java.version>8.13.0</ip2location-java.version>
@@ -193,11 +192,6 @@
                 <groupId>com.aliyun</groupId>
                 <artifactId>darabonba-java-core</artifactId>
                 <version>${aliyun-async-core.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.github.wechatpay-apiv3</groupId>
-                <artifactId>wechatpay-apache-httpclient</artifactId>
-                <version>${wechatpay.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.twilio.sdk</groupId>

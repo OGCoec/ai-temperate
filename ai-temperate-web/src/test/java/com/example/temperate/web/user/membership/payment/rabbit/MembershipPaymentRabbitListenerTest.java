@@ -1,20 +1,27 @@
 package com.example.temperate.web.user.membership.payment.rabbit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentOperation;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTimingRecorder;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTimingStep;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckConsumerService;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckConsumerService;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
-import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
-import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.rabbitmq.client.Channel;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -34,6 +41,8 @@ final class MembershipPaymentRabbitListenerTest {
 
     private MembershipPaymentCheckConsumerService paymentService;
     private Channel channel;
+    private MembershipPaymentTimingRecorder timingRecorder;
+    private MembershipPaymentTimingRecorder.Session timingSession;
     private MembershipPaymentRabbitListener listener;
     private MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope;
     private Message message;
@@ -42,10 +51,17 @@ final class MembershipPaymentRabbitListenerTest {
     void setUp() {
         paymentService = mock(MembershipPaymentCheckConsumerService.class);
         channel = mock(Channel.class);
+        timingRecorder = mock(MembershipPaymentTimingRecorder.class);
+        timingSession = mock(MembershipPaymentTimingRecorder.Session.class);
+        when(timingRecorder.start(
+                eq(MembershipPaymentOperation.RABBIT_PENDING),
+                any(Object[].class)))
+                .thenReturn(timingSession);
         listener = new MembershipPaymentRabbitListener(
                 paymentService,
                 mock(MembershipClosingCheckConsumerService.class),
-                mock(MembershipPaymentMetrics.class));
+                mock(MembershipPaymentMetrics.class),
+                timingRecorder);
         envelope = new MembershipPaymentRabbitEnvelope<>(
                 id((byte) 3),
                 MembershipPaymentRabbitNames.PAYMENT_EVENT,
@@ -70,17 +86,26 @@ final class MembershipPaymentRabbitListenerTest {
         verify(paymentService).process(envelope);
         verify(channel).basicAck(41L, false);
         verify(channel, never()).basicNack(41L, false, true);
+        verify(timingRecorder).recordStep(
+                eq(MembershipPaymentTimingStep.RABBIT_ACK), anyLong(), eq(true));
+        verify(timingRecorder).markRabbitOutcome("ACK", 0L);
+        verify(timingRecorder).finish(timingSession, null, null);
     }
 
     @Test
     void businessFailureUsesQuorumFiniteRedelivery() throws Exception {
-        doThrow(new IllegalStateException("confirm failed"))
-                .when(paymentService).process(envelope);
+        IllegalStateException failure = new IllegalStateException("confirm failed");
+        doThrow(failure).when(paymentService).process(envelope);
 
         listener.consumePayment(envelope, message, channel);
 
         verify(channel, never()).basicAck(41L, false);
         verify(channel).basicNack(41L, false, true);
+        verify(timingRecorder).recordStep(
+                eq(MembershipPaymentTimingStep.RABBIT_ACK), anyLong(), eq(true));
+        verify(timingRecorder).markRabbitOutcome("NACK", 0L);
+        verify(timingRecorder).markFailure(failure);
+        verify(timingRecorder).finish(timingSession, null, null);
     }
 
     @Test
@@ -139,6 +164,7 @@ final class MembershipPaymentRabbitListenerTest {
                 paymentService,
                 mock(MembershipClosingCheckConsumerService.class),
                 mock(MembershipPaymentMetrics.class),
+                timingRecorder,
                 new MembershipPaymentLoadtestProperties(true, List.of(1L)));
     }
 

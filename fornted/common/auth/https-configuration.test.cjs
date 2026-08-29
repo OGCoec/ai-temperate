@@ -145,6 +145,16 @@ test('ordinary H5 CSP permits sandboxed blob HTML previews only as frame content
 	assert.doesNotMatch(scriptSource, /(?:^|\s)blob:(?:\s|$)/)
 })
 
+test('ordinary H5 CSP permits form submission only to self and the exact BAR origin', () => {
+	const index = readProjectFile('index.html')
+	const formSource = index.match(/form-action ([^;"']*(?:'[^']*'[^;"']*)*)/)?.[1]
+
+	assert.ok(formSource, 'ordinary user pages must declare form-action CSP')
+	const tokens = formSource.trim().split(/\s+/).sort()
+	assert.deepEqual(tokens, ["'self'", 'https://ihaveagoddamnplan.com'].sort())
+	assert.doesNotMatch(formSource, /(?:^|\s)(?:\*|https:|http:|\*\.ihaveagoddamnplan\.com)(?:\s|$)/)
+})
+
 test('login page eagerly initializes browser CSRF without removing the unsafe-request fallback', () => {
 	const login = readProjectFile('pages/auth/login.vue')
 	const httpClient = readProjectFile('common/auth/http-client.js')

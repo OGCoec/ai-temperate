@@ -1,5 +1,6 @@
 package com.example.temperate.service.user.membership.payment.callback;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -8,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.mapper.user.membership.payment.MembershipPaymentCallbackMapper;
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult;
+import com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact;
 import com.example.temperate.service.user.membership.payment.callback.impl.PaymentCallbackPersistenceServiceImpl;
 import com.example.temperate.service.user.membership.payment.exception.MembershipPaymentInfrastructureException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -43,13 +46,32 @@ final class PaymentCallbackPersistenceServiceImplTest {
                 .hasMessageContaining("ordinal");
     }
 
+    @Test
+    void refundTerminalFactsAreLoadedInOneBatchAndKeyedByCanonicalCallbackId() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        MembershipPaymentCallbackMapper mapper = mock(MembershipPaymentCallbackMapper.class);
+        String callbackId = codec.encode(bytes((byte) 31));
+        MembershipPaymentRefundTerminalFact fact = new MembershipPaymentRefundTerminalFact();
+        fact.setCallbackId(codec.decode(callbackId));
+        fact.setOrderId(bytes((byte) 32));
+        when(mapper.findRefundTerminalFactsByIdsJson(anyString())).thenReturn(List.of(fact));
+        PaymentCallbackPersistenceService service = new PaymentCallbackPersistenceServiceImpl(
+                mapper, codec, new ObjectMapper().findAndRegisterModules());
+
+        Map<String, MembershipPaymentRefundTerminalFact> facts =
+                service.findRefundTerminalFacts(List.of(callbackId));
+
+        assertThat(facts).containsOnlyKeys(callbackId);
+        assertThat(facts.get(callbackId)).isSameAs(fact);
+    }
+
     private static PaymentCallbackSnapshot callback(
             HybridBase64UrlCodec codec,
             byte callbackByte,
             byte orderByte,
             String tradeNo) {
         return new PaymentCallbackSnapshot(
-                1,
+                PaymentCallbackSnapshot.CURRENT_SCHEMA_VERSION,
                 codec.encode(bytes(callbackByte)),
                 codec.encode(bytes(orderByte)),
                 "merchant-test",

@@ -17,6 +17,8 @@ public interface MembershipOrderMapper {
 
     int insert(MembershipOrder order);
 
+    MembershipOrder createOrResolve(MembershipOrder order);
+
     MembershipOrder findById(@Param("orderId") byte[] orderId);
 
     MembershipOrder findOwnedById(
@@ -29,15 +31,42 @@ public interface MembershipOrderMapper {
             @Param("pendingStatus") MembershipOrderStatus pendingStatus,
             @Param("startedAt") OffsetDateTime startedAt);
 
+    MembershipOrder bindProviderTradeNoIfAbsent(
+            @Param("orderId") byte[] orderId,
+            @Param("loginIdentityId") long loginIdentityId,
+            @Param("providerTradeNo") String providerTradeNo);
+
     MembershipOrder findByIdempotencyKey(
             @Param("idempotencyKey") UUID idempotencyKey);
 
+    int acquireCreationLock(@Param("loginIdentityId") long loginIdentityId);
+
+    MembershipOrder findActiveByLoginIdentityId(
+            @Param("loginIdentityId") long loginIdentityId);
+
     MembershipOrder findLatestPaidOrder(
             @Param("loginIdentityId") long loginIdentityId,
-            @Param("membershipTier") MembershipTier membershipTier,
-            @Param("paidStatus") MembershipOrderStatus paidStatus);
+            @Param("membershipTier") MembershipTier membershipTier);
 
     List<MembershipOrder> findByIdsJson(@Param("idsJson") String idsJson);
 
+    List<MembershipOrder> findByIdsJsonForUpdate(@Param("idsJson") String idsJson);
+
+    /** 统计固定半开用户 ID 区间内的订单，供持久测试模板安全预检使用。 */
+    int countByLoginIdentityIdRange(
+            @Param("startInclusive") long startInclusive,
+            @Param("endExclusive") long endExclusive);
+
+    /** 对固定半开用户区间内的订单 ID 生成稳定摘要，供区段预热复位前后校验既有正式事实未变化。 */
+    String hashIdsByLoginIdentityIdRange(
+            @Param("startInclusive") long startInclusive,
+            @Param("endExclusive") long endExclusive);
+
+    /** 只删除调用方已按本轮清单验证过的订单 ID，禁止使用用户区间做宽范围清理。 */
+    int deleteByIdsJson(@Param("idsJson") String idsJson);
+
     int batchAdvanceState(@Param("snapshotsJson") String snapshotsJson);
+
+    int batchResolveEntitlements(
+            @Param("entitlementsJson") String entitlementsJson);
 }

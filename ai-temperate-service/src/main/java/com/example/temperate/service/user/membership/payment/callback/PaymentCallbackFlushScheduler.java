@@ -1,8 +1,8 @@
 package com.example.temperate.service.user.membership.payment.callback;
 
-import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTraceContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentSchedulingConfiguration;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkerTrigger;
+import com.example.temperate.service.user.membership.payment.worker.MembershipPaymentWorkType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -17,29 +17,18 @@ import org.springframework.stereotype.Component;
         havingValue = "true")
 public final class PaymentCallbackFlushScheduler {
 
-    private static final Logger LOGGER =
-            LoggerFactory.getLogger(PaymentCallbackFlushScheduler.class);
+    private final MembershipPaymentWorkerTrigger workerTrigger;
 
-    private final PaymentCallbackBatchService batchService;
-
-    public PaymentCallbackFlushScheduler(PaymentCallbackBatchService batchService) {
-        this.batchService = batchService;
+    public PaymentCallbackFlushScheduler(
+            MembershipPaymentWorkerTrigger workerTrigger) {
+        this.workerTrigger = java.util.Objects.requireNonNull(workerTrigger);
     }
 
     @Scheduled(
             fixedDelayString =
-                    "${app.membership-payment.callback.flush-interval-millis:5000}")
+                    "${app.membership-payment.callback.flush-interval-millis:5000}",
+            scheduler = MembershipPaymentSchedulingConfiguration.CALLBACK_TASK_SCHEDULER)
     public void flush() {
-        try (MembershipPaymentTraceContext traceContext =
-                MembershipPaymentTraceContext.open()) {
-            try {
-                batchService.flushOneRun();
-            } catch (RuntimeException exception) {
-                LOGGER.warn(
-                        "Membership payment callback flush stopped; traceId={} reason={}",
-                        traceContext.traceId(),
-                        exception.getClass().getSimpleName());
-            }
-        }
+        workerTrigger.signal(MembershipPaymentWorkType.CALLBACK);
     }
 }

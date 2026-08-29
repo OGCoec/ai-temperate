@@ -16,6 +16,7 @@ import com.example.temperate.service.auth.session.authentication.enums.SessionAu
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.token.dto.result.VerifiedAccessToken;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.user.membership.payment.config.MembershipPaymentBoundaryLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import java.time.Instant;
 import java.util.List;
@@ -44,6 +45,8 @@ final class MembershipPaymentLoadtestAccessServiceImplTest {
         quotaMapper = mock(UserMembershipQuotaMapper.class);
         service = new MembershipPaymentLoadtestAccessServiceImpl(
                 new MembershipPaymentLoadtestProperties(true, List.of(USER_ID)),
+                new MembershipPaymentBoundaryLoadtestProperties(false),
+                new MembershipPaymentBoundaryLoadtestPolicy(),
                 tokenService,
                 publicIdCodec,
                 identityMapper,
@@ -95,6 +98,49 @@ final class MembershipPaymentLoadtestAccessServiceImplTest {
         when(quotaMapper.findByLoginIdentityId(USER_ID)).thenReturn(null);
 
         assertCode("valid-at", SessionAuthenticationErrorCode.ACCOUNT_UNAVAILABLE);
+    }
+
+    @Test
+    void fixedBoundaryUserAuthenticatesOnlyWhileIndependentGateIsEnabled() {
+        long boundaryUserId = new MembershipPaymentBoundaryLoadtestPolicy().firstUserId();
+        service = new MembershipPaymentLoadtestAccessServiceImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(USER_ID)),
+                new MembershipPaymentBoundaryLoadtestProperties(true),
+                new MembershipPaymentBoundaryLoadtestPolicy(),
+                tokenService,
+                publicIdCodec,
+                identityMapper,
+                quotaMapper);
+        when(tokenService.verifyAccessToken("boundary-at")).thenReturn(token(false));
+        when(publicIdCodec.decode(PUBLIC_ID)).thenReturn(boundaryUserId);
+        when(identityMapper.findAuthenticationById(boundaryUserId))
+                .thenReturn(new AuthenticationContext(
+                        boundaryUserId, "unused", 1L, AccountStatus.ACTIVE, "边界用户"));
+        UserMembershipQuota quota = new UserMembershipQuota();
+        quota.setLoginIdentityId(boundaryUserId);
+        when(quotaMapper.findByLoginIdentityId(boundaryUserId)).thenReturn(quota);
+
+        assertThat(service.authenticate("boundary-at").userId()).isEqualTo(boundaryUserId);
+    }
+
+    @Test
+    void neighboringSignedUserIsRejectedBeforeDatabaseReadWhenBoundaryGateIsEnabled() {
+        MembershipPaymentBoundaryLoadtestPolicy policy =
+                new MembershipPaymentBoundaryLoadtestPolicy();
+        service = new MembershipPaymentLoadtestAccessServiceImpl(
+                new MembershipPaymentLoadtestProperties(true, List.of(USER_ID)),
+                new MembershipPaymentBoundaryLoadtestProperties(true),
+                policy,
+                tokenService,
+                publicIdCodec,
+                identityMapper,
+                quotaMapper);
+        when(tokenService.verifyAccessToken("neighbor-at")).thenReturn(token(false));
+        when(publicIdCodec.decode(PUBLIC_ID)).thenReturn(policy.lastUserId() + 1L);
+
+        assertCode("neighbor-at", SessionAuthenticationErrorCode.ACCOUNT_UNAVAILABLE);
+
+        verifyNoInteractions(identityMapper, quotaMapper);
     }
 
     private void assertCode(String rawToken, SessionAuthenticationErrorCode expected) {

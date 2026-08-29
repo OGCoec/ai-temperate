@@ -8,6 +8,7 @@ import com.example.temperate.service.risk.ipintel.service.IpIntelligenceService;
 import com.example.temperate.service.user.apikey.config.ApiKeyProperties;
 import com.example.temperate.web.edgeproxy.TrustedEdgeNetworkContext;
 import com.example.temperate.web.edgeproxy.TrustedEdgeNetworkContextResolver;
+import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -32,6 +33,7 @@ public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
     private final NetworkRiskProperties networkRiskProperties;
     private final OpenAiErrorResponseWriter errorWriter;
     private final MeterRegistry meterRegistry;
+    private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
 
     public ApiKeyIpRiskFilter(
             TrustedEdgeNetworkContextResolver edgeContextResolver,
@@ -40,17 +42,41 @@ public final class ApiKeyIpRiskFilter extends OncePerRequestFilter {
             NetworkRiskProperties networkRiskProperties,
             OpenAiErrorResponseWriter errorWriter,
             MeterRegistry meterRegistry) {
+        this(
+                edgeContextResolver,
+                ipIntelligenceService,
+                properties,
+                networkRiskProperties,
+                errorWriter,
+                meterRegistry,
+                MembershipPaymentLoadtestRequestPolicy.disabled());
+    }
+
+    /**
+     * 创建带 W16 回环 API Key 例外的风险门禁；例外只跳过公网 IP 评分，正式 Key 认证和事务授权保持不变。
+     */
+    public ApiKeyIpRiskFilter(
+            TrustedEdgeNetworkContextResolver edgeContextResolver,
+            IpIntelligenceService ipIntelligenceService,
+            ApiKeyProperties properties,
+            NetworkRiskProperties networkRiskProperties,
+            OpenAiErrorResponseWriter errorWriter,
+            MeterRegistry meterRegistry,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
         this.edgeContextResolver = Objects.requireNonNull(edgeContextResolver);
         this.ipIntelligenceService = Objects.requireNonNull(ipIntelligenceService);
         this.properties = Objects.requireNonNull(properties);
         this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
         this.errorWriter = Objects.requireNonNull(errorWriter);
         this.meterRegistry = Objects.requireNonNull(meterRegistry);
+        this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !ApiKeyV1Paths.isApiKeyEndpoint(request.getMethod(), request.getRequestURI());
+        return loadtestRequestPolicy.matchesInferenceClient(request)
+                || !ApiKeyV1Paths.isApiKeyEndpoint(
+                        request.getMethod(), request.getRequestURI());
     }
 
     @Override

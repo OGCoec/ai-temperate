@@ -9,7 +9,7 @@ import java.time.OffsetDateTime;
 import java.util.Objects;
 
 /**
- * 该响应是来向认证客户端公开会员订单的规范 ID、精确字符串金额和当前状态时间边界，不泄露内部数据库主键。
+ * 该响应是来向认证客户端公开会员订单事实，不承载任何支付渠道提交凭据或短时签名字段。
  */
 public record MembershipOrderResponse(
         @Schema(

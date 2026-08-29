@@ -1,23 +1,30 @@
 package com.example.temperate.service.user.membership.payment.config;
 
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * 该配置是来绑定会员模拟支付开关、时间边界、批处理上限和两段 RabbitMQ 延时，并在启动期拒绝不安全组合。
+ * 该配置是来绑定会员支付 Provider、BAR HTTPS 安全边界、状态时间窗和既有异步批处理参数，并在启动期拒绝不安全组合。
  */
 @Validated
 @ConfigurationProperties(prefix = "app.membership-payment")
 public record MembershipPaymentProperties(
         @DefaultValue("false") boolean enabled,
+        @DefaultValue("true") boolean checkoutEnabled,
+        @DefaultValue("LOCAL_SIMULATOR") PaymentProviderType defaultProvider,
         @DefaultValue("PT5M") Duration pendingDuration,
         @DefaultValue("PT5M") Duration closingDuration,
         @DefaultValue Simulator simulator,
+        @DefaultValue Bar bar,
         @DefaultValue Callback callback,
         @DefaultValue OrderPersist orderPersist,
         @DefaultValue Rabbit rabbit) {
@@ -34,22 +41,84 @@ public record MembershipPaymentProperties(
     private static final Duration REQUIRED_CALLBACK_DATA_TTL = Duration.ofHours(6);
     private static final Pattern SIMULATOR_PID =
             Pattern.compile("^[A-Za-z0-9._:-]{1,64}$");
+    private static final Pattern BAR_PID = Pattern.compile("^[0-9]{1,18}$");
+    private static final Pattern BAR_API_KEY =
+            Pattern.compile("^bar_sk_[A-Za-z0-9_-]{43}$");
+    private static final String BAR_CALLBACK_PATH = "/api/payment/bar/notify";
+    private static final String BAR_MERCHANT_HOST = "niko000o.site";
+    private static final String BAR_PROVIDER_HOST = "ihaveagoddamnplan.com";
 
+    @ConstructorBinding
     public MembershipPaymentProperties {
         requirePositive("pending duration", pendingDuration);
         requirePositive("closing duration", closingDuration);
-        if (simulator == null || callback == null || orderPersist == null || rabbit == null) {
+        if (defaultProvider == null
+                || simulator == null
+                || bar == null
+                || callback == null
+                || orderPersist == null
+                || rabbit == null) {
             throw new IllegalArgumentException("Membership payment configuration groups are required.");
         }
         if (simulator.enabled() && !enabled) {
             throw new IllegalArgumentException(
                     "Membership payment must be enabled before the simulator can be enabled.");
         }
+        if (simulator.enabled() && bar.enabled()) {
+            throw new IllegalArgumentException(
+                    "The local simulator and BAR must not be enabled in the same environment.");
+        }
         validateSimulator(simulator);
+        validateBar(bar);
         validateCallback(callback);
         validateOrderPersist(orderPersist);
         validateRabbit(rabbit);
         validateTimingContract(pendingDuration, closingDuration, rabbit);
+        if (enabled && checkoutEnabled) {
+            if (defaultProvider == PaymentProviderType.LOCAL_SIMULATOR
+                    && !simulator.enabled()) {
+                throw new IllegalArgumentException(
+                        "The local simulator must be enabled when it is the default provider.");
+            }
+            if (defaultProvider == PaymentProviderType.BAR && !bar.enabled()) {
+                throw new IllegalArgumentException(
+                        "BAR must be enabled when it is the default provider.");
+            }
+        }
+    }
+
+    /**
+     * 该兼容构造器是来让既有本地模拟器测试继续显式传入原配置组；未启用模拟器时默认暂停 checkout。
+     */
+    public MembershipPaymentProperties(
+            boolean enabled,
+            Duration pendingDuration,
+            Duration closingDuration,
+            Simulator simulator,
+            Callback callback,
+            OrderPersist orderPersist,
+            Rabbit rabbit) {
+        this(
+                enabled,
+                simulator != null && simulator.enabled(),
+                PaymentProviderType.LOCAL_SIMULATOR,
+                pendingDuration,
+                closingDuration,
+                simulator,
+                new Bar(
+                        false,
+                        URI.create("https://ihaveagoddamnplan.com"),
+                        "",
+                        0,
+                        Map.of(),
+                        null,
+                        null,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        65_536),
+                callback,
+                orderPersist,
+                rabbit);
     }
 
     /**
@@ -73,11 +142,29 @@ public record MembershipPaymentProperties(
 
     }
 
+    /** 该配置组是来固定 BAR 商户 Origin、版本化密钥、回调地址和同步 RestClient 安全边界。 */
+    public record Bar(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("https://ihaveagoddamnplan.com") URI baseUrl,
+            @DefaultValue("") String pid,
+            @DefaultValue("0") int activeKeyVersion,
+            Map<Integer, String> apiKeys,
+            URI notifyUrl,
+            URI returnUrl,
+            @DefaultValue("PT2S") Duration connectTimeout,
+            @DefaultValue("PT5S") Duration readTimeout,
+            @DefaultValue("65536") int responseMaxBytes) {
+
+        public Bar {
+            apiKeys = apiKeys == null ? Map.of() : Map.copyOf(apiKeys);
+        }
+    }
+
     /** 该配置组是来约束回调 ZSet 五秒刷盘的批次、轮次、租约和固定 TTL。 */
     public record Callback(
             @DefaultValue("5000") long flushIntervalMillis,
             @DefaultValue("100") int batchSize,
-            @DefaultValue("20") int maxBatchesPerRun,
+            @DefaultValue("50") int maxBatchesPerRun,
             @DefaultValue("PT60S") Duration processingTimeout,
             @DefaultValue("PT30S") Duration dedupeTtl,
             @DefaultValue("PT10M") Duration markerTtl,
@@ -88,7 +175,7 @@ public record MembershipPaymentProperties(
     public record OrderPersist(
             @DefaultValue("5000") long flushIntervalMillis,
             @DefaultValue("100") int batchSize,
-            @DefaultValue("20") int maxBatchesPerRun,
+            @DefaultValue("50") int maxBatchesPerRun,
             @DefaultValue("PT60S") Duration processingTimeout,
             @DefaultValue("PT0.1S") Duration lockWait) {
     }
@@ -136,6 +223,62 @@ public record MembershipPaymentProperties(
         }
     }
 
+    private static void validateBar(Bar value) {
+        requirePositive("BAR connect timeout", value.connectTimeout());
+        requirePositive("BAR read timeout", value.readTimeout());
+        if (value.responseMaxBytes() < 1024 || value.responseMaxBytes() > 1_048_576) {
+            throw new IllegalArgumentException(
+                    "BAR response limit must be between 1 KiB and 1 MiB.");
+        }
+        requireHttpsOrigin("BAR base URL", value.baseUrl(), BAR_PROVIDER_HOST, true);
+        if (!value.enabled()) {
+            return;
+        }
+        if (value.pid() == null || !BAR_PID.matcher(value.pid()).matches()) {
+            throw new IllegalArgumentException("BAR PID is required when enabled.");
+        }
+        if (value.activeKeyVersion() <= 0
+                || !value.apiKeys().containsKey(value.activeKeyVersion())) {
+            throw new IllegalArgumentException(
+                    "BAR active key version must reference a configured API key.");
+        }
+        for (Map.Entry<Integer, String> entry : value.apiKeys().entrySet()) {
+            if (entry.getKey() == null
+                    || entry.getKey() <= 0
+                    || entry.getValue() == null
+                    || !BAR_API_KEY.matcher(entry.getValue()).matches()) {
+                throw new IllegalArgumentException("BAR API key configuration is invalid.");
+            }
+        }
+        requireHttpsOrigin("BAR notify URL", value.notifyUrl(), BAR_MERCHANT_HOST, false);
+        requireHttpsOrigin("BAR return URL", value.returnUrl(), BAR_MERCHANT_HOST, false);
+        if (!BAR_CALLBACK_PATH.equals(value.notifyUrl().getPath())) {
+            throw new IllegalArgumentException(
+                    "BAR notify URL must use the fixed payment callback path.");
+        }
+    }
+
+    private static void requireHttpsOrigin(
+            String name,
+            URI uri,
+            String requiredHost,
+            boolean originOnly) {
+        if (uri == null
+                || !"https".equalsIgnoreCase(uri.getScheme())
+                || uri.getHost() == null
+                || uri.getHost().isBlank()
+                || uri.getUserInfo() != null
+                || uri.getFragment() != null
+                || uri.getPort() != -1
+                || uri.getRawQuery() != null
+                || (originOnly && ((uri.getPath() != null
+                        && !uri.getPath().isBlank()
+                        && !"/".equals(uri.getPath()))))
+                || (requiredHost != null && !requiredHost.equalsIgnoreCase(uri.getHost()))) {
+            throw new IllegalArgumentException(name + " must use the approved HTTPS origin.");
+        }
+    }
+
     private static void validateCallback(Callback value) {
         requireInterval(value.flushIntervalMillis(), "callback flush interval");
         requireBatch(value.batchSize(), "callback batch size");
@@ -160,7 +303,7 @@ public record MembershipPaymentProperties(
 
     private static void validateOrderPersist(OrderPersist value) {
         requireInterval(value.flushIntervalMillis(), "order persist flush interval");
-        requireBatch(value.batchSize(), "order persist batch size");
+        requireOrderPersistBatch(value.batchSize());
         requireRuns(value.maxBatchesPerRun(), "order persist max batches per run");
         requirePositive("order persist processing timeout", value.processingTimeout());
         requirePositive("order persist lock wait", value.lockWait());
@@ -229,6 +372,13 @@ public record MembershipPaymentProperties(
     private static void requireBatch(int value, String name) {
         if (value < 1 || value > 500) {
             throw new IllegalArgumentException(name + " must be between 1 and 500.");
+        }
+    }
+
+    private static void requireOrderPersistBatch(int value) {
+        if (value < 1 || value > 100) {
+            throw new IllegalArgumentException(
+                    "Membership payment order persist batch size must be between 1 and 100.");
         }
     }
 

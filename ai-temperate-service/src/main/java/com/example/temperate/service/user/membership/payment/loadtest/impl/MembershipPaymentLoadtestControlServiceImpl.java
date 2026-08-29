@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.membership.payment.loadtest.impl;
 
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
+
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.common.redis.key.MembershipOrderRedisId;
@@ -207,6 +209,62 @@ public final class MembershipPaymentLoadtestControlServiceImpl
         return new FaultProbe(faultGate.callbackCompleteFailureCount());
     }
 
+    @Override
+    public CallbackHoldProbe armCallbackHold(String orderId, int maxHoldSeconds) {
+        MembershipOrderRedisId validOrderId = new MembershipOrderRedisId(orderId);
+        faultGate.armCallbackHold(
+                validOrderId.value(), Duration.ofSeconds(maxHoldSeconds));
+        return callbackHoldProbe(validOrderId);
+    }
+
+    @Override
+    public CallbackHoldProbe inspectCallbackHold(String orderId) {
+        return callbackHoldProbe(new MembershipOrderRedisId(orderId));
+    }
+
+    @Override
+    public CallbackHoldProbe releaseCallbackHold(String orderId) {
+        MembershipOrderRedisId validOrderId = new MembershipOrderRedisId(orderId);
+        faultGate.releaseCallbackHold(validOrderId.value());
+        return callbackHoldProbe(validOrderId);
+    }
+
+    @Override
+    public WorkerPauseProbe pauseWorkers(int maxPauseSeconds) {
+        Duration duration = Duration.ofSeconds(maxPauseSeconds);
+        faultGate.pauseCallbackWorker(duration);
+        faultGate.pauseOrderPersistenceWorker(duration);
+        return workerPauseProbe();
+    }
+
+    @Override
+    public WorkerPauseProbe inspectWorkers() {
+        return workerPauseProbe();
+    }
+
+    @Override
+    public WorkerPauseProbe resumeWorkers() {
+        faultGate.resumeCallbackWorker();
+        faultGate.resumeOrderPersistenceWorker();
+        return workerPauseProbe();
+    }
+
+    private CallbackHoldProbe callbackHoldProbe(MembershipOrderRedisId orderId) {
+        long remaining = faultGate.callbackHoldRemainingMillis(orderId.value());
+        return new CallbackHoldProbe(
+                remaining > 0L,
+                exists(keyFactory.membershipOrderCallbackMarkerKey(orderId)),
+                remaining);
+    }
+
+    private WorkerPauseProbe workerPauseProbe() {
+        return new WorkerPauseProbe(
+                faultGate.callbackWorkerPaused(),
+                faultGate.callbackWorkerPauseRemainingMillis(),
+                faultGate.orderPersistenceWorkerPaused(),
+                faultGate.orderPersistenceWorkerPauseRemainingMillis());
+    }
+
     private boolean exists(String key) {
         return Boolean.TRUE.equals(redisTemplate.hasKey(key));
     }
@@ -259,7 +317,7 @@ public final class MembershipPaymentLoadtestControlServiceImpl
                         messageId,
                         eventType,
                         MembershipPaymentRabbitEnvelope.CURRENT_SCHEMA_VERSION,
-                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC),
+                        MembershipPaymentTime.now(clock),
                         messageId,
                         new MembershipPaymentCheckMessage(validOrderId.value(), 0));
         // 探针仍走正式 Confirm 发送器并固定为持久消息，只把事件类型限定为两种 loadtest 常量。

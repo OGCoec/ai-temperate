@@ -6,13 +6,17 @@ local ready_at = ARGV[3]
 
 local expired = redis.call(
         'ZRANGEBYSCORE', processing_key, '-inf', cutoff, 'LIMIT', 0, maximum)
-local recovered = 0
-for _, callback_id in ipairs(expired) do
-    local score = redis.call('ZSCORE', processing_key, callback_id)
-    if score and tonumber(score) <= tonumber(cutoff)
-            and redis.call('ZREM', processing_key, callback_id) == 1 then
-        redis.call('ZADD', ready_key, ready_at, callback_id)
-        recovered = recovered + 1
-    end
+if #expired == 0 then
+    return 0
 end
-return recovered
+
+local zrem = {'ZREM', processing_key}
+local zadd = {'ZADD', ready_key}
+for _, callback_id in ipairs(expired) do
+    zrem[#zrem + 1] = callback_id
+    zadd[#zadd + 1] = ready_at
+    zadd[#zadd + 1] = callback_id
+end
+redis.call(unpack(zrem))
+redis.call(unpack(zadd))
+return #expired

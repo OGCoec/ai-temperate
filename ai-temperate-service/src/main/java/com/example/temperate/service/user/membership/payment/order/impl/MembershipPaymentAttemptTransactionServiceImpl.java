@@ -10,6 +10,7 @@ import com.example.temperate.service.user.membership.payment.order.MembershipPay
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,5 +68,45 @@ public final class MembershipPaymentAttemptTransactionServiceImpl
         throw new MembershipPaymentException(
                 MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT,
                 "The membership order no longer allows payment to start.");
+    }
+
+    /**
+     * 平台流水绑定不改变订单状态版本；数据库唯一约束和空值条件共同裁决跨订单复用与同订单并发重放。
+     */
+    @Override
+    @Transactional
+    public MembershipOrder bindProviderTradeNo(
+            long loginIdentityId,
+            byte[] orderId,
+            String providerTradeNo) {
+        if (providerTradeNo == null
+                || providerTradeNo.isBlank()
+                || providerTradeNo.length() > 128) {
+            throw new IllegalArgumentException("Provider trade number is invalid.");
+        }
+        MembershipOrder bound;
+        try {
+            bound = orderMapper.bindProviderTradeNoIfAbsent(
+                    orderId, loginIdentityId, providerTradeNo);
+        } catch (DataIntegrityViolationException exception) {
+            throw new MembershipPaymentException(
+                    MembershipPaymentErrorCode.BAR_ORDER_CONFLICT,
+                    "The provider trade number is already bound to another order.");
+        }
+        if (bound != null) {
+            return bound;
+        }
+        MembershipOrder existing = orderMapper.findOwnedById(orderId, loginIdentityId);
+        if (existing == null) {
+            throw new MembershipPaymentException(
+                    MembershipPaymentErrorCode.MEMBERSHIP_ORDER_NOT_FOUND,
+                    "The membership order was not found.");
+        }
+        if (!providerTradeNo.equals(existing.getProviderTradeNo())) {
+            throw new MembershipPaymentException(
+                    MembershipPaymentErrorCode.BAR_ORDER_CONFLICT,
+                    "The membership order is bound to another provider trade number.");
+        }
+        return existing;
     }
 }

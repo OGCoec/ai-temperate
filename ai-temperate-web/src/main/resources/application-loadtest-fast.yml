@@ -26,6 +26,24 @@ app:
   membership-payment:
     # 该 Profile 明确打开会员模拟支付，普通 Profile 仍由基础配置保持关闭。
     enabled: true
+    # 快速状态机调试逐条记录每个阶段的总耗时和基础设施分段耗时。
+    observability:
+      # 快速压测保持AOP计时和全量指标开启。
+      enabled: true
+      # 快速诊断逐条输出SLF4J明细，便于校对四段PENDING和三段CLOSING。
+      detail-log-enabled: true
+      # 所有快速压测链路均进入日志，不使用生产采样率。
+      sample-rate: 1.0
+      # 一秒阈值用于突出异常慢的本地Redis、数据库或Rabbit Confirm。
+      slow-threshold: PT1S
+      # 快速诊断批次通过环境变量关联日志，未提供时使用不可用占位值。
+      run-id: ${MEMBERSHIP_PAYMENT_TIMING_RUN_ID:unavailable}
+      # 快速受控压测允许记录公共订单ID，普通环境仍由基础配置保持关闭。
+      include-public-order-id: true
+    # 本地快速压测允许创建支付尝试。
+    checkout-enabled: true
+    # 本地快速压测只使用项目内模拟 Provider，绝不连接 BAR。
+    default-provider: LOCAL_SIMULATOR
     # 本机 Runner 使用应用内部签发的短期 AT，开关只在受控 Profile 生效。
     loadtest:
       # 仅本机快速状态机调试启用 AT-only 认证入口。

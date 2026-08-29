@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 该 Controller 是来为本机 JMeter Runner 获取四个既有会员账号的短期签名 Token，不接收账号创建、用户输入或外部请求。
+ * 该 Controller 是来为回环 JMeter Runner 获取十六个固定会员账号的十五小时签名 Token，不接收账号创建、用户输入或外部请求。
  *
  * <p>入口只在 loadtest 开关开启时注册，并额外限制 Servlet 回环地址；Token 由服务层调用正式 JWT 签发器生成，
  * Controller 不记录、不持久化也不回显到日志。</p>
@@ -30,7 +30,7 @@ import org.springframework.web.server.ResponseStatusException;
         havingValue = "true")
 @Tag(
         name = "会员-压测认证",
-        description = "仅供本机 loadtest Profile 的 Runner 获取既有白名单账号短期 Access Token；限制回环地址，不创建账号、不修改会员数据，也不替代生产认证接口。")
+        description = "仅供回环 loadtest Runner 获取十六个固定白名单账号的十五小时 Access Token；限制回环地址，不创建账号、不修改会员数据，也不替代生产认证接口。")
 public final class MembershipPaymentLoadtestTokenController {
 
     public static final String PATH =

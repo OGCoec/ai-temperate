@@ -28,7 +28,8 @@ import org.springframework.stereotype.Component;
         havingValue = "true")
 public final class RedisOrderPersistenceQueue implements OrderPersistenceQueue {
 
-    private static final int MAXIMUM_BATCH = 500;
+    // complete 需要逐个校验不同订单 Hash 的版本和终态，因此硬上限固定为 100，不能随通用 Redis 批次放大。
+    private static final int MAXIMUM_BATCH = 100;
     private static final RedisScript<List> CLAIM = listScript("order_persist_claim.lua");
     private static final RedisScript<Long> RECOVER = longScript("order_persist_recover.lua");
     private static final RedisScript<Long> REQUEUE = longScript("order_persist_requeue.lua");
@@ -143,7 +144,7 @@ public final class RedisOrderPersistenceQueue implements OrderPersistenceQueue {
                 .distinct()
                 .toList();
         if (values.size() > MAXIMUM_BATCH) {
-            throw new IllegalArgumentException("Order persistence batch exceeds 500 tokens.");
+            throw new IllegalArgumentException("Order persistence batch exceeds 100 tokens.");
         }
         return values;
     }
@@ -151,7 +152,7 @@ public final class RedisOrderPersistenceQueue implements OrderPersistenceQueue {
     private static int requireBatch(int value) {
         if (value < 1 || value > MAXIMUM_BATCH) {
             throw new IllegalArgumentException(
-                    "Order persistence batch must be between 1 and 500.");
+                    "Order persistence batch must be between 1 and 100.");
         }
         return value;
     }

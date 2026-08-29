@@ -5,8 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -47,6 +50,27 @@ final class MembershipPaymentLoadtestProfileGuardTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void barLoadtestIsAcceptedOnlyWithDedicatedProfileAndBarProvider() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("prod", "loadtest-bar");
+
+        assertThatCode(() -> new MembershipPaymentLoadtestProfileGuard(
+                        loadtest(true), barProperties(), environment).validate())
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void barLoadtestProfileRejectsLocalSimulatorProvider() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("prod", "loadtest-bar");
+
+        assertThatThrownBy(() -> new MembershipPaymentLoadtestProfileGuard(
+                        loadtest(true), realtimeProperties(), environment).validate())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("BAR");
+    }
+
     private static MembershipPaymentLoadtestProperties loadtest(boolean enabled) {
         return new MembershipPaymentLoadtestProperties(enabled, List.of(73014701344296960L));
     }
@@ -66,6 +90,39 @@ final class MembershipPaymentLoadtestProfileGuardTest {
                 Duration.ofSeconds(40),
                 List.of(10_000L, 10_000L, 10_000L, 15_000L),
                 List.of(10_000L, 15_000L, 15_000L));
+    }
+
+    private static MembershipPaymentProperties barProperties() {
+        return new MembershipPaymentProperties(
+                true,
+                true,
+                PaymentProviderType.BAR,
+                Duration.ofMinutes(5),
+                Duration.ofMinutes(5),
+                new MembershipPaymentProperties.Simulator(
+                        false, "", "", Duration.ofMinutes(5), 16_384, false),
+                new MembershipPaymentProperties.Bar(
+                        true,
+                        URI.create("https://ihaveagoddamnplan.com"),
+                        "1001",
+                        1,
+                        Map.of(1, "bar_sk_" + "a".repeat(43)),
+                        URI.create("https://niko000o.site/api/payment/bar/notify"),
+                        URI.create("https://niko000o.site/"),
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        65_536),
+                new MembershipPaymentProperties.Callback(
+                        5_000L, 100, 20, Duration.ofSeconds(60),
+                        Duration.ofSeconds(30), Duration.ofMinutes(10), Duration.ofHours(6)),
+                new MembershipPaymentProperties.OrderPersist(
+                        5_000L, 100, 20, Duration.ofSeconds(60), Duration.ofMillis(100)),
+                new MembershipPaymentProperties.Rabbit(
+                        List.of(10_000L, 10_000L, 10_000L, 15_000L, 15_000L,
+                                30_000L, 30_000L, 60_000L, 120_000L),
+                        List.of(30_000L, 30_000L, 60_000L, 60_000L, 120_000L),
+                        Duration.ofSeconds(30),
+                        3));
     }
 
     private static MembershipPaymentProperties properties(

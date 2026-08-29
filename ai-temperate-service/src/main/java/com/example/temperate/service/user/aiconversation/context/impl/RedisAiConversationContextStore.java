@@ -18,6 +18,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -34,12 +35,14 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 /**
- * 使用 Redis Hash 保存有限的会话尾部、持久化摘要和可丢失的中断回答覆盖层。
+ * 该实现是来使用 Redis Hash 保存有限会话尾部、持久化摘要和可丢失的中断回答覆盖层。
  *
  * <p>创建脚本只在 Key 不存在时设置一次绝对 72 小时期限；所有追加和压缩脚本只校验
  * generation 并修改明确字段，绝不续期，也不会扫描未知 Key。</p>
@@ -54,6 +57,8 @@ public final class RedisAiConversationContextStore
     private static final int FIELD_CHUNK_BYTES = 4 * 1024;
     // 参数体预留 RESP 编码、Lua SHA 和 Key 开销，确保完整 Redis 请求仍低于 1 MiB。
     private static final int MAX_COMMAND_BYTES = 880 * 1024;
+    private static final int MAX_BUILD_COMMAND_BYTES = 256 * 1024;
+    private static final int MAX_FIELDS_PER_BATCH = 128;
     private static final String META_FIELD = "meta";
     private static final String DURABLE_COMPACT_FIELD = "compact:persistent";
     private static final String LEGACY_DURABLE_COMPACT_FIELD = "compact:durable";
@@ -144,9 +149,6 @@ public final class RedisAiConversationContextStore
         if (fields.size() + 1 > properties.maxHashFields()) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
-        if (writeBytes(fields) > MAX_COMMAND_BYTES) {
-            return createInBatches(conversationPublicId, snapshot, fields);
-        }
         List<String> arguments = new ArrayList<>(2 + fields.size() * 2);
         arguments.add(snapshot.generation());
         arguments.add(Long.toString(snapshot.expiresAt().toInstant().toEpochMilli()));
@@ -154,11 +156,17 @@ public final class RedisAiConversationContextStore
             arguments.add(field);
             arguments.add(value);
         });
+        if (fields.size() + 1 > MAX_FIELDS_PER_BATCH
+                || writeBytes(arguments) > MAX_BUILD_COMMAND_BYTES) {
+            return createInBatches(conversationPublicId, snapshot, fields);
+        }
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "create",
+                    fields.size(),
                     CREATE_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             return Long.valueOf(1L).equals(result)
                     ? AiConversationContextWriteOutcome.APPLIED
                     : AiConversationContextWriteOutcome.GENERATION_MISMATCH;
@@ -181,7 +189,9 @@ public final class RedisAiConversationContextStore
         long buildExpiresAt = Math.addExact(
                 clock.millis(), java.time.Duration.ofMinutes(5).toMillis());
         try {
-            Long created = redisTemplate.execute(
+            Long created = executeObserved(
+                    "build_create",
+                    1,
                     CREATE_BUILD_SCRIPT,
                     List.of(buildKey),
                     snapshot.generation(),
@@ -189,24 +199,17 @@ public final class RedisAiConversationContextStore
             if (!Long.valueOf(1L).equals(created)) {
                 return AiConversationContextWriteOutcome.UNAVAILABLE;
             }
-            for (Map<String, String> batch : writeBatches(fields)) {
-                List<String> arguments = new ArrayList<>(2 + batch.size() * 2);
-                arguments.add(snapshot.generation());
-                arguments.add(Integer.toString(properties.maxHashFields()));
-                batch.forEach((field, value) -> {
-                    arguments.add(field);
-                    arguments.add(value);
-                });
-                Long appended = redisTemplate.execute(
-                        APPEND_BUILD_SCRIPT,
-                        List.of(buildKey),
-                        arguments.toArray(String[]::new));
-                if (!Long.valueOf(1L).equals(appended)) {
-                    redisTemplate.unlink(buildKey);
-                    return AiConversationContextWriteOutcome.UNAVAILABLE;
-                }
+            List<Map<String, String>> batches = writeBatches(snapshot, fields);
+            List<Object> appended = executeBuildPipeline(
+                    buildKey, snapshot, batches, fields.size());
+            if (appended == null || appended.size() != batches.size()
+                    || appended.stream().anyMatch(result -> number(result) != 1L)) {
+                redisTemplate.unlink(buildKey);
+                return AiConversationContextWriteOutcome.UNAVAILABLE;
             }
-            Long promoted = redisTemplate.execute(
+            Long promoted = executeObserved(
+                    "build_promote",
+                    fields.size(),
                     PROMOTE_BUILD_SCRIPT,
                     List.of(buildKey, finalKey),
                     snapshot.generation(),
@@ -230,28 +233,88 @@ public final class RedisAiConversationContextStore
         }
     }
 
-    private static List<Map<String, String>> writeBatches(
+    private List<Map<String, String>> writeBatches(
+            AiConversationContextSnapshot snapshot,
             Map<String, String> fields) {
         List<Map<String, String>> batches = new ArrayList<>();
         Map<String, String> current = new LinkedHashMap<>();
-        int bytes = 0;
         for (Map.Entry<String, String> entry : fields.entrySet()) {
-            int entryBytes = Math.addExact(
-                    entry.getKey().getBytes(StandardCharsets.UTF_8).length,
-                    entry.getValue().getBytes(StandardCharsets.UTF_8).length);
-            if (!current.isEmpty()
-                    && Math.addExact(bytes, entryBytes) > MAX_COMMAND_BYTES) {
+            if (current.size() >= MAX_FIELDS_PER_BATCH) {
                 batches.add(Map.copyOf(current));
                 current.clear();
-                bytes = 0;
             }
             current.put(entry.getKey(), entry.getValue());
-            bytes = Math.addExact(bytes, entryBytes);
+            if (writeBytes(appendBuildArguments(snapshot, current))
+                    > MAX_BUILD_COMMAND_BYTES) {
+                current.remove(entry.getKey());
+                if (current.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "AI conversation build field exceeds the command boundary.");
+                }
+                batches.add(Map.copyOf(current));
+                current.clear();
+                current.put(entry.getKey(), entry.getValue());
+                if (writeBytes(appendBuildArguments(snapshot, current))
+                        > MAX_BUILD_COMMAND_BYTES) {
+                    throw new IllegalArgumentException(
+                            "AI conversation build field exceeds the command boundary.");
+                }
+            }
         }
         if (!current.isEmpty()) {
             batches.add(Map.copyOf(current));
         }
         return List.copyOf(batches);
+    }
+
+    private List<String> appendBuildArguments(
+            AiConversationContextSnapshot snapshot,
+            Map<String, String> batch) {
+        List<String> arguments = new ArrayList<>(2 + batch.size() * 2);
+        arguments.add(snapshot.generation());
+        arguments.add(Integer.toString(properties.maxHashFields()));
+        batch.forEach((field, value) -> {
+            arguments.add(field);
+            arguments.add(value);
+        });
+        return arguments;
+    }
+
+    private List<Object> executeBuildPipeline(
+            String buildKey,
+            AiConversationContextSnapshot snapshot,
+            List<Map<String, String>> batches,
+            int itemCount) {
+        long startedNanos = System.nanoTime();
+        try {
+            // build Key 在 promote 前不可见，因此这里允许 Pipeline 减少 RTT；最终可见性仍由单条 promote Lua 保证。
+            List<Object> responses = redisTemplate.executePipelined(new SessionCallback<>() {
+                @Override
+                @SuppressWarnings({"rawtypes", "unchecked"})
+                public Object execute(RedisOperations operations) {
+                    for (Map<String, String> batch : batches) {
+                        operations.execute(
+                                APPEND_BUILD_SCRIPT,
+                                List.of(buildKey),
+                                appendBuildArguments(snapshot, batch).toArray());
+                    }
+                    return null;
+                }
+            });
+            if (responses == null
+                    || responses.size() != batches.size()
+                    || responses.stream().anyMatch(result -> number(result) != 1L)) {
+                throw new IllegalStateException(
+                        "AI conversation build Pipeline returned an invalid result.");
+            }
+            recordRedisOperation(
+                    "build_append", "success", startedNanos, batches.size(), itemCount);
+            return responses;
+        } catch (RuntimeException failure) {
+            recordRedisOperation(
+                    "build_append", "failed", startedNanos, batches.size(), itemCount);
+            throw failure;
+        }
     }
 
     @Override
@@ -277,10 +340,12 @@ public final class RedisAiConversationContextStore
             arguments.add(value);
         });
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "start_ephemeral",
+                    fields.size(),
                     START_EPHEMERAL_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             if (result != null && result > 0L) {
                 return AiConversationEphemeralStart.applied(result);
             }
@@ -361,10 +426,12 @@ public final class RedisAiConversationContextStore
         arguments.add(Integer.toString(properties.maxHashFields()));
         arguments.addAll(chunks);
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "save_interrupted",
+                    chunks.size(),
                     SAVE_INTERRUPTED_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             return Long.valueOf(1L).equals(result)
                     ? AiConversationContextWriteOutcome.APPLIED
                     : Long.valueOf(0L).equals(result)
@@ -422,9 +489,8 @@ public final class RedisAiConversationContextStore
         List<String> deletes = fieldsWithPrefix(
                 conversationPublicId, "ephemeral:" + ephemeralOrdinal + ":");
         if (!writeWithinLimits(writes, 0)
-                || current.fieldCount() - deletes.size() + writes.size()
-                > properties.maxHashFields()
-                || deletes.size() > properties.maxHashFields()) {
+                || deletes.size() > properties.maxHashFields()
+                || deletes.stream().anyMatch(writes::containsKey)) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
         List<String> arguments =
@@ -443,10 +509,12 @@ public final class RedisAiConversationContextStore
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "commit",
+                    writes.size() + deletes.size(),
                     COMMIT_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             return outcome(result);
         } catch (RuntimeException failure) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
@@ -516,7 +584,6 @@ public final class RedisAiConversationContextStore
                 compactedContextJson,
                 meta,
                 current.contextRevision(),
-                current.fieldCount(),
                 mergeDistinct(compactionFields, deletes));
     }
 
@@ -581,7 +648,6 @@ public final class RedisAiConversationContextStore
                 compactedContextJson,
                 meta,
                 current.contextRevision(),
-                current.fieldCount(),
                 mergeDistinct(compactionFields, deletes));
     }
 
@@ -600,10 +666,12 @@ public final class RedisAiConversationContextStore
             arguments.add(value);
         });
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "append",
+                    fields.size(),
                     APPEND_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             return outcome(result);
         } catch (RuntimeException failure) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
@@ -617,25 +685,31 @@ public final class RedisAiConversationContextStore
             String compactedContextJson,
             CacheMeta meta,
             long expectedContextRevision,
-            int currentFieldCount,
             List<String> deletes) {
         Map<String, String> writes = new LinkedHashMap<>();
         putCompactionChunked(
                 writes,
                 compactField,
                 Objects.requireNonNull(compactedContextJson));
-        if (currentFieldCount - deletes.size() + writes.size()
-                > properties.maxHashFields()) {
+        if (writes.size() > properties.maxHashFields()
+                || deletes.size() > properties.maxHashFields()
+                || deletes.contains(META_FIELD)
+                || deletes.contains("generation")) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
+        // 压缩摘要覆盖旧的同名 chunk；在 Java 侧先移除写删重叠，Lua 只接收明确的最终集合。
+        List<String> effectiveDeletes = deletes.stream()
+                .distinct()
+                .filter(field -> !writes.containsKey(field))
+                .toList();
         List<String> arguments = new ArrayList<>(
-                6 + deletes.size() + writes.size() * 2);
+                6 + effectiveDeletes.size() + writes.size() * 2);
         arguments.add(generation);
         arguments.add(Long.toString(expectedContextRevision));
         arguments.add(json(meta));
         arguments.add(Integer.toString(properties.maxHashFields()));
-        arguments.add(Integer.toString(deletes.size()));
-        arguments.addAll(deletes);
+        arguments.add(Integer.toString(effectiveDeletes.size()));
+        arguments.addAll(effectiveDeletes);
         arguments.add(Integer.toString(writes.size()));
         writes.forEach((field, value) -> {
             arguments.add(field);
@@ -645,10 +719,12 @@ public final class RedisAiConversationContextStore
             return AiConversationContextWriteOutcome.UNAVAILABLE;
         }
         try {
-            Long result = redisTemplate.execute(
+            Long result = executeObserved(
+                    "replace_compaction",
+                    writes.size() + effectiveDeletes.size(),
                     REPLACE_COMPACTION_SCRIPT,
                     List.of(key(conversationPublicId)),
-                    arguments.toArray(String[]::new));
+                    arguments.toArray());
             return outcome(result);
         } catch (RuntimeException failure) {
             return AiConversationContextWriteOutcome.UNAVAILABLE;
@@ -957,6 +1033,55 @@ public final class RedisAiConversationContextStore
                     value.getBytes(StandardCharsets.UTF_8).length);
         }
         return bytes;
+    }
+
+    private static long number(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof byte[] bytes) {
+            return Long.parseLong(new String(bytes, StandardCharsets.UTF_8));
+        }
+        return Long.parseLong(Objects.toString(value));
+    }
+
+    private Long executeObserved(
+            String operation,
+            int itemCount,
+            DefaultRedisScript<Long> script,
+            List<String> keys,
+            Object... arguments) {
+        long startedNanos = System.nanoTime();
+        try {
+            Long result = redisTemplate.execute(script, keys, arguments);
+            String outcome = result != null && result > 0L
+                    ? "success"
+                    : result != null && (result == 0L || result == 2L)
+                            ? "conflict" : "failed";
+            recordRedisOperation(operation, outcome, startedNanos, 1, itemCount);
+            return result;
+        } catch (RuntimeException failure) {
+            recordRedisOperation(operation, "failed", startedNanos, 1, itemCount);
+            throw failure;
+        }
+    }
+
+    private void recordRedisOperation(
+            String operation,
+            String outcome,
+            long startedNanos,
+            int batchCount,
+            int itemCount) {
+        try {
+            metrics.redisOperation(
+                    Duration.ofNanos(Math.max(0L, System.nanoTime() - startedNanos)),
+                    operation,
+                    outcome,
+                    batchCount,
+                    itemCount);
+        } catch (RuntimeException observationFailure) {
+            LOGGER.debug("AI conversation Redis metric failed safely");
+        }
     }
 
     private static AiConversationContextWriteOutcome outcome(Long result) {

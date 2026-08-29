@@ -26,7 +26,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
- * 编排 IP2Location API Key 的批量验证、AES-GCM保护、Redis原子写入和调用侧解密。
+ * 该实现是来编排 IP2Location API Key 的批量验证、AES-GCM 保护、Redis 有界写入和调用侧解密。
  *
  * <p>管理员只能获得掩码元数据；供应商实现每次只能领取一个已扣减额度的明文 Key，且明文不会跨越该业务边界。</p>
  */
@@ -70,7 +70,7 @@ public final class Ip2LocationApiKeyServiceImpl implements Ip2LocationApiKeyServ
                 ? Ip2LocationImportMode.CREATE_ONLY
                 : command.mode();
 
-        // 先完成全部规范化、加密和确定性去重，再执行一次 Lua；任意输入错误都不会产生部分写入。
+        // 先完成全部规范化、加密和确定性去重，再按原顺序提交；容量不足只拒绝尾部新凭据。
         Map<String, ProtectedIp2LocationKey> unique = new LinkedHashMap<>();
         int inputDuplicates = 0;
         for (String rawKey : rawKeys) {
@@ -90,10 +90,11 @@ public final class Ip2LocationApiKeyServiceImpl implements Ip2LocationApiKeyServ
                 command.initialQuota(),
                 mode);
         return new Ip2LocationKeyBatchResult(
-                unique.size(),
+                unique.size() - result.capacityRejectedCount(),
                 result.createdCount(),
                 result.updatedCount(),
-                result.duplicateCount() + inputDuplicates);
+                result.duplicateCount() + inputDuplicates,
+                result.capacityRejectedCount());
     }
 
     @Override

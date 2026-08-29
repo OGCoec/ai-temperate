@@ -2,6 +2,7 @@ package com.example.temperate.service.user.membership.payment.provider;
 
 import com.example.temperate.common.redis.key.MembershipOrderRedisId;
 import com.example.temperate.common.redis.key.PaymentCallbackRedisId;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Objects;
@@ -19,7 +20,7 @@ public record SimulatedPaymentProviderResult(
         BigDecimal paidAmountYuan,
         OffsetDateTime updatedAt) {
 
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     public SimulatedPaymentProviderResult {
         if (schemaVersion != CURRENT_SCHEMA_VERSION) {
@@ -40,6 +41,7 @@ public record SimulatedPaymentProviderResult(
             throw new IllegalArgumentException(
                     "Paid simulated provider result requires payment details.");
         }
-        updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
+        updatedAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(updatedAt, "updatedAt must not be null"));
     }
 }

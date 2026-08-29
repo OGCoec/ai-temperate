@@ -38,10 +38,10 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * 提供受管理员会话、设备校验和 CSRF 保护的 IP2Location API Key 批量管理接口。
+ * 该控制器是来提供受管理员会话、设备校验和 CSRF 保护的 IP2Location API Key 批量管理接口。
  *
  * <p>接口只返回 HMAC Key ID 和脱敏元数据，永不回显明文 Key、密文或供应商响应；文件导入与 JSON
- * 批量导入共享同一原子业务入口。</p>
+ * 批量导入共享同一有界部分接受业务入口。</p>
  */
 @Validated
 @RestController
@@ -60,10 +60,10 @@ public class AdminIp2LocationKeyController {
     }
 
     @PostMapping("/batch")
-    @ResponseStatus(HttpStatus.CREATED)
+    @ResponseStatus(HttpStatus.OK)
     @Operation(
-            summary = "原子批量导入并加密保存 IP2Location API Key",
-            description = "客户端只提交套餐、初始额度和 Key；有效期由 Service 按服务端 UTC 时间计算。")
+            summary = "有界批量导入并加密保存 IP2Location API Key",
+            description = "客户端只提交套餐、初始额度和 Key；容量不足的尾部新凭据会在 HTTP 200 响应中单独统计。")
     public Ip2LocationKeyBatchResult batch(
             @Valid @RequestBody BatchRequest request,
             HttpServletResponse response) {
@@ -72,10 +72,10 @@ public class AdminIp2LocationKeyController {
     }
 
     @PostMapping(path = "/import", consumes = "multipart/form-data")
-    @ResponseStatus(HttpStatus.CREATED)
+    @ResponseStatus(HttpStatus.OK)
     @Operation(
-            summary = "从 UTF-8 文本文件原子批量导入 IP2Location API Key",
-            description = "文件接口只接受套餐、初始额度和导入模式，不接受客户端提供的截止时间或 TTL。")
+            summary = "从 UTF-8 文本文件有界批量导入 IP2Location API Key",
+            description = "文件接口不接受客户端截止时间；容量不足时保留前序成功项并返回容量拒绝数量。")
     public Ip2LocationKeyBatchResult importText(
             @RequestParam("file") MultipartFile file,
             @RequestParam

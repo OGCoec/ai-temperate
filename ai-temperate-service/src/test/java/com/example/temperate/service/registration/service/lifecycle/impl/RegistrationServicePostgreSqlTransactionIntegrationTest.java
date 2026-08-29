@@ -413,6 +413,16 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
         }
 
         @Override
+        public List<UserLoginIdentity> findByIds(List<Long> identityIds) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int batchInsertBoundaryFixtures(List<UserLoginIdentity> identities) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public com.example.temperate.model.user.domain.CurrentUserProfile
                 findCurrentUserProfileById(long identityId) {
             throw new UnsupportedOperationException();
@@ -486,6 +496,16 @@ class RegistrationServicePostgreSqlTransactionIntegrationTest {
                     "INSERT INTO user_profile (login_identity_id, display_name) VALUES (?, ?)",
                     profile.getLoginIdentityId(),
                     profile.getDisplayName());
+        }
+
+        @Override
+        public int batchInsertBoundaryFixtures(List<UserProfile> profiles) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<UserProfile> findByLoginIdentityIds(List<Long> loginIdentityIds) {
+            throw new UnsupportedOperationException();
         }
     }
 

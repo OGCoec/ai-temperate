@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
 import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.mapper.ai.AiConversationMapper;
@@ -15,7 +16,9 @@ import com.example.temperate.mapper.ai.AiModelUsageMapper;
 import com.example.temperate.mapper.ai.AiModelUsageVideoDetailMapper;
 import com.example.temperate.mapper.user.membership.UserMembershipQuotaMapper;
 import com.example.temperate.model.ai.entity.AiModelUsageDetail;
+import com.example.temperate.model.ai.entity.AiModelUsage;
 import com.example.temperate.model.ai.entity.AiModelUsageVideoDetail;
+import com.example.temperate.model.ai.enums.AiModelBillingStatus;
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
@@ -30,6 +33,10 @@ import com.example.temperate.service.user.aiconversation.observability.AiConvers
 import com.example.temperate.service.user.aiconversation.video.AiConversationVideoMode;
 import com.example.temperate.service.user.aiconversation.video.AiConversationVideoResolution;
 import com.example.temperate.service.user.membership.MembershipQuotaPlan;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationException;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationService;
+import com.example.temperate.service.user.membership.impl.MembershipQuotaPeriodActivationServiceImpl;
+import com.example.temperate.service.user.membership.loadtest.MembershipQuotaLoadtestFaultGate;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -57,7 +64,9 @@ class AiConversationBillingServiceImplTest {
         quota.setQuotaBalanceMinor(125L);
         quota.setQuotaPeriodEndsAt(OffsetDateTime.parse("2026-07-30T12:00:00Z"));
 
-        service().activateExpiredPeriod(quota);
+        activationService().activateIfDue(
+                quota,
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
 
         assertThat(quota.getQuotaBalanceMinor()).isEqualTo(200_000L);
         assertThat(quota.getQuotaPeriodStartedAt())
@@ -71,17 +80,21 @@ class AiConversationBillingServiceImplTest {
         UserMembershipQuota active = new UserMembershipQuota();
         active.setMembershipTier(MembershipTier.FREE.ordinal());
         active.setQuotaBalanceMinor(4_200L);
+        active.setQuotaPeriodStartedAt(
+                OffsetDateTime.parse("2026-07-25T12:00:00Z"));
         active.setQuotaPeriodEndsAt(OffsetDateTime.parse("2026-08-01T12:00:00Z"));
-        service().activateExpiredPeriod(active);
+        activationService().activateIfDue(
+                active,
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
         assertThat(active.getQuotaBalanceMinor()).isEqualTo(4_200L);
 
         UserMembershipQuota invalid = new UserMembershipQuota();
         invalid.setMembershipTier(99);
         invalid.setQuotaPeriodEndsAt(OffsetDateTime.parse("2026-07-30T12:00:00Z"));
-        assertThatThrownBy(() -> service().activateExpiredPeriod(invalid))
-                .isInstanceOfSatisfying(AiConversationException.class, exception ->
-                        assertThat(exception.code())
-                                .isEqualTo(AiConversationErrorCode.AI_QUOTA_RULE_MISSING));
+        assertThatThrownBy(() -> activationService().activateIfDue(
+                        invalid,
+                        OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC)))
+                .isInstanceOf(MembershipQuotaPeriodActivationException.class);
     }
 
     @Test
@@ -93,6 +106,9 @@ class AiConversationBillingServiceImplTest {
 
         assertThat(reservation.reservedQuotaMinor()).isEqualTo(241L);
         assertThat(fixture.quota().getQuotaBalanceMinor()).isEqualTo(4_759L);
+        verify(fixture.activationService()).activateIfDue(
+                fixture.quota(),
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
         verify(fixture.quotaMapper()).updateBalanceAndPeriod(fixture.quota());
         verify(fixture.usageMapper()).insert(any());
         verify(fixture.detailMapper()).insert(any());
@@ -120,6 +136,57 @@ class AiConversationBillingServiceImplTest {
     }
 
     @Test
+    void idempotentReplayReturnsBeforeQuotaActivationOrDeduction() {
+        BillingFixture fixture = fixture(5_000L);
+        AiModelUsageDetail duplicate = new AiModelUsageDetail();
+        duplicate.setUsageId(new byte[] {2});
+        duplicate.setConversationId(new byte[] {1});
+        duplicate.setMeteringBasis(AiConversationMeteringBasis.TOKEN.code());
+        duplicate.setEstimatedPromptTokens(100L);
+        duplicate.setMaxOutputTokens(128_000L);
+        duplicate.setInputRatioSnapshot(new BigDecimal("0.75"));
+        duplicate.setCachedInputRatioSnapshot(new BigDecimal("0.075"));
+        duplicate.setOutputRatioSnapshot(new BigDecimal("4.5"));
+        duplicate.setReservedQuotaMinor(241L);
+        AiModelUsage usage = new AiModelUsage();
+        usage.setId(new byte[] {2});
+        usage.setLoginIdentityId(7L);
+        usage.setAiModelId(9L);
+        usage.setMeteringBasis(AiConversationMeteringBasis.TOKEN.code());
+        usage.setBillingStatus(AiModelBillingStatus.RESERVED.code());
+        when(fixture.detailMapper().findByIdempotencyDigest(any()))
+                .thenReturn(duplicate);
+        when(fixture.usageMapper().findByIdForUpdate(any())).thenReturn(usage);
+
+        AiConversationReservation replay =
+                fixture.service().reserve(reservationCommand());
+
+        assertThat(replay.replay()).isTrue();
+        verify(fixture.activationService(), never()).activateIfDue(any(), any());
+        verify(fixture.quotaMapper(), never()).findByLoginIdentityIdForUpdate(7L);
+        verify(fixture.quotaMapper(), never()).updateBalanceAndPeriod(any());
+    }
+
+    @Test
+    void loadtestFaultRunsAfterReservationWritesAndBeforeAfterCommitEviction() {
+        MembershipQuotaLoadtestFaultGate faultGate =
+                mock(MembershipQuotaLoadtestFaultGate.class);
+        BillingFixture fixture = fixture(5_000L, faultGate);
+        doThrow(new IllegalStateException("rollback"))
+                .when(faultGate).failAfterReservationIfArmed(7L);
+
+        assertThatThrownBy(() -> fixture.service().reserve(reservationCommand()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("rollback");
+
+        verify(fixture.quotaMapper()).updateBalanceAndPeriod(fixture.quota());
+        verify(fixture.usageMapper()).insert(any());
+        verify(fixture.detailMapper()).insert(any());
+        verify(faultGate).failAfterReservationIfArmed(7L);
+        verify(fixture.cacheInvalidationExecutor(), never()).evictAfterCommit(7L);
+    }
+
+    @Test
     void providerCostReservationUsesOutputCountWithoutTokenRatios() {
         BillingFixture fixture = fixture(50_000L);
         AiConversationReservationCommand command = new AiConversationReservationCommand(
@@ -133,6 +200,9 @@ class AiConversationBillingServiceImplTest {
 
         assertThat(reservation.reservedQuotaMinor()).isEqualTo(300L);
         assertThat(fixture.quota().getQuotaBalanceMinor()).isEqualTo(49_700L);
+        verify(fixture.activationService()).activateIfDue(
+                fixture.quota(),
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
         assertThat(reservation.metering().basis())
                 .isEqualTo(AiConversationMeteringBasis.PROVIDER_COST_TICKS);
         ArgumentCaptor<com.example.temperate.model.ai.entity.AiModelUsageDetail>
@@ -170,6 +240,9 @@ class AiConversationBillingServiceImplTest {
         // 6 秒 × 0.14 美元/秒 = 0.84 美元，账户最小单位为 0.01，因此预扣 84。
         assertThat(reservation.reservedQuotaMinor()).isEqualTo(84L);
         assertThat(fixture.quota().getQuotaBalanceMinor()).isEqualTo(49_916L);
+        verify(fixture.activationService()).activateIfDue(
+                fixture.quota(),
+                OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC));
         ArgumentCaptor<AiModelUsageDetail> usageDetail =
                 ArgumentCaptor.forClass(AiModelUsageDetail.class);
         verify(fixture.detailMapper()).insert(usageDetail.capture());
@@ -197,21 +270,29 @@ class AiConversationBillingServiceImplTest {
                 mock(HybridSemaphoreIdWorker.class),
                 new AiConversationQuotaCalculator(),
                 new AiConversationProviderCostQuotaCalculator(),
-                tier -> new MembershipQuotaPlan(
-                        tier == MembershipTier.PLUS ? 200_000L : 5_000L,
-                        Duration.ofDays(7)),
+                activationService(),
                 mock(UserProfileCacheInvalidationExecutor.class),
                 CLOCK,
                 mock(AiConversationMetrics.class));
     }
 
     private static BillingFixture fixture(long balanceMinor) {
+        return fixture(balanceMinor, MembershipQuotaLoadtestFaultGate.disabled());
+    }
+
+    private static BillingFixture fixture(
+            long balanceMinor,
+            MembershipQuotaLoadtestFaultGate faultGate) {
         AiConversationMapper conversationMapper = mock(AiConversationMapper.class);
         AiModelUsageMapper usageMapper = mock(AiModelUsageMapper.class);
         AiModelUsageDetailMapper detailMapper = mock(AiModelUsageDetailMapper.class);
         AiModelUsageVideoDetailMapper videoDetailMapper =
                 mock(AiModelUsageVideoDetailMapper.class);
         UserMembershipQuotaMapper quotaMapper = mock(UserMembershipQuotaMapper.class);
+        MembershipQuotaPeriodActivationService activationService =
+                mock(MembershipQuotaPeriodActivationService.class);
+        UserProfileCacheInvalidationExecutor cacheInvalidationExecutor =
+                mock(UserProfileCacheInvalidationExecutor.class);
         HybridSemaphoreIdWorker idWorker = mock(HybridSemaphoreIdWorker.class);
         UserMembershipQuota quota = new UserMembershipQuota();
         quota.setMembershipTier(MembershipTier.FREE.ordinal());
@@ -236,19 +317,20 @@ class AiConversationBillingServiceImplTest {
                         idWorker,
                         new AiConversationQuotaCalculator(),
                         new AiConversationProviderCostQuotaCalculator(),
-                        tier -> new MembershipQuotaPlan(
-                                5_000L,
-                                Duration.ofDays(7)),
-                        mock(UserProfileCacheInvalidationExecutor.class),
+                        activationService,
+                        cacheInvalidationExecutor,
+                        faultGate,
                         CLOCK,
                         mock(AiConversationMetrics.class));
         return new BillingFixture(
                 service,
                 quota,
+                activationService,
                 quotaMapper,
                 usageMapper,
                 detailMapper,
-                videoDetailMapper);
+                videoDetailMapper,
+                cacheInvalidationExecutor);
     }
 
     private static AiConversationReservationCommand reservationCommand() {
@@ -273,15 +355,24 @@ class AiConversationBillingServiceImplTest {
                 100L);
     }
 
+    private static MembershipQuotaPeriodActivationServiceImpl activationService() {
+        return new MembershipQuotaPeriodActivationServiceImpl(
+                tier -> new MembershipQuotaPlan(
+                        tier == MembershipTier.PLUS ? 200_000L : 5_000L,
+                        Duration.ofDays(7)));
+    }
+
     /**
      * 集中保存预扣测试使用的协作者，便于同时断言余额和未发生的持久化动作。
      */
     private record BillingFixture(
             AiConversationBillingServiceImpl service,
             UserMembershipQuota quota,
+            MembershipQuotaPeriodActivationService activationService,
             UserMembershipQuotaMapper quotaMapper,
             AiModelUsageMapper usageMapper,
             AiModelUsageDetailMapper detailMapper,
-            AiModelUsageVideoDetailMapper videoDetailMapper) {
+            AiModelUsageVideoDetailMapper videoDetailMapper,
+            UserProfileCacheInvalidationExecutor cacheInvalidationExecutor) {
     }
 }

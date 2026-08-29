@@ -200,6 +200,24 @@
 										</view>
 									</view>
 								</view>
+								<!-- #ifdef H5 -->
+								<button
+									class="profile-api-key-card profile-membership-upgrade"
+									type="button"
+									:disabled="logoutBusy"
+									aria-label="进入会员套餐升级页面"
+									@click="openMembershipPlans"
+								>
+									<view class="profile-api-key-icon" aria-hidden="true">
+										<uni-icons type="paperplane-filled" size="21" color="#75dfb7" />
+									</view>
+									<view class="profile-api-key-copy">
+										<text class="profile-api-key-title">升级套餐</text>
+										<text class="profile-api-key-detail">查看 Go、Plus、Pro 与 Ultra 的服务端模拟支付报价</text>
+									</view>
+									<text class="profile-api-key-chevron" aria-hidden="true">›</text>
+								</button>
+								<!-- #endif -->
 							</view>
 
 							<view
@@ -437,6 +455,9 @@
 			},
 			openApiKeys() {
 				if (!this.logoutBusy) this.$emit('open-api-keys')
+			},
+			openMembershipPlans() {
+				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.membershipPlans })
 			},
 			openTotpSecurity() {
 				if (!this.logoutBusy) uni.navigateTo({ url: AUTH_ROUTES.totpSecurity })
@@ -768,6 +789,7 @@
 		line-height: 1;
 	}
 	.profile-quota-card { @include user-frosted-surface; padding: 20px; border-radius: 16px; }
+	.profile-membership-upgrade { margin-top: 14px; }
 	.profile-quota-value { display: block; margin-top: 7px; color: #f3f5f4; font-size: 28px; font-weight: 750; line-height: 1.2; font-variant-numeric: tabular-nums; }
 	.profile-quota-summary { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; color: #aeb8b3; font-size: 13px; font-variant-numeric: tabular-nums; }
 	.profile-quota-progress { height: 8px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: #2b312e; }

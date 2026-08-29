@@ -90,10 +90,9 @@
 						<verification-identity-summary
 							:email="registrationEmail"
 							:phone-presentation="registrationPhonePresentation"
+							:restart-disabled="busy"
+							@restart="restartIdentityVerification"
 						/>
-						<view class="auth-links">
-							<button class="auth-link" type="button" :disabled="busy" @click="restartIdentityVerification">重新填写</button>
-						</view>
 						<view class="auth-code-row">
 							<view class="auth-field">
 								<label class="auth-label" for="auth-register-email-code">邮箱验证码</label>

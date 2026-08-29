@@ -45,17 +45,20 @@
 
 ## 第一阶段：生成生产 H5 与精确资源清单
 
-在 HBuilderX 中使用“发行 -> 网站-H5 手机版”，输出到：
+在 `fornted` 目录使用唯一的生产构建命令。该命令调用项目本地锁定版本的 uni-app 编译器，固定使用 `h5` 目标，并固定输出到：
 
 ```text
 fornted\unpackage\dist\build\h5
 ```
 
-发行目录只包含 `index.html`、生产资源、`_headers` 和不带 SPA 通配回退的 `_redirects`。禁止上传源码目录、`.vue`、source map、测试文件、`node_modules`、本地证书或环境变量文件。HBuilderX 产物中的 `/hybrid/**` 和 `/uni_modules/**` 不进入 Worker 资源清单，主域名对这些路径固定返回 404。
+`fornted\unpackage\dist\build\web` 是 HBuilderX 的旧自动输出目录，不得用于生成边缘资源清单、发布检查或 Pages 上传。
+
+发行目录只包含 `index.html`、生产资源、`_headers` 和不带 SPA 通配回退的 `_redirects`。禁止上传源码目录、`.vue`、source map、测试文件、`node_modules`、本地证书或环境变量文件。构建产物中的 `/hybrid/**` 和 `/uni_modules/**` 不进入 Worker 资源清单，主域名对这些路径固定返回 404。
 
 生产构建完成后，在 `fornted` 目录依次生成并核对边缘资源清单：
 
 ```powershell
+npm run build:h5
 npm run generate:h5-edge-assets
 npm run verify:esm-contracts
 npm run test:models
@@ -70,6 +73,15 @@ npm run verify:h5-release -- --dir unpackage\dist\build\h5
 ## 第二阶段：Pages Direct Upload
 
 将完整的 `fornted\unpackage\dist\build\h5` Direct Upload 到 `ai-temperate-frontend`。先记录本次不可变部署地址，再更新 Worker 的 `H5_PAGES_ORIGIN`；该地址必须是 HTTPS `*.pages.dev` 源站，不能指回 `niko000o.site`，否则会形成回源循环。
+
+从仓库根目录执行上传时，目录参数必须保持为完整 H5 产物目录：
+
+```powershell
+Set-Location cloudflare\api-gateway
+npx wrangler pages deploy ..\..\fornted\unpackage\dist\build\h5 --project-name=ai-temperate-frontend
+```
+
+禁止上传 `build\web`，也禁止把旧部署中的单个 JS 文件复制进新目录。
 
 Pages 独立地址只验收静态原点：
 

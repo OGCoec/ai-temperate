@@ -20,6 +20,7 @@ import com.example.temperate.model.user.membership.payment.MembershipOrderStatus
 import com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution;
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackResolution;
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult;
+import com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact;
 import com.example.temperate.service.user.membership.payment.callback.impl.MembershipPaymentCallbackDecisionServiceImpl;
 import com.example.temperate.service.user.membership.payment.callback.impl.PaymentCallbackBatchServiceImpl;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
@@ -28,11 +29,14 @@ import com.example.temperate.service.user.membership.payment.entitlement.Members
 import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentRefundEntitlementCommand;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestFaultGate;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentWorker;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentRefundCommand;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipPaymentUnappliedCallbackStore;
+import com.example.temperate.service.user.membership.payment.store.MembershipPaymentMissingSnapshotReleaseOutcome;
 import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -44,9 +48,15 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.InOrder;
 
 /**
@@ -60,11 +70,13 @@ final class PaymentCallbackBatchServiceImplTest {
 
     private PaymentCallbackQueue callbackQueue;
     private MembershipOrderSnapshotStore orderStore;
+    private MembershipPaymentUnappliedCallbackStore unappliedCallbackStore;
     private PaymentCallbackPersistenceService persistenceService;
     private MembershipPaymentEntitlementSettlementService entitlementService;
     private MembershipPaymentRefundService refundService;
     private MembershipPaymentRejectedCallbackResumeService rejectedResumeService;
     private MembershipPaymentLoadtestFaultGate loadtestFaultGate;
+    private MembershipPaymentMetrics metrics;
     private PaymentCallbackBatchService service;
     private PaymentCallbackClaim claim;
     private PaymentCallbackSnapshot callback;
@@ -73,20 +85,30 @@ final class PaymentCallbackBatchServiceImplTest {
     void setUp() {
         callbackQueue = mock(PaymentCallbackQueue.class);
         orderStore = mock(MembershipOrderSnapshotStore.class);
+        unappliedCallbackStore = mock(MembershipPaymentUnappliedCallbackStore.class);
         persistenceService = mock(PaymentCallbackPersistenceService.class);
         entitlementService = mock(MembershipPaymentEntitlementSettlementService.class);
         refundService = mock(MembershipPaymentRefundService.class);
         rejectedResumeService = mock(MembershipPaymentRejectedCallbackResumeService.class);
         loadtestFaultGate = mock(MembershipPaymentLoadtestFaultGate.class);
+        metrics = mock(MembershipPaymentMetrics.class);
         claim = new PaymentCallbackClaim(CALLBACK_ID, NOW.toEpochMilli());
         callback = callback();
         when(callbackQueue.claim(anyInt(), anyLong()))
                 .thenReturn(List.of(claim), List.of());
         when(callbackQueue.findAll(any())).thenReturn(Map.of(CALLBACK_ID, callback));
         when(orderStore.findAll(any())).thenReturn(Map.of(ORDER_ID, order()));
+        when(unappliedCallbackStore.finalizeRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.APPLIED,
+                        MembershipOrderStatus.CLOSED,
+                        2L)));
+        when(unappliedCallbackStore.releaseRejected(any())).thenReturn(Set.of(CALLBACK_ID));
         service = new PaymentCallbackBatchServiceImpl(
                 callbackQueue,
                 orderStore,
+                unappliedCallbackStore,
                 mock(MembershipOrderMapper.class),
                 persistenceService,
                 entitlementService,
@@ -98,7 +120,7 @@ final class PaymentCallbackBatchServiceImplTest {
                 new ObjectMapper(),
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                mock(MembershipPaymentMetrics.class));
+                metrics);
     }
 
     @Test
@@ -125,6 +147,27 @@ final class PaymentCallbackBatchServiceImplTest {
         order.verify(persistenceService).resolve(any());
         order.verify(callbackQueue).complete(List.of(
                 new PaymentCallbackCompletion(claim, ORDER_ID)));
+    }
+
+    @Test
+    void reportsNaturalWorkerRunBatchAndClaimCounts() {
+        when(persistenceService.persist(any())).thenReturn(List.of(write()));
+        when(orderStore.markPaidAll(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.APPLIED,
+                        MembershipOrderStatus.PAID,
+                        2L)));
+
+        service.flushOneRun();
+
+        verify(metrics).workerRunCompleted(
+                org.mockito.ArgumentMatchers.eq(MembershipPaymentWorker.CALLBACK),
+                org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq(1),
+                org.mockito.ArgumentMatchers.eq("drained"),
+                anyLong(),
+                anyString());
     }
 
     @Test
@@ -298,6 +341,7 @@ final class PaymentCallbackBatchServiceImplTest {
         PaymentCallbackBatchService terminalService = new PaymentCallbackBatchServiceImpl(
                 callbackQueue,
                 orderStore,
+                unappliedCallbackStore,
                 mapper,
                 persistenceService,
                 entitlementService,
@@ -358,22 +402,33 @@ final class PaymentCallbackBatchServiceImplTest {
     }
 
     @Test
-    void refundRequiredClosingOrderRepublishesFinalStageBeforeRemovingMarker() {
+    void refundRequiredClosingOrderFinalizesBeforeRefundWithoutRestartingMq() {
         MembershipOrderSnapshot closingOrder = lateClosingOrder();
         when(orderStore.findAll(any())).thenReturn(Map.of(ORDER_ID, closingOrder));
         when(persistenceService.persist(any())).thenReturn(List.of(write()));
 
         service.flushOneRun();
 
-        verify(entitlementService).settleRefundRequired(any());
-        verify(refundService).refund(any(PaymentRefundCommand.class));
-        InOrder recoveryOrder = inOrder(rejectedResumeService, callbackQueue);
-        recoveryOrder.verify(rejectedResumeService).resume(closingOrder);
-        recoveryOrder.verify(callbackQueue).complete(List.of(
+        InOrder finalizationOrder = inOrder(
+                entitlementService,
+                unappliedCallbackStore,
+                refundService,
+                callbackQueue);
+        finalizationOrder.verify(entitlementService).settleRefundRequired(any());
+        finalizationOrder.verify(unappliedCallbackStore).finalizeRefundRequired(List.of(
+                new MembershipPaymentRefundRequiredFinalizationCommand(
+                        claim,
+                        ORDER_ID,
+                        callback.providerTradeNo(),
+                        closingOrder.expiresAt().plus(properties().closingDuration()),
+                        OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))));
+        finalizationOrder.verify(refundService).refund(any(PaymentRefundCommand.class));
+        finalizationOrder.verify(callbackQueue).complete(List.of(
                 new PaymentCallbackCompletion(
                         claim,
                         ORDER_ID,
                         PaymentProviderResultCompletionAction.RESET_UNPAID)));
+        verify(rejectedResumeService, never()).resume(any());
     }
 
     @Test
@@ -394,9 +449,12 @@ final class PaymentCallbackBatchServiceImplTest {
         verify(orderStore, never()).markPaidAll(any());
         InOrder rejectedOrder = inOrder(
                 persistenceService,
+                unappliedCallbackStore,
                 rejectedResumeService,
                 callbackQueue);
         rejectedOrder.verify(persistenceService).resolve(any());
+        rejectedOrder.verify(unappliedCallbackStore).releaseRejected(List.of(
+                new MembershipPaymentRejectedCallbackReleaseCommand(claim, ORDER_ID)));
         rejectedOrder.verify(rejectedResumeService).resume(order());
         rejectedOrder.verify(callbackQueue).complete(any());
         verify(callbackQueue).complete(List.of(
@@ -407,7 +465,7 @@ final class PaymentCallbackBatchServiceImplTest {
     }
 
     @Test
-    void recoveredRejectedCallbackRepublishesFinalStageBeforeRemovingMarker() {
+    void recoveredRejectedCallbackReleasesMarkerBeforeRepublishingFinalStage() {
         MembershipPaymentCallbackWriteResult recovered = write();
         recovered.setInserted(false);
         recovered.setDuplicate(true);
@@ -417,7 +475,9 @@ final class PaymentCallbackBatchServiceImplTest {
 
         service.flushOneRun();
 
-        InOrder order = inOrder(rejectedResumeService, callbackQueue);
+        InOrder order = inOrder(unappliedCallbackStore, rejectedResumeService, callbackQueue);
+        order.verify(unappliedCallbackStore).releaseRejected(List.of(
+                new MembershipPaymentRejectedCallbackReleaseCommand(claim, ORDER_ID)));
         order.verify(rejectedResumeService).resume(order());
         order.verify(callbackQueue).complete(List.of(
                 new PaymentCallbackCompletion(
@@ -460,11 +520,217 @@ final class PaymentCallbackBatchServiceImplTest {
         verify(refundService).refund(new PaymentRefundCommand(
                 ORDER_ID, callback.providerTradeNo(), callback.paidAmountYuan()));
         verify(entitlementService).settleRefundRequired(any());
+        verify(unappliedCallbackStore).finalizeRefundRequired(any());
         verify(callbackQueue).complete(List.of(
                 new PaymentCallbackCompletion(
                         claim,
                         ORDER_ID,
                         PaymentProviderResultCompletionAction.RESET_UNPAID)));
+    }
+
+    @Test
+    void missingRedisSnapshotUsesExactDatabaseTerminalFactBeforeRefunding() {
+        when(orderStore.findAll(any())).thenReturn(Map.of(
+                ORDER_ID, order(MembershipOrderStatus.CANCELLED)));
+        MembershipPaymentCallbackWriteResult recovered = write();
+        recovered.setInserted(false);
+        recovered.setDuplicate(true);
+        recovered.setSameCallback(true);
+        recovered.setResolution(MembershipPaymentCallbackResolution.REFUND_REQUIRED.name());
+        when(persistenceService.persist(any())).thenReturn(List.of(recovered));
+        when(unappliedCallbackStore.finalizeRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.MISSING,
+                        null,
+                        0L)));
+        when(persistenceService.findRefundTerminalFacts(List.of(CALLBACK_ID)))
+                .thenReturn(Map.of(CALLBACK_ID, refundTerminalFact()));
+        when(unappliedCallbackStore.releaseMissingRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED));
+
+        service.flushOneRun();
+
+        verify(persistenceService).findRefundTerminalFacts(List.of(CALLBACK_ID));
+        verify(unappliedCallbackStore).releaseMissingRefundRequired(any());
+        verify(refundService).refund(new PaymentRefundCommand(
+                ORDER_ID, callback.providerTradeNo(), callback.paidAmountYuan()));
+        verify(callbackQueue).complete(List.of(
+                new PaymentCallbackCompletion(
+                        claim,
+                        ORDER_ID,
+                        PaymentProviderResultCompletionAction.RESET_UNPAID)));
+        verify(callbackQueue, never()).requeue(any(), anyLong());
+    }
+
+    @Test
+    void missingSnapshotWithoutDatabaseTerminalFactIsRequeuedWithoutRefund() {
+        when(orderStore.findAll(any())).thenReturn(Map.of(
+                ORDER_ID, order(MembershipOrderStatus.CANCELLED)));
+        MembershipPaymentCallbackWriteResult recovered = write();
+        recovered.setInserted(false);
+        recovered.setDuplicate(true);
+        recovered.setSameCallback(true);
+        recovered.setResolution(MembershipPaymentCallbackResolution.REFUND_REQUIRED.name());
+        when(persistenceService.persist(any())).thenReturn(List.of(recovered));
+        when(unappliedCallbackStore.finalizeRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.MISSING,
+                        null,
+                        0L)));
+        when(persistenceService.findRefundTerminalFacts(List.of(CALLBACK_ID)))
+                .thenReturn(Map.of());
+
+        service.flushOneRun();
+
+        verify(callbackQueue).requeue(List.of(claim), NOW.toEpochMilli());
+        verify(unappliedCallbackStore, never()).releaseMissingRefundRequired(any());
+        verify(refundService, never()).refund(any());
+        verify(callbackQueue, never()).complete(any());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidRefundTerminalFacts")
+    void missingSnapshotRejectsEveryIncompleteDatabaseAuthorityFact(
+            String description,
+            Consumer<MembershipPaymentRefundTerminalFact> corrupt) {
+        when(orderStore.findAll(any())).thenReturn(Map.of(
+                ORDER_ID, order(MembershipOrderStatus.CANCELLED)));
+        MembershipPaymentCallbackWriteResult recovered = write();
+        recovered.setInserted(false);
+        recovered.setDuplicate(true);
+        recovered.setSameCallback(true);
+        recovered.setResolution(MembershipPaymentCallbackResolution.REFUND_REQUIRED.name());
+        when(persistenceService.persist(any())).thenReturn(List.of(recovered));
+        when(unappliedCallbackStore.finalizeRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.MISSING,
+                        null,
+                        0L)));
+        MembershipPaymentRefundTerminalFact fact = refundTerminalFact();
+        corrupt.accept(fact);
+        when(persistenceService.findRefundTerminalFacts(List.of(CALLBACK_ID)))
+                .thenReturn(Map.of(CALLBACK_ID, fact));
+
+        service.flushOneRun();
+
+        verify(callbackQueue).requeue(List.of(claim), NOW.toEpochMilli());
+        verify(unappliedCallbackStore, never()).releaseMissingRefundRequired(any());
+        verify(refundService, never()).refund(any());
+        verify(callbackQueue, never()).complete(any());
+    }
+
+    @Test
+    void missingSnapshotReleaseKeepsClaimRetryableWhenProviderRefundFails() {
+        when(orderStore.findAll(any())).thenReturn(Map.of(
+                ORDER_ID, order(MembershipOrderStatus.CANCELLED)));
+        MembershipPaymentCallbackWriteResult recovered = write();
+        recovered.setInserted(false);
+        recovered.setDuplicate(true);
+        recovered.setSameCallback(true);
+        recovered.setResolution(MembershipPaymentCallbackResolution.REFUND_REQUIRED.name());
+        when(persistenceService.persist(any())).thenReturn(List.of(recovered));
+        when(unappliedCallbackStore.finalizeRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.MISSING,
+                        null,
+                        0L)));
+        when(persistenceService.findRefundTerminalFacts(List.of(CALLBACK_ID)))
+                .thenReturn(Map.of(CALLBACK_ID, refundTerminalFact()));
+        when(unappliedCallbackStore.releaseMissingRefundRequired(any())).thenReturn(Map.of(
+                CALLBACK_ID,
+                MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED));
+        doThrow(new IllegalStateException("provider unavailable"))
+                .when(refundService).refund(any());
+
+        service.flushOneRun();
+
+        verify(unappliedCallbackStore).releaseMissingRefundRequired(any());
+        verify(callbackQueue).requeue(List.of(claim), NOW.toEpochMilli());
+        verify(callbackQueue, never()).complete(any());
+    }
+
+    @Test
+    void refundFinalizationFailureRequeuesBeforeExternalRefundAndCompletion() {
+        MembershipOrderSnapshot closingOrder = lateClosingOrder();
+        when(orderStore.findAll(any())).thenReturn(Map.of(ORDER_ID, closingOrder));
+        when(persistenceService.persist(any())).thenReturn(List.of(write()));
+        when(unappliedCallbackStore.finalizeRefundRequired(any()))
+                .thenThrow(new IllegalStateException("redis down"));
+
+        service.flushOneRun();
+
+        verify(callbackQueue).requeue(List.of(claim), NOW.toEpochMilli());
+        verify(refundService, never()).refund(any());
+        verify(callbackQueue, never()).complete(any());
+    }
+
+    private MembershipPaymentRefundTerminalFact refundTerminalFact() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        MembershipPaymentRefundTerminalFact fact = new MembershipPaymentRefundTerminalFact();
+        fact.setCallbackId(codec.decode(CALLBACK_ID));
+        fact.setOrderId(codec.decode(ORDER_ID));
+        fact.setProviderTradeNo(callback.providerTradeNo());
+        fact.setCallbackResolution(MembershipPaymentCallbackResolution.REFUND_REQUIRED.name());
+        fact.setOrderStatus(MembershipOrderStatus.CANCELLED);
+        fact.setOrderEntitlementResolution(
+                MembershipOrderEntitlementResolution.REFUND_REQUIRED);
+        fact.setOrderProviderTradeNo(null);
+        return fact;
+    }
+
+    private static Stream<Arguments> invalidRefundTerminalFacts() {
+        HybridBase64UrlCodec codec = new HybridBase64UrlCodec();
+        return Stream.of(
+                Arguments.of(
+                        "callbackId mismatch",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setCallbackId(codec.decode(id((byte) 31)))),
+                Arguments.of(
+                        "orderId mismatch",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setOrderId(codec.decode(id((byte) 32)))),
+                Arguments.of(
+                        "providerTradeNo mismatch",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setProviderTradeNo("provider-mismatch")),
+                Arguments.of(
+                        "callback resolution incomplete",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setCallbackResolution(
+                                        MembershipPaymentCallbackResolution.APPLIED.name())),
+                Arguments.of(
+                        "order status is not terminal",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setOrderStatus(MembershipOrderStatus.PAID)),
+                Arguments.of(
+                        "entitlement is not refund required",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setOrderEntitlementResolution(
+                                        MembershipOrderEntitlementResolution.APPLIED)),
+                Arguments.of(
+                        "order provider trade remains bound",
+                        (Consumer<MembershipPaymentRefundTerminalFact>) fact ->
+                                fact.setOrderProviderTradeNo("provider-still-bound")));
+    }
+
+    @Test
+    void rejectedReleaseFailureRequeuesBeforeRabbitResumeAndCompletion() {
+        callback = callback(new BigDecimal("20.01"), "alipay");
+        when(callbackQueue.findAll(any())).thenReturn(Map.of(CALLBACK_ID, callback));
+        when(persistenceService.persist(any())).thenReturn(List.of(write()));
+        when(unappliedCallbackStore.releaseRejected(any()))
+                .thenThrow(new IllegalStateException("redis down"));
+
+        service.flushOneRun();
+
+        verify(callbackQueue).requeue(List.of(claim), NOW.toEpochMilli());
+        verify(rejectedResumeService, never()).resume(any());
+        verify(callbackQueue, never()).complete(any());
     }
 
     @Test

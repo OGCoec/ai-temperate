@@ -4,14 +4,17 @@ import com.example.temperate.model.user.membership.payment.MembershipOrderStatus
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteOutcome;
+import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -21,6 +24,23 @@ import java.util.UUID;
  */
 final class MembershipPaymentRedisCodec {
 
+    private static final List<String> ORDER_FIELDS = List.of(
+            "schemaVersion",
+            "orderId",
+            "loginIdentityId",
+            "membershipTier",
+            "payAmountYuan",
+            "payType",
+            "status",
+            "idempotencyKey",
+            "providerTradeNo",
+            "paymentStartedAt",
+            "expiresAt",
+            "closingDeadlineAt",
+            "paidAt",
+            "stateVersion",
+            "createdAt",
+            "updatedAt");
     private MembershipPaymentRedisCodec() {
     }
 
@@ -63,6 +83,48 @@ final class MembershipPaymentRedisCodec {
                 number(fields, "stateVersion"),
                 time(fields, "createdAt", true),
                 time(fields, "updatedAt", true));
+    }
+
+    /**
+     * 解析协调器混合写入结果；正常写入直接复用已提交数据库快照，只有冲突或陈旧裁决读取 Redis 当前 16 字段。
+     */
+    static MembershipOrderSnapshotWriteResult readOrderWriteReply(
+            List<?> reply,
+            MembershipOrderSnapshot submittedSnapshot) {
+        if (reply == null || reply.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Membership order write script reply is empty.");
+        }
+        Objects.requireNonNull(submittedSnapshot, "submittedSnapshot must not be null");
+        MembershipOrderSnapshotWriteOutcome outcome =
+                MembershipOrderSnapshotWriteOutcome.valueOf(scriptText(reply.get(0)));
+        if (outcome == MembershipOrderSnapshotWriteOutcome.MISSING
+                || outcome == MembershipOrderSnapshotWriteOutcome.REQUIRES_RESTORE) {
+            if (reply.size() != 1) {
+                throw new IllegalArgumentException(
+                        "Snapshotless membership order write reply contains unexpected fields.");
+            }
+            return new MembershipOrderSnapshotWriteResult(outcome, null);
+        }
+        if (reply.size() == 1) {
+            if (outcome == MembershipOrderSnapshotWriteOutcome.CREATED
+                    || outcome == MembershipOrderSnapshotWriteOutcome.REPLACED
+                    || outcome == MembershipOrderSnapshotWriteOutcome.APPLIED
+                    || outcome == MembershipOrderSnapshotWriteOutcome.UNCHANGED) {
+                return new MembershipOrderSnapshotWriteResult(outcome, submittedSnapshot);
+            }
+            throw new IllegalArgumentException(
+                    "Membership order write conflict reply is missing current fields.");
+        }
+        if (reply.size() != ORDER_FIELDS.size() + 1) {
+            throw new IllegalArgumentException(
+                    "Membership order write script reply has an invalid size.");
+        }
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (int index = 0; index < ORDER_FIELDS.size(); index++) {
+            fields.put(ORDER_FIELDS.get(index), scriptText(reply.get(index + 1)));
+        }
+        return new MembershipOrderSnapshotWriteResult(outcome, readOrder(fields));
     }
 
     static Map<String, String> writeCallback(PaymentCallbackSnapshot snapshot) {
@@ -185,20 +247,29 @@ final class MembershipPaymentRedisCodec {
             return null;
         }
         try {
-            return OffsetDateTime.ofInstant(
-                    Instant.ofEpochMilli(Long.parseLong(value)),
-                    ZoneOffset.UTC);
+            return MembershipPaymentTime.fromEpochMicros(Long.parseLong(value));
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("Invalid Redis payment time: " + name, exception);
         }
     }
 
     private static String epoch(OffsetDateTime value) {
-        return value == null ? "" : Long.toString(value.toInstant().toEpochMilli());
+        return value == null ? "" : Long.toString(MembershipPaymentTime.toEpochMicros(value));
     }
 
     private static String text(String value) {
         return value == null ? "" : value;
+    }
+
+    private static String scriptText(Object value) {
+        if (value instanceof String text) {
+            return text;
+        }
+        if (value instanceof byte[] bytes) {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        throw new IllegalArgumentException(
+                "Membership payment Redis script reply contains a missing or invalid field.");
     }
 
     private static String string(Object value) {
@@ -207,4 +278,8 @@ final class MembershipPaymentRedisCodec {
         }
         return String.valueOf(value);
     }
+
+    /**
+     * 该结果是来同时携带 Lua 版本裁决和裁决后的当前订单快照，调用方只向业务层暴露快照。
+     */
 }

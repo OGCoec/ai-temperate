@@ -38,6 +38,28 @@
         )
     </insert>
 
+    <insert id="batchInsertBoundaryFixtures">
+        INSERT INTO user_membership_quota (
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at,
+            membership_expires_at
+        )
+        VALUES
+        <foreach collection="quotas" item="quota" separator=",">
+            (
+                #{quota.loginIdentityId,jdbcType=BIGINT},
+                #{quota.membershipTier,jdbcType=SMALLINT},
+                #{quota.quotaBalanceMinor,jdbcType=BIGINT},
+                #{quota.quotaPeriodStartedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{quota.quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{quota.membershipExpiresAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            )
+        </foreach>
+    </insert>
+
     <select id="findByLoginIdentityId"
             resultMap="UserMembershipQuotaResultMap">
         SELECT
@@ -85,6 +107,25 @@
         FOR UPDATE
     </select>
 
+    <select id="findByLoginIdentityIdsForUpdate"
+            resultMap="UserMembershipQuotaResultMap">
+        SELECT
+            id,
+            login_identity_id,
+            membership_tier,
+            quota_balance_minor,
+            quota_period_started_at,
+            quota_period_ends_at,
+            membership_expires_at
+        FROM user_membership_quota
+        WHERE login_identity_id IN
+        <foreach collection="loginIdentityIds" item="loginIdentityId" open="(" separator="," close=")">
+            #{loginIdentityId,jdbcType=BIGINT}
+        </foreach>
+        ORDER BY login_identity_id
+        FOR UPDATE
+    </select>
+
     <update id="updateBalanceAndPeriod"
             parameterType="com.example.temperate.model.user.entity.UserMembershipQuota">
         UPDATE user_membership_quota
@@ -95,6 +136,36 @@
                 #{quotaPeriodEndsAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         WHERE id = #{id,jdbcType=BIGINT}
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+    </update>
+
+    <update id="batchGrantPaidMemberships">
+        WITH grants AS (
+            SELECT
+                raw."loginIdentityId" AS login_identity_id,
+                raw."membershipTier" AS membership_tier,
+                raw."quotaBalanceMinor" AS quota_balance_minor,
+                raw."quotaPeriodStartedAt" AS quota_period_started_at,
+                raw."quotaPeriodEndsAt" AS quota_period_ends_at,
+                raw."membershipExpiresAt" AS membership_expires_at
+            FROM jsonb_to_recordset(
+                CAST(#{grantsJson,jdbcType=VARCHAR} AS JSONB)
+            ) AS raw(
+                "loginIdentityId" BIGINT,
+                "membershipTier" SMALLINT,
+                "quotaBalanceMinor" BIGINT,
+                "quotaPeriodStartedAt" TIMESTAMPTZ,
+                "quotaPeriodEndsAt" TIMESTAMPTZ,
+                "membershipExpiresAt" TIMESTAMPTZ
+            )
+        )
+        UPDATE user_membership_quota
+        SET membership_tier = grants.membership_tier,
+            quota_balance_minor = grants.quota_balance_minor,
+            quota_period_started_at = grants.quota_period_started_at,
+            quota_period_ends_at = grants.quota_period_ends_at,
+            membership_expires_at = grants.membership_expires_at
+        FROM grants
+        WHERE user_membership_quota.login_identity_id = grants.login_identity_id
     </update>
 
     <update id="expirePaidMembershipIfDue">

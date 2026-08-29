@@ -19,6 +19,10 @@ public interface UserMembershipQuotaMapper {
 
     int insert(UserMembershipQuota membershipQuota);
 
+    /** 一次插入一批受控毫秒边界测试额度模板；批次上限由服务层固定为 500 条。 */
+    int batchInsertBoundaryFixtures(
+            @Param("quotas") List<UserMembershipQuota> quotas);
+
     UserMembershipQuota findByLoginIdentityId(
             @Param("loginIdentityId") long loginIdentityId);
 
@@ -29,7 +33,13 @@ public interface UserMembershipQuotaMapper {
     UserMembershipQuota findByLoginIdentityIdForUpdate(
             @Param("loginIdentityId") long loginIdentityId);
 
+    List<UserMembershipQuota> findByLoginIdentityIdsForUpdate(
+            @Param("loginIdentityIds") List<Long> loginIdentityIds);
+
     int updateBalanceAndPeriod(UserMembershipQuota membershipQuota);
+
+    int batchGrantPaidMemberships(
+            @Param("grantsJson") String grantsJson);
 
     /**
      * 对一个已认证用户原子执行付费会员惰性过期；FREE、未到期付费会员以及并发请求已经处理的记录均返回零。

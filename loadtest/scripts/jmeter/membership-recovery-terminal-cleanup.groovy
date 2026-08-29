@@ -59,6 +59,19 @@ def waitUntil = { Instant target ->
     }
 }
 
+def nextTier = {
+    Map response = request('GET', '/api/user/membership-plan-offers', authHeaders, null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Recovery offer lookup failed: ' + response.status)
+    }
+    Map body = (Map) json.parseText(response.body)
+    List offers = (List) body.offers
+    if (offers == null || offers.isEmpty()) {
+        throw new IllegalStateException('Recovery account has no legal higher membership offer.')
+    }
+    return ((Map) offers.first()).targetTier as String
+}
+
 def createOrder = {
     String idempotencyKey = UUID.randomUUID().toString()
     Map headers = new LinkedHashMap<>(authHeaders)
@@ -67,7 +80,11 @@ def createOrder = {
             'POST',
             '/api/user/membership-orders',
             headers,
-            JsonOutput.toJson([targetTier: 'GO', payType: 'alipay', idempotencyKey: idempotencyKey]))
+            JsonOutput.toJson([
+                    targetTier: nextTier(),
+                    payType: 'alipay',
+                    idempotencyKey: idempotencyKey
+            ]))
     if (response.status != 201) {
         throw new IllegalStateException('Recovery setup order failed: ' + response.status)
     }
@@ -122,9 +139,15 @@ def sign = { String tradeNo, String orderId ->
             mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8)))
 }
 
-def callback = { Map order, String tradeNo ->
+def callback = { Map order, String tradeNo, String expectedResolution ->
     Instant now = Instant.now()
     String paidTime = formatter.format(now)
+    String callbackMoney = expectedResolution == 'REJECTED'
+            ? new BigDecimal(order.payAmountYuan as String)
+                    .add(new BigDecimal('0.01'))
+                    .setScale(2)
+                    .toPlainString()
+            : order.payAmountYuan
     Map fields = [
             pid: callbackPid,
             trade_no: tradeNo,
@@ -135,7 +158,7 @@ def callback = { Map order, String tradeNo ->
             addtime: paidTime,
             endtime: paidTime,
             name: 'membership-recovery',
-            money: order.payAmountYuan,
+            money: callbackMoney,
             param: vars.get('caseName'),
             buyer: 'recovery-buyer',
             timestamp: Long.toString(now.epochSecond),
@@ -191,6 +214,67 @@ def faultCount = {
         throw new IllegalStateException('Loadtest fault probe failed: ' + response.status)
     }
     return ((Map) json.parseText(response.body)).callbackCompleteFailureCount as long
+}
+
+def pauseWorkers = { int seconds ->
+    Map response = request(
+            'POST',
+            '/internal/test/membership-payments/loadtest-control/workers/pause' +
+                    '?maxPauseSeconds=' + seconds,
+            ['Accept': 'application/json'],
+            null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Worker pause failed: ' + response.status)
+    }
+    Map probe = (Map) json.parseText(response.body)
+    if (!probe.callbackWorkerPaused || !probe.orderPersistenceWorkerPaused) {
+        throw new IllegalStateException('Both local workers were not paused.')
+    }
+    return probe
+}
+
+def resumeWorkers = {
+    Map response = request(
+            'POST',
+            '/internal/test/membership-payments/loadtest-control/workers/resume',
+            ['Accept': 'application/json'],
+            null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Worker resume failed: ' + response.status)
+    }
+    return (Map) json.parseText(response.body)
+}
+
+def markerHold = { String action, String orderId, Integer seconds ->
+    String encoded = URLEncoder.encode(orderId, StandardCharsets.UTF_8)
+    String query = '?orderId=' + encoded
+    if (seconds != null) {
+        query += '&maxHoldSeconds=' + seconds
+    }
+    String method = action == 'inspect' ? 'GET' : 'POST'
+    String suffix = action == 'inspect' ? '' : '/' + action
+    Map response = request(
+            method,
+            '/internal/test/membership-payments/loadtest-control/callback-hold' + suffix + query,
+            ['Accept': 'application/json'],
+            null)
+    if (response.status != 200) {
+        throw new IllegalStateException('Marker hold action failed: ' + action)
+    }
+    return (Map) json.parseText(response.body)
+}
+
+def waitForMarker = { String orderId ->
+    Instant deadline = Instant.now().plusSeconds(20L)
+    Map probe = [:]
+    while (Instant.now().isBefore(deadline)) {
+        probe = markerHold('inspect', orderId, null)
+        if (probe.markerPresent) {
+            return probe
+        }
+        Thread.sleep(250L)
+    }
+    throw new IllegalStateException('Recovery callback Marker was not written: ' + probe)
 }
 
 def waitForRedisCleanup = { String orderId ->
@@ -251,7 +335,7 @@ try {
     switch (vars.get('recoveryMode')) {
         case 'CALLBACK_PROCESSING_TIMEOUT':
             startPayment(order.orderId)
-            callback(order, tradeNo)
+            callback(order, tradeNo, 'APPLIED')
             Map callbackProbe = control('recover-callback')
             claimed = callbackProbe.claimed as int
             recovered = callbackProbe.recovered as int
@@ -273,7 +357,7 @@ try {
             startPayment(order.orderId)
             Map armed = armCallbackCompleteFailure(order.orderId)
             faultBefore = armed.callbackCompleteFailureCount as long
-            callback(order, tradeNo)
+            callback(order, tradeNo, 'APPLIED')
             waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
             Instant faultDeadline = Instant.now().plusSeconds(120L)
             while (Instant.now().isBefore(faultDeadline)) {
@@ -295,7 +379,7 @@ try {
             break
         case 'PAID_TERMINAL_CLEANUP':
             startPayment(order.orderId)
-            callback(order, tradeNo)
+            callback(order, tradeNo, 'APPLIED')
             waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
             expectedStatus = 'PAID'
             expectedResolution = 'APPLIED'
@@ -317,14 +401,111 @@ try {
             break
         case 'DEDUPE_TTL_DATABASE_FALLBACK':
             startPayment(order.orderId)
-            callback(order, tradeNo)
+            callback(order, tradeNo, 'APPLIED')
             waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
             Thread.sleep(31_000L)
-            callback(order, (tradeNo + '-NEW').take(128))
+            callback(order, (tradeNo + '-NEW').take(128), 'APPLIED')
             control('flush')
             waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(60L))
             expectedStatus = 'PAID'
             expectedResolution = 'APPLIED'
+            break
+        case 'WORKER_PAUSE_APPLIED':
+            startPayment(order.orderId)
+            pauseWorkers(120)
+            try {
+                callback(order, tradeNo, 'APPLIED')
+                waitForMarker(order.orderId)
+                Thread.sleep(10_000L)
+                if (getOrder(order.orderId).status == 'PAID') {
+                    throw new IllegalStateException('Paused callback Worker applied the callback.')
+                }
+            } finally {
+                resumeWorkers()
+            }
+            waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
+            expectedStatus = 'PAID'
+            expectedResolution = 'APPLIED'
+            break
+        case 'WORKER_PAUSE_REJECTED':
+            startPayment(order.orderId)
+            pauseWorkers(120)
+            try {
+                callback(order, tradeNo, 'REJECTED')
+                waitForMarker(order.orderId)
+                Thread.sleep(10_000L)
+            } finally {
+                resumeWorkers()
+            }
+            Instant rejectedHardClose = OffsetDateTime.parse(order.expiresAt)
+                    .toInstant().plusSeconds(300L)
+            waitForStatus(order.orderId, 'CLOSED', rejectedHardClose.plusSeconds(180L))
+            expectedStatus = 'CLOSED'
+            expectedResolution = 'REJECTED'
+            break
+        case 'CALLBACK_COMPLETE_FIRST_FAILURE':
+            startPayment(order.orderId)
+            Map firstFailureArmed = armCallbackCompleteFailure(order.orderId)
+            faultBefore = firstFailureArmed.callbackCompleteFailureCount as long
+            callback(order, tradeNo, 'APPLIED')
+            waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
+            Instant firstFailureDeadline = Instant.now().plusSeconds(120L)
+            while (Instant.now().isBefore(firstFailureDeadline)) {
+                control('flush')
+                faultAfter = faultCount()
+                if (faultAfter > faultBefore) {
+                    break
+                }
+                Thread.sleep(1_000L)
+            }
+            if (faultAfter != faultBefore + 1L) {
+                throw new IllegalStateException('Callback complete did not fail exactly once.')
+            }
+            control('flush')
+            expectedStatus = 'PAID'
+            expectedResolution = 'APPLIED'
+            break
+        case 'MQ_SHORT_CIRCUIT_WORKER_RECOVERY':
+            startPayment(order.orderId)
+            Instant appliedTarget = OffsetDateTime.parse(order.createdAt)
+                    .toInstant().plusSeconds(10L)
+            markerHold('arm', order.orderId, 120)
+            try {
+                callback(order, tradeNo, 'APPLIED')
+                waitForMarker(order.orderId)
+                waitUntil(appliedTarget.plusSeconds(15L))
+                Map appliedHeld = markerHold('inspect', order.orderId, null)
+                if (!appliedHeld.armed || !appliedHeld.markerPresent) {
+                    throw new IllegalStateException('Marker did not cover the first PENDING MQ stage.')
+                }
+            } finally {
+                markerHold('release', order.orderId, null)
+            }
+            waitForStatus(order.orderId, 'PAID', Instant.now().plusSeconds(120L))
+            expectedStatus = 'PAID'
+            expectedResolution = 'APPLIED'
+            break
+        case 'REJECTED_MARKER_DELETED_TO_CLOSED':
+            startPayment(order.orderId)
+            Instant rejectedTarget = OffsetDateTime.parse(order.createdAt)
+                    .toInstant().plusSeconds(10L)
+            markerHold('arm', order.orderId, 120)
+            try {
+                callback(order, tradeNo, 'REJECTED')
+                waitForMarker(order.orderId)
+                waitUntil(rejectedTarget.plusSeconds(15L))
+                Map rejectedHeld = markerHold('inspect', order.orderId, null)
+                if (!rejectedHeld.armed || !rejectedHeld.markerPresent) {
+                    throw new IllegalStateException('Rejected Marker did not cover the PENDING MQ stage.')
+                }
+            } finally {
+                markerHold('release', order.orderId, null)
+            }
+            Instant finalHardClose = OffsetDateTime.parse(order.expiresAt)
+                    .toInstant().plusSeconds(300L)
+            waitForStatus(order.orderId, 'CLOSED', finalHardClose.plusSeconds(180L))
+            expectedStatus = 'CLOSED'
+            expectedResolution = 'REJECTED'
             break
         default:
             throw new IllegalStateException('Unknown recovery mode: ' + vars.get('recoveryMode'))

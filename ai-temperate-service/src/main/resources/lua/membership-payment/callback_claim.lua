@@ -3,12 +3,18 @@ local processing_key = KEYS[2]
 local maximum = tonumber(ARGV[1])
 local claimed_at = ARGV[2]
 
-local candidates = redis.call('ZRANGE', ready_key, 0, maximum - 1)
-local claimed = {}
-for _, callback_id in ipairs(candidates) do
-    if redis.call('ZREM', ready_key, callback_id) == 1 then
-        redis.call('ZADD', processing_key, claimed_at, callback_id)
-        table.insert(claimed, callback_id)
-    end
+local popped = redis.call('ZPOPMIN', ready_key, maximum)
+if #popped == 0 then
+    return {}
 end
+
+local claimed = {}
+local zadd = {'ZADD', processing_key}
+for index = 1, #popped, 2 do
+    local callback_id = popped[index]
+    claimed[#claimed + 1] = callback_id
+    zadd[#zadd + 1] = claimed_at
+    zadd[#zadd + 1] = callback_id
+end
+redis.call(unpack(zadd))
 return claimed

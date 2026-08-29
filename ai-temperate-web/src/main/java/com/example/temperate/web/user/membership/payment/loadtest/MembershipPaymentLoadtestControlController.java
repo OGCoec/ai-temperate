@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -25,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
  */
 @RestController
 @RequestMapping(MembershipPaymentLoadtestControlController.PATH)
+@Profile({"loadtest-fast", "loadtest-realtime"})
 @ConditionalOnProperty(
         prefix = "app.membership-payment.loadtest",
         name = "enabled",
@@ -136,6 +138,63 @@ public final class MembershipPaymentLoadtestControlController {
             HttpServletRequest request) {
         requireLoopback(request);
         return noStore(controlService.inspectFaults());
+    }
+
+    @PostMapping("/callback-hold/arm")
+    @Operation(summary = "为目标订单武装有界 callback hold")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.CallbackHoldProbe>
+            armCallbackHold(
+                    @RequestParam String orderId,
+                    @RequestParam int maxHoldSeconds,
+                    HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.armCallbackHold(orderId, maxHoldSeconds));
+    }
+
+    @GetMapping("/callback-hold")
+    @Operation(summary = "读取目标订单 callback hold 与 Marker 存在性")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.CallbackHoldProbe>
+            callbackHold(
+                    @RequestParam String orderId,
+                    HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.inspectCallbackHold(orderId));
+    }
+
+    @PostMapping("/callback-hold/release")
+    @Operation(summary = "幂等释放目标订单 callback hold")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.CallbackHoldProbe>
+            releaseCallbackHold(
+                    @RequestParam String orderId,
+                    HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.releaseCallbackHold(orderId));
+    }
+
+    @PostMapping("/workers/pause")
+    @Operation(summary = "有界暂停本机 callback 与订单刷盘 Worker")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.WorkerPauseProbe>
+            pauseWorkers(
+                    @RequestParam int maxPauseSeconds,
+                    HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.pauseWorkers(maxPauseSeconds));
+    }
+
+    @GetMapping("/workers")
+    @Operation(summary = "读取本机 callback 与订单刷盘 Worker 暂停状态")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.WorkerPauseProbe>
+            workers(HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.inspectWorkers());
+    }
+
+    @PostMapping("/workers/resume")
+    @Operation(summary = "幂等恢复本机 callback 与订单刷盘 Worker")
+    public ResponseEntity<MembershipPaymentLoadtestControlService.WorkerPauseProbe>
+            resumeWorkers(HttpServletRequest request) {
+        requireLoopback(request);
+        return noStore(controlService.resumeWorkers());
     }
 
     private static <T> ResponseEntity<T> noStore(T body) {

@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * 验证管理员 API Key 批量导入由服务端计算套餐有效期，并在整体校验和确定性去重后进行一次有界 Redis 原子写入。
+ * 该测试是来验证管理员 API Key 批量导入由服务端计算套餐有效期，并汇总有界 Pipeline 的部分接受结果。
  */
 class Ip2LocationApiKeyServiceImplTest {
 
@@ -42,7 +42,7 @@ class Ip2LocationApiKeyServiceImplTest {
                         anyList(),
                         eq(50_000L),
                         eq(Ip2LocationImportMode.CREATE_ONLY)))
-                .thenReturn(new Ip2LocationApiKeyStore.BatchWriteResult(1, 0, 0));
+                .thenReturn(new Ip2LocationApiKeyStore.BatchWriteResult(1, 0, 0, 0));
         Ip2LocationApiKeyServiceImpl service = service(store);
 
         Ip2LocationKeyBatchResult result = service.importBatch(
@@ -63,6 +63,7 @@ class Ip2LocationApiKeyServiceImplTest {
         assertThat(keys.getValue().getFirst().expiresAt())
                 .isEqualTo(NOW.plus(Duration.ofDays(7)));
         assertThat(result.acceptedCount()).isEqualTo(1);
+        assertThat(result.capacityRejectedCount()).isZero();
         assertThat(result.duplicateCount()).isEqualTo(1);
         assertThat(result.toString()).doesNotContain("duplicate-test-key");
     }
@@ -90,7 +91,7 @@ class Ip2LocationApiKeyServiceImplTest {
                         anyList(),
                         eq(50_000L),
                         eq(Ip2LocationImportMode.CREATE_ONLY)))
-                .thenReturn(new Ip2LocationApiKeyStore.BatchWriteResult(1, 0, 0));
+                .thenReturn(new Ip2LocationApiKeyStore.BatchWriteResult(1, 0, 0, 0));
         Ip2LocationApiKeyServiceImpl service = service(store);
 
         service.importBatch(new Ip2LocationKeyBatchCommand(
@@ -124,6 +125,29 @@ class Ip2LocationApiKeyServiceImplTest {
         assertThatThrownBy(() -> service.importBatch(command))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(store);
+    }
+
+    @Test
+    void capacityRejectedItemsAreExcludedFromAcceptedCount() {
+        Ip2LocationApiKeyStore store = mock(Ip2LocationApiKeyStore.class);
+        when(store.writeBatch(
+                        anyList(),
+                        eq(50_000L),
+                        eq(Ip2LocationImportMode.CREATE_ONLY)))
+                .thenReturn(new Ip2LocationApiKeyStore.BatchWriteResult(2, 0, 0, 3));
+        Ip2LocationApiKeyServiceImpl service = service(store);
+
+        Ip2LocationKeyBatchResult result = service.importBatch(
+                new Ip2LocationKeyBatchCommand(
+                        Ip2LocationPlanType.FREE,
+                        50_000,
+                        Ip2LocationImportMode.CREATE_ONLY,
+                        List.of("key-one-123", "key-two-123", "key-three-123",
+                                "key-four-123", "key-five-123")));
+
+        assertThat(result.acceptedCount()).isEqualTo(2);
+        assertThat(result.createdCount()).isEqualTo(2);
+        assertThat(result.capacityRejectedCount()).isEqualTo(3);
     }
 
     private static Ip2LocationApiKeyServiceImpl service(

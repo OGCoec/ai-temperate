@@ -2,16 +2,16 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Membership Recovery Terminal Cleanup Realtime" enabled="true">
-      <stringProp name="TestPlan.comments">七种真实恢复与终态清理场景串行运行，避免恢复探针领取其他场景的工作项。</stringProp>
+      <stringProp name="TestPlan.comments">十二种真实恢复、Worker 暂停、Marker 短路与终态清理场景串行运行，避免恢复探针领取其他场景的工作项。</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Variables" enabled="true"><collectionProp name="Arguments.arguments"/></elementProp>
     </TestPlan>
     <hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Seven Serial Recovery Cases" enabled="true">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Twelve Serial Recovery Cases" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
-        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true"><boolProp name="LoopController.continue_forever">false</boolProp><stringProp name="LoopController.loops">7</stringProp></elementProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true"><boolProp name="LoopController.continue_forever">false</boolProp><stringProp name="LoopController.loops">12</stringProp></elementProp>
         <stringProp name="ThreadGroup.num_threads">1</stringProp>
         <stringProp name="ThreadGroup.ramp_time">1</stringProp>
         <boolProp name="ThreadGroup.scheduler">false</boolProp>
@@ -20,7 +20,7 @@
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Approved Users" enabled="true"><stringProp name="delimiter">,</stringProp><stringProp name="fileEncoding">UTF-8</stringProp><stringProp name="filename">${__P(USERS_CSV)}</stringProp><boolProp name="ignoreFirstLine">true</boolProp><boolProp name="quotedData">true</boolProp><boolProp name="recycle">true</boolProp><boolProp name="stopThread">true</boolProp><stringProp name="shareMode">shareMode.all</stringProp><stringProp name="variableNames">userId,accessToken</stringProp></CSVDataSet><hashTree/>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Recovery Cases" enabled="true"><stringProp name="delimiter">,</stringProp><stringProp name="fileEncoding">UTF-8</stringProp><stringProp name="filename">${__P(RECOVERY_CASES_CSV)}</stringProp><boolProp name="ignoreFirstLine">true</boolProp><boolProp name="quotedData">true</boolProp><boolProp name="recycle">false</boolProp><boolProp name="stopThread">true</boolProp><stringProp name="shareMode">shareMode.all</stringProp><stringProp name="variableNames">caseName,recoveryMode</stringProp></CSVDataSet><hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Execute Recovery Case" enabled="true"><stringProp name="cacheKey">membership-recovery-realtime-v4</stringProp><stringProp name="filename">${__P(RECOVERY_SCRIPT)}</stringProp><stringProp name="parameters"></stringProp><stringProp name="scriptLanguage">groovy</stringProp></JSR223Sampler><hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Execute Recovery Case" enabled="true"><stringProp name="cacheKey">membership-recovery-realtime-v5</stringProp><stringProp name="filename">${__P(RECOVERY_SCRIPT)}</stringProp><stringProp name="parameters"></stringProp><stringProp name="scriptLanguage">groovy</stringProp></JSR223Sampler><hashTree/>
       </hashTree>
     </hashTree>
   </hashTree>

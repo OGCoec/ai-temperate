@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.membership.payment.rabbit.impl;
 
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
+
 import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.common.id.snowflake.component.HybridSemaphoreIdWorker;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
@@ -55,7 +57,7 @@ public final class RabbitMembershipPaymentCheckPublisherImpl
                         base64UrlCodec.encode(idWorker.nextId()),
                         MembershipPaymentRabbitNames.PAYMENT_EVENT,
                         MembershipPaymentRabbitEnvelope.CURRENT_SCHEMA_VERSION,
-                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC),
+                        MembershipPaymentTime.now(clock),
                         traceId(),
                         new MembershipPaymentCheckMessage(orderId, stageIndex));
         sender.send(

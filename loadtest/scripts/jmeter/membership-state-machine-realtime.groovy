@@ -1,5 +1,6 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.math.RoundingMode
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
@@ -13,6 +14,8 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -114,6 +117,43 @@ def waitForStatus = { String orderId, String expected, Instant deadline ->
     return order
 }
 
+def readMembershipOffers = {
+    Map response = requireHttp(
+            request('GET', '/api/user/membership-plan-offers', authHeaders, null),
+            [200],
+            'get membership plan offers')
+    Map body = (Map) json.parseText(response.body)
+    List<Map> offers = (List<Map>) body.offers
+    return offers ?: []
+}
+
+def resolveTargetTier = {
+    List<Map> offers = readMembershipOffers()
+    if (offers == null || offers.isEmpty()) {
+        throw new IllegalStateException('Test account has no legal higher membership offer.')
+    }
+    String requestedTier = vars.get('targetTier')
+    Map requested = offers.find { offer -> offer.targetTier == requestedTier }
+    return ((requested ?: offers.first()).targetTier) as String
+}
+
+def waitForEntitlementVisibility = { String paidTargetTier ->
+    Instant entitlementDeadline = Instant.now().plusSeconds(60L)
+    while (true) {
+        List<Map> offers = readMembershipOffers()
+        if (!offers.any { offer -> offer.targetTier == paidTargetTier }) {
+            return
+        }
+        if (!Instant.now().isBefore(entitlementDeadline)) {
+            throw new IllegalStateException(
+                    'Paid membership entitlement was not visible before account reuse.')
+        }
+        // Redis 订单先进入 PAID 不代表 PostgreSQL 权益事务和用户资料缓存失效已经完成；
+        // 账号锁必须覆盖这一窗口，避免后一个案例冻结随后会变成非法的旧套餐报价。
+        Thread.sleep(250L)
+    }
+}
+
 def sign = { String tradeNo, String orderId ->
     String canonical = ['SIMULATED', callbackPid, tradeNo, orderId, 'TRADE_SUCCESS'].join('\n')
     Mac mac = Mac.getInstance('HmacSHA256')
@@ -204,20 +244,91 @@ def parallelCallbacks = { List<Map<String, String>> calls ->
     }
 }
 
+def workerControl = { String action, Integer maxPauseSeconds ->
+    String path = '/internal/test/membership-payments/loadtest-control/workers/' + action
+    if (maxPauseSeconds != null) {
+        path += '?maxPauseSeconds=' + maxPauseSeconds
+    }
+    return requireHttp(request('POST', path, ['Accept': 'application/json'], null), [200],
+            'worker control ' + action)
+}
+
+def cancelWithConcurrentAttempts = { String orderId, int attemptCount ->
+    def executor = Executors.newFixedThreadPool(attemptCount + 1)
+    try {
+        def cancelFuture = executor.submit({ ->
+            return request(
+                    'POST',
+                    '/api/user/membership-orders/' + orderId + '/cancel',
+                    authHeaders,
+                    null)
+        } as Callable<Map>)
+        def attemptFutures = (0..<attemptCount).collect {
+            executor.submit({ ->
+                return request(
+                        'POST',
+                        '/api/user/membership-orders/' + orderId + '/payment-attempts',
+                        authHeaders,
+                        null)
+            } as Callable<Map>)
+        }
+        requireHttp(cancelFuture.get(), [200], 'concurrent cancel order')
+        attemptFutures.each { future ->
+            requireHttp(future.get(), [200, 201, 409], 'concurrent payment attempt')
+        }
+    } finally {
+        executor.shutdownNow()
+    }
+}
+
+def createOrderAfterPersistenceBarrier = { Map<String, String> headers, String body ->
+    Instant createDeadline = Instant.now().plusSeconds(30L)
+    while (true) {
+        Map createResponse = request(
+                'POST', '/api/user/membership-orders', headers, body)
+        if (createResponse.status == 201) {
+            return (Map) json.parseText(createResponse.body)
+        }
+        // Redis 终态可能先于 PostgreSQL 权益裁决可见；同账号下一个案例必须沿用同一幂等键有限等待，
+        // 不能把这一致性窗口误判为产品缺陷，更不能通过放宽单活动订单约束绕过数据库裁决。
+        if (createResponse.status == 409 && Instant.now().isBefore(createDeadline)) {
+            Thread.sleep(250L)
+            continue
+        }
+        requireHttp(
+                createResponse,
+                [201],
+                'create order after previous terminal persistence')
+    }
+}
+
+// 同一 JMeter 进程会循环使用 16 个固定账号；每账号串行创建订单，避免测试器自身违反单活动订单约束。
+String accountLockKey = 'membership-state-account-lock:' + vars.get('userId')
+Semaphore accountLock
+synchronized (props) {
+    accountLock = (Semaphore) props.get(accountLockKey)
+    if (accountLock == null) {
+        accountLock = new Semaphore(1, true)
+        props.put(accountLockKey, accountLock)
+    }
+}
+if (!accountLock.tryAcquire(30L, TimeUnit.MINUTES)) {
+    throw new IllegalStateException('Timed out waiting for the fixed test account to become idle.')
+}
+
+boolean workersPaused = false
+
 try {
     String idempotencyKey = UUID.randomUUID().toString()
+    String targetTier = resolveTargetTier()
     String createBody = JsonOutput.toJson([
-            targetTier: vars.get('targetTier'),
+            targetTier: targetTier,
             payType: vars.get('payType'),
             idempotencyKey: idempotencyKey
     ])
     Map createHeaders = new LinkedHashMap<>(authHeaders)
     createHeaders['Content-Type'] = 'application/json'
-    def createResponse = requireHttp(
-            request('POST', '/api/user/membership-orders', createHeaders, createBody),
-            [201],
-            'create order')
-    Map order = (Map) json.parseText(createResponse.body)
+    Map order = createOrderAfterPersistenceBarrier(createHeaders, createBody)
     String orderId = order.orderId
     String money = order.payAmountYuan
     Instant createdAt = OffsetDateTime.parse(order.createdAt, iso).toInstant()
@@ -249,15 +360,43 @@ try {
         Instant cancelAt = anchor(vars.get('cancelAnchor'))
                 .plusSeconds(Long.parseLong(vars.get('cancelOffsetSeconds')))
         waitUntil(cancelAt)
-        requireHttp(
-                request(
-                        'POST',
-                        '/api/user/membership-orders/' + orderId + '/cancel',
-                        authHeaders,
-                        null),
-                [200],
-                'cancel order')
+        switch (vars.get('raceMode')) {
+            case 'CANCEL_DURING_PERSIST_PAUSE':
+                workerControl('pause', 180)
+                workersPaused = true
+                requireHttp(
+                        request(
+                                'POST',
+                                '/api/user/membership-orders/' + orderId + '/cancel',
+                                authHeaders,
+                                null),
+                        [200],
+                        'cancel while order persistence is paused')
+                break
+            case 'CANCEL_PAYMENT_ATTEMPT_PARALLEL':
+                cancelWithConcurrentAttempts(orderId, 1)
+                break
+            case 'CANCEL_IDEMPOTENT_REPLAY_PARALLEL':
+                cancelWithConcurrentAttempts(orderId, 5)
+                break
+            default:
+                requireHttp(
+                        request(
+                                'POST',
+                                '/api/user/membership-orders/' + orderId + '/cancel',
+                                authHeaders,
+                                null),
+                        [200],
+                        'cancel order')
+                break
+        }
         waitForStatus(orderId, 'CANCELLED', Instant.now().plusSeconds(20L))
+        if (workersPaused) {
+            // 保留 Redis 已终态、数据库仍可能滞后的观察窗口，再恢复真实刷盘 Worker 完成收敛。
+            Thread.sleep(3_000L)
+            workerControl('resume', null)
+            workersPaused = false
+        }
     }
 
     Instant callbackTarget = anchor(vars.get('callbackAnchor'))
@@ -294,9 +433,19 @@ try {
                 vars.get('group') + ' payment attempt rejection')
     }
 
-    String firstTradeNo = 'JMX-' + runId + '-' + scenario + '-0'
+    String firstTradeNo = vars.get('expectedResolution') == 'NONE'
+            ? 'NONE'
+            : 'JMX-' + runId + '-' + scenario + '-0'
     Instant callbackSentAt = Instant.now()
-    sendCallback(orderId, money, firstTradeNo, vars.get('protocol'))
+    if (vars.get('expectedResolution') != 'NONE') {
+        String callbackMoney = vars.get('expectedResolution') == 'REJECTED'
+                ? new BigDecimal(money)
+                        .add(new BigDecimal('0.01'))
+                        .setScale(2, RoundingMode.UNNECESSARY)
+                        .toPlainString()
+                : money
+        sendCallback(orderId, callbackMoney, firstTradeNo, vars.get('protocol'))
+    }
 
     // PAID 重放必须在首次回调已经完成状态迁移后进行，证明测试针对的是终态而非 ready 队列竞态。
     if (vars.get('group') == 'PAID') {
@@ -357,12 +506,16 @@ try {
             throw new IllegalArgumentException('Unsupported replay mode: ' + vars.get('replayMode'))
     }
 
-    Map finalOrder = waitForStatus(
-            orderId,
-            vars.get('expectedStatus'),
-            Instant.now().plusSeconds(120L))
+    Instant finalDeadline = vars.get('expectedStatus') == 'CLOSED'
+            ? [Instant.now().plusSeconds(120L), hardCloseAt.plusSeconds(180L)].max()
+            : Instant.now().plusSeconds(120L)
+    Map finalOrder = waitForStatus(orderId, vars.get('expectedStatus'), finalDeadline)
+    if (vars.get('expectedStatus') == 'PAID'
+            && vars.get('expectedResolution') == 'APPLIED') {
+        waitForEntitlementVisibility(targetTier)
+    }
     Path output = Path.of(props.getProperty('SCENARIO_ORDERS_CSV'))
-    String header = 'run_id,user_id,idempotency_key,order_id,scenario,scenario_group,expected_status,expected_resolution,target_callback_at,actual_callback_at,callback_drift_millis,provider_trade_no,protocol\n'
+    String header = 'run_id,user_id,idempotency_key,order_id,scenario,scenario_group,expected_status,expected_resolution,payment_started_required,target_callback_at,actual_callback_at,callback_drift_millis,provider_trade_no,protocol\n'
     String row = [
             runId,
             vars.get('userId'),
@@ -372,6 +525,7 @@ try {
             vars.get('group'),
             vars.get('expectedStatus'),
             vars.get('expectedResolution'),
+            Boolean.toString(Boolean.parseBoolean(vars.get('startPayment'))),
             callbackTarget.toString(),
             callbackSentAt.toString(),
             Long.toString(callbackSentAt.toEpochMilli() - callbackTarget.toEpochMilli()),
@@ -408,4 +562,13 @@ try {
             (failure.message ?: failure.class.name).take(1024),
             StandardCharsets.UTF_8.name())
     SampleResult.setSuccessful(false)
+} finally {
+    if (workersPaused) {
+        try {
+            workerControl('resume', null)
+        } catch (Throwable resumeFailure) {
+            log.error('Failed to resume local membership workers after state case.', resumeFailure)
+        }
+    }
+    accountLock.release()
 }

@@ -45,7 +45,10 @@ public final class MembershipOrderPersistenceServiceImpl
         this.objectMapper = Objects.requireNonNull(objectMapper);
     }
 
-    /** 同版本重试影响零行属于幂等成功；事务提交后才能由调用方完成 processing 令牌。 */
+    /**
+     * 同版本同阶段重试影响零行属于幂等成功；Payment Attempt 与 Redis 状态迁移并发产生同版本分叉时，
+     * Mapper 允许时间不早于数据库事实且阶段更高的实时快照收敛，事务提交后才能由调用方完成 processing 令牌。
+     */
     @Override
     @Transactional
     public void persist(List<MembershipOrderSnapshot> snapshots) {

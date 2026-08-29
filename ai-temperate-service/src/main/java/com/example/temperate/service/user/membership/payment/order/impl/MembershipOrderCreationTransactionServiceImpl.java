@@ -6,13 +6,14 @@ import com.example.temperate.service.user.membership.payment.MembershipPaymentEr
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderCreationResult;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderCreationTransactionService;
+import java.util.Arrays;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 该实现是来在单个 PostgreSQL 本地事务中创建会员订单，并在 UUIDv4 唯一约束竞争后解析唯一胜出记录。
+ * 该实现是来在单个 PostgreSQL 本地事务中创建会员订单，并串行化同一用户的活动订单竞争与 UUIDv4 幂等重放。
  *
  * <p>事务边界只覆盖数据库读写；Redis 快照和 RabbitMQ 消息必须在本方法提交成功后由编排服务执行。</p>
  */
@@ -32,30 +33,39 @@ public final class MembershipOrderCreationTransactionServiceImpl
     }
 
     /**
-     * 先读取已有幂等订单，再尝试无异常冲突插入；并发失败时重新读取数据库唯一约束选出的胜出记录。
+     * 单条 CTE 在用户 advisory lock 后依次解析幂等订单、活动订单与新插入事实；极少数跨用户唯一键竞争才执行回退查询。
      */
     @Override
     @Transactional
     public MembershipOrderCreationResult createOrGet(MembershipOrder candidate) {
         MembershipOrder requested = Objects.requireNonNull(candidate, "candidate must not be null");
-        MembershipOrder existing = membershipOrderMapper.findByIdempotencyKey(
-                requested.getIdempotencyKey());
-        if (existing != null) {
-            return existingResult(requested, existing);
-        }
-        if (membershipOrderMapper.insert(requested) == 1) {
+        MembershipOrder resolved = membershipOrderMapper.createOrResolve(requested);
+        if (resolved != null && Arrays.equals(requested.getId(), resolved.getId())) {
             return new MembershipOrderCreationResult(requested, true);
         }
+        if (resolved != null
+                && Objects.equals(
+                        requested.getIdempotencyKey(), resolved.getIdempotencyKey())) {
+            return existingResult(requested, resolved);
+        }
+        if (resolved != null) {
+            return activeOrderResult(requested, resolved);
+        }
 
-        // ON CONFLICT 只说明另一事务赢得唯一键；必须重新读取并校验业务意图，不能把不同用户的 UUID 当作合法重放。
+        // 同语句快照看不到由其他事务刚提交且触发 ON CONFLICT 的跨用户胜出行；只在空返回时执行两次精确索引回退。
         MembershipOrder winner = membershipOrderMapper.findByIdempotencyKey(
                 requested.getIdempotencyKey());
-        if (winner == null) {
-            throw new MembershipPaymentException(
-                    MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT,
-                    "The login identity no longer exists or the order winner cannot be resolved.");
+        if (winner != null) {
+            return existingResult(requested, winner);
         }
-        return existingResult(requested, winner);
+        MembershipOrder active = membershipOrderMapper.findActiveByLoginIdentityId(
+                requested.getLoginIdentityId());
+        if (active != null) {
+            return activeOrderResult(requested, active);
+        }
+        throw new MembershipPaymentException(
+                MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT,
+                "The login identity no longer exists or the order winner cannot be resolved.");
     }
 
     private static MembershipOrderCreationResult existingResult(
@@ -69,5 +79,21 @@ public final class MembershipOrderCreationTransactionServiceImpl
                     "The idempotency key is already bound to another membership order intent.");
         }
         return new MembershipOrderCreationResult(existing, false);
+    }
+
+    private static MembershipOrderCreationResult activeOrderResult(
+            MembershipOrder requested,
+            MembershipOrder active) {
+        // 同键胜出订单可能恰好在前一次幂等查询与活动订单查询之间提交；此时必须识别为合法重放，不能误报第二笔活动订单冲突。
+        if (Objects.equals(requested.getIdempotencyKey(), active.getIdempotencyKey())) {
+            return existingResult(requested, active);
+        }
+        throw activeOrderConflict();
+    }
+
+    private static MembershipPaymentException activeOrderConflict() {
+        return new MembershipPaymentException(
+                MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT,
+                "The login identity already has an active membership order.");
     }
 }

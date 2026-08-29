@@ -2,6 +2,9 @@ package com.example.temperate.web.user.membership.payment.rabbit;
 
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentOperation;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTimingRecorder;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTimingStep;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckConsumerService;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckConsumerService;
@@ -21,7 +24,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * 该监听器是来把两条会员支付 Quorum 队列交给业务服务，并且只在业务处理及下一条消息 Confirm 成功后手动 ACK。
+ * 该监听器是来把两条会员支付Quorum队列交给业务服务、记录包含ACK/NACK的总耗时，并且只在业务及下一条消息Confirm成功后手动ACK。
+ *
+ * <p>监听器是final且没有业务接口，不能使用项目固定的JDK AOP代理；它显式开启与AOP入口相同的计时会话，内部基础设施步骤仍由切面累计。</p>
  */
 @Component
 @ConditionalOnProperty(
@@ -36,16 +41,19 @@ public final class MembershipPaymentRabbitListener {
     private final MembershipPaymentCheckConsumerService paymentService;
     private final MembershipClosingCheckConsumerService closingService;
     private final MembershipPaymentMetrics metrics;
+    private final MembershipPaymentTimingRecorder timingRecorder;
     private final MembershipPaymentLoadtestProperties loadtestProperties;
 
     public MembershipPaymentRabbitListener(
             MembershipPaymentCheckConsumerService paymentService,
             MembershipClosingCheckConsumerService closingService,
-            MembershipPaymentMetrics metrics) {
+            MembershipPaymentMetrics metrics,
+            MembershipPaymentTimingRecorder timingRecorder) {
         this(
                 paymentService,
                 closingService,
                 metrics,
+                timingRecorder,
                 new MembershipPaymentLoadtestProperties(false, java.util.List.of()));
     }
 
@@ -54,10 +62,12 @@ public final class MembershipPaymentRabbitListener {
             MembershipPaymentCheckConsumerService paymentService,
             MembershipClosingCheckConsumerService closingService,
             MembershipPaymentMetrics metrics,
+            MembershipPaymentTimingRecorder timingRecorder,
             MembershipPaymentLoadtestProperties loadtestProperties) {
         this.paymentService = Objects.requireNonNull(paymentService);
         this.closingService = Objects.requireNonNull(closingService);
         this.metrics = Objects.requireNonNull(metrics);
+        this.timingRecorder = Objects.requireNonNull(timingRecorder);
         this.loadtestProperties = Objects.requireNonNull(loadtestProperties);
     }
 
@@ -68,17 +78,17 @@ public final class MembershipPaymentRabbitListener {
             MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope,
             Message message,
             Channel channel) throws IOException {
-        long deliveryTag = message.getMessageProperties().getDeliveryTag();
-        Runnable restoreLoggingContext = installLoggingContext(envelope);
+        MembershipPaymentTimingRecorder.Session timingSession = timingRecorder.start(
+                MembershipPaymentOperation.RABBIT_PENDING,
+                new Object[] {envelope, message});
+        Throwable timingFailure = null;
         try {
-            if (!handleLoadtestProbe(envelope, message)) {
-                paymentService.process(envelope);
-            }
-            channel.basicAck(deliveryTag, false);
-        } catch (RuntimeException exception) {
-            reject(channel, deliveryTag, envelope, message, exception);
+            consumePaymentWithAck(envelope, message, channel);
+        } catch (IOException | RuntimeException | Error throwable) {
+            timingFailure = throwable;
+            throw throwable;
         } finally {
-            restoreLoggingContext.run();
+            timingRecorder.finish(timingSession, null, timingFailure);
         }
     }
 
@@ -89,16 +99,56 @@ public final class MembershipPaymentRabbitListener {
             MembershipPaymentRabbitEnvelope<MembershipClosingCheckMessage> envelope,
             Message message,
             Channel channel) throws IOException {
+        MembershipPaymentTimingRecorder.Session timingSession = timingRecorder.start(
+                MembershipPaymentOperation.RABBIT_CLOSING,
+                new Object[] {envelope, message});
+        Throwable timingFailure = null;
+        try {
+            consumeClosingWithAck(envelope, message, channel);
+        } catch (IOException | RuntimeException | Error throwable) {
+            timingFailure = throwable;
+            throw throwable;
+        } finally {
+            timingRecorder.finish(timingSession, null, timingFailure);
+        }
+    }
+
+    private void consumePaymentWithAck(
+            MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        Runnable restoreLoggingContext = installLoggingContext(envelope);
+        try {
+            if (!handleLoadtestProbe(envelope, message)) {
+                paymentService.process(envelope);
+            }
+            acknowledge(channel, deliveryTag);
+        } catch (RuntimeException exception) {
+            reject(channel, deliveryTag, envelope, message, exception);
+            return;
+        } finally {
+            restoreLoggingContext.run();
+        }
+        timingRecorder.markRabbitOutcome("ACK", deliveryCount(message));
+    }
+
+    private void consumeClosingWithAck(
+            MembershipPaymentRabbitEnvelope<MembershipClosingCheckMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         Runnable restoreLoggingContext = installLoggingContext(envelope);
         try {
             closingService.process(envelope);
-            channel.basicAck(deliveryTag, false);
+            acknowledge(channel, deliveryTag);
         } catch (RuntimeException exception) {
             reject(channel, deliveryTag, envelope, message, exception);
+            return;
         } finally {
             restoreLoggingContext.run();
         }
+        timingRecorder.markRabbitOutcome("ACK", deliveryCount(message));
     }
 
     private void reject(
@@ -119,7 +169,39 @@ public final class MembershipPaymentRabbitListener {
             metrics.dlq();
         }
         // 业务队列固定为 x-delivery-limit=3 的 Quorum Queue；requeue 只允许有限重投，耗尽后由 RabbitMQ 进入 DLQ。
-        channel.basicNack(deliveryTag, false, true);
+        rejectAndRequeue(channel, deliveryTag);
+        timingRecorder.markRabbitOutcome("NACK", priorDeliveries);
+        timingRecorder.markFailure(exception);
+    }
+
+    private void acknowledge(Channel channel, long deliveryTag) throws IOException {
+        long startedNanos = System.nanoTime();
+        boolean succeeded = false;
+        try {
+            channel.basicAck(deliveryTag, false);
+            succeeded = true;
+        } finally {
+            // ACK属于消费者总耗时的一部分，单独计时才能区分Broker确认抖动和业务处理抖动。
+            timingRecorder.recordStep(
+                    MembershipPaymentTimingStep.RABBIT_ACK,
+                    Math.max(0L, System.nanoTime() - startedNanos),
+                    succeeded);
+        }
+    }
+
+    private void rejectAndRequeue(Channel channel, long deliveryTag) throws IOException {
+        long startedNanos = System.nanoTime();
+        boolean succeeded = false;
+        try {
+            channel.basicNack(deliveryTag, false, true);
+            succeeded = true;
+        } finally {
+            // NACK沿用同一个低基数步骤，由ackAction区分结果，避免新增无界指标标签。
+            timingRecorder.recordStep(
+                    MembershipPaymentTimingStep.RABBIT_ACK,
+                    Math.max(0L, System.nanoTime() - startedNanos),
+                    succeeded);
+        }
     }
 
     private boolean handleLoadtestProbe(

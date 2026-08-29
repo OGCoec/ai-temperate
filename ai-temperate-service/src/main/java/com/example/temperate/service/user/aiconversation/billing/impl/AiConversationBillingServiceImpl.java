@@ -11,7 +11,6 @@ import com.example.temperate.model.ai.entity.AiModelUsage;
 import com.example.temperate.model.ai.entity.AiModelUsageDetail;
 import com.example.temperate.model.ai.entity.AiModelUsageVideoDetail;
 import com.example.temperate.model.ai.enums.AiModelBillingStatus;
-import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.service.admin.aimodel.cache.AiModelCacheEntry;
 import com.example.temperate.service.user.aiconversation.billing.AiConversationBillingService;
@@ -25,12 +24,12 @@ import com.example.temperate.service.user.aiconversation.exception.AiConversatio
 import com.example.temperate.service.user.aiconversation.exception.AiConversationException;
 import com.example.temperate.service.user.aiconversation.model.AiModelProvider;
 import com.example.temperate.service.user.aiconversation.observability.AiConversationMetrics;
-import com.example.temperate.service.user.membership.MembershipQuotaPlan;
-import com.example.temperate.service.user.membership.MembershipQuotaPlanService;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationException;
+import com.example.temperate.service.user.membership.MembershipQuotaPeriodActivationService;
+import com.example.temperate.service.user.membership.loadtest.MembershipQuotaLoadtestFaultGate;
 import com.example.temperate.service.user.profile.cache.UserProfileCacheInvalidationExecutor;
 import java.nio.ByteBuffer;
 import java.time.Clock;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
@@ -53,11 +52,13 @@ public final class AiConversationBillingServiceImpl
     private final HybridSemaphoreIdWorker idWorker;
     private final AiConversationQuotaCalculator quotaCalculator;
     private final AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator;
-    private final MembershipQuotaPlanService quotaPlanService;
+    private final MembershipQuotaPeriodActivationService quotaPeriodActivationService;
     private final UserProfileCacheInvalidationExecutor cacheInvalidationExecutor;
+    private final MembershipQuotaLoadtestFaultGate loadtestFaultGate;
     private final Clock clock;
     private final AiConversationMetrics metrics;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public AiConversationBillingServiceImpl(
             AiConversationMapper conversationMapper,
             AiModelUsageMapper usageMapper,
@@ -67,8 +68,9 @@ public final class AiConversationBillingServiceImpl
             HybridSemaphoreIdWorker idWorker,
             AiConversationQuotaCalculator quotaCalculator,
             AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator,
-            MembershipQuotaPlanService quotaPlanService,
+            MembershipQuotaPeriodActivationService quotaPeriodActivationService,
             UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
+            MembershipQuotaLoadtestFaultGate loadtestFaultGate,
             Clock clock,
             AiConversationMetrics metrics) {
         this.conversationMapper = Objects.requireNonNull(conversationMapper);
@@ -80,11 +82,45 @@ public final class AiConversationBillingServiceImpl
         this.quotaCalculator = Objects.requireNonNull(quotaCalculator);
         this.providerCostQuotaCalculator =
                 Objects.requireNonNull(providerCostQuotaCalculator);
-        this.quotaPlanService = Objects.requireNonNull(quotaPlanService);
+        this.quotaPeriodActivationService =
+                Objects.requireNonNull(quotaPeriodActivationService);
         this.cacheInvalidationExecutor =
                 Objects.requireNonNull(cacheInvalidationExecutor);
+        this.loadtestFaultGate = Objects.requireNonNull(loadtestFaultGate);
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
+    }
+
+    /**
+     * 保留既有独立单元测试的构造契约；Spring 运行时固定注入完整的受控故障门禁。
+     */
+    public AiConversationBillingServiceImpl(
+            AiConversationMapper conversationMapper,
+            AiModelUsageMapper usageMapper,
+            AiModelUsageDetailMapper detailMapper,
+            AiModelUsageVideoDetailMapper videoDetailMapper,
+            UserMembershipQuotaMapper quotaMapper,
+            HybridSemaphoreIdWorker idWorker,
+            AiConversationQuotaCalculator quotaCalculator,
+            AiConversationProviderCostQuotaCalculator providerCostQuotaCalculator,
+            MembershipQuotaPeriodActivationService quotaPeriodActivationService,
+            UserProfileCacheInvalidationExecutor cacheInvalidationExecutor,
+            Clock clock,
+            AiConversationMetrics metrics) {
+        this(
+                conversationMapper,
+                usageMapper,
+                detailMapper,
+                videoDetailMapper,
+                quotaMapper,
+                idWorker,
+                quotaCalculator,
+                providerCostQuotaCalculator,
+                quotaPeriodActivationService,
+                cacheInvalidationExecutor,
+                MembershipQuotaLoadtestFaultGate.disabled(),
+                clock,
+                metrics);
     }
 
     @Override
@@ -131,7 +167,16 @@ public final class AiConversationBillingServiceImpl
                     "当前账号没有可用额度记录",
                     false);
         }
-        activateExpiredPeriod(quota);
+        try {
+            quotaPeriodActivationService.activateIfDue(
+                    quota,
+                    clock.instant().atOffset(ZoneOffset.UTC));
+        } catch (MembershipQuotaPeriodActivationException exception) {
+            throw new AiConversationException(
+                    AiConversationErrorCode.AI_QUOTA_RULE_MISSING,
+                    "当前会员等级尚未配置额度周期规则",
+                    false);
+        }
         if (quota.getQuotaBalanceMinor() < reservedQuota) {
             throw new AiConversationException(
                     AiConversationErrorCode.AI_QUOTA_INSUFFICIENT,
@@ -174,6 +219,8 @@ public final class AiConversationBillingServiceImpl
         }
         // 视频快照在通用详情成功写入后于同一事务落库，确保无物理外键时仍不会提交孤立扩展记录。
         insertVideoReservation(usageId, command.metering());
+        // W16 只在全部预扣写入完成后抛错，才能证明周期激活、余额、会话和 Usage 由同一事务一起回滚。
+        loadtestFaultGate.failAfterReservationIfArmed(command.userId());
         cacheInvalidationExecutor.evictAfterCommit(command.userId());
         metrics.billing("reserve", "success");
         return new AiConversationReservation(
@@ -334,35 +381,6 @@ public final class AiConversationBillingServiceImpl
             throw new IllegalStateException(
                     "AI model usage video detail insert did not affect one row.");
         }
-    }
-
-    void activateExpiredPeriod(UserMembershipQuota quota) {
-        OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
-        if (quota.getQuotaPeriodEndsAt() != null
-                && quota.getQuotaPeriodEndsAt().isAfter(now)) {
-            return;
-        }
-        MembershipTier tier = resolveTier(quota.getMembershipTier());
-        if (tier == null) {
-            throw new AiConversationException(
-                    AiConversationErrorCode.AI_QUOTA_RULE_MISSING,
-                    "当前会员等级尚未配置额度周期规则",
-                    false);
-        }
-        // 该方法只在额度行已被 FOR UPDATE 锁定的预扣事务中执行，确保周期重置与本次扣减原子落库。
-        MembershipQuotaPlan plan = quotaPlanService.getRequired(tier);
-        quota.setQuotaBalanceMinor(plan.totalMinor());
-        quota.setQuotaPeriodStartedAt(now);
-        quota.setQuotaPeriodEndsAt(now.plus(plan.period()));
-    }
-
-    private static MembershipTier resolveTier(Integer membershipTierCode) {
-        if (membershipTierCode == null
-                || membershipTierCode < 0
-                || membershipTierCode >= MembershipTier.values().length) {
-            return null;
-        }
-        return MembershipTier.values()[membershipTierCode];
     }
 
     private static long idempotencyLockKey(byte[] digest) {

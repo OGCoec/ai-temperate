@@ -6,8 +6,15 @@ const test = require('node:test')
 
 const { verifyH5ReleaseArtifacts } = require('../../scripts/verify-h5-release.cjs')
 const {
+	LEGACY_WEB_RELEASE_ROOT,
 	collectPublicAssetPaths
 } = require('../../scripts/generate-h5-edge-assets.cjs')
+
+const bundledUniComponentImplementations = [
+	'const popup={name:"uniPopup"}',
+	'const transition={name:"uniTransition"}',
+	'const searchBar={name:"UniSearchBar"}'
+].join(';')
 
 function withFixture(files, run) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ait-h5-release-'))
@@ -15,6 +22,7 @@ function withFixture(files, run) {
 		const fixtureFiles = {
 			'404.html': '<!doctype html><title>页面不存在</title>',
 			'assets/api-key-id-contract.js': 'const apiKeyIdPattern=/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/',
+			'assets/uni-component-implementations.js': bundledUniComponentImplementations,
 			...files
 		}
 		for (const [relativePath, content] of Object.entries(fixtureFiles)) {
@@ -32,6 +40,7 @@ function withFixture(files, run) {
 function verifyFixture(root, overrides = {}) {
 	return verifyH5ReleaseArtifacts({
 		root,
+		allowNonCanonicalRoot: true,
 		assetManifestPaths: collectPublicAssetPaths(root),
 		...overrides
 	})
@@ -63,6 +72,31 @@ test('accepts a static H5 release artifact with no Vite development modules', ()
 	}, root => {
 		assert.deepEqual(verifyFixture(root).errors, [])
 	})
+})
+
+test('rejects an H5 artifact that omits bundled uni component implementations', () => {
+	withFixture({
+		'index.html': '<!doctype html><meta http-equiv="Content-Security-Policy" content="frame-src https://ai-temperate-html-preview.pages.dev"><script type="module" src="/assets/index-a1b2c3.js"></script>',
+		'_headers': headers,
+		'_redirects': '# SPA routes are resolved by the main-site Worker.\n',
+		'assets/index-a1b2c3.js': 'const previewOrigin="https://ai-temperate-html-preview.pages.dev"',
+		'assets/uni-component-implementations.js': null
+	}, root => {
+		const errors = verifyFixture(root).errors.join('\n')
+		assert.match(errors, /UniPopup implementation/)
+		assert.match(errors, /UniTransition implementation/)
+		assert.match(errors, /UniSearchBar implementation/)
+	})
+})
+
+test('rejects the legacy web output even when fixture directories are allowed', () => {
+	assert.match(
+		verifyH5ReleaseArtifacts({
+			root: LEGACY_WEB_RELEASE_ROOT,
+			allowNonCanonicalRoot: true
+		}).errors.join('\n'),
+		/canonical H5 release directory/
+	)
 })
 
 test('rejects an H5 artifact that still validates API Key IDs as 11-character Base64URL values', () => {

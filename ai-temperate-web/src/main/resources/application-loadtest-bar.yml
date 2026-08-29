@@ -1,0 +1,87 @@
+# 共享服务器 BAR 全天浸泡 Profile，只增加固定账号测试入口，不开放本地故障控制能力。
+spring:
+  # 该配置必须与 prod Profile 共同显式激活，启动守卫拒绝其他组合。
+  config:
+    # 只有显式启用共享 BAR 验收时才应用本文件。
+    activate:
+      # 专用 Profile 名称用于隔离本地模拟器和服务器 BAR。
+      on-profile: loadtest-bar
+
+# 共享服务器仍使用基础配置中的 TLS、端口、安全环境和真实基础设施连接。
+app:
+  # 会员支付是本轮共享 BAR 验收的唯一测试业务域。
+  membership-payment:
+    # 共享服务器显式启用会员支付状态机。
+    enabled: true
+    # BAR压测逐条记录真实HTTPS查询、关单、回调和Rabbit状态机耗时。
+    observability:
+      # BAR压测保持AOP计时和全量指标开启。
+      enabled: true
+      # 诊断波次逐条输出安全元数据，禁止记录签名、API Key或第三方正文。
+      detail-log-enabled: true
+      # 所有BAR测试链路均保留完成日志，供跨消息阶段关联。
+      sample-rate: 1.0
+      # 一秒阈值用于突出真实BAR网络尾延迟，但不改变五秒读取超时。
+      slow-threshold: PT1S
+      # 共享服务器每次受控验收必须注入批次号，避免固定日志文件跨运行混合。
+      run-id: ${MEMBERSHIP_PAYMENT_TIMING_RUN_ID:unavailable}
+      # 共享BAR压测允许输出公共订单ID，但仍禁止第三方签名、密钥和响应正文。
+      include-public-order-id: true
+    # 共享服务器允许固定测试账号创建真实 BAR Payment Attempt。
+    checkout-enabled: true
+    # Provider 固定为 BAR，禁止回退到本地模拟器。
+    default-provider: BAR
+    # AT-only 分支只接受下列十六个固定账号的十五小时测试 Token。
+    loadtest:
+      # 该开关由启动守卫与 prod、loadtest-bar Profile 组合共同约束。
+      enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_ENABLED:true}
+      # W16 专用推理协议替身默认关闭，只允许第二个服务器回环实例显式启用。
+      inference-stub:
+        # 公网共享实例必须保持 false；第二回环实例通过独立环境变量开启。
+        enabled: ${MEMBERSHIP_PAYMENT_LOADTEST_INFERENCE_STUB_ENABLED:false}
+        # 启用替身时必须提供 FC 能够读取且位于允许域名内的 HTTPS 沙箱视频素材。
+        video-url: ${MEMBERSHIP_PAYMENT_LOADTEST_VIDEO_URL:}
+      # EDU/TEAM 恢复快照只保存在服务器 Git 忽略目录并限制文件 ACL。
+      restricted-fixture-snapshot-path: ${MEMBERSHIP_PAYMENT_RESTRICTED_FIXTURE_SNAPSHOT_PATH:loadtest/local/restricted-membership-fixtures.json}
+      # 固定白名单禁止从数据库或请求参数动态扩张。
+      allowed-user-ids:
+        # 回归账号 R01。
+        - 72659006262480896
+        # 回归账号 R02。
+        - 73014701344296960
+        # 回归账号 R03。
+        - 74891801495998464
+        # 回归账号 R04。
+        - 76721355290185728
+        # 升级账号 U01。
+        - 84736921162616832
+        # 升级账号 U02。
+        - 84739559597936640
+        # 升级账号 U03。
+        - 84742296792338432
+        # 升级账号 U04。
+        - 84745417706835968
+        # 并发账号 C01。
+        - 84746552547086336
+        # 并发账号 C02。
+        - 84753114204344320
+        # 并发账号 C03。
+        - 84754367089086464
+        # 并发账号 C04。
+        - 84755204414771200
+        # 受限套餐账号 E01。
+        - 84758509811535872
+        # 受限套餐账号 E02。
+        - 84758866549673984
+        # 受限套餐账号 T01。
+        - 84759380653903872
+        # 受限套餐账号 T02。
+        - 84760794662834176
+    # 共享服务器禁止注册本地模拟支付 Provider。
+    simulator:
+      # BAR 阶段只能通过真实沙箱接口改变支付事实。
+      enabled: false
+    # BAR 商户号、版本密钥和回调地址继续只从基础配置的环境变量读取。
+    bar:
+      # 共享服务器显式注册 BAR Provider，缺少安全环境变量时启动校验失败。
+      enabled: true

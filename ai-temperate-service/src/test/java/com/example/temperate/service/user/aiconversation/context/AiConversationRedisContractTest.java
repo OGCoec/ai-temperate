@@ -9,7 +9,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * 静态验证 AI 会话 Redis Lua 保持 generation 隔离和不可滑动的绝对过期时间。
+ * 该测试是来静态验证 AI 会话 Redis Lua 的 generation 隔离、分块集合命令和不可滑动绝对过期时间。
  */
 final class AiConversationRedisContractTest {
 
@@ -27,7 +27,7 @@ final class AiConversationRedisContractTest {
                 .contains("HSET")
                 .contains("generation");
         assertThat(append)
-                .contains("HGET")
+                .contains("HMGET")
                 .contains("generation")
                 .contains("HSET")
                 .doesNotContain("EXPIRE")
@@ -42,13 +42,13 @@ final class AiConversationRedisContractTest {
                 "ai-temperate-service/src/main/java/com/example/temperate/service/user/aiconversation/context/impl/RedisAiConversationContextStore.java");
 
         assertThat(compact)
-                .contains("HGET")
+                .contains("HMGET")
                 .contains("generation")
                 .contains("HLEN")
                 .contains("maximumFields")
                 .contains("HDEL")
-                .contains("deleteCount")
-                .contains("writeCount")
+                .contains("delete_count")
+                .contains("write_count")
                 .contains("KEYS[1]")
                 .doesNotContain("SCAN")
                 .doesNotContain("PEXPIRE");
@@ -119,10 +119,9 @@ final class AiConversationRedisContractTest {
         assertThat(commit)
                 .contains("generation")
                 .contains("contextRevision")
-                .contains("redis.call('HSET', KEYS[1], 'meta', ARGV[3])")
-                .contains("redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])")
+                .contains("hset_chunked(KEYS[1]")
+                .contains("hmget_chunked(KEYS[1]")
                 .contains("HLEN")
-                .contains("HEXISTS")
                 .contains("maximumFields")
                 .contains("return -1")
                 .doesNotContain("EXPIRE")
@@ -169,15 +168,18 @@ final class AiConversationRedisContractTest {
                 .contains("createInBatches")
                 .contains("writeBatches")
                 .contains("APPEND_BUILD_SCRIPT")
+                .contains("MAX_FIELDS_PER_BATCH = 128")
+                .contains("MAX_BUILD_COMMAND_BYTES = 256 * 1024")
+                .contains("executePipelined")
                 .doesNotContain("opsForHash().putAll(buildKey");
         assertThat(createBuild)
                 .contains("generation")
                 .contains("PEXPIREAT");
         assertThat(appendBuild)
-                .contains("HGET")
+                .contains("HMGET")
                 .contains("generation")
                 .contains("HLEN")
-                .contains("HSET")
+                .contains("hset_chunked")
                 .doesNotContain("EXPIRE")
                 .doesNotContain("PEXPIRE");
         assertThat(promoteBuild)
@@ -185,6 +187,30 @@ final class AiConversationRedisContractTest {
                 .contains("EXISTS")
                 .contains("RENAME")
                 .contains("PEXPIREAT");
+    }
+
+    @Test
+    void fieldHeavyScriptsUseOneRedisCallPerOneHundredTwentyEightFields()
+            throws IOException {
+        String[] names = {
+            "append_fields.lua",
+            "append_context_build.lua",
+            "commit_turn.lua",
+            "replace_compaction.lua",
+            "save_ephemeral_interrupted.lua",
+            "create_context.lua",
+            "start_ephemeral.lua"
+        };
+        for (String name : names) {
+            String source = read(
+                    "ai-temperate-service/src/main/resources/lua/ai-conversation/" + name);
+            assertThat(source)
+                    .as(name)
+                    .contains("MAX_FIELDS_PER_CALL = 128")
+                    .doesNotContain("redis.call('HEXISTS', KEYS[1]")
+                    .doesNotContain("redis.call('HDEL', KEYS[1], ARGV[index])")
+                    .doesNotContain("redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])");
+        }
     }
 
     @Test

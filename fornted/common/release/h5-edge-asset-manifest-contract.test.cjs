@@ -5,9 +5,36 @@ const path = require('node:path')
 const test = require('node:test')
 
 const {
+	DEFAULT_H5_RELEASE_ROOT,
+	LEGACY_WEB_RELEASE_ROOT,
+	assertSupportedH5ReleaseRoot,
 	collectPublicAssetPaths,
 	renderAssetManifest
 } = require('../../scripts/generate-h5-edge-assets.cjs')
+
+test('uses one canonical H5 release directory and rejects the legacy web directory', () => {
+	const frontendRoot = path.resolve(__dirname, '..', '..')
+	assert.equal(
+		DEFAULT_H5_RELEASE_ROOT,
+		path.join(frontendRoot, 'unpackage', 'dist', 'build', 'h5')
+	)
+	assert.equal(
+		LEGACY_WEB_RELEASE_ROOT,
+		path.join(frontendRoot, 'unpackage', 'dist', 'build', 'web')
+	)
+	assert.equal(
+		assertSupportedH5ReleaseRoot(DEFAULT_H5_RELEASE_ROOT),
+		DEFAULT_H5_RELEASE_ROOT
+	)
+	assert.throws(
+		() => assertSupportedH5ReleaseRoot(LEGACY_WEB_RELEASE_ROOT),
+		/canonical H5 release directory/
+	)
+	assert.throws(
+		() => assertSupportedH5ReleaseRoot(path.join(frontendRoot, 'dist')),
+		/canonical H5 release directory/
+	)
+})
 
 test('collects only exact H5 assets and static files in stable order', () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ait-edge-assets-'))

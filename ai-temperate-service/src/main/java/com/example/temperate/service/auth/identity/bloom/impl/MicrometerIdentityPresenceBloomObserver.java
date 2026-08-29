@@ -6,6 +6,7 @@ import com.example.temperate.service.auth.identity.bloom.IdentityPresenceDecisio
 import com.example.temperate.service.auth.identity.bloom.IdentityPresenceKind;
 import com.example.temperate.service.auth.identity.bloom.IdentityPresenceMutationResult;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -19,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.stereotype.Component;
 
 /**
- * 将身份 Bloom 的有限枚举结果和构建进度记录为低基数 Micrometer 指标。
+ * 该实现是来把身份 Bloom 的有限枚举结果、Redis 批量耗时和构建进度记录为低基数 Micrometer 指标。
  *
  * <p>指标标签只包含联系方式类型、状态和受控失败原因，不记录邮箱、手机号、用户 ID 或完整 Redis Key。</p>
  */
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Component;
 public final class MicrometerIdentityPresenceBloomObserver
         implements IdentityPresenceBloomObserver {
 
+    private final MeterRegistry registry;
     private final Map<IdentityPresenceKind, Map<IdentityPresenceDecision, Counter>>
             queryCounters;
     private final Map<IdentityPresenceMutationResult, Counter> mutationCounters;
@@ -43,6 +45,7 @@ public final class MicrometerIdentityPresenceBloomObserver
             MeterRegistry meterRegistry,
             IdentityPresenceBloomSettings settings) {
         MeterRegistry registry = Objects.requireNonNull(meterRegistry);
+        this.registry = registry;
         IdentityPresenceBloomSettings validSettings = Objects.requireNonNull(settings);
         this.queryCounters = queryCounters(registry);
         this.mutationCounters = mutationCounters(registry);
@@ -138,6 +141,37 @@ public final class MicrometerIdentityPresenceBloomObserver
     public void degraded(String reason) {
         lifecycleState.set(-1L);
         degradedCounters.getOrDefault(reason, degradedCounters.get("OTHER")).increment();
+    }
+
+    @Override
+    public void redisOperation(
+            String operation,
+            String outcome,
+            long durationNanos,
+            int itemCount) {
+        String safeOperation = switch (operation) {
+            case "query", "add", "add_batch", "remove", "remove_batch" -> operation;
+            default -> "query";
+        };
+        String safeOutcome = switch (outcome) {
+            case "success", "unavailable", "failed" -> outcome;
+            default -> "failed";
+        };
+        Timer.builder("identity_presence_bloom_redis_duration")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(Math.max(0L, durationNanos), TimeUnit.NANOSECONDS);
+        DistributionSummary.builder("identity_presence_bloom_redis_batches")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(1);
+        DistributionSummary.builder("identity_presence_bloom_redis_batch_items")
+                .tag("operation", safeOperation)
+                .tag("outcome", safeOutcome)
+                .register(registry)
+                .record(Math.max(0, itemCount));
     }
 
     private static Map<IdentityPresenceKind, Map<IdentityPresenceDecision, Counter>>

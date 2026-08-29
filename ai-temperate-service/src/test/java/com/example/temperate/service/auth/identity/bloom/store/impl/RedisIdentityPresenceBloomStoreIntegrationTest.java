@@ -16,6 +16,7 @@ import com.example.temperate.service.bloom.impl.RedisVersionedCompositeCountingB
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +40,7 @@ class RedisIdentityPresenceBloomStoreIntegrationTest {
             System.getenv().getOrDefault("AIT_TEST_REDIS_IMAGE", "redis:7.4.2-alpine");
     private static final IdentityPresenceBloomSettings SETTINGS =
             new IdentityPresenceBloomSettings(
-                    true, 1_000_000, 7, 1, 1_000_000, 500, 256, 100_000);
+                    true, 1_000_000, 7, 1, 1_000_000, 100, 256, 100_000);
     private static final RedisKeyFactory KEY_FACTORY = new RedisKeyFactory("test");
     private static final HmacSha256Identifier HMAC =
             new HmacSha256Identifier(
@@ -168,6 +169,76 @@ class RedisIdentityPresenceBloomStoreIntegrationTest {
     }
 
     @Test
+    void appliesAndRetriesOneHundredRecordsAsOneAtomicBatch() {
+        store.beginBuild("v1-batch-100");
+        List<ProtectedIdentityPresenceRecord> records = IntStream.range(0, 100)
+                .mapToObj(index -> new ProtectedIdentityPresenceRecord(
+                        20_000L + index,
+                        protectedValue("email", "batch-" + index + "@example.com"),
+                        protectedValue("phone", "+86139" + String.format("%08d", index))))
+                .toList();
+
+        assertThat(store.addAll(records))
+                .isEqualTo(IdentityPresenceMutationResult.APPLIED);
+        assertThat(store.addAll(records))
+                .isEqualTo(IdentityPresenceMutationResult.ALREADY_APPLIED);
+        store.markReady("v1-batch-100");
+        store.activate("v1-batch-100");
+        assertThat(store.check(
+                        IdentityPresenceKind.EMAIL,
+                        records.getFirst().protectedEmail()))
+                .isEqualTo(IdentityPresenceDecision.POSSIBLY_PRESENT);
+        assertThat(store.check(
+                        IdentityPresenceKind.PHONE,
+                        records.getLast().protectedPhone()))
+                .isEqualTo(IdentityPresenceDecision.POSSIBLY_PRESENT);
+
+        assertThat(store.removeAll(records))
+                .isEqualTo(IdentityPresenceMutationResult.APPLIED);
+        assertThat(store.removeAll(records))
+                .isEqualTo(IdentityPresenceMutationResult.ALREADY_APPLIED);
+    }
+
+    @Test
+    void readsAndUpdatesExistingBigEndianU16CounterLayout() {
+        IdentityPresenceBloomSettings u16Settings =
+                new IdentityPresenceBloomSettings(
+                        true, 1_000_000, 7, 2, 500_000, 100, 256, 100_000);
+        RedisIdentityPresenceBloomStore u16Store =
+                new RedisIdentityPresenceBloomStore(
+                        new RedisVersionedCompositeCountingBloomEngineImpl(redisTemplate),
+                        KEY_FACTORY,
+                        u16Settings);
+        HmacIdentifier email = protectedValue("email", "u16-layout@example.com");
+        HmacIdentifier phone = protectedValue("phone", "+8613800000016");
+        ProtectedIdentityPresenceRecord record =
+                new ProtectedIdentityPresenceRecord(30_016L, email, phone);
+        CountingBloomLayout layout = new CountingBloomLayout(
+                1_000_000, 7, 2, 500_000);
+        CountingBloomPosition existing = layout.positions(email.value()).getFirst();
+        String emailBucket = KEY_FACTORY.bucketKey(
+                "bloom", "uli-email", "v1-u16", existing.bucketNumber());
+        u16Store.beginBuild("v1-u16");
+        DefaultRedisScript<Long> seedBigEndianCounter = new DefaultRedisScript<>(
+                "redis.call('SETRANGE', KEYS[1], tonumber(ARGV[1]), string.char(0, 1)) "
+                        + "return 1",
+                Long.class);
+        redisTemplate.execute(
+                seedBigEndianCounter,
+                List.of(emailBucket),
+                Integer.toString(existing.byteOffset()));
+
+        assertThat(u16Store.add(record))
+                .isEqualTo(IdentityPresenceMutationResult.APPLIED);
+        assertThat(readUnsignedCounter(emailBucket, existing, "u16"))
+                .isEqualTo(2L);
+        assertThat(u16Store.remove(record))
+                .isEqualTo(IdentityPresenceMutationResult.APPLIED);
+        assertThat(readUnsignedCounter(emailBucket, existing, "u16"))
+                .isEqualTo(1L);
+    }
+
+    @Test
     void overflowRejectsWholeMutationWithoutChangingOtherCounters() {
         HmacIdentifier email = protectedValue("email", "user@example.com");
         HmacIdentifier phone = protectedValue("phone", "+8613812345678");
@@ -273,6 +344,20 @@ class RedisIdentityPresenceBloomStoreIntegrationTest {
                                 "v1-underflow", receiptShard),
                         Long.toString(userId)))
                 .isTrue();
+    }
+
+    private static Long readUnsignedCounter(
+            String bucketKey,
+            CountingBloomPosition position,
+            String bitfieldType) {
+        DefaultRedisScript<Long> readCounter = new DefaultRedisScript<>(
+                "return redis.call('BITFIELD_RO', KEYS[1], 'GET', ARGV[1], ARGV[2])[1]",
+                Long.class);
+        return redisTemplate.execute(
+                readCounter,
+                List.of(bucketKey),
+                bitfieldType,
+                Integer.toString(Math.multiplyExact(position.byteOffset(), 8)));
     }
 
     private static HmacIdentifier protectedValue(String kind, String value) {

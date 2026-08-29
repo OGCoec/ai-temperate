@@ -29,6 +29,18 @@ public interface MembershipPaymentLoadtestControlService {
 
     FaultProbe inspectFaults();
 
+    CallbackHoldProbe armCallbackHold(String orderId, int maxHoldSeconds);
+
+    CallbackHoldProbe inspectCallbackHold(String orderId);
+
+    CallbackHoldProbe releaseCallbackHold(String orderId);
+
+    WorkerPauseProbe pauseWorkers(int maxPauseSeconds);
+
+    WorkerPauseProbe inspectWorkers();
+
+    WorkerPauseProbe resumeWorkers();
+
     /** 该结果是来证明一条任务确实先进入过期 processing、再被恢复并重新交给正常批处理。 */
     record RecoveryProbe(int claimed, int recovered, long processingAfterRecovery) {
     }
@@ -62,5 +74,20 @@ public interface MembershipPaymentLoadtestControlService {
 
     /** 该结果只公开单调触发次数，使 JMeter 证明一次性故障确实发生，不返回已武装订单或内部异常。 */
     record FaultProbe(long callbackCompleteFailureCount) {
+    }
+
+    /** 该结果只暴露 hold 是否有效、Marker 是否存在和剩余时长，不返回 Marker value 或 callbackId。 */
+    record CallbackHoldProbe(
+            boolean armed,
+            boolean markerPresent,
+            long remainingMillis) {
+    }
+
+    /** 该结果是来证明两个本地 Worker 的有界暂停状态，不允许远程改变共享环境调度。 */
+    record WorkerPauseProbe(
+            boolean callbackWorkerPaused,
+            long callbackWorkerRemainingMillis,
+            boolean orderPersistenceWorkerPaused,
+            long orderPersistenceWorkerRemainingMillis) {
     }
 }

@@ -76,6 +76,15 @@ public final class AuthTokenServiceImpl implements AuthTokenService {
      */
     @Override
     public String issueAccessToken(long userId) {
+        return issueAccessToken(userId, accessTokenTtl);
+    }
+
+    /**
+     * 使用与普通访问令牌完全相同的最小声明，只允许内部调用方显式收紧或延长有效期；该方法不会修改
+     * 单例 Service 的默认 TTL，因此压测令牌不会影响正常登录签发行为。
+     */
+    @Override
+    public String issueAccessToken(long userId, Duration timeToLive) {
         if (userId <= 0) {
             throw new IllegalArgumentException("Access token user ID must be positive.");
         }
@@ -84,7 +93,7 @@ public final class AuthTokenServiceImpl implements AuthTokenService {
         claims.put(Claims.SUBJECT, publicIdCodec.encode(userId));
         claims.put(Claims.ID, newNanoId());
         claims.put("ver", TOKEN_SCHEMA_VERSION);
-        return jwtUtils.generateToken(claims, accessTokenTtl);
+        return jwtUtils.generateToken(claims, requireAccessTokenTtl(timeToLive));
     }
 
     /**

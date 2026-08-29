@@ -2,6 +2,7 @@ package com.example.temperate.service.user.membership.payment.callback;
 
 import com.example.temperate.common.redis.key.MembershipOrderRedisId;
 import com.example.temperate.common.redis.key.PaymentCallbackRedisId;
+import com.example.temperate.service.user.membership.payment.time.MembershipPaymentTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -28,7 +29,7 @@ public record PaymentCallbackSnapshot(
         String idempotencyFingerprint,
         String payloadDigest) {
 
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     public PaymentCallbackSnapshot {
         if (schemaVersion != CURRENT_SCHEMA_VERSION) {
@@ -42,8 +43,10 @@ public record PaymentCallbackSnapshot(
         payType = requireText("pay type", payType, 16);
         tradeStatus = requireText("trade status", tradeStatus, 32);
         paidAmountYuan = requireAmount(paidAmountYuan);
-        paidAt = Objects.requireNonNull(paidAt, "paidAt must not be null");
-        receivedAt = Objects.requireNonNull(receivedAt, "receivedAt must not be null");
+        paidAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(paidAt, "paidAt must not be null"));
+        receivedAt = MembershipPaymentTime.normalize(
+                Objects.requireNonNull(receivedAt, "receivedAt must not be null"));
         if (requestTimestampEpochSeconds <= 0) {
             throw new IllegalArgumentException("Payment callback timestamp must be positive.");
         }

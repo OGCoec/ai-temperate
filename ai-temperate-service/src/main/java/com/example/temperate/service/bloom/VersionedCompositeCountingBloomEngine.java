@@ -89,7 +89,7 @@ public interface VersionedCompositeCountingBloomEngine {
         public Namespace {
             if (layout == null
                     || buildBatchSize < 1
-                    || buildBatchSize > 2_000
+                    || buildBatchSize > 500
                     || receiptShards < 1
                     || receiptShards > 1_000
                     || Integer.bitCount(receiptShards) != 1

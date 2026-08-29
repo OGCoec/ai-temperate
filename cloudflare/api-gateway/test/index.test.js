@@ -187,6 +187,8 @@ test('valid H5 pages fetch the Pages root without forwarding credentials or quer
 		'/pages/ai-chat/index',
 		'/pages/account/profile',
 		'/pages/account/api-keys',
+		'/pages/account/membership-plans',
+		'/pages/account/payment-result',
 		'/pages/account/totp-security',
 		'/pages/ai-models/catalog',
 		'/pages/ai-models/detail',
@@ -1856,6 +1858,64 @@ test('root host forwards the ordinary AI model APIs without changing their paths
 		'https://api.niko000o.site/api/ai-models?pageNum=1&pageSize=20'
 	)
 	assert.equal(captured.headers.get('Origin'), 'https://niko000o.site')
+})
+
+test('root host forwards authenticated membership checkout APIs with exact methods', async () => {
+	const cases = [
+		{ method: 'GET', path: '/api/user/membership-plan-offers' },
+		{ method: 'POST', path: '/api/user/membership-orders' },
+		{ method: 'GET', path: '/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA' },
+		{ method: 'POST', path: '/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/cancel' },
+		{ method: 'POST', path: '/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/payment-attempts' }
+	]
+
+	for (const item of cases) {
+		let captured
+		const response = await handleRequest(
+			request('niko000o.site', item.path, { method: item.method }),
+			ENV,
+			runtime(upstream => {
+				captured = upstream
+				return Response.json({ ok: true })
+			})
+		)
+
+		assert.equal(response.status, 200, item.path)
+		assert.equal(captured.method, item.method, item.path)
+		assert.equal(captured.url, `https://api.niko000o.site${item.path}`, item.path)
+	}
+})
+
+test('BAR callback is forwarded as the exact GET server callback without adding a POST route', async () => {
+	const query = '?pid=1001&trade_no=123&sign=masked'
+	let captured
+	const accepted = await handleRequest(
+		request('niko000o.site', `/api/payment/bar/notify${query}`, {
+			headers: { Cookie: '' },
+			migrated: false
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('success', {
+				headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
+			})
+		})
+	)
+	const rejectedPost = await handleRequest(
+		request('niko000o.site', '/api/payment/bar/notify', {
+			method: 'POST',
+			migrated: false
+		}),
+		ENV,
+		runtime(() => { throw new Error('POST callback must not reach Origin') })
+	)
+
+	assert.equal(accepted.status, 200)
+	assert.equal(await accepted.text(), 'success')
+	assert.equal(captured.method, 'GET')
+	assert.equal(captured.url, `https://api.niko000o.site/api/payment/bar/notify${query}`)
+	assert.equal(rejectedPost.status, 405)
 })
 
 test('API Key management preserves strong ETags and disables response transforms', async () => {

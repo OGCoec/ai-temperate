@@ -30,6 +30,8 @@ public class MembershipOrder {
     private OffsetDateTime expiresAt;
     private OffsetDateTime closingDeadlineAt;
     private OffsetDateTime paidAt;
+    private MembershipOrderEntitlementResolution entitlementResolution;
+    private OffsetDateTime entitlementResolvedAt;
     private Long stateVersion;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
