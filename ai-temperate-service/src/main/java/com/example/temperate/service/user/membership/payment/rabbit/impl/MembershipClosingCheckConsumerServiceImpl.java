@@ -35,9 +35,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来让新订单在 CLOSING 最终边界直接关单，同时兼容部署前已经发布的五段消息链。
+ * 该实现是来在订单进入 CLOSING 后立即复用原 Provider 关单逻辑，并在最终边界再次幂等确认后收敛 CLOSED。
  *
- * <p>Marker 命中时立即结束当前 MQ 时间链；PAID、UNKNOWN、查询异常和其他不安全结果仍使用有限重试，耗尽后进入 DLQ。</p>
+ * <p>安全关闭结果在硬截止前只安排最终确认；PAID 交给回调链收敛，UNKNOWN 依赖现有分段和终态有限重试。</p>
  */
 @Service
 @ConditionalOnProperty(
@@ -96,40 +96,39 @@ public final class MembershipClosingCheckConsumerServiceImpl
         if (orderStore.callbackInProgress(message.orderId())) {
             return;
         }
-        int lastStage = delays.size() - 1;
-        if (message.stageIndex() < lastStage) {
-            int nextStage = message.stageIndex() + 1;
-            closingPublisher.publishNext(
-                    message.orderId(),
-                    nextStage,
-                    0,
-                    Duration.ofMillis(delays.get(nextStage)));
-            return;
-        }
         OffsetDateTime boundaryCheckAt = MembershipPaymentTime.now(clock);
         if (order.closingDeadlineAt() == null) {
             retryTerminal(message);
             return;
         }
-        if (boundaryCheckAt.isBefore(order.closingDeadlineAt())) {
-            // 在任何外部关单副作用之前复核真实硬截止；早到消息只重新调度同一最终阶段。
-            finalCheckScheduler.scheduleClosing(
-                    message.orderId(),
-                    order.closingDeadlineAt(),
-                    message.terminalRetryCount());
-            return;
-        }
+        // CLOSING 的首条消息与后续重试都走原关单方法；这只前移首次副作用，不改 Provider 合同。
         PaymentCloseResult close = closeOrUnknown(
                 order, envelope.traceId(), envelope.messageId());
         if (close.status() == PaymentProviderStatus.PAID) {
             PaymentQueryResult paid = queryOrUnknown(
                     order, envelope.traceId(), envelope.messageId());
             reconciliationService.reconcilePaid(order, paid);
-            retryTerminal(message);
+            if (boundaryCheckAt.isBefore(order.closingDeadlineAt())) {
+                continueBeforeDeadline(message, delays, order.closingDeadlineAt());
+            } else {
+                retryTerminal(message);
+            }
             return;
         }
         if (!safeClosedStatus(close.status())) {
-            retryTerminal(message);
+            if (boundaryCheckAt.isBefore(order.closingDeadlineAt())) {
+                continueBeforeDeadline(message, delays, order.closingDeadlineAt());
+            } else {
+                retryTerminal(message);
+            }
+            return;
+        }
+        if (boundaryCheckAt.isBefore(order.closingDeadlineAt())) {
+            // 第三方已安全关闭也不提前写 CLOSED，五分钟 CLOSING 继续承接关单前已完成的延迟回调。
+            finalCheckScheduler.scheduleClosing(
+                    message.orderId(),
+                    order.closingDeadlineAt(),
+                    0);
             return;
         }
 
@@ -148,6 +147,27 @@ public final class MembershipClosingCheckConsumerServiceImpl
                 || transition.outcome() == MembershipOrderTransitionOutcome.MISSING) {
             retryTerminal(message);
         }
+    }
+
+    private void continueBeforeDeadline(
+            MembershipClosingCheckMessage message,
+            List<Long> delays,
+            OffsetDateTime closingDeadlineAt) {
+        int lastStage = delays.size() - 1;
+        if (message.stageIndex() < lastStage) {
+            int nextStage = message.stageIndex() + 1;
+            closingPublisher.publishNext(
+                    message.orderId(),
+                    nextStage,
+                    message.terminalRetryCount(),
+                    Duration.ofMillis(delays.get(nextStage)));
+            return;
+        }
+        // 零延迟首关单会让旧分段链提前到达最终阶段，仍必须回到订单真实硬截止时间。
+        finalCheckScheduler.scheduleClosing(
+                message.orderId(),
+                closingDeadlineAt,
+                message.terminalRetryCount());
     }
 
     private PaymentCloseResult closeOrUnknown(

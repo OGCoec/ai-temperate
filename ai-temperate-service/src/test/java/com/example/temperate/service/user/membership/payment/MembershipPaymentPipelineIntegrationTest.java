@@ -51,6 +51,7 @@ import com.example.temperate.service.user.membership.payment.store.MembershipPay
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteRuntimeSnapshot;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckPublisher;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckPublisher;
@@ -207,6 +208,8 @@ final class MembershipPaymentPipelineIntegrationTest {
 
         MembershipPaymentFinalCheckScheduler finalCheckScheduler =
                 mock(MembershipPaymentFinalCheckScheduler.class);
+        MembershipClosingCheckPublisher closingPublisher =
+                mock(MembershipClosingCheckPublisher.class);
         MembershipPaymentProviderRegistry providerRegistry =
                 mock(MembershipPaymentProviderRegistry.class);
         PaymentFactReconciliationService reconciliationService = (order, fact) ->
@@ -218,6 +221,7 @@ final class MembershipPaymentPipelineIntegrationTest {
                 providerRegistry,
                 reconciliationService,
                 mock(MembershipPaymentCheckPublisher.class),
+                closingPublisher,
                 finalCheckScheduler,
                 properties,
                 CLOCK,

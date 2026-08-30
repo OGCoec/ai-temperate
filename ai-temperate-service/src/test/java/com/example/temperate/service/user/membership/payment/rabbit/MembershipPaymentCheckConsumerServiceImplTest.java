@@ -2,6 +2,7 @@ package com.example.temperate.service.user.membership.payment.rabbit;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
@@ -49,7 +50,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 
 /**
- * 该单元测试是来约束 RabbitMQ 全阶段先执行回调 marker 门禁、中间阶段不主动访问支付方，以及最终阶段安全收敛或进入 DLQ。
+ * 该单元测试是来约束 RabbitMQ 关单时序：订单进入 CLOSING 后立即关闭支付方，但必须等到最终边界才允许写入 CLOSED。
  */
 final class MembershipPaymentCheckConsumerServiceImplTest {
 
@@ -157,7 +158,7 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
     }
 
     @Test
-    void pendingFinalStageQueriesThenStartsClosingAndSchedulesFinalClosingCheck() {
+    void pendingFinalStageQueriesThenStartsClosingAndPublishesImmediateClosingCheck() {
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
                 MembershipOrderStatus.PENDING_PAYMENT)));
         when(provider.queryPayment(any())).thenReturn(provider(PaymentProviderStatus.PENDING));
@@ -173,8 +174,30 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
         pendingService().process(paymentEnvelope(8));
 
         verify(provider).queryPayment(any());
-        verify(finalCheckScheduler).scheduleClosing(
-                ORDER_ID, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC), 0);
+        verify(closingPublisher).publishNext(
+                ORDER_ID, 0, 0, Duration.ZERO);
+        verify(finalCheckScheduler, never()).scheduleClosing(anyString(), any(), anyInt());
+    }
+
+    @Test
+    void pendingClosingRaceThatWasAlreadyAppliedStillPublishesImmediateClosingCheck() {
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
+                MembershipOrderStatus.PENDING_PAYMENT)));
+        when(provider.queryPayment(any())).thenReturn(provider(PaymentProviderStatus.PENDING));
+        when(orderStore.startClosing(
+                ORDER_ID,
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.ALREADY_APPLIED,
+                        MembershipOrderStatus.CLOSING,
+                        2L));
+
+        pendingService().process(paymentEnvelope(8));
+
+        verify(closingPublisher).publishNext(
+                ORDER_ID, 0, 0, Duration.ZERO);
+        verify(finalCheckScheduler, never()).scheduleClosing(anyString(), any(), anyInt());
     }
 
     @Test
@@ -193,14 +216,14 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
 
         pendingService().process(paymentEnvelope(8));
 
-        InOrder ordered = inOrder(reconciliationService, orderStore, finalCheckScheduler);
+        InOrder ordered = inOrder(reconciliationService, orderStore, closingPublisher);
         ordered.verify(reconciliationService).reconcilePaid(any(), any());
         ordered.verify(orderStore).startClosing(
                 ORDER_ID,
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
-        ordered.verify(finalCheckScheduler).scheduleClosing(
-                ORDER_ID, OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC), 0);
+        ordered.verify(closingPublisher).publishNext(
+                ORDER_ID, 0, 0, Duration.ZERO);
         verify(orderStore, never()).markPaid(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
@@ -216,18 +239,91 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
         "2, 3, 60000",
         "3, 4, 120000"
     })
-    void everyClosingIntermediateStagePublishesItsConfiguredNextDelayWithoutQuery(
+    void everyClosingIntermediateStageRetriesItsConfiguredNextDelayWhenCloseIsUnknown(
             int currentStage,
             int nextStage,
             long nextDelayMillis) {
-        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(order(
-                MembershipOrderStatus.CLOSING)));
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.CLOSING,
+                now.minusMinutes(5),
+                now.plusMinutes(5));
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.UNKNOWN, null));
 
         closingService().process(closingEnvelope(currentStage, 0));
 
+        verify(provider).closePayment(any());
         verify(closingPublisher).publishNext(
                 ORDER_ID, nextStage, 0, Duration.ofMillis(nextDelayMillis));
-        verify(provider, never()).closePayment(any());
+        verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
+    }
+
+    @Test
+    void closingInitialSafeCloseSchedulesFinalBoundaryWithoutClosingLocalOrder() {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.CLOSING,
+                now.minusMinutes(5),
+                now.plusMinutes(5));
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.CLOSED, "123456789"));
+
+        closingService().process(closingEnvelope(0, 0));
+
+        verify(provider).closePayment(any());
+        verify(finalCheckScheduler).scheduleClosing(
+                ORDER_ID, early.closingDeadlineAt(), 0);
+        verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
+    }
+
+    @Test
+    void closingInitialPaidResultReconcilesAndKeepsNormalClosingChecks() {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.CLOSING,
+                now.minusMinutes(5),
+                now.plusMinutes(5));
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.PAID, "123456789"));
+        when(provider.queryPayment(any())).thenReturn(paidProvider());
+        when(reconciliationService.reconcilePaid(any(), any())).thenReturn(true);
+
+        closingService().process(closingEnvelope(0, 0));
+
+        InOrder ordered = inOrder(provider, reconciliationService, closingPublisher);
+        ordered.verify(provider).closePayment(any());
+        ordered.verify(provider).queryPayment(any());
+        ordered.verify(reconciliationService).reconcilePaid(any(), any());
+        ordered.verify(closingPublisher).publishNext(
+                ORDER_ID, 1, 0, Duration.ofSeconds(30));
+        verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = PaymentProviderStatus.class,
+            names = {"PENDING", "UNKNOWN"})
+    void closingInitialUnsafeStatusKeepsOrderClosingAndRetries(
+            PaymentProviderStatus status) {
+        OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
+        MembershipOrderSnapshot early = orderWithDeadlines(
+                MembershipOrderStatus.CLOSING,
+                now.minusMinutes(5),
+                now.plusMinutes(5));
+        when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(status, null));
+
+        closingService().process(closingEnvelope(0, 0));
+
+        verify(provider).closePayment(any());
+        verify(closingPublisher).publishNext(
+                ORDER_ID, 1, 0, Duration.ofSeconds(30));
+        verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
     }
 
     @ParameterizedTest
@@ -388,7 +484,7 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
     }
 
     @Test
-    void closingFinalMessageBeforeDeadlineReschedulesWithoutClosingProvider() {
+    void closingFinalMessageBeforeDeadlineConfirmsProviderThenReschedulesBoundary() {
         OffsetDateTime now = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         MembershipOrderSnapshot early = orderWithDeadlines(
                 MembershipOrderStatus.CLOSING,
@@ -396,12 +492,14 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
                 now.plusNanos(1_000));
         when(lookupService.find(ORDER_ID)).thenReturn(Optional.of(early));
         when(orderStore.callbackInProgress(ORDER_ID)).thenReturn(false);
+        when(provider.closePayment(any())).thenReturn(
+                new PaymentCloseResult(PaymentProviderStatus.CLOSED, "123456789"));
 
         closingService().process(closingEnvelope(4, 2));
 
         verify(finalCheckScheduler).scheduleClosing(
-                ORDER_ID, early.closingDeadlineAt(), 2);
-        verify(provider, never()).closePayment(any());
+                ORDER_ID, early.closingDeadlineAt(), 0);
+        verify(provider).closePayment(any());
         verify(orderStore, never()).finalizeClosing(anyString(), any(), any());
     }
 
@@ -412,6 +510,7 @@ final class MembershipPaymentCheckConsumerServiceImplTest {
                 providerRegistry,
                 reconciliationService,
                 paymentPublisher,
+                closingPublisher,
                 finalCheckScheduler,
                 properties,
                 Clock.fixed(NOW, ZoneOffset.UTC),

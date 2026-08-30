@@ -12,6 +12,7 @@ import com.example.temperate.service.user.membership.payment.provider.Membership
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckPublisher;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckConsumerService;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
@@ -31,7 +32,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来让新订单在 PENDING 最终边界直接检查，同时兼容部署前已经发布的九段消息链。
+ * 该实现是来在 PENDING 最终边界查询支付事实，并在订单进入 CLOSING 后立即启动原关单消息链。
  */
 @Service
 @ConditionalOnProperty(
@@ -49,6 +50,7 @@ public final class MembershipPaymentCheckConsumerServiceImpl
     private final MembershipPaymentProviderRegistry providerRegistry;
     private final PaymentFactReconciliationService reconciliationService;
     private final MembershipPaymentCheckPublisher paymentPublisher;
+    private final MembershipClosingCheckPublisher closingPublisher;
     private final MembershipPaymentFinalCheckScheduler finalCheckScheduler;
     private final MembershipPaymentProperties properties;
     private final Clock clock;
@@ -60,6 +62,7 @@ public final class MembershipPaymentCheckConsumerServiceImpl
             MembershipPaymentProviderRegistry providerRegistry,
             PaymentFactReconciliationService reconciliationService,
             MembershipPaymentCheckPublisher paymentPublisher,
+            MembershipClosingCheckPublisher closingPublisher,
             MembershipPaymentFinalCheckScheduler finalCheckScheduler,
             MembershipPaymentProperties properties,
             Clock clock,
@@ -69,6 +72,7 @@ public final class MembershipPaymentCheckConsumerServiceImpl
         this.providerRegistry = Objects.requireNonNull(providerRegistry);
         this.reconciliationService = Objects.requireNonNull(reconciliationService);
         this.paymentPublisher = Objects.requireNonNull(paymentPublisher);
+        this.closingPublisher = Objects.requireNonNull(closingPublisher);
         this.finalCheckScheduler = Objects.requireNonNull(finalCheckScheduler);
         this.properties = Objects.requireNonNull(properties);
         this.clock = Objects.requireNonNull(clock);
@@ -120,7 +124,12 @@ public final class MembershipPaymentCheckConsumerServiceImpl
                 now);
         if (transition.outcome() == MembershipOrderTransitionOutcome.APPLIED
                 || transition.outcome() == MembershipOrderTransitionOutcome.ALREADY_APPLIED) {
-            finalCheckScheduler.scheduleClosing(message.orderId(), hardCloseAt, 0);
+            // 先原子写入 CLOSING，再零延迟发布现有关单消息；重复消息依赖 Provider 关单幂等和状态机收敛。
+            closingPublisher.publishNext(
+                    message.orderId(),
+                    0,
+                    0,
+                    Duration.ZERO);
         }
     }
 
