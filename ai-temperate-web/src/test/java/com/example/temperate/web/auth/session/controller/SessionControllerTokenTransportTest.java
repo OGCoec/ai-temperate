@@ -7,7 +7,9 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
@@ -17,6 +19,7 @@ import com.example.temperate.service.auth.session.authentication.dto.result.Sess
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
+import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
@@ -52,6 +55,7 @@ class SessionControllerTokenTransportTest {
     private AuthCookieWriter cookieWriter;
     private PreAuthService preAuthService;
     private PreAuthTransport preAuthTransport;
+    private NetworkRiskProperties networkRiskProperties;
     private SessionController controller;
 
     @BeforeEach
@@ -60,15 +64,17 @@ class SessionControllerTokenTransportTest {
         cookieWriter = mock(AuthCookieWriter.class);
         preAuthService = mock(PreAuthService.class);
         preAuthTransport = mock(PreAuthTransport.class);
+        networkRiskProperties = mock(NetworkRiskProperties.class);
         controller = new SessionController(
                 service,
                 cookieWriter,
                 preAuthService,
                 preAuthTransport,
-                mock(NetworkRiskProperties.class),
+                networkRiskProperties,
                 new WebRtcVerificationTransport());
         when(service.bootstrap(any())).thenReturn(result());
         when(preAuthTransport.read(any(), any())).thenReturn("user-preauth");
+        when(networkRiskProperties.mode()).thenReturn(NetworkRiskMode.ENFORCE);
     }
 
     @Test
@@ -109,6 +115,45 @@ class SessionControllerTokenTransportTest {
     }
 
     @Test
+    void h5BootstrapWithoutRefreshCookieSkipsPreAuthBindingAndDelegatesMissingTokenToService() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                new PreAuthAccess(null, null));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        SessionAuthenticationException expected = new SessionAuthenticationException(
+                SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED,
+                "Refresh token is required.",
+                true);
+        doThrow(expected).when(service).bootstrap(any(SessionBootstrapCommand.class));
+
+        assertThatThrownBy(() -> controller.bootstrap(
+                null,
+                "device-1",
+                "H5",
+                request,
+                response))
+                .isSameAs(expected)
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code())
+                            .isEqualTo(SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED);
+                    assertThat(exception.clearCookies()).isTrue();
+                });
+
+        ArgumentCaptor<SessionBootstrapCommand> command =
+                ArgumentCaptor.forClass(SessionBootstrapCommand.class);
+        verify(service).bootstrap(command.capture());
+        assertThat(command.getValue().getRefreshToken()).isNull();
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.BINDING_ATTEMPTED_ATTRIBUTE))
+                .isEqualTo(Boolean.FALSE);
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE))
+                .isEqualTo("skipped_missing_refresh");
+        verifyNoInteractions(preAuthService);
+    }
+
+    @Test
     void h5BootstrapPreservesCurrentBackgroundVerificationSignal() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(
@@ -133,10 +178,45 @@ class SessionControllerTokenTransportTest {
                 request,
                 response);
 
+        verify(service).bootstrap(any(SessionBootstrapCommand.class), same(binding));
         assertThat(response.getHeader(WebRtcVerificationTransport.STATE_HEADER))
                 .isEqualTo("PENDING");
         assertThat(response.getHeader(WebRtcVerificationTransport.GENERATION_HEADER))
                 .isEqualTo("9");
+    }
+
+    @Test
+    void h5BootstrapWithRefreshCookieKeepsRecoverablePreAuthFailure() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setCookies(new Cookie(AuthCookieWriter.REFRESH_COOKIE, "browser-rt"));
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        when(preAuthService.requireSessionBinding(any(), any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("simulated binding mismatch"));
+
+        assertThatThrownBy(() -> controller.bootstrap(
+                null,
+                "device-1",
+                "H5",
+                request,
+                new MockHttpServletResponse()))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code())
+                            .isEqualTo(SessionAuthenticationErrorCode.PREAUTH_REQUIRED);
+                    assertThat(exception.clearCookies()).isFalse();
+                });
+
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.BINDING_ATTEMPTED_ATTRIBUTE))
+                .isEqualTo(Boolean.TRUE);
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE))
+                .isEqualTo("preauth_required");
+        verify(service, never()).bootstrap(any(SessionBootstrapCommand.class));
+        verify(service, never()).bootstrap(
+                any(SessionBootstrapCommand.class),
+                any(PreAuthSessionBinding.class));
     }
 
     @Test

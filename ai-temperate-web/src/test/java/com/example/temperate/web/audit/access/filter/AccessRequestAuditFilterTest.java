@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.example.temperate.service.audit.access.command.AccessAuditCommand;
 import com.example.temperate.service.audit.access.service.AccessAuditEventService;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import jakarta.servlet.AsyncEvent;
@@ -19,6 +20,7 @@ import jakarta.servlet.AsyncListener;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockAsyncContext;
@@ -41,6 +43,10 @@ class AccessRequestAuditFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/users/AAAAAAAAJxE");
         request.setRemoteAddr("203.0.113.77");
         request.addHeader("X-Client-Platform", "H5");
+        UUID requestWideTrace = UUID.randomUUID();
+        request.setAttribute(
+                AuthRequestTraceFilter.TRACE_ATTRIBUTE,
+                requestWideTrace.toString());
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, (servletRequest, servletResponse) -> {
@@ -60,6 +66,7 @@ class AccessRequestAuditFilterTest {
         assertThat(command.routeTemplate()).isEqualTo("/api/users/{id}");
         assertThat(command.statusCode()).isEqualTo(204);
         assertThat(command.canonicalClientIp()).isEqualTo("203.0.113.77");
+        assertThat(command.traceId()).isEqualTo(requestWideTrace);
         assertThat(response.getHeader(AccessRequestAuditFilter.TRACE_HEADER)).isNotBlank();
     }
 

@@ -31,33 +31,29 @@ test('ordinary H5 bootstraps PreAuth before protected API requests without expos
 	assert.match(http, /clearSession\(\)[\s\S]*invalidatePreAuth\(\)/)
 })
 
-test('only exact H5 bootstrap paths continue while the WebRTC report is pending', () => {
+test('all ordinary H5 requests schedule WebRTC in the background', () => {
 	const http = source('common/auth/http-client.js')
 	const authApi = source('common/auth/auth-api.js')
-	const publicRequest = http.slice(http.indexOf('export async function publicRequest'))
+	const csrfRequest = http.slice(
+		http.indexOf('export async function initializeBrowserCsrf'),
+		http.indexOf('export async function publicRequest'))
+	const publicRequest = http.slice(
+		http.indexOf('export async function publicRequest'),
+		http.indexOf('async function bootstrapBrowserSession'))
+	const authorizedRequest = http.slice(
+		http.indexOf('export async function authorizedRequest'),
+		http.indexOf('function handleAuthorizedSecurityFailure'))
+	const streamingRequest = http.slice(
+		http.indexOf('export async function prepareAuthorizedStreamingRequest'),
+		http.indexOf('export async function recoverAuthorizedStreamingSession'))
 
-	assert.match(http, /PHONE_COUNTRY_PATH\s*=\s*'\/api\/auth\/phone-country'/)
-	assert.match(http, /OAUTH_START_PATH\s*=\s*'\/api\/auth\/oauth2\/start'/)
-	assert.match(
-		http,
-		/H5_WEBRTC_BACKGROUND_PATHS\s*=\s*new Set\(\[\s*PHONE_COUNTRY_PATH,\s*OAUTH_START_PATH\s*\]\)/
-	)
-	assert.match(
-		http,
-		/function shouldAwaitH5WebRtc\(path\)\s*\{\s*return !H5_WEBRTC_BACKGROUND_PATHS\.has\(path\)\s*\}/
-	)
-	assert.match(
-		publicRequest,
-		/await ensureCookieScopeMigration\(\)[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(shouldAwaitH5WebRtc\(path\)\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
-	)
-	assert.match(
-		publicRequest,
-		/error\.code === 'PREAUTH_REQUIRED'[\s\S]*await ensurePreAuth\(\)[\s\S]*if \(shouldAwaitH5WebRtc\(path\)\) \{\s*await ensureH5WebRtcVerified\(\)\s*\}/
-	)
-	assert.equal(
-		(publicRequest.match(/if \(shouldAwaitH5WebRtc\(path\)\) \{/g) || []).length,
-		2
-	)
+	for (const requestSource of [csrfRequest, publicRequest, authorizedRequest, streamingRequest]) {
+		assert.match(requestSource, /scheduleH5WebRtcForRequest\(/)
+		assert.doesNotMatch(requestSource, /await ensureH5WebRtcVerified\(\)/)
+	}
+	assert.doesNotMatch(http, /H5_WEBRTC_BACKGROUND_PATHS|shouldAwaitH5WebRtc/)
+	assert.match(publicRequest, /PREAUTH_REQUIRED[\s\S]*await ensurePreAuth\(\)[\s\S]*scheduleH5WebRtcForRequest\(/)
+	assert.match(authorizedRequest, /retryState\.webRtc[\s\S]*await recoverH5WebRtc\(\)/)
 	assert.doesNotMatch(http, /skipWebRtc/i)
 	assert.match(
 		authApi,
@@ -222,10 +218,19 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	assert.match(verification, /verificationTasks\s*=\s*new Map/)
 	assert.match(verification, /activeEntry/)
 	assert.match(verification, /compareGeneration/)
-	assert.match(verification, /observeAndroidWebRtcVerificationHeaders/)
+	assert.match(verification, /observeWebRtcVerificationHeaders/)
+	assert.match(verification, /scheduleH5WebRtcVerification/)
+	assert.match(verification, /WEBRTC_BACKGROUND_SCHEDULED/)
+	assert.match(verification, /WEBRTC_BACKGROUND_COMPLETED/)
+	assert.match(verification, /WEBRTC_BACKGROUND_FAILED/)
 	assert.match(verification, /createWebRtcDiagnosticLogger/)
 	assert.match(verification, /WEBRTC_DIAGNOSTICS_ENABLED\s*=\s*process\.env\.NODE_ENV\s*===\s*'development'/)
 	assert.match(verification, /createWebRtcDiagnosticLogger\(\s*'user-flow',\s*WEBRTC_DIAGNOSTICS_ENABLED\s*\)/)
+	assert.match(verification, /WEBRTC_ATTEMPT_CREATED/)
+	assert.match(verification, /WEBRTC_START_RESOLVED/)
+	assert.match(verification, /WEBRTC_PROBE_FINISHED/)
+	assert.match(verification, /WEBRTC_REPORT_DISPATCHED/)
+	assert.match(verification, /X-AIT-WebRTC-Probe-Run-Id/)
 	assert.match(verification, /start_response_received/)
 	assert.match(verification, /platform_probe_completed/)
 	assert.match(verification, /report_payload_prepared/)
@@ -259,9 +264,10 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 		/clientPlatform\(\)\s*===\s*'ANDROID'[\s\S]*collectAndroidWebRtcIpsInBackground[\s\S]*collectBrowserWebRtcIps/
 	)
 	assert.match(core, /WEBRTC_VERIFICATION_PENDING/)
-	assert.match(http, /await ensureH5WebRtcVerified\(\)/)
-	assert.match(http, /observeAndroidWebRtcVerificationHeaders/)
-	assert.match(http, /#ifdef APP-PLUS[\s\S]*observeAndroidWebRtcVerificationHeaders/)
+	assert.equal((http.match(/await ensureH5WebRtcVerified\(\)/g) || []).length, 1)
+	assert.match(http, /async function recoverH5WebRtc\(\)[\s\S]*await ensureH5WebRtcVerified\(\)/)
+	assert.match(http, /observeWebRtcVerificationHeaders/)
+	assert.doesNotMatch(http, /#ifdef APP-PLUS[\s\S]{0,160}observeWebRtcVerificationHeaders/)
 	assert.match(http, /void startAndroidWebRtcVerificationInBackground/)
 	assert.match(authApi, /#ifdef APP-PLUS[\s\S]*startAndroidWebRtcVerificationInBackground/)
 	assert.doesNotMatch(authApi, /ensureH5WebRtcVerified/)
@@ -311,7 +317,8 @@ test('H5 and Android WebRTC verification use isolated platform probes and never 
 	assert.ok(localProbe.includes("split(/\\s+/)"))
 	assert.ok(localProbe.includes("/^stun:[a-z0-9.-]+:\\d{1,5}$/i"))
 	assert.doesNotMatch(verification, /timeoutMillis\s*\+\s*3000/)
-	assert.match(app, /#ifdef H5[\s\S]*ensureH5WebRtcVerified/)
+	assert.match(app, /#ifdef H5[\s\S]*scheduleH5WebRtcVerification/)
+	assert.doesNotMatch(app, /ensureH5WebRtcVerified/)
 	assert.match(app, /#ifdef APP-PLUS[\s\S]*startAndroidWebRtcVerificationInBackground/)
 	assert.doesNotMatch(app, /then\(\(\)\s*=>\s*startWebRtcVerificationInBackground\(\)\)/)
 	assert.match(app, /presentWebRtcFailure\(error\)/)

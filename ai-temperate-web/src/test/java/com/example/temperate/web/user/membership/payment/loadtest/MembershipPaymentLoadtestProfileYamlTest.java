@@ -52,7 +52,7 @@ final class MembershipPaymentLoadtestProfileYamlTest {
         assertThat(resolver.getProperty("server.tomcat.accept-count", Integer.class))
                 .isEqualTo(256);
         assertThat(resolver.getProperty("server.tomcat.max-connections", Integer.class))
-                .isEqualTo(320);
+                .isEqualTo(256);
         assertThat(resolver.getProperty("server.tomcat.threads.max", Integer.class))
                 .isEqualTo(256);
         assertThat(resolver.getProperty("spring.rabbitmq.cache.channel.size", Integer.class))

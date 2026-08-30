@@ -2,6 +2,7 @@ package com.example.temperate.service.auth.session.authentication.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -22,6 +23,7 @@ import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSess
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionValidation;
 import com.example.temperate.service.auth.session.refresh.store.RefreshSessionStore;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +68,36 @@ class SessionAuthenticationServiceImplTest {
                 new AuthenticationContext(
                         USER_ID, "{bcrypt}hash", 3L, AccountStatus.ACTIVE, "用户"));
         when(tokenService.issueAccessToken(USER_ID)).thenReturn("new-access-token");
+        clearInvocations(tokenService, sessionStore, protector, identityMapper);
+    }
+
+    @Test
+    void bootstrapWithoutBindingRejectsMissingRefreshBeforeCallingDependencies() {
+        assertThatThrownBy(() -> service.bootstrap(
+                new SessionBootstrapCommand(null, null, DEVICE)))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code())
+                            .isEqualTo(SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED);
+                    assertThat(exception.clearCookies()).isTrue();
+                });
+
+        verifyNoInteractions(tokenService, sessionStore, protector, identityMapper);
+    }
+
+    @Test
+    void bootstrapWithBindingRejectsBlankRefreshBeforeCallingDependencies() {
+        PreAuthSessionBinding binding = mock(PreAuthSessionBinding.class);
+
+        assertThatThrownBy(() -> service.bootstrap(
+                new SessionBootstrapCommand(null, "  ", DEVICE),
+                binding))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code())
+                            .isEqualTo(SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED);
+                    assertThat(exception.clearCookies()).isTrue();
+                });
+
+        verifyNoInteractions(tokenService, sessionStore, protector, identityMapper, binding);
     }
 
     @Test

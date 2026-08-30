@@ -1,5 +1,6 @@
 package com.example.temperate.web.user.aiconversation.diagnostic;
 
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,7 +20,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <p>客户端关联 ID 仅在符合 UUIDv4 时进入请求属性和 MDC；非法值降级为 unavailable，不能改变业务响应。
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
+@Order(Ordered.HIGHEST_PRECEDENCE + 11)
 @ConditionalOnProperty(
         prefix = "app.ai-conversation.lifecycle-diagnostics",
         name = "enabled",
@@ -56,7 +57,7 @@ public final class AiConversationRequestTraceFilter
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
-        String traceId = UUID.randomUUID().toString();
+        String traceId = existingRequestTrace(request);
         long requestStartedNanos = System.nanoTime();
         String clientRequestId = validUuidV4(
                 request.getHeader(CLIENT_REQUEST_HEADER));
@@ -93,6 +94,18 @@ public final class AiConversationRequestTraceFilter
         } catch (IllegalArgumentException exception) {
             return UNAVAILABLE;
         }
+    }
+
+    private static String existingRequestTrace(HttpServletRequest request) {
+        Object value = request.getAttribute(AuthRequestTraceFilter.TRACE_ATTRIBUTE);
+        if (value instanceof String traceId) {
+            try {
+                return UUID.fromString(traceId).toString();
+            } catch (IllegalArgumentException ignored) {
+                // 请求属性可能被其他组件污染；无效值只能降级为新的服务端 Trace，不能进入日志关联字段。
+            }
+        }
+        return UUID.randomUUID().toString();
     }
 
     private static void restoreMdc(String key, String previous) {

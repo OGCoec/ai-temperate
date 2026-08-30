@@ -23,3 +23,16 @@ test('runtime authentication state is reused until the session is explicitly cle
 	assert.equal(state.isRuntimeSessionAuthenticated(), false)
 	assert.ok(clearedVersion > authenticatedVersion)
 })
+
+test('terminal failures coalesce cleanup and login redirect until authentication succeeds', async () => {
+	const state = await loadModule()
+
+	assert.equal(state.beginRuntimeTerminalSessionTransition(), true)
+	assert.equal(state.beginRuntimeTerminalSessionTransition(), false)
+	assert.equal(state.claimRuntimeTerminalSessionRedirect(), true)
+	assert.equal(state.claimRuntimeTerminalSessionRedirect(), false)
+
+	state.markRuntimeSessionAuthenticated()
+	assert.equal(state.beginRuntimeTerminalSessionTransition(), true)
+	assert.equal(state.claimRuntimeTerminalSessionRedirect(), true)
+})

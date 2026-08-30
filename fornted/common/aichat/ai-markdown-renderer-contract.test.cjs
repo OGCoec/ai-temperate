@@ -321,6 +321,33 @@ test('matched SSE sources use one accessible chip without weakening ordinary lin
 	assert.equal(chip.includes('v-html'), false)
 })
 
+test('source chips preserve descenders while keeping single-line ellipsis in every variant', () => {
+	const chip = readComponent('user-source-chip.vue')
+	const baseRule = chip.match(/\.user-source-chip\s*\{([^}]*)\}/)?.[1] || ''
+	const cardRule = chip.match(/\.user-source-chip\.is-card\s*\{([^}]*)\}/)?.[1] || ''
+	const textRule = chip.match(/\.user-source-chip-title,\s*\.user-source-chip-domain\s*\{([^}]*)\}/)?.[1] || ''
+	const titleRule = chip.match(/\.user-source-chip-title\s*\{([^}]*)\}/)?.[1] || ''
+	const domainRule = chip.match(/(?:^|\n)\s*\.user-source-chip-domain\s*\{([^}]*)\}/)?.[1] || ''
+	const cardDomainRule = chip.match(/\.user-source-chip\.is-card \.user-source-chip-domain\s*\{([^}]*)\}/)?.[1] || ''
+
+	assert.match(chip, /SOURCE_VARIANTS\s*=\s*new Set\(\['inline', 'activity', 'card'\]\)/)
+	assert.match(baseRule, /box-sizing:\s*border-box/)
+	assert.match(baseRule, /min-height:\s*30px/)
+	assert.match(baseRule, /line-height:\s*normal/)
+	assert.doesNotMatch(baseRule, /line-height:\s*1\s*;/)
+	assert.match(cardRule, /min-height:\s*52px/)
+	assert.match(textRule, /display:\s*block/)
+	assert.match(textRule, /line-height:\s*1\.35/)
+	assert.match(textRule, /min-width:\s*0/)
+	assert.match(textRule, /overflow:\s*hidden/)
+	assert.match(textRule, /text-overflow:\s*ellipsis/)
+	assert.match(textRule, /white-space:\s*nowrap/)
+	assert.match(titleRule, /font-size:\s*12px/)
+	assert.match(domainRule, /font-size:\s*11px/)
+	assert.match(cardDomainRule, /font-size:\s*11px/)
+	assert.doesNotMatch(chip, /#ifdef\s+(?:H5|APP-PLUS)/)
+})
+
 test('research summaries render through compact safe Markdown and preserve exact activity states', () => {
 	const panel = readComponent('user-chat-panel.vue')
 

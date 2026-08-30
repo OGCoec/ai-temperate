@@ -1,6 +1,7 @@
 import Activity from 'android.app.Activity'
 import Build from 'android.os.Build'
 import CancellationSignal from 'android.os.CancellationSignal'
+import Log from 'android.util.Log'
 import ConnectionResult from 'com.google.android.gms.common.ConnectionResult'
 import GoogleApiAvailability from 'com.google.android.gms.common.GoogleApiAvailability'
 import ContextCompat from 'androidx.core.content.ContextCompat'
@@ -13,10 +14,34 @@ import GetCredentialException from 'androidx.credentials.exceptions.GetCredentia
 import GetCredentialCancellationException from 'androidx.credentials.exceptions.GetCredentialCancellationException'
 import NoCredentialException from 'androidx.credentials.exceptions.NoCredentialException'
 import ClearCredentialException from 'androidx.credentials.exceptions.ClearCredentialException'
-import GetGoogleIdOption from 'com.google.android.libraries.identity.googleid.GetGoogleIdOption'
+import GetSignInWithGoogleOption from 'com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption'
 import GoogleIdTokenCredential from 'com.google.android.libraries.identity.googleid.GoogleIdTokenCredential'
 import Void from 'java.lang.Void'
 import { GoogleSignInCallbacks } from '../interface.uts'
+
+const GOOGLE_OAUTH_LOG_TAG = 'AIT_GOOGLE_OAUTH'
+
+function logGoogleOAuth(stage : string, details : string = '') : void {
+	const suffix = details.length > 0 ? ' ' + details : ''
+	Log.i(GOOGLE_OAUTH_LOG_TAG, 'stage=' + stage + suffix)
+}
+
+// Credential Manager 会在系统账号选择界面结束后异步回调；这里强持有整次请求，避免 UTS 桥接对象提前失去生命周期。
+let activeCredentialManager : CredentialManager | null = null
+let activeCancellationSignal : CancellationSignal | null = null
+let activeCredentialCallback : CredentialCallback | null = null
+let activeRequestId : number = 0
+
+function isCredentialRequestActive(requestId : number) : boolean {
+	return requestId == activeRequestId && activeCredentialCallback != null
+}
+
+function releaseCredentialRequest(requestId : number) : void {
+	if (requestId != activeRequestId) return
+	activeCredentialManager = null
+	activeCancellationSignal = null
+	activeCredentialCallback = null
+}
 
 /** 仅检查 Android 版本、前台 Activity 和 Google Play 服务，不触发任何账号界面。 */
 export function isGoogleSignInAvailable() : boolean {
@@ -28,8 +53,8 @@ export function isGoogleSignInAvailable() : boolean {
 }
 
 /**
- * 在用户明确点击后显示 Credential Manager 账号选择器；先显示已授权账号，没有结果时再显示全部设备账号。
- * ID Token 只进入 success 回调，插件不写 Storage、KeyStore、日志或 URL。
+ * 在用户明确点击后使用 Google 官方显式登录选项显示账号选择器，不经过已授权账号筛选或自动选择。
+ * ID Token 只进入 success 回调，插件不写入 Storage、KeyStore 或 URL；诊断日志只包含阶段和异常类型，不包含凭据内容。
  */
 export function signInWithGoogle(
 	serverClientId : string,
@@ -37,86 +62,121 @@ export function signInWithGoogle(
 	callbacks : GoogleSignInCallbacks
 ) : void {
 	if (!isGoogleSignInAvailable()) {
+		logGoogleOAuth('native_android_error', 'errorType=google_play_services_unavailable')
 		callbacks.fail('GOOGLE_NATIVE_UNAVAILABLE', 'Google 原生登录不可用。')
 		return
 	}
 	if (serverClientId.length == 0 || nonce.length == 0) {
+		logGoogleOAuth('native_android_error', 'errorType=invalid_request')
 		callbacks.fail('GOOGLE_NATIVE_INVALID_REQUEST', 'Google 登录请求无效。')
 		return
 	}
-	requestCredential(serverClientId, nonce, true, callbacks)
+	requestCredential(serverClientId, nonce, callbacks)
 }
 
 function requestCredential(
 	serverClientId : string,
 	nonce : string,
-	filterAuthorized : boolean,
 	callbacks : GoogleSignInCallbacks
 ) : void {
 	const activity = UTSAndroid.getUniActivity() as Activity
 	const manager = CredentialManager.create(activity)
-	const googleOption = new GetGoogleIdOption.Builder()
-		.setServerClientId(serverClientId)
-		.setFilterByAuthorizedAccounts(filterAuthorized)
-		.setAutoSelectEnabled(false)
+	const googleOption = new GetSignInWithGoogleOption.Builder(serverClientId)
 		.setNonce(nonce)
 		.build()
 	const request = new GetCredentialRequest.Builder()
 		.addCredentialOption(googleOption)
 		.build()
-	manager.getCredentialAsync(
-		activity,
-		request,
-		new CancellationSignal(),
-		ContextCompat.getMainExecutor(activity),
-		new CredentialCallback(serverClientId, nonce, filterAuthorized, callbacks))
+	// 同一时刻只保留一个账号选择请求；新请求会取消旧请求，防止超时后的迟到回调干扰当前登录。
+	if (activeCancellationSignal != null) {
+		activeCancellationSignal!.cancel()
+	}
+	activeRequestId += 1
+	const requestId = activeRequestId
+	const signal = new CancellationSignal()
+	const callback = new CredentialCallback(
+		requestId,
+		callbacks)
+	activeCredentialManager = manager
+	activeCancellationSignal = signal
+	activeCredentialCallback = callback
+	logGoogleOAuth(
+		'native_android_request_begin',
+		'requestType=explicit_sign_in_with_google')
+	try {
+		manager.getCredentialAsync(
+			activity,
+			request,
+			signal,
+			ContextCompat.getMainExecutor(activity),
+			callback)
+	} catch (error : Exception) {
+		releaseCredentialRequest(requestId)
+		logGoogleOAuth(
+			'native_android_error',
+			'errorType=' + UTSAndroid.getJavaClass(error).simpleName)
+		callbacks.fail('GOOGLE_NATIVE_UNAVAILABLE', 'Google 原生登录暂时不可用。')
+	}
 }
 
 class CredentialCallback implements CredentialManagerCallback<GetCredentialResponse, GetCredentialException> {
-	private serverClientId : string
-	private nonce : string
-	private filterAuthorized : boolean
+	private requestId : number
 	private callbacks : GoogleSignInCallbacks
 
 	constructor(
-		serverClientId : string,
-		nonce : string,
-		filterAuthorized : boolean,
+		requestId : number,
 		callbacks : GoogleSignInCallbacks
 	) {
-		this.serverClientId = serverClientId
-		this.nonce = nonce
-		this.filterAuthorized = filterAuthorized
+		this.requestId = requestId
 		this.callbacks = callbacks
 	}
 
 	override onResult(result : GetCredentialResponse) : void {
+		if (!isCredentialRequestActive(this.requestId)) return
+		releaseCredentialRequest(this.requestId)
 		try {
-			const credential = result.getCredential()
-			if (credential.getType() != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+			logGoogleOAuth('native_android_result')
+			const credential = result.credential
+			if (credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+				logGoogleOAuth('native_android_error', 'errorType=unsupported_credential')
 				this.callbacks.fail('GOOGLE_NATIVE_UNSUPPORTED_CREDENTIAL', 'Google 返回了不支持的凭据。')
 				return
 			}
-			const googleCredential = GoogleIdTokenCredential.createFrom(credential.getData())
-			this.callbacks.success({ idToken: googleCredential.getIdToken() })
+			const googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
+			const idToken = googleCredential.idToken
+			if (idToken.length == 0) {
+				logGoogleOAuth('native_android_error', 'errorType=empty_id_token')
+				this.callbacks.fail('GOOGLE_NATIVE_INVALID_CREDENTIAL', 'Google 登录凭据无效。')
+				return
+			}
+			logGoogleOAuth('native_android_success')
+			this.callbacks.success({ idToken })
 		} catch (error : Exception) {
+			logGoogleOAuth(
+				'native_android_error',
+				'errorType=' + UTSAndroid.getJavaClass(error).simpleName)
 			this.callbacks.fail('GOOGLE_NATIVE_INVALID_CREDENTIAL', 'Google 登录凭据无效。')
 		}
 	}
 
 	override onError(error : GetCredentialException) : void {
+		if (!isCredentialRequestActive(this.requestId)) return
+		releaseCredentialRequest(this.requestId)
 		if (error instanceof GetCredentialCancellationException) {
+			logGoogleOAuth('native_android_cancel')
 			this.callbacks.cancel()
 			return
 		}
-		if (this.filterAuthorized && error instanceof NoCredentialException) {
-			requestCredential(this.serverClientId, this.nonce, false, this.callbacks)
-			return
-		}
 		if (error instanceof NoCredentialException) {
+			logGoogleOAuth(
+				'native_android_error',
+				'errorType=' + UTSAndroid.getJavaClass(error).simpleName)
 			this.callbacks.fail('GOOGLE_NATIVE_NO_ACCOUNT', '设备上没有可用的 Google 账号。')
 			return
 		}
+		logGoogleOAuth(
+			'native_android_error',
+			'errorType=' + UTSAndroid.getJavaClass(error).simpleName)
 		this.callbacks.fail('GOOGLE_NATIVE_UNAVAILABLE', 'Google 原生登录暂时不可用。')
 	}
 }
@@ -132,7 +192,7 @@ export function clearGoogleCredentialState() : void {
 		new ClearCredentialCallback())
 }
 
-class ClearCredentialCallback implements CredentialManagerCallback<Void, ClearCredentialException> {
-	override onResult(result : Void) : void { }
+class ClearCredentialCallback implements CredentialManagerCallback<Void | null, ClearCredentialException> {
+	override onResult(result : Void | null) : void { }
 	override onError(error : ClearCredentialException) : void { }
 }

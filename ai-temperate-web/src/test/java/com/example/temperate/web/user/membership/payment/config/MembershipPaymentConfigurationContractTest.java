@@ -33,7 +33,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 final class MembershipPaymentConfigurationContractTest {
 
     @Test
-    void hikariUsesTheApprovedSingleInstanceLoadtestCapacity() throws IOException {
+    void productionDefaultsUseTheApprovedSingleInstanceCapacity() throws IOException {
         MutablePropertySources sources = new MutablePropertySources();
         new YamlPropertySourceLoader()
                 .load("application.yml", new ClassPathResource("application.yml"))
@@ -41,9 +41,21 @@ final class MembershipPaymentConfigurationContractTest {
         PropertySourcesPropertyResolver resolver = new PropertySourcesPropertyResolver(sources);
 
         assertThat(resolver.getProperty(
-                "spring.datasource.hikari.maximum-pool-size", Integer.class)).isEqualTo(96);
+                "spring.datasource.hikari.maximum-pool-size", Integer.class)).isEqualTo(256);
         assertThat(resolver.getProperty(
                 "spring.datasource.hikari.minimum-idle", Integer.class)).isEqualTo(8);
+        assertThat(resolver.getProperty("server.tomcat.accept-count", Integer.class))
+                .isEqualTo(256);
+        assertThat(resolver.getProperty("server.tomcat.max-connections", Integer.class))
+                .isEqualTo(256);
+        assertThat(resolver.getProperty("server.tomcat.threads.max", Integer.class))
+                .isEqualTo(256);
+        assertThat(resolver.getProperty("spring.rabbitmq.requested-channel-max", Integer.class))
+                .isEqualTo(512);
+        assertThat(resolver.getProperty("spring.rabbitmq.cache.channel.size", Integer.class))
+                .isEqualTo(256);
+        assertThat(resolver.getProperty("spring.rabbitmq.cache.channel.checkout-timeout"))
+                .isEqualTo("30s");
     }
 
     @Test

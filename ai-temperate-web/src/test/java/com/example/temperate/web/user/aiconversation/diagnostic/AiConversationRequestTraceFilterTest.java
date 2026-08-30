@@ -2,6 +2,7 @@ package com.example.temperate.web.user.aiconversation.diagnostic;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -65,6 +66,28 @@ final class AiConversationRequestTraceFilterTest {
         assertThat(request.getAttribute(
                 AiConversationRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE))
                 .isEqualTo("unavailable");
+    }
+
+    @Test
+    void reusesTheRequestWideTraceWhenAuthenticationDiagnosticsAlreadyCreatedIt()
+            throws Exception {
+        AiConversationRequestTraceFilter filter =
+                new AiConversationRequestTraceFilter();
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/ai/conversations/example/responses");
+        String requestWideTrace = UUID.randomUUID().toString();
+        request.setAttribute(
+                AuthRequestTraceFilter.TRACE_ATTRIBUTE,
+                requestWideTrace);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(request.getAttribute(
+                AiConversationRequestTraceFilter.TRACE_ATTRIBUTE))
+                .isEqualTo(requestWideTrace);
+        assertThat(response.getHeader(AiConversationRequestTraceFilter.TRACE_HEADER))
+                .isEqualTo(requestWideTrace);
     }
 
     @Test

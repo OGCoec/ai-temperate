@@ -838,3 +838,27 @@ test('diagnostic callback failures never change a successful probe result', asyn
 		harness.cleanup()
 	}
 })
+
+test('Android abort closes the hidden WebView and rejects without a zero-candidate result', async () => {
+	const harness = installWebViewHarness()
+	try {
+		const controller = new AbortController()
+		const { collectAndroidWebRtcIpsInBackground } = await probeModule()
+		const resultPromise = collectAndroidWebRtcIpsInBackground({
+			cryptoBridge: cryptoBridge(),
+			signal: controller.signal,
+			timeoutMillis: 12000
+		})
+
+		controller.abort('APP_HIDDEN')
+
+		await assert.rejects(resultPromise, error => {
+			assert.equal(error.code, 'WEBRTC_ATTEMPT_ABORTED')
+			assert.equal(error.cancelReason, 'APP_HIDDEN')
+			return true
+		})
+		assert.equal(harness.closeCount, 1)
+	} finally {
+		harness.cleanup()
+	}
+})

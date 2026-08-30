@@ -11,7 +11,7 @@
     "type": "uts",
     "declaration": {
       "ads": "无",
-      "data": "只把用户选择后返回的短时 Google ID Token 交给调用方内存回调，不持久化、不记录日志。",
+    "data": "只把用户选择后返回的短时 Google ID Token 交给调用方内存回调，不持久化、不记录 Token 或凭据内容；仅输出不含凭据的阶段诊断日志。",
       "permissions": "需要网络连接与设备上的 Google Play 服务。"
     }
   },

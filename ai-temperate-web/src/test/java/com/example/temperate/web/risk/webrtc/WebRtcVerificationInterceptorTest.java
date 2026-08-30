@@ -20,6 +20,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -179,10 +180,34 @@ class WebRtcVerificationInterceptorTest {
         request.setAttribute(
                 NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
                 mock(PreAuthAccess.class));
+        request.setAttribute(
+                AuthRequestTraceFilter.TRACE_ATTRIBUTE,
+                "123e4567-e89b-42d3-a456-426614174000");
+        request.setAttribute(
+                AuthRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE,
+                "123e4567-e89b-42d3-a456-426614174001");
+        request.setAttribute(
+                AuthRequestTraceFilter.PAGE_INSTANCE_ATTRIBUTE,
+                "123e4567-e89b-42d3-a456-426614174003");
+        request.setAttribute(
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE,
+                "123e4567-e89b-42d3-a456-426614174002");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
-                .isFalse();
+        try (LogCapture logs = LogCapture.start()) {
+            assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                    .isFalse();
+            assertThat(logs.joined())
+                    .contains(
+                            "event=webrtc_interceptor_rejected",
+                            "status=428",
+                            "errorCode=WEBRTC_IP_FAMILY_INCOMPLETE",
+                            "generation=9",
+                            "failureReason=IP_FAMILY_INCOMPLETE",
+                            "pageInstanceId=123e4567-e89b-42d3-a456-426614174003",
+                            "probeRunId=123e4567-e89b-42d3-a456-426614174002")
+                    .doesNotContain("2606:4700:4700::1111", "8.8.8.8");
+        }
         assertThat(response.getStatus()).isEqualTo(428);
         assertThat(response.getContentAsString())
                 .contains(

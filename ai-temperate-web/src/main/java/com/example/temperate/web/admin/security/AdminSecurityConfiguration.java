@@ -3,6 +3,7 @@ package com.example.temperate.web.admin.security;
 import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.web.admin.transport.AdminCookieWriter;
 import com.example.temperate.web.auth.config.SpaCsrfTokenRequestHandler;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationTransport;
@@ -72,6 +73,10 @@ public class AdminSecurityConfiguration {
                 "Authorization",
                 "Content-Type",
                 "X-Device-Installation-Id",
+                AuthRequestTraceFilter.CLIENT_REQUEST_HEADER,
+                AuthRequestTraceFilter.PAGE_INSTANCE_HEADER,
+                AuthRequestTraceFilter.CLIENT_QUEUE_HEADER,
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
                 PLATFORM_HEADER,
                 "X-Admin-Register-Token",
                 "X-Admin-Login-Flow-Token",
@@ -88,6 +93,7 @@ public class AdminSecurityConfiguration {
                 "X-Accel-Buffering",
                 WebRtcVerificationTransport.STATE_HEADER,
                 WebRtcVerificationTransport.GENERATION_HEADER,
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
                 "Idempotency-Replayed"));
         configuration.setMaxAge(600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -18,6 +18,12 @@ const androidDiagnostics = createWebRtcDiagnosticLogger(
  * Android 仅使用屏幕外本地 WebView 探测 WebRTC，并由 UTS 原生加密桥保护回传结果。
  */
 export async function collectAndroidVerificationIps(options = {}) {
+	if (options.signal?.aborted === true) {
+		const error = new Error('WebRTC attempt was cancelled.')
+		error.code = 'WEBRTC_ATTEMPT_ABORTED'
+		error.cancelReason = String(options.signal.reason || 'EPOCH_INVALIDATED')
+		throw error
+	}
 	if (typeof plus === 'undefined' || !plus.webview) {
 		androidDiagnostics('environment_unavailable', {
 			reason: 'plus_webview_unavailable'
@@ -40,6 +46,7 @@ export async function collectAndroidVerificationIps(options = {}) {
 		resourcePath: '/hybrid/html/webrtc-probe.html',
 		stunUrls: options.stunUrls,
 		timeoutMillis: options.timeoutMillis,
+		signal: options.signal,
 		diagnosticRole: 'user',
 		diagnosticsEnabled: WEBRTC_DIAGNOSTICS_ENABLED,
 		onDiagnostic: androidDiagnostics,

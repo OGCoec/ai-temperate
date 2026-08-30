@@ -14,6 +14,7 @@ import com.example.temperate.service.risk.observability.NetworkRiskMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthRequiredException;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
@@ -52,6 +53,8 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             NetworkRiskInterceptor.class.getName() + ".diagnosticInvocation";
     public static final String WEBRTC_GENERATION_CHANGED_ATTRIBUTE =
             NetworkRiskInterceptor.class.getName() + ".webRtcGenerationChanged";
+    public static final String PREAUTH_CREDENTIAL_PRESENT_ATTRIBUTE =
+            NetworkRiskInterceptor.class.getName() + ".preAuthCredentialPresent";
     private static final String COMPLETED_EVALUATION_ATTRIBUTE =
             NetworkRiskInterceptor.class.getName() + ".completedEvaluation";
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
@@ -120,22 +123,27 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             HttpServletRequest request,
             HttpServletResponse response,
             Object handler) throws Exception {
-        // 压测路径仍会在后续用户认证拦截器验证 AT、白名单与数据库状态，这里只跳过其明确不需要的 PreAuth 风险会话。
-        if (loadtestRequestPolicy.matchesTokenMint(request)
-                || loadtestRequestPolicy.matches(request)) {
-            // 本机 Token 签发入口只由 Controller 的回环地址校验保护；会员业务路径仍在后续认证拦截器校验 AT。
-            return true;
-        }
-        int invocationNo = nextInvocationNo(request);
-        String dispatcherType = request.getDispatcherType().name();
-        String traceId = traceId(request);
-        try (NetworkRiskDiagnosticContext.Scope ignored =
-                NetworkRiskDiagnosticContext.open(
-                        traceId,
-                        invocationNo,
-                        dispatcherType,
-                        DIAGNOSTIC_PHASE)) {
-            return evaluate(request, response);
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.RISK);
+        try {
+            // 压测路径仍会在后续用户认证拦截器验证 AT、白名单与数据库状态，这里只跳过其明确不需要的 PreAuth 风险会话。
+            if (loadtestRequestPolicy.matchesTokenMint(request)
+                    || loadtestRequestPolicy.matches(request)) {
+                // 本机 Token 签发入口只由 Controller 的回环地址校验保护；会员业务路径仍在后续认证拦截器校验 AT。
+                return true;
+            }
+            int invocationNo = nextInvocationNo(request);
+            String dispatcherType = request.getDispatcherType().name();
+            String traceId = traceId(request);
+            try (NetworkRiskDiagnosticContext.Scope ignored =
+                    NetworkRiskDiagnosticContext.open(
+                            traceId,
+                            invocationNo,
+                            dispatcherType,
+                            DIAGNOSTIC_PHASE)) {
+                return evaluate(request, response);
+            }
+        } finally {
+            AuthRequestTiming.complete(request, AuthRequestTiming.Stage.RISK);
         }
     }
 
@@ -155,6 +163,9 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
             return allow(request, scope, "bypass");
         }
         String rawPreAuth = transport.read(request, scope);
+        request.setAttribute(
+                PREAUTH_CREDENTIAL_PRESENT_ATTRIBUTE,
+                rawPreAuth != null && !rawPreAuth.isBlank());
         PreAuthAccess access = existingAccess instanceof PreAuthAccess verified
                 ? verified
                 : preAuthService.resolve(
@@ -329,6 +340,9 @@ public final class NetworkRiskInterceptor implements HandlerInterceptor {
                 safePath(request.getRequestURI()),
                 response.getStatus(),
                 response.isCommitted());
+        AuthRequestTiming.recordErrorCode(request, code);
+        AuthRequestTiming.complete(request, AuthRequestTiming.Stage.RISK);
+        AuthRequestTiming.writeServerTiming(request, response);
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());

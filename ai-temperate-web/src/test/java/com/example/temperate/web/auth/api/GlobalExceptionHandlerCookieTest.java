@@ -102,6 +102,42 @@ class GlobalExceptionHandlerCookieTest {
     }
 
     @Test
+    void missingRefreshTokenReturnsUnauthorizedAndClearsBrowserSessionAndPreAuthCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse responseTarget = new MockHttpServletResponse();
+
+        var response = handler.handleSession(
+                exception(SessionAuthenticationErrorCode.REFRESH_TOKEN_REQUIRED, true),
+                request,
+                responseTarget);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("REFRESH_TOKEN_REQUIRED");
+        verify(cookieWriter).clearSession(responseTarget);
+        verify(preAuthTransport).clearCookie(responseTarget, RiskScope.USER);
+    }
+
+    @Test
+    void recoverablePreAuthFailureReturnsPreconditionRequiredWithoutClearingCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Client-Platform", "H5");
+        MockHttpServletResponse responseTarget = new MockHttpServletResponse();
+
+        var response = handler.handleSession(
+                exception(SessionAuthenticationErrorCode.PREAUTH_REQUIRED, false),
+                request,
+                responseTarget);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("PREAUTH_REQUIRED");
+        verify(cookieWriter, never()).clearSession(responseTarget);
+        verify(preAuthTransport, never()).clearCookie(responseTarget, RiskScope.USER);
+    }
+
+    @Test
     void h5MissingAccessTokenAlsoClearsTheUnusableRefreshSession() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Client-Platform", "H5");

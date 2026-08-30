@@ -7,5 +7,6 @@ export function collectH5VerificationIps(options = {}) {
 	return collectH5WebRtcIps(
 		options.stunUrls,
 		options.timeoutMillis,
-		options.diagnosticTrace)
+		options.diagnosticTrace,
+		options.signal)
 }

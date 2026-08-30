@@ -27,8 +27,8 @@ server:
   tomcat:
     # 压测连接接收队列与二百五十六并发上限一致，只影响该受控压测 Profile。
     accept-count: ${MEMBERSHIP_LOADTEST_TOMCAT_ACCEPT_COUNT:256}
-    # 三百二十个连接为二百五十六正式请求预留六十四个采样、探针和管理连接，避免观测连接挤占实验并发。
-    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:320}
+    # 最大连接数固定为二百五十六，与生产默认值和正式请求并发上限保持一致。
+    max-connections: ${MEMBERSHIP_LOADTEST_TOMCAT_MAX_CONNECTIONS:256}
     # Tomcat 工作线程上限按本轮明确的压测合同统一为二百五十六，仅用于受控本机压测。
     threads:
       # 高线程上限只定义容量边界，正式运行仍必须监控线程、内存、CPU 和请求超时。

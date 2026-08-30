@@ -49,7 +49,7 @@
 			@keydown.esc.stop="$emit('close-drawer')"
 		>
 			<view class="workspace-drawer-heading">
-				<text class="workspace-drawer-title">{{ androidClient ? 'AI Temperate' : '聊天' }}</text>
+				<text class="workspace-drawer-title">{{ androidClient ? 'Eagle AI' : '聊天' }}</text>
 				<button
 					class="workspace-icon-button"
 					type="button"

@@ -6,9 +6,14 @@ import { WEBRTC_DEFAULT_TIMEOUT_MILLIS } from './webrtc-verification-core.js'
 export function collectH5WebRtcIps(
 	stunUrls,
 	timeoutMillis = WEBRTC_DEFAULT_TIMEOUT_MILLIS,
-	diagnosticTrace
+	diagnosticTrace,
+	signal
 ) {
-	return new Promise(resolve => {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted === true) {
+			reject(webRtcAbortError(signal.reason))
+			return
+		}
 		const PeerConnection = typeof globalThis !== 'undefined'
 			? globalThis.RTCPeerConnection
 				|| globalThis.webkitRTCPeerConnection
@@ -36,16 +41,30 @@ export function collectH5WebRtcIps(
 		let connection
 		let timer
 		let settled = false
+		let onCandidate
+		let onGatheringState
+
+		const cleanup = () => {
+			if (timer) {
+				clearTimeout(timer)
+				timer = null
+			}
+			signal?.removeEventListener?.('abort', onAbort)
+			if (!connection) return
+			try {
+				connection.removeEventListener('icecandidate', onCandidate)
+				connection.removeEventListener('icegatheringstatechange', onGatheringState)
+				connection.close()
+			} catch (_) {
+				// 页面卸载过程中浏览器可能已销毁连接；取消结果仍必须稳定结算。
+			}
+			connection = null
+		}
 
 		const finish = (reason = 'completed') => {
 			if (settled) return
 			settled = true
-			if (timer) clearTimeout(timer)
-			if (connection) {
-				connection.removeEventListener('icecandidate', onCandidate)
-				connection.removeEventListener('icegatheringstatechange', onGatheringState)
-				connection.close()
-			}
+			cleanup()
 			const values = stableIpOrder([...addresses]).slice(0, 8)
 			const families = candidateFamilyCounts(values)
 			trace(diagnosticTrace, 'ice_finished', {
@@ -63,7 +82,26 @@ export function collectH5WebRtcIps(
 			resolve(values)
 		}
 
-		const onCandidate = event => {
+		const onAbort = () => {
+			if (settled) return
+			settled = true
+			cleanup()
+			trace(diagnosticTrace, 'ice_finished', {
+				reason: 'aborted',
+				hostCount: stats.hostCount,
+				srflxCount: stats.srflxCount,
+				acceptedCount: 0,
+				acceptedHostCount: 0,
+				acceptedSrflxCount: 0,
+				ignoredRelayCount: stats.ignoredRelayCount,
+				rejectedNonPublicCount: stats.rejectedNonPublicCount,
+				ipv4Count: 0,
+				ipv6Count: 0
+			})
+			reject(webRtcAbortError(signal?.reason))
+		}
+
+		onCandidate = event => {
 			const candidate = event?.candidate
 			if (!candidate) {
 				finish('null_candidate')
@@ -90,8 +128,14 @@ export function collectH5WebRtcIps(
 			}
 		}
 
-		const onGatheringState = () => {
+		onGatheringState = () => {
 			if (connection?.iceGatheringState === 'complete') finish('gathering_complete')
+		}
+
+		signal?.addEventListener?.('abort', onAbort, { once: true })
+		if (signal?.aborted === true) {
+			onAbort()
+			return
 		}
 
 		try {
@@ -284,4 +328,11 @@ function stableIpOrder(addresses) {
 		if (family) return family
 		return left === right ? 0 : left < right ? -1 : 1
 	})
+}
+
+function webRtcAbortError(reason) {
+	const error = new Error('WebRTC attempt was cancelled.')
+	error.code = 'WEBRTC_ATTEMPT_ABORTED'
+	error.cancelReason = String(reason || 'EPOCH_INVALIDATED')
+	return error
 }

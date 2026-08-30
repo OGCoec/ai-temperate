@@ -13,6 +13,16 @@ function parseUniPages(source) {
 	return JSON.parse(source.replace(/^\s*\/\/\s*#(?:ifn?def|endif).*$/gm, ''))
 }
 
+test('authenticated home dismisses the native startup layer after workspace initialization', () => {
+	const entry = read('pages/ai-chat/index.vue')
+
+	assert.match(entry, /eagle-native-splash\.js/)
+	assert.match(entry, /onAuthenticatedPageReady\(\)[\s\S]{0,420}handleAuthenticated\(\)/)
+	assert.match(entry, /createNativeSplashHandoff\(this,\s*'home-ready'\)/)
+	assert.match(entry, /onAuthenticatedPageReady\(\)[\s\S]{0,620}nativeSplashHandoff\?\.markDomReady\(\)/)
+	assert.doesNotMatch(entry, /onReady\(\)[\s\S]{0,180}dismissNativeSplash/)
+})
+
 test('H5 entry explicitly publishes the uni-icons font instead of relying on component style discovery', () => {
 	const app = read('App.vue')
 	const entry = read('main.js')
@@ -171,7 +181,9 @@ test('recent conversations are expanded in the focused sidebar and loaded on dem
 	const recentUsages = sidebar.match(/<user-recent-conversations\b/g) || []
 
 	assert.match(page, /let recentExpanded = false[\s\S]*#ifdef H5[\s\S]*recentExpanded = true/)
-	assert.doesNotMatch(page, /onAuthenticatedPageReady\(\)[\s\S]{0,180}refreshConversations\(\)/)
+	assert.match(page, /ensureRecentConversations\(\)[\s\S]*if \(!this\.authenticated\)/)
+	assert.match(page, /CONVERSATION_LIST_SKIPPED/)
+	assert.match(page, /handleAuthenticated\(\)[\s\S]*this\.sidebarOpen[\s\S]*this\.recentExpanded[\s\S]*ensureRecentConversations\(\)/)
 	assert.match(page, /ensureRecentConversations\(\)[\s\S]*this\.conversationsLoaded/)
 	assert.match(page, /toggleRecentConversations\(\)[\s\S]*this\.recentExpanded = !this\.recentExpanded[\s\S]*ensureRecentConversations\(\)/)
 	assert.match(page, /sidebarPreferenceTouched:\s*false/)

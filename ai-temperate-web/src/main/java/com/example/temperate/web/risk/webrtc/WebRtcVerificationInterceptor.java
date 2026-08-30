@@ -6,9 +6,11 @@ import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
 import com.example.temperate.service.risk.observability.WebRtcMetrics;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
+import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcFailureReason;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationOutcome;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
@@ -27,9 +29,9 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -102,9 +104,20 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(
+            @NonNull HttpServletRequest request,
+            @NonNull HttpServletResponse response,
+            @NonNull Object handler) throws Exception {
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.WEBRTC);
+        try {
+            return inspect(request, response);
+        } finally {
+            AuthRequestTiming.complete(request, AuthRequestTiming.Stage.WEBRTC);
+        }
+    }
+
+    private boolean inspect(
             HttpServletRequest request,
-            HttpServletResponse response,
-            Object handler) throws Exception {
+            HttpServletResponse response) throws Exception {
         if (loadtestRequestPolicy.matches(request)) {
             // 会员压测认证已由后续 UserSessionAuthenticationInterceptor 完成，不能再要求站内 WebRTC PreAuth。
             return true;
@@ -116,7 +129,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             return true;
         }
         if (properties.mode() == NetworkRiskMode.DISABLED
-                || HttpMethod.OPTIONS.matches(request.getMethod())) {
+                || "OPTIONS".equals(request.getMethod())) {
             return allow(request, scope, "bypass");
         }
         String platform = platform(request);
@@ -133,7 +146,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             if (properties.mode() == NetworkRiskMode.OBSERVE) {
                 return allow(request, scope, "observe_required");
             }
-            return rejectPreAuth(response);
+            return rejectPreAuth(request, response);
         }
 
         WebRtcVerificationDecision decision = verificationService.inspect(
@@ -160,6 +173,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             return allow(request, scope, metricDecision);
         }
         return reject(
+                request,
                 response,
                 httpStatus(decision.outcome()),
                 scope,
@@ -167,7 +181,20 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
                 observation.clientIp());
     }
 
-    private boolean rejectPreAuth(HttpServletResponse response) throws Exception {
+    private boolean rejectPreAuth(
+            HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        AuthRequestTiming.recordErrorCode(request, "PREAUTH_REQUIRED");
+        logRejected(
+                request,
+                HttpStatus.PRECONDITION_REQUIRED,
+                "PREAUTH_REQUIRED",
+                "REQUIRED",
+                0L,
+                null,
+                false);
+        AuthRequestTiming.complete(request, AuthRequestTiming.Stage.WEBRTC);
+        AuthRequestTiming.writeServerTiming(request, response);
         response.setStatus(HttpStatus.PRECONDITION_REQUIRED.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
@@ -181,11 +208,24 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
     }
 
     private boolean reject(
+            HttpServletRequest request,
             HttpServletResponse response,
             HttpStatus status,
             RiskScope scope,
             WebRtcVerificationDecision decision,
             String currentHttpIp) throws Exception {
+        AuthRequestTiming.recordErrorCode(request, code(decision.outcome()));
+        logRejected(
+                request,
+                status,
+                code(decision.outcome()),
+                decision.verificationState(),
+                decision.probeGeneration(),
+                decision.failureReason(),
+                decision.outcome() == WebRtcVerificationOutcome.NETWORK_CHANGED
+                        || decision.outcome() == WebRtcVerificationOutcome.STALE_REPORT);
+        AuthRequestTiming.complete(request, AuthRequestTiming.Stage.WEBRTC);
+        AuthRequestTiming.writeServerTiming(request, response);
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
@@ -207,6 +247,46 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
         body.put("timestamp", Instant.now().toString());
         objectMapper.writeValue(response.getWriter(), body);
         return false;
+    }
+
+    private static void logRejected(
+            HttpServletRequest request,
+            HttpStatus status,
+            String errorCode,
+            String verificationState,
+            long generation,
+            PreAuthWebRtcFailureReason failureReason,
+            boolean retryable) {
+        // 拒绝日志只关联请求和状态机枚举；完整 HTTP IP 与候选集合仍仅进入受控错误响应，不写入日志。
+        LOGGER.warn(
+                "event=webrtc_interceptor_rejected traceId={} clientRequestId={} "
+                        + "pageInstanceId={} probeRunId={} path={} platform={} status={} "
+                        + "errorCode={} verificationState={} generation={} failureReason={} retryable={}",
+                diagnosticAttribute(request, AuthRequestTraceFilter.TRACE_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.PAGE_INSTANCE_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE),
+                safePath(request.getRequestURI()),
+                platform(request),
+                status.value(),
+                safeDiagnosticValue(errorCode),
+                safeDiagnosticValue(verificationState),
+                Math.max(0L, generation),
+                failureReason == null ? "absent" : failureReason.name(),
+                retryable);
+    }
+
+    private static String diagnosticAttribute(
+            HttpServletRequest request,
+            String attributeName) {
+        Object value = request.getAttribute(attributeName);
+        return value instanceof String text ? safeDiagnosticValue(text) : "absent";
+    }
+
+    private static String safeDiagnosticValue(String value) {
+        return value != null && value.matches("^[A-Za-z0-9._:-]{1,128}$")
+                ? value
+                : "absent";
     }
 
     private static boolean allow(

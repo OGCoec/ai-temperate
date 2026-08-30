@@ -10,6 +10,13 @@ import {
 import { ensureCookieScopeMigration } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import {
+	authDiagnosticRequestHeaders,
+	createAuthRequestDiagnostic,
+	recordAuthDiagnosticEvent,
+	recordAuthDiagnosticFailure,
+	recordAuthDiagnosticResponse
+} from './auth-diagnostics.js'
+import {
 	loadAndroidSessionCredentials,
 	saveAndroidSessionCredentials
 } from './android-keystore.js'
@@ -30,31 +37,71 @@ const PRE_AUTH_PATH = '/api/_edge/pre-auth'
 let ready = false
 let bootstrapInFlight = null
 let resetRequested = false
+let preAuthLifecycleEpoch = 0
 
 export function currentPreAuthToken() {
 	if (clientPlatform() !== 'ANDROID') return ''
 	return loadAndroidSessionCredentials().preAuthToken || ''
 }
 
+export function isPreAuthReady() {
+	return ready === true
+}
+
 export function invalidatePreAuth() {
+	preAuthLifecycleEpoch += 1
 	ready = false
 	resetRequested = true
+	// 旧请求可以自然结束，但不能再被新 epoch 加入，也不能在 finally 中清掉新任务。
+	bootstrapInFlight = null
+	recordAuthDiagnosticEvent('PREAUTH_INVALIDATED', {
+		source: 'invalidate_pre_auth',
+		outcome: 'invalidated'
+	})
 	if (clientPlatform() !== 'ANDROID') return
 	const current = loadAndroidSessionCredentials()
 	saveAndroidSessionCredentials({ ...current, preAuthToken: '' })
 }
 
 export async function ensurePreAuth() {
-	if (ready) return currentPreAuthToken()
-	if (!bootstrapInFlight) {
-		bootstrapInFlight = bootstrapPreAuth()
-			.finally(() => { bootstrapInFlight = null })
+	if (ready) {
+		recordAuthDiagnosticEvent('PREAUTH_SINGLE_FLIGHT', {
+			source: 'ensure_pre_auth',
+			outcome: 'ready_memory',
+			owner: false,
+			waiter: false
+		})
+		return currentPreAuthToken()
 	}
-	return bootstrapInFlight
+	const owner = !bootstrapInFlight
+		|| bootstrapInFlight.epoch !== preAuthLifecycleEpoch
+	recordAuthDiagnosticEvent('PREAUTH_SINGLE_FLIGHT', {
+		source: 'ensure_pre_auth',
+		outcome: owner ? 'created' : 'joined',
+		owner,
+		waiter: !owner
+	})
+	if (owner) {
+		bootstrapInFlight = createBootstrapEntry(false)
+	}
+	return bootstrapInFlight.promise
 }
 
-async function bootstrapPreAuth(riskChallengeRetried = false) {
+function createBootstrapEntry(riskChallengeRetried) {
+	const entry = {
+		epoch: preAuthLifecycleEpoch,
+		promise: null
+	}
+	entry.promise = bootstrapPreAuth(riskChallengeRetried, entry.epoch)
+		.finally(() => {
+			if (bootstrapInFlight === entry) bootstrapInFlight = null
+		})
+	return entry
+}
+
+async function bootstrapPreAuth(riskChallengeRetried = false, attemptEpoch = preAuthLifecycleEpoch) {
 	await ensureCookieScopeMigration()
+	assertCurrentPreAuthAttempt(attemptEpoch)
 	// Challenge 返回后的同步抢占只允许当前调用方执行一次 PreAuth 复查。
 	const challengeRecheck = claimRiskChallengeRecheck()
 	const platform = clientPlatform()
@@ -72,6 +119,7 @@ async function bootstrapPreAuth(riskChallengeRetried = false) {
 	try {
 		response = await requestBootstrap(headers)
 	} catch (error) {
+		assertCurrentPreAuthAttempt(attemptEpoch)
 		if (error.reauthenticationRequired) clearSession()
 		if (presentRiskBlock(error)) throw error
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
@@ -80,8 +128,9 @@ async function bootstrapPreAuth(riskChallengeRetried = false) {
 					throw repeatedAndroidRiskChallengeError(error)
 				}
 				await acceptAndroidRiskChallenge(error)
+				assertCurrentPreAuthAttempt(attemptEpoch)
 				try {
-					return await bootstrapPreAuth(true)
+					return await bootstrapPreAuth(true, attemptEpoch)
 				} catch (cause) {
 					throw normalizeRiskChallengeRecheckError(cause)
 				}
@@ -91,6 +140,7 @@ async function bootstrapPreAuth(riskChallengeRetried = false) {
 		if (challengeRecheck) failRiskChallengeRecheck()
 		throw error
 	}
+	assertCurrentPreAuthAttempt(attemptEpoch)
 	if (response?.status === 'DISABLED') {
 		if (platform === 'ANDROID') {
 			saveAndroidSessionCredentials({
@@ -144,14 +194,26 @@ export async function acceptAndroidRiskChallenge(error) {
 }
 
 export function recheckPreAuthAfterRiskChallenge() {
+	preAuthLifecycleEpoch += 1
 	ready = false
 	resetRequested = false
-	if (!bootstrapInFlight) {
-		bootstrapInFlight = bootstrapPreAuth(true)
-			.catch(cause => { throw normalizeRiskChallengeRecheckError(cause) })
-			.finally(() => { bootstrapInFlight = null })
-	}
-	return bootstrapInFlight
+	bootstrapInFlight = null
+	const entry = createBootstrapEntry(true)
+	entry.promise = entry.promise
+		.catch(cause => { throw normalizeRiskChallengeRecheckError(cause) })
+	bootstrapInFlight = entry
+	return entry.promise
+}
+
+function assertCurrentPreAuthAttempt(attemptEpoch) {
+	if (attemptEpoch === preAuthLifecycleEpoch) return
+	recordAuthDiagnosticEvent('PREAUTH_STALE_COMPLETION_IGNORED', {
+		source: 'preauth_bootstrap',
+		outcome: 'stale_epoch'
+	})
+	throw preAuthError(
+		'PREAUTH_ATTEMPT_STALE',
+		'预登录安全状态已更新，请重新发起请求。')
 }
 
 function requestBootstrap(headers) {
@@ -160,14 +222,19 @@ function requestBootstrap(headers) {
 }
 
 function requestBootstrapOnce(headers) {
+	const authDiagnostic = createAuthRequestDiagnostic(
+		PRE_AUTH_PATH,
+		'preauth_bootstrap')
+	const diagnosticHeaders = authDiagnosticRequestHeaders(authDiagnostic)
 	return new Promise((resolve, reject) => {
 		uni.request({
 			url: `${AUTH_API_BASE_URL}${PRE_AUTH_PATH}`,
 			method: 'POST',
-			header: androidEdgeRequestHeaders(headers),
+			header: androidEdgeRequestHeaders({ ...headers, ...diagnosticHeaders }),
 			withCredentials: true,
 			timeout: 10000,
 			success(response) {
+				recordAuthDiagnosticResponse(authDiagnostic, response)
 				const diagnostics = inspectAuthResponse(response)
 				if (diagnostics.classification === 'EDGE_CHALLENGE') {
 					const error = preAuthError(
@@ -197,6 +264,7 @@ function requestBootstrapOnce(headers) {
 			fail(cause) {
 				const error = preAuthError('NETWORK_ERROR', '网络连接失败，请稍后重试。')
 				error.cause = cause
+				recordAuthDiagnosticFailure(authDiagnostic, error)
 				reject(error)
 			}
 		})
@@ -211,6 +279,7 @@ function preAuthError(code, message) {
 
 function normalizeRiskChallengeRecheckError(cause) {
 	if ([
+		'PREAUTH_ATTEMPT_STALE',
 		'RISK_CHALLENGE_CANCELLED',
 		'RISK_CHALLENGE_TIMEOUT',
 		'RISK_CHALLENGE_COOKIE_FAILED',

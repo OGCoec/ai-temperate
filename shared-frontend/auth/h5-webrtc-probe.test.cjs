@@ -140,3 +140,50 @@ test('ordinary and administrator Android hidden probes stay byte-identical', () 
 		fs.readFileSync(ordinaryAndroidProbePath, 'utf8'),
 		fs.readFileSync(adminAndroidProbePath, 'utf8'))
 })
+
+test('H5 abort closes RTCPeerConnection and rejects instead of returning zero candidates', async () => {
+	const connections = []
+	class PendingPeerConnection {
+		constructor() {
+			this.listeners = new Map()
+			this.closed = false
+			connections.push(this)
+		}
+
+		addEventListener(name, handler) { this.listeners.set(name, handler) }
+		removeEventListener(name) { this.listeners.delete(name) }
+		createDataChannel() {}
+		createOffer() { return Promise.resolve({ type: 'offer', sdp: '' }) }
+		setLocalDescription() { return Promise.resolve() }
+		close() { this.closed = true }
+	}
+	const context = {
+		RTCPeerConnection: PendingPeerConnection,
+		Promise,
+		Set,
+		Number,
+		String,
+		Array,
+		Math,
+		Error,
+		setTimeout,
+		clearTimeout
+	}
+	vm.runInNewContext(sourceText, context, { filename: sourcePath })
+	const controller = new AbortController()
+	const resultPromise = context.__collectH5WebRtcIps(
+		[],
+		1000,
+		undefined,
+		controller.signal)
+
+	controller.abort('DOCUMENT_UNLOADED')
+
+	await assert.rejects(resultPromise, error => {
+		assert.equal(error.code, 'WEBRTC_ATTEMPT_ABORTED')
+		assert.equal(error.cancelReason, 'DOCUMENT_UNLOADED')
+		return true
+	})
+	assert.equal(connections.length, 1)
+	assert.equal(connections[0].closed, true)
+})

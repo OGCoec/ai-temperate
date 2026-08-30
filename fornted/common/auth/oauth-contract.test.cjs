@@ -23,18 +23,68 @@ test('Android OAuth Flow uses the existing encrypted flow vault while Google ID 
 	assert.match(flow, /if \(!idToken\)[\s\S]*oauthCancel/)
 })
 
-test('Google native plugin disables auto selection and retries with all device accounts', () => {
+test('Google OAuth diagnostics use the approved stages and never log credentials', () => {
+	const flow = read('common/auth/oauth-flow.js')
+	const api = read('common/auth/auth-api.js')
+	const plugin = read('uni_modules/ait-google-signin/utssdk/app-android/index.uts')
+	const pluginInterface = read('uni_modules/ait-google-signin/utssdk/interface.uts')
+
+	assert.match(flow, /GOOGLE_OAUTH_LOG_PREFIX\s*=\s*['"]\[AIT_GOOGLE_OAUTH\]['"]/)
+	assert.match(flow, /GOOGLE_NATIVE_TIMEOUT_MS\s*=\s*30000/)
+	assert.match(flow, /GOOGLE_NATIVE_COMPLETE_TIMEOUT_MS\s*=\s*30000/)
+	assert.match(flow, /let settled\s*=\s*false/)
+	assert.match(flow, /const settle\s*=\s*callback\s*=>\s*value\s*=>/)
+	assert.match(flow, /clearTimeout\(timeoutHandle\)/)
+	assert.match(flow, /const allowed\s*=\s*\[['"]provider['"],\s*['"]mode['"],\s*['"]code['"],\s*['"]status['"],\s*['"]httpStatus['"],\s*['"]elapsedMs['"],\s*['"]tokenPresent['"]\]/)
+	for (const stage of [
+		'oauth_start_begin',
+		'oauth_start_success',
+		'oauth_start_fail',
+		'native_begin',
+		'native_success',
+		'native_cancel',
+		'native_fail',
+		'native_timeout',
+		'native_complete_begin',
+		'native_complete_success',
+		'native_complete_fail',
+		'native_complete_timeout'
+	]) {
+		assert.match(flow, new RegExp(`['"]${stage}['"]`))
+	}
+	for (const stage of [
+		'native_android_request_begin',
+		'native_android_result',
+		'native_android_success',
+		'native_android_error',
+		'native_android_cancel'
+	]) {
+		assert.match(plugin, new RegExp(stage))
+	}
+	assert.match(api, /oauthNativeGoogleComplete[\s\S]*timeout:\s*30000/)
+	assert.match(api, /\/api\/auth\/oauth2\/google\/native\/complete/)
+	assert.match(pluginInterface, /success\s*:\s*\(result : GoogleSignInResult\)\s*=>\s*void/)
+	assert.match(pluginInterface, /cancel\s*:\s*\(\)\s*=>\s*void/)
+	assert.match(pluginInterface, /fail\s*:\s*\(code : string, message : string\)\s*=>\s*void/)
+	assert.doesNotMatch(flow, /console\.(?:log|info|warn|error)\([^\n]*(?:idToken|nonce|oauthFlowToken)/i)
+	assert.doesNotMatch(plugin, /Log\.[a-zA-Z]+\([^\n]*(?:idToken|nonce|oauthFlowToken)/i)
+})
+
+test('Google native plugin uses the explicit Sign in with Google option', () => {
 	const plugin = read('uni_modules/ait-google-signin/utssdk/app-android/index.uts')
 	const config = JSON.parse(read('uni_modules/ait-google-signin/utssdk/app-android/config.json'))
 
-	assert.match(plugin, /setAutoSelectEnabled\(false\)/)
-	assert.match(plugin, /setFilterByAuthorizedAccounts\(filterAuthorized\)/)
-	assert.match(plugin, /requestCredential\(this\.serverClientId, this\.nonce, false/)
+	assert.match(plugin, /GetSignInWithGoogleOption/)
+	assert.match(plugin, /new GetSignInWithGoogleOption\.Builder\(serverClientId\)/)
 	assert.match(plugin, /setNonce\(nonce\)/)
+	assert.doesNotMatch(plugin, /GetGoogleIdOption/)
+	assert.doesNotMatch(plugin, /setFilterByAuthorizedAccounts/)
+	assert.doesNotMatch(plugin, /native_android_retry_no_credential/)
 	assert.deepEqual(config.dependencies, [
 		'androidx.credentials:credentials:1.6.0',
 		'androidx.credentials:credentials-play-services-auth:1.6.0',
-		'com.google.android.libraries.identity.googleid:googleid:1.2.0'
+		'com.google.android.libraries.identity.googleid:googleid:1.2.0',
+		'com.google.android.gms:play-services-base:18.3.0'
 	])
 })
 
@@ -103,19 +153,63 @@ test('H5 OAuth return completion is page-idempotent and delegates state transiti
 	assert.match(flow, /\['FAILED', 'EXPIRED'\]/)
 })
 
-test('login renders two-column OAuth buttons with packaged provider icons', () => {
+test('all authentication completion requests cross one WebRTC epoch boundary', () => {
+	const api = read('common/auth/auth-api.js')
+
+	assert.match(api, /authenticationCompletionRequest/)
+	assert.match(api, /disableAutomaticReplay:\s*true/)
+	assert.match(api, /WebRtcSchedulingPolicy\.SUPPRESS/)
+	assert.match(api, /OAUTH_COMPLETE_BOUNDARY/)
+	assert.match(api, /AUTHENTICATED_EPOCH_ROTATED/)
+	assert.match(api, /WEBRTC_AUTH_EPOCH_STARTED/)
+	for (const path of [
+		'/api/auth/oauth2/complete',
+		'/api/auth/oauth2/google/native/complete',
+		'/api/auth/login/password',
+		'/api/auth/login/code/verify',
+		'/api/auth/login/totp/verify'
+	]) {
+		assert.match(api, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+	}
+	assert.match(api, /scheduleH5WebRtcVerification/)
+	assert.match(api, /startAndroidWebRtcVerificationInBackground/)
+})
+
+test('Android app lifecycle cancels only WebRTC and resumes OAuth before a fresh probe', () => {
+	const app = read('App.vue')
+	const onShowIndex = app.indexOf('onShow()')
+	const onHideIndex = app.indexOf('onHide()')
+	const onShow = app.slice(onShowIndex, onHideIndex)
+	const onHide = app.slice(onHideIndex, app.indexOf('globalData', onHideIndex))
+
+	assert.match(onHide, /cancelActiveWebRtcVerification\('APP_HIDDEN'\)/)
+	assert.doesNotMatch(onHide, /oauthCancel|cancelGoogle|CredentialManager/)
+	assert.ok(onShow.indexOf('resumePendingOAuth()') < onShow.indexOf('ensurePreAuth()'))
+	assert.ok(
+		onShow.indexOf('ensurePreAuth()')
+			< onShow.indexOf('startAndroidWebRtcVerificationInBackground()')
+	)
+})
+
+test('login renders stable OAuth buttons without visual loading spinners', () => {
 	const login = read('pages/auth/login.vue')
 	const googleIconPath = path.join(root, 'static/icons/auth/google.svg')
 	const githubIconPath = path.join(root, 'static/icons/auth/github.svg')
 
 	assert.match(login, /\.oauth-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)
+	assert.match(login, /\.oauth-actions\s*\{[^}]*column-gap:\s*14px/)
+	assert.match(login, /\.oauth-actions\s*\{[^}]*width:\s*100%/)
+	assert.match(login, /\.oauth-button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*margin:\s*0[^}]*box-sizing:\s*border-box[^}]*overflow:\s*hidden/)
+	assert.match(login, /\.oauth-button:disabled\s*\{[^}]*opacity:\s*\.46[^}]*filter:\s*grayscale\(\.35\)\s+saturate\(\.65\)[^}]*cursor:\s*not-allowed/)
 	assert.match(login, /class="oauth-icon"\s+src="\/static\/icons\/auth\/google\.svg"\s+mode="aspectFit"\s+aria-hidden="true"/)
 	assert.match(login, /class="oauth-icon"\s+src="\/static\/icons\/auth\/github\.svg"\s+mode="aspectFit"\s+aria-hidden="true"/)
 	assert.doesNotMatch(login, /\.oauth-fallback\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/)
-	assert.doesNotMatch(
+	assert.match(
 		login,
-		/@media\s+screen\s+and\s+\(max-width:\s*359px\)[\s\S]*?\.oauth-actions\s*\{[^}]*grid-template-columns:\s*1fr/
+		/@media\s+screen\s+and\s+\(max-width:\s*359px\)[\s\S]*?\.oauth-actions\s*\{[^}]*grid-template-columns:\s*1fr[^}]*row-gap:\s*10px/
 	)
+	assert.doesNotMatch(login, /:loading="busy\s*&&\s*oauthProvider\s*===\s*'(?:GOOGLE|GITHUB)'"/)
+	assert.equal((login.match(/:disabled="busy"/g) || []).length >= 2, true)
 	assert.equal(fs.existsSync(googleIconPath), true)
 	assert.equal(fs.existsSync(githubIconPath), true)
 	assert.match(fs.readFileSync(googleIconPath, 'utf8'), /#4285F4[\s\S]*#34A853[\s\S]*#FBBC05[\s\S]*#EA4335/)

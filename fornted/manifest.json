@@ -1,7 +1,7 @@
 {
-    "name" : "AI Temperate",
+    "name" : "Eagle AI",
     "appid" : "__UNI__F0AE07E",
-    "description" : "AI Temperate 认证与个人中心前端",
+    "description" : "Eagle AI 认证与个人中心前端",
     "versionName" : "1.0.0",
     "versionCode" : "100",
     "transformPx" : false,
@@ -12,8 +12,8 @@
         "compilerVersion" : 3,
         "nvueLaunchMode" : "fast",
         "splashscreen" : {
-            "alwaysShowBeforeRender" : true,
-            "waiting" : true,
+            "alwaysShowBeforeRender" : false,
+            "waiting" : false,
             "autoclose" : true,
             "delay" : 0
         },

@@ -158,6 +158,42 @@ public final class NetworkRiskDiagnosticLoggingAspect {
     }
 
     /**
+     * 记录 PreAuth 与刷新会话的绑定复核结果；原始会话引用只交给业务服务，切面禁止读取或格式化该参数。
+     */
+    @Around(
+            "execution(* com.example.temperate.service.risk.preauth.service."
+                    + "PreAuthService.requireSessionBinding(..))")
+    public Object logSessionBinding(ProceedingJoinPoint joinPoint) throws Throwable {
+        long startedAtNanos = System.nanoTime();
+        PreAuthAccess access = argument(joinPoint, 0, PreAuthAccess.class);
+        RiskScope requestedScope = argument(joinPoint, 1, RiskScope.class);
+        try {
+            Object result = joinPoint.proceed();
+            logPreAuthCompleted(
+                    "preauth_session_binding_completed",
+                    requestedScope == null ? scope(access) : requestedScope,
+                    access,
+                    result == null ? "empty" : "succeeded",
+                    startedAtNanos,
+                    null,
+                    result == null);
+            return result;
+        } catch (Throwable failure) {
+            logPreAuthCompleted(
+                    "preauth_session_binding_completed",
+                    requestedScope == null ? scope(access) : requestedScope,
+                    access,
+                    failure instanceof IllegalArgumentException
+                            ? "preauth_required"
+                            : "failed",
+                    startedAtNanos,
+                    failure,
+                    true);
+            throw failure;
+        }
+    }
+
+    /**
      * 使用 Mono.defer 把开始与完成日志延迟到真实订阅，并用原子门禁保证每次订阅只有一个终态事件。
      */
     @Around(

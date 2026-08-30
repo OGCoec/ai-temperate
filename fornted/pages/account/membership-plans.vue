@@ -1,5 +1,5 @@
 <template>
-	<view class="membership-page">
+	<view class="membership-page" :class="{ 'android-readonly': androidClient }">
 		<view class="membership-shell" :aria-busy="loading || Boolean(purchasingTier)">
 			<view class="membership-header">
 				<button class="icon-button" type="button" aria-label="返回个人资料" @click="returnToProfile">
@@ -8,9 +8,16 @@
 				<view class="membership-heading">
 					<text class="membership-kicker">MEMBERSHIP STUDIO</text>
 					<text class="membership-title">选择你的套餐</text>
-					<text class="membership-subtitle">服务端实时计算价格，一次点击即可安全提交到 BAR 模拟支付页面。</text>
+					<text class="membership-subtitle">
+						{{ androidClient
+							? '查看服务端实时价格，购买和升级请在网页版完成。'
+							: '服务端实时计算价格，一次点击即可安全提交到 BAR 模拟支付页面。' }}
+					</text>
 				</view>
-				<view class="simulation-badge"><text class="simulation-dot"></text><text>沙箱模拟</text></view>
+				<view class="simulation-badge">
+					<text class="simulation-dot"></text>
+					<text>{{ androidClient ? '只读报价' : '沙箱模拟' }}</text>
+				</view>
 			</view>
 
 			<view class="membership-context">
@@ -20,11 +27,15 @@
 				</view>
 				<view class="context-boundary">
 					<text class="context-label">支付边界</text>
-					<text class="context-detail">仅确认模拟订单，不发放会员权益</text>
+					<text class="context-detail">
+						{{ androidClient
+							? 'Android 客户端不创建订单、不提供支付'
+							: '仅确认模拟订单，不发放会员权益' }}
+					</text>
 				</view>
 			</view>
 
-			<view class="payment-method-block">
+			<view v-if="!androidClient" class="payment-method-block">
 				<view>
 					<text class="section-eyebrow">PAYMENT METHOD</text>
 					<text class="section-title">选择支付展示方式</text>
@@ -73,9 +84,9 @@
 					<view class="offer-price">
 						<text class="price-currency">¥</text>
 						<text class="price-value">{{ offer.payAmountYuan }}</text>
-						<text class="price-period">本次模拟订单</text>
+						<text class="price-period">{{ androidClient ? '最终费用' : '本次模拟订单' }}</text>
 					</view>
-					<view v-if="offer.creditAmountYuan !== '0.00'" class="offer-credit">
+					<view v-if="androidClient || offer.creditAmountYuan !== '0.00'" class="offer-credit">
 						<text>套餐原价 ¥{{ offer.listPriceYuan }}</text>
 						<text>已抵扣 −¥{{ offer.creditAmountYuan }}</text>
 					</view>
@@ -86,9 +97,9 @@
 					<button
 						class="purchase-button"
 						type="button"
-						:loading="purchasingTier === offer.targetTier"
+						:loading="!androidClient && purchasingTier === offer.targetTier"
 						:disabled="purchaseDisabled(offer)"
-						@click="purchase(offer)"
+						@click="handleOfferAction(offer)"
 					>
 						{{ purchaseLabel(offer) }}
 					</button>
@@ -101,22 +112,28 @@
 			</view>
 
 			<view class="membership-footnote">
-				<text>BAR SANDBOX</text>
-				<text>短时签名提交描述只用于本次 Form POST，不保存、不缓存、不写入日志。</text>
+				<text>{{ androidClient ? '只读报价' : 'BAR SANDBOX' }}</text>
+				<text>
+					{{ androidClient
+						? '价格以服务端最新报价为准。Android 客户端仅供查看。'
+						: '短时签名提交描述只用于本次 Form POST，不保存、不缓存、不写入日志。' }}
+				</text>
 			</view>
 		</view>
 	</view>
 </template>
 
 <script>
-	import { AUTH_ROUTES } from '@/common/auth/config.js'
+	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import { membershipPaymentApi } from '@/common/user/membership-payment-api.js'
+	// #ifdef H5
 	import {
 		createPaymentIdempotencyKey,
 		isUncertainPaymentError,
 		submitBarCheckout,
 		writePaymentReturnContext
 	} from '@/common/user/membership-payment-state.js'
+	// #endif
 
 	const PAY_TYPE_PRESENTATION = Object.freeze({
 		alipay: Object.freeze({ value: 'alipay', label: '支付宝', mark: '支' }),
@@ -143,6 +160,9 @@
 			}
 		},
 		computed: {
+			androidClient() {
+				return clientPlatform() === 'ANDROID'
+			},
 			currentTierLabel() {
 				return TIER_LABELS[this.currentTier] || '未设置'
 			},
@@ -150,6 +170,11 @@
 				return this.payTypes
 					.map(value => PAY_TYPE_PRESENTATION[value])
 					.filter(Boolean)
+			},
+			webCheckoutAvailable() {
+				return this.checkoutEnabled
+					&& this.provider === 'BAR'
+					&& this.availablePayTypes.length > 0
 			}
 		},
 		methods: {
@@ -177,17 +202,41 @@
 				}
 			},
 			purchaseDisabled() {
+				if (this.androidClient) return !this.webCheckoutAvailable
 				return Boolean(this.purchasingTier)
 					|| !this.checkoutEnabled
 					|| this.provider !== 'BAR'
 					|| !this.payType
 			},
 			purchaseLabel(offer) {
+				if (this.androidClient) {
+					return this.webCheckoutAvailable
+						? '请前往网页版升级'
+						: '网页版升级维护中'
+				}
 				if (this.purchasingTier === offer.targetTier) return '正在创建支付…'
 				if (!this.checkoutEnabled) return '支付维护中'
 				if (this.provider !== 'BAR') return '当前环境不提供 H5 支付'
 				return '立即购买'
 			},
+			handleOfferAction(offer) {
+				if (this.androidClient) {
+					this.showAndroidUpgradeNotice(offer)
+					return
+				}
+				// #ifdef H5
+				this.purchase(offer)
+				// #endif
+			},
+			showAndroidUpgradeNotice(offer) {
+				uni.showModal({
+					title: '请前往网页版升级',
+					content: `升级到 ${offer.displayName} 的当前费用为 ¥${offer.payAmountYuan}。\nAndroid 客户端暂不提供支付，请使用浏览器访问 niko000o.site，登录同一账号后完成升级。`,
+					showCancel: false,
+					confirmText: '我知道了'
+				})
+			},
+			// #ifdef H5
 			async purchase(offer) {
 				if (this.purchaseDisabled(offer)) return
 				const intentName = `${offer.targetTier}:${this.payType}`
@@ -271,6 +320,7 @@
 				delete next[name]
 				this.paymentIntents = next
 			},
+			// #endif
 			paymentErrorMessage(error, fallback) {
 				const messages = {
 					PAYMENT_CHECKOUT_DISABLED: '当前暂停创建新的模拟支付。',
@@ -348,7 +398,7 @@
 	.offer-credit { min-height: 21px; margin-top: 12px; display: flex; justify-content: space-between; gap: 12px; color: #8cd8b9; font-size: 11px; font-variant-numeric: tabular-nums; }
 	.offer-rule { height: 1px; margin: 22px 0 18px; background: #2a312e; }
 	.offer-features { min-height: 48px; display: flex; flex-direction: column; gap: 8px; color: #a9b4ae; font-size: 12px; }
-	.purchase-button { width: 100%; min-height: 48px; margin: 24px 0 0; border: 1px solid rgba(55, 211, 154, .38); border-radius: 12px; background: rgba(55, 211, 154, .1); color: #a3e9cc; font-size: 14px; font-weight: 760; }
+	.purchase-button { width: 100%; min-height: 48px; margin: 24px 0 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 1px solid rgba(55, 211, 154, .38); border-radius: 12px; background: rgba(55, 211, 154, .1); color: #a3e9cc; font-size: 14px; font-weight: 760; text-align: center; }
 	.featured .purchase-button { border-color: #54d8a1; background: #54d8a1; color: #07120d; }
 	.purchase-button:disabled { opacity: .45; }
 	.membership-banner { margin-top: 22px; padding: 15px 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid rgba(222, 153, 83, .35); border-radius: 14px; background: rgba(222, 153, 83, .08); }

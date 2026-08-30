@@ -8,11 +8,13 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
+import jakarta.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -63,6 +65,81 @@ class AuthRequestTraceFilterTest {
 
         assertThat(response.getHeader(AuthRequestTraceFilter.TRACE_HEADER)).isNull();
         assertThat(request.getAttribute(AuthRequestTraceFilter.TRACE_ATTRIBUTE)).isNull();
+    }
+
+    @Test
+    void tracesAiRequestAndCorrelatesValidatedClientTimingHeaders() throws Exception {
+        AuthRequestTraceFilter filter = new AuthRequestTraceFilter(
+                mock(TrustedClientIpResolver.class));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/ai/conversations");
+        request.addHeader(
+                AuthRequestTraceFilter.CLIENT_REQUEST_HEADER,
+                "123e4567-e89b-42d3-a456-426614174000");
+        request.addHeader(
+                AuthRequestTraceFilter.PAGE_INSTANCE_HEADER,
+                "123e4567-e89b-42d3-a456-426614174001");
+        request.addHeader(AuthRequestTraceFilter.CLIENT_QUEUE_HEADER, "1432");
+        request.addHeader(
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
+                "123e4567-e89b-42d3-a456-426614174002");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        Logger logger = (Logger) LoggerFactory.getLogger(AuthRequestTraceFilter.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            filter.doFilter(request, response, (servletRequest, servletResponse) -> {
+                assertThat(MDC.get(AuthRequestTraceFilter.PAGE_INSTANCE_MDC_KEY))
+                        .isEqualTo("123e4567-e89b-42d3-a456-426614174001");
+                assertThat(MDC.get(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_MDC_KEY))
+                        .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
+                AuthRequestTiming.recordMillis(request, AuthRequestTiming.Stage.RISK, 821L);
+                AuthRequestTiming.recordErrorCode(request, "REFRESH_TOKEN_REQUIRED");
+                ((HttpServletResponse) servletResponse).setStatus(401);
+            });
+
+            assertThat(request.getAttribute(AuthRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE))
+                    .isEqualTo("123e4567-e89b-42d3-a456-426614174000");
+            assertThat(request.getAttribute(AuthRequestTraceFilter.PAGE_INSTANCE_ATTRIBUTE))
+                    .isEqualTo("123e4567-e89b-42d3-a456-426614174001");
+            assertThat(request.getAttribute(AuthRequestTraceFilter.CLIENT_QUEUE_ATTRIBUTE))
+                    .isEqualTo(1432L);
+            assertThat(request.getAttribute(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE))
+                    .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
+            assertThat(response.getHeader(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER))
+                    .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
+            assertThat(MDC.get(AuthRequestTraceFilter.PAGE_INSTANCE_MDC_KEY)).isNull();
+            assertThat(MDC.get(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_MDC_KEY)).isNull();
+            assertThat(response.getHeader(AuthRequestTiming.SERVER_TIMING_HEADER))
+                    .contains("risk;dur=821", "total;dur=");
+            assertThat(appender.list).singleElement()
+                    .satisfies(event -> assertThat(event.getFormattedMessage())
+                            .contains(
+                                    "status=401",
+                                    "errorCode=REFRESH_TOKEN_REQUIRED",
+                                    "pageInstanceId=123e4567-e89b-42d3-a456-426614174001",
+                                    "probeRunId=123e4567-e89b-42d3-a456-426614174002"));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void ignoresInvalidWebRtcProbeCorrelationInsteadOfLoggingClientText() throws Exception {
+        AuthRequestTraceFilter filter = new AuthRequestTraceFilter(
+                mock(TrustedClientIpResolver.class));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/_edge/webrtc/start");
+        request.addHeader(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER, "unsafe-client-text");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(request.getAttribute(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE))
+                .isEqualTo("absent");
+        assertThat(response.getHeader(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER)).isNull();
     }
 
     @Test

@@ -2,6 +2,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const vm = require('node:vm')
 
 const frontendRoot = path.resolve(__dirname, '..', '..')
 const {
@@ -100,4 +101,50 @@ test('the release documentation only publishes the canonical H5 directory', () =
 		source,
 		/(?:pages deploy|verify:h5-release)[^\r\n]*build\\web/
 	)
+})
+
+test('the stable H5 bootstrap scopes the body scroll lock to workspace routes', async () => {
+	const source = read('static/bootstrap/viewport-bootstrap.js')
+	const listeners = new Map()
+	const bodyClasses = new Set()
+	let pathname = '/pages/account/profile'
+
+	const context = {
+		CSS: { supports: () => true },
+		document: {
+			readyState: 'complete',
+			body: {
+				classList: {
+					toggle(name, enabled) {
+						if (enabled) bodyClasses.add(name)
+						else bodyClasses.delete(name)
+					}
+				}
+			},
+			createElement: () => ({}),
+			head: { appendChild: () => {} }
+		},
+		window: {
+			location: {
+				get pathname() { return pathname }
+			},
+			history: {
+				pushState(_state, _title, nextPath) { pathname = nextPath },
+				replaceState(_state, _title, nextPath) { pathname = nextPath }
+			},
+			addEventListener(name, listener) { listeners.set(name, listener) }
+		}
+	}
+
+	vm.runInNewContext(source, context)
+	assert.equal(bodyClasses.has('ait-workspace-active'), true)
+
+	context.window.history.pushState(null, '', '/pages/account/membership-plans')
+	await Promise.resolve()
+	assert.equal(bodyClasses.has('ait-workspace-active'), false)
+
+	pathname = '/pages/account/profile'
+	listeners.get('popstate')()
+	await Promise.resolve()
+	assert.equal(bodyClasses.has('ait-workspace-active'), true)
 })

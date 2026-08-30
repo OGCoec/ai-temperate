@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
 import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationDecision;
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -110,13 +111,15 @@ class WebRtcEdgeControllerTest {
                                 .PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE,
                         List.of("2606:4700:4700::1111")));
 
+        MockHttpServletRequest request = request("POST", "/api/_edge/webrtc/report");
+        AuthRequestTiming.initialize(request, true);
         var response = fixture.controller().reportUser(
                 "device-installation-0001",
                 "H5",
                 new WebRtcEdgeController.WebRtcReportRequest(
                         "13",
                         List.of("2606:4700:4700::1111")),
-                request("POST", "/api/_edge/webrtc/report"));
+                request);
 
         assertThat(response.getStatusCode())
                 .isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
@@ -129,6 +132,8 @@ class WebRtcEdgeControllerTest {
         assertThat(response.getBody().httpIp()).isEqualTo("8.8.8.8");
         assertThat(response.getBody().webRtcIps())
                 .containsExactly("2606:4700:4700::1111");
+        assertThat(AuthRequestTiming.errorCode(request))
+                .isEqualTo("WEBRTC_IP_FAMILY_INCOMPLETE");
     }
 
     @Test

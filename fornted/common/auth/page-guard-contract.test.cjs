@@ -58,6 +58,7 @@ const legacyTabNavigationMethod = 'switch' + 'Tab'
 
 test('page guard verifies protected routes through the backend-backed session flow', () => {
 	const source = read('common/auth/page-guard.js')
+	const sessionGate = read('pages/launch/session-gate.vue')
 
 	assert.match(source, /restorePersistedSession/)
 	assert.match(source, /loadCurrentUserProfile\(\{\s*force:\s*true\s*\}\)/)
@@ -67,6 +68,10 @@ test('page guard verifies protected routes through the backend-backed session fl
 	assert.match(source, /uni\.reLaunch\(\{[\s\S]*url:\s*AUTH_ROUTES\.login/)
 	assert.match(source, /authenticationInFlight/)
 	assert.match(source, /isProtectedRoute/)
+	assert.match(source, /beginRuntimeTerminalSessionTransition/)
+	assert.match(source, /claimRuntimeTerminalSessionRedirect/)
+	assert.match(sessionGate, /beginRuntimeTerminalSessionTransition/)
+	assert.match(sessionGate, /claimRuntimeTerminalSessionRedirect/)
 })
 
 test('clearing a session also removes runtime state and pending API Key create intent', () => {

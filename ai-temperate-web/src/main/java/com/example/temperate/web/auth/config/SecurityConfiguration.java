@@ -15,6 +15,7 @@ import com.example.temperate.web.apichat.diagnostic.ApiChatStreamDiagnosticFilte
 import com.example.temperate.web.apiresponse.ApiResponsesTraceFilter;
 import com.example.temperate.web.apiresponse.diagnostic.ApiResponsesStreamDiagnosticFilter;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
@@ -294,6 +295,10 @@ public class SecurityConfiguration {
                 "Idempotency-Key",
                 "X-Device-Installation-Id",
                 "X-AI-Client-Request-Id",
+                AuthRequestTraceFilter.CLIENT_REQUEST_HEADER,
+                AuthRequestTraceFilter.PAGE_INSTANCE_HEADER,
+                AuthRequestTraceFilter.CLIENT_QUEUE_HEADER,
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
                 PLATFORM_HEADER,
                 "X-Register-Token",
                 "X-Register-CSRF",
@@ -312,10 +317,12 @@ public class SecurityConfiguration {
                 HttpHeaders.ETAG,
                 "Retry-After",
                 AuthRequestTraceFilter.TRACE_HEADER,
+                AuthRequestTiming.SERVER_TIMING_HEADER,
                 "X-AI-Generation-Id",
                 "X-New-Access-Token",
                 WebRtcVerificationTransport.STATE_HEADER,
                 WebRtcVerificationTransport.GENERATION_HEADER,
+                AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
                 "X-Session-Renewed",
                 "CF-Ray",
                 "cf-mitigated"));

@@ -3,6 +3,7 @@ package com.example.temperate.web.audit.access.filter;
 import com.example.temperate.service.audit.access.command.AccessAuditCommand;
 import com.example.temperate.service.audit.access.service.AccessAuditEventService;
 import com.example.temperate.service.auth.session.authentication.domain.SessionPrincipal;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import com.example.temperate.web.user.aiconversation.diagnostic.AiConversationRequestTraceFilter;
@@ -94,8 +95,18 @@ public final class AccessRequestAuditFilter extends OncePerRequestFilter {
     }
 
     private static UUID existingTraceId(HttpServletRequest request) {
-        Object value = request.getAttribute(
-                AiConversationRequestTraceFilter.TRACE_ATTRIBUTE);
+        Object requestWideValue = request.getAttribute(
+                AuthRequestTraceFilter.TRACE_ATTRIBUTE);
+        UUID requestWideTrace = parseTraceId(requestWideValue);
+        if (requestWideTrace != null) {
+            return requestWideTrace;
+        }
+        Object value = request.getAttribute(AiConversationRequestTraceFilter.TRACE_ATTRIBUTE);
+        UUID aiConversationTrace = parseTraceId(value);
+        return aiConversationTrace == null ? UUID.randomUUID() : aiConversationTrace;
+    }
+
+    private static UUID parseTraceId(Object value) {
         if (value instanceof String traceId) {
             try {
                 return UUID.fromString(traceId);
@@ -103,7 +114,7 @@ public final class AccessRequestAuditFilter extends OncePerRequestFilter {
                 // 非法请求属性不能覆盖访问审计自身的安全关联标识。
             }
         }
-        return UUID.randomUUID();
+        return null;
     }
 
     private static Long principalUserId(HttpServletRequest request) {

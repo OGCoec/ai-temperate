@@ -3,11 +3,20 @@
 	import { ensurePreAuth } from '@/common/auth/pre-auth.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import { isRiskChallengeFlowPage } from '@/common/auth/risk-challenge-navigation.js'
-	import { presentWebRtcFailure } from '@/common/auth/webrtc-verification.js'
+	import {
+		cancelActiveWebRtcVerification,
+		installH5WebRtcDiagnosticLifecycle,
+		presentWebRtcFailure
+	} from '@/common/auth/webrtc-verification.js'
+	import {
+		installH5AuthDiagnosticLifecycle,
+		recordAuthDiagnosticEvent,
+		renewAuthDiagnosticPage
+	} from '@/common/auth/auth-diagnostics.js'
 	// #ifdef H5
 	import { ensureCookieScopeMigration } from '@/common/auth/cookie-scope-migration.js'
 	import {
-		ensureH5WebRtcVerified
+		scheduleH5WebRtcVerification
 	} from '@/common/auth/webrtc-verification.js'
 	import { prewarmTurnstile } from '@/common/auth/turnstile-prewarm.js'
 	// #endif
@@ -26,19 +35,26 @@
 
 	export default {
 		onLaunch(options) {
+			renewAuthDiagnosticPage(options?.path || '', 'app_launch')
 			// #ifdef H5
+			// WebRTC 监听器先注册，使 pagehide 时的活动快照能被认证日志监听器一并同步落盘。
+			installH5WebRtcDiagnosticLifecycle()
+			installH5AuthDiagnosticLifecycle()
 			console.log(
-				`%c AI Temperate %c v${version} `,
+				`%c Eagle AI %c v${version} `,
 				'background:#10251d;padding:1px;border-radius:3px 0 0 3px;color:#dff8ed',
 				'background:#37d39a;padding:1px;border-radius:0 3px 3px 0;color:#04110c;font-weight:bold'
 			)
 			// #endif
 			if (!isRiskChallengeFlowPage(options?.path)) {
 				// #ifdef H5
-				// H5 保留浏览器 Cookie、PreAuth 和 RTCPeerConnection 的既有执行顺序。
-				void ensureCookieScopeMigration().catch(() => {})
-				void ensurePreAuth()
-					.then(() => ensureH5WebRtcVerified())
+				// H5 只等待 PreAuth；RTCPeerConnection 探测由 single-flight 在后台完成。
+				void ensureCookieScopeMigration()
+					.then(() => ensurePreAuth())
+					.then(() => scheduleH5WebRtcVerification({
+						path: options?.path || '',
+						source: 'app_launch'
+					}))
 					.catch(error => {
 						if (presentRiskBlock(error)) return
 						presentWebRtcFailure(error)
@@ -65,18 +81,41 @@
 			// #endif
 		},
 		onShow() {
+			recordAuthDiagnosticEvent('PAGE_SHOW', {
+				source: 'app_show',
+				pageState: 'active'
+			})
 			console.log('App Show')
 			// #ifdef APP-PLUS
 			// 系统浏览器经 App Link 返回或用户手动回到 App 时，都从 KeyStore 中恢复同一个待处理 Flow。
-			void resumePendingOAuth().catch(error => {
-				uni.showToast({
-					title: error?.message || '第三方登录恢复失败',
-					icon: 'none'
+			void resumePendingOAuth()
+				.catch(error => {
+					uni.showToast({
+						title: error?.message || '第三方登录恢复失败',
+						icon: 'none'
+					})
 				})
-			})
+				.finally(() => {
+					// OAuth 恢复先完成，再用当前 PreAuth single-flight 启动一次新探测。
+					void ensurePreAuth()
+						.then(() => startAndroidWebRtcVerificationInBackground())
+						.catch(error => {
+							if (presentRiskBlock(error)) return
+							if (presentWebRtcFailure(error)) return
+							presentAndroidEdgeChallengeFailure(error)
+						})
+				})
 			// #endif
 		},
 		onHide() {
+			// #ifdef APP-PLUS
+			// 只终止 WebRTC 隐藏 WebView，不干预 Credential Manager 或 OAuth 回调。
+			cancelActiveWebRtcVerification('APP_HIDDEN')
+			// #endif
+			recordAuthDiagnosticEvent('PAGE_HIDE', {
+				source: 'app_hide',
+				pageState: 'hidden'
+			})
 			console.log('App Hide')
 		},
 		globalData: {

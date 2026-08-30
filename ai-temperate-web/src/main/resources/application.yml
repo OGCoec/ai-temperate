@@ -114,9 +114,9 @@ spring:
     driver-class-name: org.postgresql.Driver
     # HikariCP 连接池等待和 PostgreSQL JDBC 网络读取必须有界，避免 Rabbit 消息长期停留在 Unacked。
     hikari:
-      # 单实例数据库连接池最多允许九十六条连接；该压测值接近 PostgreSQL 百连接上限，部署多实例前必须按实例数重新下调。
-      maximum-pool-size: ${POSTGRES_POOL_MAXIMUM_SIZE:96}
-      # 常驻空闲连接固定为八条，避免仅提高最大值后长期占用九十六条数据库会话。
+      # 单实例数据库连接池最多允许二百五十六条连接，与正式容量压测保持一致并由 PostgreSQL 三百八十四连接上限保留管理余量。
+      maximum-pool-size: ${POSTGRES_POOL_MAXIMUM_SIZE:256}
+      # 常驻空闲连接固定为八条，避免仅提高最大值后长期占用二百五十六条数据库会话。
       minimum-idle: ${POSTGRES_POOL_MINIMUM_IDLE:8}
       # 获取数据库连接最多等待十秒，连接池耗尽时尽快失败并交给上层有限重试。
       connection-timeout: ${POSTGRES_POOL_CONNECTION_TIMEOUT_MS:10000}
@@ -156,6 +156,16 @@ spring:
     password: ${RABBITMQ_PASSWORD}
     # RabbitMQ 虚拟主机支持环境变量隔离业务资源。
     virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+    # RabbitMQ 协商通道上限固定为五百一十二，覆盖两组固定消费者、发布通道和管理余量。
+    requested-channel-max: ${RABBITMQ_REQUESTED_CHANNEL_MAX:512}
+    # RabbitMQ 客户端缓存配置用于复用发布连接上的通道并提供有界背压。
+    cache:
+      # Channel 维度保持单连接模式，不创建额外 RabbitMQ 连接池。
+      channel:
+        # 发布通道缓存固定为二百五十六，与正式容量压测和 HTTP 并发上限保持一致。
+        size: ${RABBITMQ_CHANNEL_CACHE_SIZE:256}
+        # 发布通道耗尽时最多等待三十秒，禁止继续无界创建通道。
+        checkout-timeout: ${RABBITMQ_CHANNEL_CHECKOUT_TIMEOUT:30s}
     # 启用关联式发布确认以观测 Broker 接收结果。
     publisher-confirm-type: correlated
     # 启用无法路由消息的返回机制。
@@ -1301,6 +1311,13 @@ app:
     # 可信代理 CIDR 使用逗号分隔，默认不信任任何代理提供的转发 IP 头。
     trusted-proxy-ranges: ${AUTH_PHONE_COUNTRY_TRUSTED_PROXY_RANGES:}
 
+  # H5 与后端认证异步链路的脱敏请求诊断配置。
+  auth-request-diagnostics:
+    # 默认开启请求关联、阶段耗时和结构化完成日志，定位结束后可由环境变量显式关闭。
+    enabled: ${AUTH_REQUEST_DIAGNOSTICS_ENABLED:true}
+    # 默认向浏览器暴露固定阶段的 Server-Timing，内容只包含毫秒耗时而不包含凭据。
+    server-timing-enabled: ${AUTH_SERVER_TIMING_ENABLED:true}
+
   # 受保护业务 API 的脱敏访问审计配置。
   access-audit:
     # 默认关闭访问审计；仅在明确需要数据库审计存储时才应启用整条消息链路。
@@ -1497,6 +1514,16 @@ local-proxy:
 server:
   # Web 服务端口支持环境变量覆盖，具体传输协议由激活的 Profile 决定。
   port: ${SERVER_PORT:6655}
+  # Tomcat 容量参数与正式压测统一为二百五十六，生产和压测不再使用不同默认值。
+  tomcat:
+    # 连接接收队列固定为二百五十六，超过容量的请求由上游执行有界等待或拒绝。
+    accept-count: ${SERVER_TOMCAT_ACCEPT_COUNT:256}
+    # 同时建立的连接上限固定为二百五十六，与工作线程上限保持一致。
+    max-connections: ${SERVER_TOMCAT_MAX_CONNECTIONS:256}
+    # Tomcat 平台工作线程配置组用于约束同步 Servlet 请求并发。
+    threads:
+      # 工作线程上限固定为二百五十六，与生产和正式容量压测的统一合同一致。
+      max: ${SERVER_TOMCAT_MAX_THREADS:256}
 
 # Springdoc OpenAPI 配置。
 springdoc:
@@ -1520,6 +1547,12 @@ logging:
     com.example.temperate.web.risk: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
     # 网络风险 Service 默认只记录状态转换失败，临时 DEBUG 用于关联 PreAuth 与风险评估轨迹。
     com.example.temperate.service.risk.logging: ${NETWORK_RISK_DIAGNOSTIC_LOG_LEVEL:INFO}
+    # 认证请求 Filter 默认输出请求关联、最终状态和各门禁耗时，不记录 Cookie 或 Token 内容。
+    com.example.temperate.web.auth.diagnostic: ${AUTH_REQUEST_DIAGNOSTICS_LOG_LEVEL:INFO}
+    # 用户会话拦截器默认输出凭据存在性布尔值和 Session 阶段耗时，禁止输出凭据原文。
+    com.example.temperate.web.auth.interceptor: ${AUTH_REQUEST_DIAGNOSTICS_LOG_LEVEL:INFO}
+    # 会话服务 AOP 默认记录 RT-first 与 Bootstrap 的服务层耗时，只输出受控结果分类。
+    com.example.temperate.service.auth.session.diagnostic: ${AUTH_REQUEST_DIAGNOSTICS_LOG_LEVEL:INFO}
     # API Chat Service、协议解析与 AOP 诊断默认记录 INFO 元数据，禁止在该包启用正文级 TRACE。
     com.example.temperate.service.user.apichat.diagnostic: ${API_KEY_STREAM_DIAGNOSTIC_LOG_LEVEL:INFO}
     # API Chat Servlet 诊断默认记录请求、异步和错误分派，便于关联 Tomcat 二次分派。

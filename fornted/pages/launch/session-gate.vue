@@ -1,5 +1,14 @@
 <template>
-	<view class="session-gate" role="status" aria-live="polite" :aria-busy="restoring">
+	<view
+		class="session-gate"
+		role="status"
+		aria-live="polite"
+		:aria-busy="restoring"
+		:style="{
+			'--eagle-shimmer-delay': shimmerDelay,
+			'--eagle-shimmer-play-state': shimmerPlayState
+		}"
+	>
 		<view class="session-mark">
 			<view class="session-mark-core"></view>
 		</view>
@@ -14,7 +23,16 @@
 	import { AUTH_ROUTES } from '@/common/auth/config.js'
 	import { restorePersistedSession } from '@/common/auth/http-client.js'
 	import { clearSession } from '@/common/auth/session-vault.js'
-	import { markRuntimeSessionAuthenticated } from '@/common/auth/authenticated-session-state.js'
+	import {
+		beginRuntimeTerminalSessionTransition,
+		claimRuntimeTerminalSessionRedirect,
+		markRuntimeSessionAuthenticated
+	} from '@/common/auth/authenticated-session-state.js'
+	import { recordAuthDiagnosticEvent } from '@/common/auth/auth-diagnostics.js'
+	import {
+		dismissNativeSplashAfterPaint,
+		getNativeSplashCycleOffsetMillis
+	} from '@/common/launch/eagle-native-splash.js'
 	import {
 		clearCurrentUserProfile,
 		loadCurrentUserProfile
@@ -34,12 +52,41 @@
 
 	export default {
 		data() {
-			return { routing: false, unavailable: false, restoring: false }
+			return {
+				routing: false,
+				unavailable: false,
+				restoring: false,
+				shimmerDelay: '0ms',
+				shimmerPlayState: 'paused',
+				frontendShimmerStarted: false,
+				nativeSplashDismissScheduled: false
+			}
 		},
 		onLoad() {
 			this.restoreSession()
 		},
+		onReady() {
+			this.startFrontendShimmer()
+		},
 		methods: {
+			startFrontendShimmer() {
+				if (this.frontendShimmerStarted) return
+				this.frontendShimmerStarted = true
+
+				const cycleOffset = getNativeSplashCycleOffsetMillis()
+				this.shimmerDelay = `-${cycleOffset}ms`
+				this.shimmerPlayState = 'running'
+			},
+			revealSessionGate(reason) {
+				if (this.nativeSplashDismissScheduled) return
+				this.nativeSplashDismissScheduled = true
+				this.startFrontendShimmer()
+
+				// 当前页面不切换 WebView，连续提交两帧即可安全交接错误内容和重试按钮。
+				this.$nextTick(() => {
+					dismissNativeSplashAfterPaint(reason)
+				})
+			},
 			async restoreSession() {
 				if (this.restoring || this.routing) return
 				this.restoring = true
@@ -56,11 +103,21 @@
 					this.go(AUTH_ROUTES.home)
 				} catch (error) {
 					if (TERMINAL_SESSION_ERRORS.has(error?.code)) {
-						clearCurrentUserProfile()
-						clearSession()
-						this.go(AUTH_ROUTES.login)
+						if (beginRuntimeTerminalSessionTransition()) {
+							clearCurrentUserProfile()
+							clearSession()
+						}
+						if (claimRuntimeTerminalSessionRedirect()) {
+							recordAuthDiagnosticEvent('LOGIN_REDIRECT_TRIGGERED', {
+								source: 'session_gate',
+								errorCode: error?.code,
+								route: AUTH_ROUTES.login
+							})
+							this.go(AUTH_ROUTES.login)
+						}
 					} else {
 						this.unavailable = true
+						this.revealSessionGate('session-error')
 					}
 				} finally {
 					this.restoring = false
@@ -69,7 +126,14 @@
 			go(url) {
 				if (this.routing) return
 				this.routing = true
-				uni.reLaunch({ url })
+				uni.reLaunch({
+					url,
+					fail: () => {
+						this.routing = false
+						this.unavailable = true
+						this.revealSessionGate('route-failed')
+					}
+				})
 			}
 		}
 	}
@@ -91,22 +155,95 @@
 	}
 
 	.session-mark {
-		@include user-frosted-surface;
-		width: 58px;
-		height: 58px;
-		border-radius: 18px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		margin-bottom: 26px;
+		position: relative;
+		isolation: isolate;
+		width: 132px;
+		height: 132px;
+		margin-bottom: 30px;
+		overflow: hidden;
+		border: 1px solid rgba(108, 255, 200, .24);
+		border-radius: 38px;
+		background: #0b0d0c;
+		box-shadow:
+			0 22px 54px rgba(0, 0, 0, .36),
+			0 0 0 1px rgba(85, 241, 184, .04),
+			inset 0 1px rgba(255, 255, 255, .08);
+
+		&::before {
+			content: '';
+			position: absolute;
+			z-index: 0;
+			inset: -58%;
+			background: linear-gradient(
+				115deg,
+				transparent calc(50% - 38px),
+				rgba(104, 255, 200, .06) calc(50% - 19px),
+				rgba(132, 255, 211, .76) 50%,
+				rgba(104, 255, 200, .06) calc(50% + 19px),
+				transparent calc(50% + 38px)
+			);
+			transform: translate3d(-46%, 0, 0);
+			animation: eagle-shimmer-sweep 1.9s cubic-bezier(.4, 0, .2, 1) infinite;
+			animation-delay: var(--eagle-shimmer-delay, 0ms);
+			animation-play-state: var(--eagle-shimmer-play-state, paused);
+		}
+
+		&::after {
+			content: '';
+			position: absolute;
+			z-index: 3;
+			inset: 0;
+			border-radius: inherit;
+			box-shadow:
+				inset 0 0 18px rgba(84, 246, 185, .12),
+				0 0 24px rgba(55, 211, 154, .08);
+			animation: eagle-halo-pulse 1.9s ease-in-out infinite;
+			animation-delay: var(--eagle-shimmer-delay, 0ms);
+			animation-play-state: var(--eagle-shimmer-play-state, paused);
+			pointer-events: none;
+		}
 	}
 
 	.session-mark-core {
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		background: #37d39a;
-		animation: session-pulse 1.1s ease-in-out infinite alternate;
+		position: absolute;
+		z-index: 1;
+		inset: 8px;
+		overflow: hidden;
+		border: 1px solid rgba(113, 255, 203, .16);
+		border-radius: 31px;
+		background: #0b0d0c;
+		box-shadow:
+			inset 0 0 28px rgba(71, 229, 171, .09),
+			0 0 24px rgba(48, 215, 157, .08);
+
+		&::before {
+			content: '';
+			position: absolute;
+			z-index: 0;
+			inset: -60%;
+			background: linear-gradient(
+				115deg,
+				transparent calc(50% - 38px),
+				rgba(92, 248, 190, .05) calc(50% - 19px),
+				rgba(109, 255, 201, .50) 50%,
+				rgba(92, 248, 190, .05) calc(50% + 19px),
+				transparent calc(50% + 38px)
+			);
+			transform: translate3d(-46%, 0, 0);
+			animation: eagle-shimmer-sweep 1.9s cubic-bezier(.4, 0, .2, 1) infinite;
+			animation-delay: var(--eagle-shimmer-delay, 0ms);
+			animation-play-state: var(--eagle-shimmer-play-state, paused);
+		}
+
+		&::after {
+			content: '';
+			position: absolute;
+			z-index: 2;
+			inset: 12px;
+			background: center / contain no-repeat url('../../static/branding/eagle-mark.png');
+			filter: drop-shadow(0 0 12px rgba(255, 255, 255, .12));
+			pointer-events: none;
+		}
 	}
 
 	.session-kicker {
@@ -143,12 +280,26 @@
 		font-weight: 700;
 	}
 
-	@keyframes session-pulse {
-		from { opacity: .45; transform: scale(.82); }
-		to { opacity: 1; transform: scale(1); }
+	@keyframes eagle-shimmer-sweep {
+		0%, 6% { transform: translate3d(-46%, 0, 0); }
+		88%, 100% { transform: translate3d(46%, 0, 0); }
+	}
+
+	@keyframes eagle-halo-pulse {
+		0%, 18%, 100% { opacity: .46; }
+		52% { opacity: 1; }
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.session-mark-core { animation: none; }
+		.session-mark::before,
+		.session-mark-core::before {
+			animation: none;
+			transform: translate3d(-46%, 0, 0);
+		}
+
+		.session-mark::after {
+			animation: none;
+			opacity: .46;
+		}
 	}
 </style>

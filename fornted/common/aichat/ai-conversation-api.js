@@ -280,7 +280,10 @@ export const aiConversationApi = Object.freeze({
 		const entries = [['pageSize', size]]
 		if (cursor) entries.push(['cursor', cursor])
 		const query = buildQueryString(entries)
-		const result = await authorizedRequest(`/api/ai/conversations?${query}`, { method: 'GET' })
+		const result = await authorizedRequest(`/api/ai/conversations?${query}`, {
+			method: 'GET',
+			diagnosticSource: 'ai_conversation_list'
+		})
 		if (!Array.isArray(result?.conversations)) throw error('AI_CONVERSATION_RESPONSE_INVALID', '会话列表无效。')
 		return Object.freeze({
 			conversations: Object.freeze(result.conversations.map(item => {

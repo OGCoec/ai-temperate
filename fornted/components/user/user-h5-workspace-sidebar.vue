@@ -20,9 +20,9 @@
 			@keydown.tab="trapSidebarFocus"
 		>
 			<view class="workspace-sidebar-header">
-				<view class="workspace-brand" aria-label="AI Temperate">
+				<view class="workspace-brand" aria-label="Eagle AI">
 					<view class="workspace-brand-mark" aria-hidden="true">AI</view>
-					<text v-if="presentation === 'full'" class="workspace-brand-name">AI Temperate</text>
+					<text v-if="presentation === 'full'" class="workspace-brand-name">Eagle AI</text>
 				</view>
 				<button
 					v-if="presentation === 'full'"

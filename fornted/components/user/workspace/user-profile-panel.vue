@@ -200,7 +200,6 @@
 										</view>
 									</view>
 								</view>
-								<!-- #ifdef H5 -->
 								<button
 									class="profile-api-key-card profile-membership-upgrade"
 									type="button"
@@ -213,11 +212,14 @@
 									</view>
 									<view class="profile-api-key-copy">
 										<text class="profile-api-key-title">升级套餐</text>
-										<text class="profile-api-key-detail">查看 Go、Plus、Pro 与 Ultra 的服务端模拟支付报价</text>
+										<text class="profile-api-key-detail">
+											{{ androidClient
+												? '查看可升级套餐和实时价格，购买请前往网页版'
+												: '查看 Go、Plus、Pro 与 Ultra 的服务端模拟支付报价' }}
+										</text>
 									</view>
 									<text class="profile-api-key-chevron" aria-hidden="true">›</text>
 								</button>
-								<!-- #endif -->
 							</view>
 
 							<view

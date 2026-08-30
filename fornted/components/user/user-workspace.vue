@@ -18,7 +18,7 @@
 			@toggle-recent="toggleRecentConversations"
 			@open-conversation="openConversation"
 			@copy-conversation="copyConversationId"
-			@retry-conversations="refreshConversations"
+			@retry-conversations="ensureRecentConversations"
 			@load-more-conversations="loadMoreConversations"
 			@close="closeSidebar"
 		/>
@@ -51,7 +51,7 @@
 			@toggle-recent="toggleRecentConversations"
 			@open-conversation="openConversation"
 			@copy-conversation="copyConversationId"
-			@retry-conversations="refreshConversations"
+			@retry-conversations="ensureRecentConversations"
 			@load-more-conversations="loadMoreConversations"
 			@close-drawer="drawerOpen = false"
 		/>
@@ -132,6 +132,10 @@
 	import UserApiKeyPanel from './workspace/user-api-key-panel.vue'
 	import UserApiKeyUsagePanel from './workspace/user-api-key-usage-panel.vue'
 	import { clientPlatform } from '@/common/auth/config.js'
+	import {
+		recordAuthDiagnosticEvent,
+		renewAuthDiagnosticPage
+	} from '@/common/auth/auth-diagnostics.js'
 
 	const DESTINATIONS = Object.freeze(['chat', 'models', 'profile', 'apiKeys', 'apiKeyUsage'])
 	export default {
@@ -235,6 +239,14 @@
 			}
 		},
 		mounted() {
+			renewAuthDiagnosticPage(
+				'/pages/ai-chat/index',
+				'user_workspace_mounted')
+			recordAuthDiagnosticEvent('USER_WORKSPACE_MOUNTED', {
+				source: 'user_workspace_mounted',
+				authReady: this.authenticated,
+				route: '/pages/ai-chat/index'
+			})
 			// #ifdef H5
 			document.body?.classList?.add('ait-workspace-active')
 			this.workspaceResizeListener = event => this.handleWorkspaceResize(
@@ -389,12 +401,27 @@
 				if (this.recentExpanded) this.ensureRecentConversations()
 			},
 			ensureRecentConversations() {
+				if (!this.authenticated) {
+					recordAuthDiagnosticEvent('CONVERSATION_LIST_SKIPPED', {
+						source: 'user_workspace_recent_conversations',
+						authReady: false,
+						path: '/api/ai/conversations',
+						outcome: 'authentication_pending'
+					})
+					return false
+				}
 				if (this.conversationsLoaded || this.conversationLoading) {
 					return true
 				}
+				recordAuthDiagnosticEvent('CONVERSATION_LIST_TRIGGERED', {
+					source: 'user_workspace_recent_conversations',
+					authReady: this.authenticated,
+					path: '/api/ai/conversations'
+				})
 				return this.refreshConversations()
 			},
 			async refreshConversations() {
+				if (!this.authenticated) return false
 				this.applyConversationState(setConversationLoading(true))
 				try {
 					this.applyConversationState(setConversationPage(
@@ -485,6 +512,9 @@
 				if (!this.authenticated) return
 				this.$nextTick(() => {
 					this.$refs.chatPanel?.onAuthenticatedPageReady()
+					if (this.sidebarOpen && this.recentExpanded) {
+						this.ensureRecentConversations()
+					}
 					if (this.activeDestination === 'apiKeys') {
 						this.$refs.apiKeyPanel?.onAuthenticatedPageReady()
 					}

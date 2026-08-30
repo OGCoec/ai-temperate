@@ -11,6 +11,44 @@ import {
 } from '@/uni_modules/ait-google-signin'
 // #endif
 
+const GOOGLE_OAUTH_LOG_PREFIX = '[AIT_GOOGLE_OAUTH]'
+const GOOGLE_NATIVE_TIMEOUT_MS = 30000
+const GOOGLE_NATIVE_COMPLETE_TIMEOUT_MS = 30000
+const GOOGLE_NATIVE_COMPLETE_TIMEOUT_CODE = 'GOOGLE_NATIVE_COMPLETE_TIMEOUT'
+
+function logGoogleOAuth(stage, fields = {}) {
+	if (clientPlatform() !== 'ANDROID') return
+	const allowed = [
+		'provider',
+		'mode',
+		'code',
+		'status',
+		'httpStatus',
+		'elapsedMs',
+		'tokenPresent'
+	]
+	const details = allowed
+		.filter(key => fields[key] !== undefined && fields[key] !== null)
+		.map(key => `${key}=${String(fields[key])}`)
+		.join(' ')
+	console.log(`${GOOGLE_OAUTH_LOG_PREFIX} stage=${stage}${details ? ` ${details}` : ''}`)
+}
+
+function withClientTimeout(promise, timeoutMs, code, message) {
+	let timeoutHandle = null
+	const timeoutPromise = new Promise((_, reject) => {
+		timeoutHandle = setTimeout(() => {
+			const error = new Error(message)
+			error.code = code
+			reject(error)
+		}, timeoutMs)
+	})
+	return Promise.race([promise, timeoutPromise])
+		.finally(() => {
+			if (timeoutHandle) clearTimeout(timeoutHandle)
+		})
+}
+
 let resumePromise = null
 
 function openBrowser(url) {
@@ -41,27 +79,59 @@ function nativeGoogleAvailable() {
 
 function requestNativeGoogle(serverClientId, nonce) {
 	return new Promise((resolve, reject) => {
+		let settled = false
+		let timeoutHandle = null
+		const settle = callback => value => {
+			if (settled) return
+			settled = true
+			if (timeoutHandle) clearTimeout(timeoutHandle)
+			callback(value)
+		}
+		const resolveOnce = settle(resolve)
+		const rejectOnce = settle(reject)
+		timeoutHandle = setTimeout(() => {
+			if (settled) return
+			settled = true
+			timeoutHandle = null
+			const error = new Error('Google 原生登录超时。')
+			error.code = 'GOOGLE_NATIVE_TIMEOUT'
+			reject(error)
+		}, GOOGLE_NATIVE_TIMEOUT_MS)
+
 		if (clientPlatform() !== 'ANDROID') {
 			const error = new Error('当前设备不支持 Google 原生登录。')
 			error.code = 'GOOGLE_NATIVE_UNAVAILABLE'
-			reject(error)
+			rejectOnce(error)
 			return
 		}
 		// #ifdef APP-PLUS
-		signInWithGoogle(serverClientId, nonce, {
-			success: result => resolve(result.idToken),
-			cancel: () => resolve(''),
-			fail: (code, message) => {
-				const error = new Error(message || 'Google 原生登录不可用。')
-				error.code = code || 'GOOGLE_NATIVE_UNAVAILABLE'
-				reject(error)
-			}
-		})
+		try {
+			signInWithGoogle(serverClientId, nonce, {
+				success: result => {
+					const idToken = result?.idToken
+					if (!idToken) {
+						const error = new Error('Google 原生登录未返回凭据。')
+						error.code = 'GOOGLE_NATIVE_EMPTY_TOKEN'
+						rejectOnce(error)
+						return
+					}
+					resolveOnce(idToken)
+				},
+				cancel: () => resolveOnce(''),
+				fail: (code, message) => {
+					const error = new Error(message || 'Google 原生登录不可用。')
+					error.code = code || 'GOOGLE_NATIVE_UNAVAILABLE'
+					rejectOnce(error)
+				}
+			})
+		} catch (error) {
+			rejectOnce(error)
+		}
 		return
 		// #endif
 		const error = new Error('当前设备不支持 Google 原生登录。')
 		error.code = 'GOOGLE_NATIVE_UNAVAILABLE'
-		reject(error)
+		rejectOnce(error)
 	})
 }
 
@@ -105,9 +175,26 @@ export async function startOAuth(provider) {
 		// 严格原生策略下，标准基座或无 GMS 不能静默改走浏览器，避免用户误以为已启动账号选择器。
 		return { nativeUnavailable: true, code: 'GOOGLE_NATIVE_UNAVAILABLE' }
 	}
-	const response = await authApi.oauthStart(
-		provider,
-		nativeGoogle ? 'GOOGLE_NATIVE' : 'BROWSER')
+	const oauthStartStartedAt = Date.now()
+	logGoogleOAuth('oauth_start_begin', { provider })
+	let response
+	try {
+		response = await authApi.oauthStart(
+			provider,
+			nativeGoogle ? 'GOOGLE_NATIVE' : 'BROWSER')
+		logGoogleOAuth('oauth_start_success', {
+			mode: response?.mode,
+			elapsedMs: Date.now() - oauthStartStartedAt
+		})
+	} catch (error) {
+		logGoogleOAuth('oauth_start_fail', {
+			provider,
+			code: error?.code,
+			httpStatus: error?.statusCode,
+			elapsedMs: Date.now() - oauthStartStartedAt
+		})
+		throw error
+	}
 	if (response?.mode === 'BROWSER_REDIRECT' || response?.mode === 'BROWSER') {
 		if (nativeGoogle) {
 			const error = new Error('安卓 Google 登录必须使用原生账号选择器。')
@@ -125,17 +212,21 @@ export async function startOAuth(provider) {
 	if (!nativeGoogle) {
 		throw new Error('第三方登录模式无效。')
 	}
+	const nativeStartedAt = Date.now()
+	logGoogleOAuth('native_begin', { provider })
+	let idToken
 	try {
-		const idToken = await requestNativeGoogle(
+		idToken = await requestNativeGoogle(
 			response.googleServerClientId, response.nonce)
-		if (!idToken) {
-			try { await authApi.oauthCancel() } catch (ignored) { }
-			return { cancelled: true }
-		}
-		// ID Token 只存在于当前局部变量，上传结束后不写入任何持久化存储。
-		const status = await authApi.oauthNativeGoogleComplete(idToken)
-		return await continueFromStatus(status)
 	} catch (error) {
+		const nativeFields = {
+			provider,
+			code: error?.code,
+			elapsedMs: Date.now() - nativeStartedAt
+		}
+		logGoogleOAuth(
+			error?.code === 'GOOGLE_NATIVE_TIMEOUT' ? 'native_timeout' : 'native_fail',
+			nativeFields)
 		if (['GOOGLE_NATIVE_UNAVAILABLE', 'GOOGLE_NATIVE_NO_ACCOUNT'].includes(error?.code)) {
 			// 原生请求已创建服务端 Flow；失败时显式取消，避免旧 nonce 在本机继续保持待处理状态。
 			try { await authApi.oauthCancel() } catch (ignored) { }
@@ -143,6 +234,49 @@ export async function startOAuth(provider) {
 		}
 		throw error
 	}
+	if (!idToken) {
+		logGoogleOAuth('native_cancel', {
+			provider,
+			elapsedMs: Date.now() - nativeStartedAt
+		})
+		try { await authApi.oauthCancel() } catch (ignored) { }
+		return { cancelled: true }
+	}
+	logGoogleOAuth('native_success', {
+		provider,
+		tokenPresent: true,
+		elapsedMs: Date.now() - nativeStartedAt
+	})
+
+	// ID Token 只存在于当前局部变量，上传结束后不写入任何持久化存储。
+	const completeStartedAt = Date.now()
+	logGoogleOAuth('native_complete_begin', { provider })
+	let status
+	try {
+		status = await withClientTimeout(
+			authApi.oauthNativeGoogleComplete(idToken),
+			GOOGLE_NATIVE_COMPLETE_TIMEOUT_MS,
+			GOOGLE_NATIVE_COMPLETE_TIMEOUT_CODE,
+			'Google 登录完成请求超时。')
+		logGoogleOAuth('native_complete_success', {
+			provider,
+			status: status?.status,
+			elapsedMs: Date.now() - completeStartedAt
+		})
+	} catch (error) {
+		logGoogleOAuth(
+			error?.code === GOOGLE_NATIVE_COMPLETE_TIMEOUT_CODE
+				? 'native_complete_timeout'
+				: 'native_complete_fail',
+			{
+				provider,
+				code: error?.code,
+				httpStatus: error?.statusCode,
+				elapsedMs: Date.now() - completeStartedAt
+			})
+		throw error
+	}
+	return await continueFromStatus(status)
 }
 
 export async function resumePendingOAuth() {

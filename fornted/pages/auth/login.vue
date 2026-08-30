@@ -11,7 +11,6 @@
 				<button
 					class="oauth-button google"
 					type="button"
-					:loading="busy && oauthProvider === 'GOOGLE'"
 					:disabled="busy"
 					:aria-busy="busy && oauthProvider === 'GOOGLE'"
 					@click="oauthLogin('GOOGLE')"
@@ -22,7 +21,6 @@
 				<button
 					class="oauth-button github"
 					type="button"
-					:loading="busy && oauthProvider === 'GITHUB'"
 					:disabled="busy"
 					:aria-busy="busy && oauthProvider === 'GITHUB'"
 					@click="oauthLogin('GITHUB')"
@@ -210,6 +208,7 @@
 	import { initializeBrowserCsrf } from '@/common/auth/http-client.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import { startOAuth } from '@/common/auth/oauth-flow.js'
+	import { createNativeSplashHandoff } from '@/common/launch/eagle-native-splash.js'
 	import { isValidEmailAddress } from '@shared-auth/email-validation.js'
 	import {
 		getCurrentPhoneCountrySelection,
@@ -228,6 +227,7 @@
 		components: { AuthTurnstile, IdentifierFields, PhoneDeliveryMethod, VerificationIdentitySummary },
 		data() {
 			return {
+				nativeSplashHandoff: null,
 				methods: [
 					{ value: 'PASSWORD', label: '密码' },
 					{ value: 'EMAIL_CODE', label: '邮箱验证码' },
@@ -306,12 +306,20 @@
 			code() { this.fieldErrors.code = '' }
 		},
 		onLoad() {
+			this.nativeSplashHandoff = createNativeSplashHandoff(this, 'login-ready')
 			this.phoneCountryPageActive = true
 			this.initializePhoneCountry()
 			this.initializePageCsrf()
 			this.timer = setInterval(() => { if (this.cooldown > 0) this.cooldown -= 1 }, 1000)
 		},
+		onReady() {
+			// DOM 提交只是交接信号之一；桥接还会等待当前 App WebView 真正显示。
+			this.$nextTick(() => {
+				this.nativeSplashHandoff?.markDomReady()
+			})
+		},
 		onShow() {
+			this.nativeSplashHandoff?.bindWebview()
 			this.syncPhoneCountrySelection()
 			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'show' }))
 		},
@@ -322,6 +330,8 @@
 			this.$nextTick(() => this.syncTurnstileBounds({ reason: 'resize' }))
 		},
 		onUnload() {
+			this.nativeSplashHandoff?.dispose()
+			this.nativeSplashHandoff = null
 			this.phoneCountryPageActive = false
 			clearInterval(this.timer)
 		},
@@ -691,7 +701,8 @@
 	.oauth-actions {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 12px;
+		column-gap: 14px;
+		width: 100%;
 		margin: 24px 0 20px;
 	}
 	.oauth-button {
@@ -699,9 +710,13 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
+		width: 100%;
 		min-width: 0;
+		margin: 0;
 		min-height: 48px;
 		padding: 0 12px;
+		box-sizing: border-box;
+		overflow: hidden;
 		border: 1px solid rgba(152, 166, 158, .32);
 		border-radius: 12px;
 		background: #151a17;
@@ -713,6 +728,7 @@
 	.oauth-icon { width: 20px; height: 20px; flex: 0 0 20px; }
 	.oauth-label { white-space: nowrap; }
 	.oauth-button:focus-visible { outline: 2px solid #58e2ad; outline-offset: 2px; }
+	.oauth-button:disabled { opacity: .46; filter: grayscale(.35) saturate(.65); cursor: not-allowed; }
 	.oauth-button.google { background: #f5f7f6; color: #17201c; }
 	.oauth-button.github { background: #202421; color: #f7f8f7; }
 	.oauth-divider { display: flex; align-items: center; gap: 12px; color: #7f8b85; font-size: 12px; }
@@ -720,7 +736,7 @@
 	.oauth-divider::after { content: ''; height: 1px; flex: 1; background: rgba(139, 150, 144, .2); }
 	@media screen and (max-width: 359px) {
 		.compact { width: 100%; }
-		.oauth-actions { gap: 8px; }
+		.oauth-actions { grid-template-columns: 1fr; row-gap: 10px; }
 		.oauth-button { padding: 0 6px; font-size: 12px; }
 		.oauth-icon { width: 18px; height: 18px; flex-basis: 18px; }
 	}

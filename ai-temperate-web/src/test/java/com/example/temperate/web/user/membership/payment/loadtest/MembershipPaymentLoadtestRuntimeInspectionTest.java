@@ -32,7 +32,7 @@ final class MembershipPaymentLoadtestRuntimeInspectionTest {
         HikariDataSource dataSource = mock(HikariDataSource.class);
         HikariPoolMXBean pool = mock(HikariPoolMXBean.class);
         when(dataSource.getHikariPoolMXBean()).thenReturn(pool);
-        when(dataSource.getMaximumPoolSize()).thenReturn(96);
+        when(dataSource.getMaximumPoolSize()).thenReturn(256);
         when(dataSource.getMinimumIdle()).thenReturn(8);
         when(dataSource.getPoolName()).thenReturn("membershipPool");
         when(pool.getTotalConnections()).thenReturn(40);
@@ -99,7 +99,7 @@ final class MembershipPaymentLoadtestRuntimeInspectionTest {
         Object probe = serviceType.getMethod("inspect").invoke(service);
         Object hikari = value(probe, "hikari");
         assertThat(value(hikari, "poolAvailable")).isEqualTo(true);
-        assertThat(value(hikari, "configuredMaximumPoolSize")).isEqualTo(96);
+        assertThat(value(hikari, "configuredMaximumPoolSize")).isEqualTo(256);
         assertThat(value(hikari, "configuredMinimumIdle")).isEqualTo(8);
         assertThat(value(hikari, "totalConnections")).isEqualTo(40);
         assertThat(value(hikari, "activeConnections")).isEqualTo(32);

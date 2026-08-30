@@ -17,6 +17,7 @@ import com.example.temperate.service.risk.observability.NetworkRiskDiagnosticCon
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthIssue;
 import com.example.temperate.service.risk.preauth.domain.PreAuthRequiredException;
+import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import java.time.Instant;
@@ -52,6 +53,12 @@ class NetworkRiskDiagnosticLoggingAspectTest {
                 .thenReturn(new PreAuthIssue(
                         "new-sensitive-preauth-token",
                         Instant.parse("2026-07-26T22:06:24Z")));
+        when(target.requireSessionBinding(
+                        access,
+                        RiskScope.ADMIN,
+                        RiskSessionType.ADMIN_SESSION,
+                        RAW_SESSION))
+                .thenReturn(mock(PreAuthSessionBinding.class));
         PreAuthService service = proxy(target, PreAuthService.class);
 
         assertThat(AopUtils.isJdkDynamicProxy(service)).isTrue();
@@ -69,12 +76,18 @@ class NetworkRiskDiagnosticLoggingAspectTest {
                     RiskSessionType.ADMIN_SESSION,
                     RAW_SESSION,
                     Instant.parse("2026-07-26T16:06:24Z"));
+            service.requireSessionBinding(
+                    access,
+                    RiskScope.ADMIN,
+                    RiskSessionType.ADMIN_SESSION,
+                    RAW_SESSION);
 
             assertThat(logs.joinedMessages())
                     .contains(
                             "event=preauth_resolve_completed",
                             "event=preauth_touch_completed",
                             "event=preauth_promotion_completed",
+                            "event=preauth_session_binding_completed",
                             "traceId=trace-risk-aop",
                             "invocationNo=2",
                             "dispatcherType=ASYNC",

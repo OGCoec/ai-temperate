@@ -15,6 +15,7 @@ import com.example.temperate.service.humanverification.exception.HumanVerificati
 import com.example.temperate.service.registration.enums.RegistrationErrorCode;
 import com.example.temperate.service.registration.exception.RegistrationException;
 import com.example.temperate.service.risk.domain.RiskScope;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.flow.transport.AuthFlowCookieWriter;
 import com.example.temperate.web.auth.oauth.provider.OAuthProviderException;
@@ -126,7 +127,13 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
             SessionAuthenticationException exception,
             HttpServletRequest request,
             HttpServletResponse servletResponse) {
+        AuthRequestTiming.recordErrorCode(
+                request, externalSessionCode(exception.code()));
+        request.setAttribute(
+                AuthRequestTiming.CLEAR_COOKIES_ATTRIBUTE,
+                exception.clearCookies());
         clearBrowserCredentials(exception, request, servletResponse);
+        AuthRequestTiming.writeServerTiming(request, servletResponse);
         return response(
                 sessionStatus(exception.code()),
                 externalSessionCode(exception.code()),

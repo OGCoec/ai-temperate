@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.web.auth.config.SpaCsrfTokenRequestHandler;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -68,6 +69,14 @@ class AdminSecurityConfigurationCsrfTest {
         assertThat(cors).isNotNull();
         assertThat(cors.getAllowedMethods())
                 .containsExactly("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
+        assertThat(cors.getAllowedHeaders())
+                .contains(
+                        AuthRequestTraceFilter.CLIENT_REQUEST_HEADER,
+                        AuthRequestTraceFilter.PAGE_INSTANCE_HEADER,
+                        AuthRequestTraceFilter.CLIENT_QUEUE_HEADER,
+                        AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER);
+        assertThat(cors.getExposedHeaders())
+                .contains(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER);
     }
 
     private static DefaultCsrfToken token() {

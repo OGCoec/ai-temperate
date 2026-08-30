@@ -15,6 +15,8 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.service.PreAuthService;
 import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestAccessService;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
@@ -24,6 +26,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -45,6 +49,18 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
     public static final String RENEWED_HEADER = "X-Session-Renewed";
     public static final String NEW_ACCESS_HEADER = "X-New-Access-Token";
     public static final String REFRESH_HEADER = "X-Refresh-Token";
+    public static final String ACCESS_CREDENTIAL_PRESENT_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".accessCredentialPresent";
+    public static final String REFRESH_CREDENTIAL_PRESENT_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".refreshCredentialPresent";
+    public static final String CSRF_PRESENT_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".csrfPresent";
+    public static final String PREAUTH_ACCESS_PRESENT_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".preAuthAccessPresent";
+    public static final String BINDING_ATTEMPTED_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".bindingAttempted";
+    public static final String BINDING_RESULT_ATTRIBUTE =
+            UserSessionAuthenticationInterceptor.class.getName() + ".bindingResult";
     private static final String COMPLETED_ATTRIBUTE =
             UserSessionAuthenticationInterceptor.class.getName() + ".completed";
     private static final String PLATFORM_HEADER = "X-Client-Platform";
@@ -52,6 +68,8 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String MEMBERSHIP_PLAN_OFFERS_PATH =
             "/api/user/membership-plan-offers";
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(UserSessionAuthenticationInterceptor.class);
 
     private final AccessSessionService accessSessionService;
     private final AuthCookieWriter cookieWriter;
@@ -103,6 +121,39 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
             HttpServletRequest request,
             HttpServletResponse response,
             Object handler) {
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.SESSION);
+        try {
+            return authenticate(request, response);
+        } catch (SessionAuthenticationException exception) {
+            AuthRequestTiming.recordErrorCode(request, exception.code().name());
+            throw exception;
+        } finally {
+            long durationMillis = AuthRequestTiming.complete(
+                    request, AuthRequestTiming.Stage.SESSION);
+            if (request.getAttribute(AuthRequestTraceFilter.TRACE_ATTRIBUTE) != null) {
+                LOGGER.info(
+                        "event=user_session_auth_completed traceId={} platform={} authenticated={} "
+                                + "errorCode={} durationMs={} accessCredentialPresent={} "
+                                + "refreshCredentialPresent={} csrfHeaderPresent={} "
+                                + "preAuthAccessPresent={} bindingAttempted={} bindingResult={}",
+                        traceId(request),
+                        AuthClientPlatform.fromHeader(request.getHeader(PLATFORM_HEADER)),
+                        request.getAttribute(PRINCIPAL_ATTRIBUTE) instanceof SessionPrincipal,
+                        AuthRequestTiming.errorCode(request),
+                        durationMillis,
+                        diagnosticValue(request, ACCESS_CREDENTIAL_PRESENT_ATTRIBUTE),
+                        diagnosticValue(request, REFRESH_CREDENTIAL_PRESENT_ATTRIBUTE),
+                        diagnosticValue(request, CSRF_PRESENT_ATTRIBUTE),
+                        diagnosticValue(request, PREAUTH_ACCESS_PRESENT_ATTRIBUTE),
+                        diagnosticValue(request, BINDING_ATTEMPTED_ATTRIBUTE),
+                        diagnosticValue(request, BINDING_RESULT_ATTRIBUTE));
+            }
+        }
+    }
+
+    private boolean authenticate(
+            HttpServletRequest request,
+            HttpServletResponse response) {
         Object existingPrincipal = request.getAttribute(PRINCIPAL_ATTRIBUTE);
         if (Boolean.TRUE.equals(request.getAttribute(COMPLETED_ATTRIBUTE))
                 && existingPrincipal instanceof SessionPrincipal principal) {
@@ -125,13 +176,28 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
 
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(
                 request.getHeader(PLATFORM_HEADER));
+        String accessCredential = platform == AuthClientPlatform.ANDROID
+                ? bearerToken(request)
+                : cookieToken(request, AuthCookieWriter.ACCESS_COOKIE);
+        String refreshCredential = platform == AuthClientPlatform.ANDROID
+                ? request.getHeader(REFRESH_HEADER)
+                : cookieToken(request, AuthCookieWriter.REFRESH_COOKIE);
+        String csrfCredential = request.getHeader(CSRF_HEADER);
+        request.setAttribute(
+                ACCESS_CREDENTIAL_PRESENT_ATTRIBUTE,
+                present(accessCredential));
+        request.setAttribute(
+                REFRESH_CREDENTIAL_PRESENT_ATTRIBUTE,
+                present(refreshCredential));
+        request.setAttribute(CSRF_PRESENT_ATTRIBUTE, present(csrfCredential));
+        request.setAttribute(
+                PREAUTH_ACCESS_PRESENT_ATTRIBUTE,
+                request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE)
+                        instanceof PreAuthAccess);
         SessionAccessCommand command = new SessionAccessCommand(
-                platform == AuthClientPlatform.ANDROID
-                        ? bearerToken(request) : cookieToken(request, AuthCookieWriter.ACCESS_COOKIE),
-                platform == AuthClientPlatform.ANDROID
-                        ? request.getHeader(REFRESH_HEADER)
-                        : cookieToken(request, AuthCookieWriter.REFRESH_COOKIE),
-                request.getHeader(CSRF_HEADER),
+                accessCredential,
+                refreshCredential,
+                csrfCredential,
                 request.getHeader(DEVICE_HEADER));
         PreAuthSessionBinding binding = userPreAuthBinding(request, command.refreshToken());
         SessionAccessResult result = binding == null
@@ -185,28 +251,56 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
             String rawRefreshToken) {
         // 缺失 RT 必须由统一会话服务稳定映射为 REFRESH_TOKEN_REQUIRED，不能被 PreAuth 提前改写错误语义。
         if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            request.setAttribute(BINDING_ATTEMPTED_ATTRIBUTE, Boolean.FALSE);
+            request.setAttribute(BINDING_RESULT_ATTRIBUTE, "skipped_missing_refresh");
             return null;
         }
         Object value = request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
         if (!(value instanceof PreAuthAccess access)) {
+            request.setAttribute(BINDING_ATTEMPTED_ATTRIBUTE, Boolean.FALSE);
+            request.setAttribute(BINDING_RESULT_ATTRIBUTE, "skipped_missing_preauth");
             return null;
         }
+        request.setAttribute(BINDING_ATTEMPTED_ATTRIBUTE, Boolean.TRUE);
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.PREAUTH_BINDING);
         try {
-            return preAuthService.requireSessionBinding(
+            PreAuthSessionBinding binding = preAuthService.requireSessionBinding(
                     access,
                     RiskScope.USER,
                     RiskSessionType.USER_REFRESH,
                     rawRefreshToken);
+            request.setAttribute(BINDING_RESULT_ATTRIBUTE, "succeeded");
+            return binding;
         } catch (IllegalArgumentException exception) {
             if (networkRiskProperties.mode() == NetworkRiskMode.OBSERVE) {
+                request.setAttribute(BINDING_RESULT_ATTRIBUTE, "observe_fallback");
                 return null;
             }
+            request.setAttribute(BINDING_RESULT_ATTRIBUTE, "preauth_required");
             throw new SessionAuthenticationException(
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is no longer bound to this session.",
                     false,
                     exception);
+        } finally {
+            AuthRequestTiming.complete(request, AuthRequestTiming.Stage.PREAUTH_BINDING);
         }
+    }
+
+    private static boolean present(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String traceId(HttpServletRequest request) {
+        Object value = request.getAttribute(AuthRequestTraceFilter.TRACE_ATTRIBUTE);
+        return value instanceof String trace ? trace : "absent";
+    }
+
+    private static String diagnosticValue(
+            HttpServletRequest request,
+            String attributeName) {
+        Object value = request.getAttribute(attributeName);
+        return value == null ? "unavailable" : String.valueOf(value);
     }
 
     private static void establishSecurityContext(

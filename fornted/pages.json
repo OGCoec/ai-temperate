@@ -3,9 +3,7 @@
 		{
 			"path": "pages/launch/session-gate",
 			"style": {
-				"navigationBarTitleText": "正在启动",
-				"navigationBarTextStyle": "white",
-				"navigationBarBackgroundColor": "#0b0d0c",
+				"navigationStyle": "custom",
 				"backgroundColor": "#0b0d0c"
 			}
 		},
@@ -106,6 +104,7 @@
 				"backgroundColor": "#0b0d0c"
 			}
 		},
+		// #endif
 		{
 			"path": "pages/account/membership-plans",
 			"style": {
@@ -113,6 +112,7 @@
 				"backgroundColor": "#0b0d0c"
 			}
 		},
+		// #ifdef H5
 		{
 			"path": "pages/account/payment-result",
 			"style": {
@@ -184,7 +184,7 @@
 	],
 	"globalStyle": {
 		"pageOrientation": "portrait",
-		"navigationBarTitleText": "AI Temperate",
+		"navigationBarTitleText": "Eagle AI",
 		"navigationBarTextStyle": "white",
 		"navigationBarBackgroundColor": "#0b0d0c",
 		"backgroundColor": "#0b0d0c",

@@ -9,8 +9,9 @@ import com.example.temperate.service.auth.session.authentication.exception.Sessi
 import com.example.temperate.service.auth.session.authentication.service.SessionAuthenticationService;
 import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
-import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.api.WebInvalidInputException;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
+import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.service.risk.domain.RiskScope;
@@ -85,14 +86,46 @@ public final class SessionController {
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
             HttpServletRequest request,
             HttpServletResponse response) {
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.CONTROLLER);
+        try {
+            return bootstrapSession(body, deviceId, platformHeader, request, response);
+        } catch (SessionAuthenticationException exception) {
+            AuthRequestTiming.recordErrorCode(request, exception.code().name());
+            throw exception;
+        } finally {
+            AuthRequestTiming.complete(request, AuthRequestTiming.Stage.CONTROLLER);
+        }
+    }
+
+    private SessionResponse bootstrapSession(
+            SessionRequest body,
+            String deviceId,
+            String platformHeader,
+            HttpServletRequest request,
+            HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
         if (platform != AuthClientPlatform.H5) {
             throw new WebInvalidInputException();
         }
         // bootstrap 只允许 H5：它依赖浏览器携带 SameSite RT Cookie，并由安全拦截器校验来源。
         String refreshToken = refreshToken(platform, body, request);
+        String accessToken = accessToken(request);
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.ACCESS_CREDENTIAL_PRESENT_ATTRIBUTE,
+                accessToken != null && !accessToken.isBlank());
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.REFRESH_CREDENTIAL_PRESENT_ATTRIBUTE,
+                refreshToken != null && !refreshToken.isBlank());
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.CSRF_PRESENT_ATTRIBUTE,
+                request.getHeader(CSRF_HEADER) != null
+                        && !request.getHeader(CSRF_HEADER).isBlank());
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.PREAUTH_ACCESS_PRESENT_ATTRIBUTE,
+                request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE)
+                        instanceof PreAuthAccess);
         SessionBootstrapCommand command = new SessionBootstrapCommand(
-                accessToken(request), refreshToken, deviceId);
+                accessToken, refreshToken, deviceId);
         PreAuthSessionBinding binding = userPreAuthBinding(request, refreshToken);
         SessionAuthenticationResult result = binding == null
                 ? sessionService.bootstrap(command)
@@ -221,27 +254,59 @@ public final class SessionController {
     private PreAuthSessionBinding userPreAuthBinding(
             HttpServletRequest request,
             String rawRefreshToken) {
+        // RT 是恢复会话的根凭据；缺失时必须由统一会话服务返回 401，不能先把匿名 PreAuth 误判成 428。
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_ATTEMPTED_ATTRIBUTE,
+                    Boolean.FALSE);
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
+                    "skipped_missing_refresh");
+            return null;
+        }
         Object value = request.getAttribute(
                 NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
         if (!(value instanceof PreAuthAccess access)) {
             // NETWORK_RISK_MODE=DISABLED 时没有 PreAuth 上下文，保留本地开发的原有会话路径。
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_ATTEMPTED_ATTRIBUTE,
+                    Boolean.FALSE);
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
+                    "skipped_missing_preauth");
             return null;
         }
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.BINDING_ATTEMPTED_ATTRIBUTE,
+                Boolean.TRUE);
+        AuthRequestTiming.begin(request, AuthRequestTiming.Stage.PREAUTH_BINDING);
         try {
-            return preAuthService.requireSessionBinding(
+            PreAuthSessionBinding binding = preAuthService.requireSessionBinding(
                     access,
                     RiskScope.USER,
                     RiskSessionType.USER_REFRESH,
                     rawRefreshToken);
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
+                    "succeeded");
+            return binding;
         } catch (IllegalArgumentException exception) {
             if (networkRiskProperties.mode() == NetworkRiskMode.OBSERVE) {
+                request.setAttribute(
+                        UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
+                        "observe_fallback");
                 return null;
             }
+            request.setAttribute(
+                    UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
+                    "preauth_required");
             throw new SessionAuthenticationException(
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is no longer bound to this session.",
                     false,
                     exception);
+        } finally {
+            AuthRequestTiming.complete(request, AuthRequestTiming.Stage.PREAUTH_BINDING);
         }
     }
 

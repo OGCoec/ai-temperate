@@ -1,6 +1,10 @@
-import { publicRequest } from './http-client.js'
+import {
+	publicRequest,
+	WebRtcSchedulingPolicy
+} from './http-client.js'
 import { saveSession } from './session-vault.js'
 import { markRuntimeSessionAuthenticated } from './authenticated-session-state.js'
+import { recordAuthDiagnosticEvent } from './auth-diagnostics.js'
 import { clientPlatform } from './config.js'
 import { classifyPassword, passwordError } from './password-policy.js'
 import {
@@ -14,7 +18,11 @@ import {
 	clearAndroidOAuthFlow
 } from './android-flow-keystore.js'
 import { beginTotpLoginFlow, clearTotpLoginFlow } from './totp-login-flow.js'
-import { invalidateWebRtcVerification } from './webrtc-verification.js'
+import {
+	currentWebRtcVerificationEpoch,
+	invalidateWebRtcVerification,
+	scheduleH5WebRtcVerification
+} from './webrtc-verification.js'
 // #ifdef APP-PLUS
 import {
 	startAndroidWebRtcVerificationInBackground
@@ -104,7 +112,11 @@ function assertPasswordLoginAllowed(password) {
 	rejectClientPassword('密码强度不足，请重置密码。', 'PASSWORD_RESET_REQUIRED')
 }
 
-function handleLoginResponse(response) {
+function handleLoginResponse(
+	response,
+	boundaryEstablished = false,
+	path = 'authentication_complete'
+) {
 	if (response?.status === 'TOTP_REQUIRED') {
 		beginTotpLoginFlow(response)
 		return response
@@ -113,14 +125,46 @@ function handleLoginResponse(response) {
 		clearTotpLoginFlow()
 		saveSession(response)
 		markRuntimeSessionAuthenticated()
-		// 登录轮换 PreAuth 后建立新的任务 epoch；H5 在下一次请求前同步校验。
-		invalidateWebRtcVerification()
+		// 非标准调用仍需主动建立边界；标准完成请求已经在发送前完成 epoch 切换。
+		if (!boundaryEstablished) {
+			invalidateWebRtcVerification('AUTHENTICATED_EPOCH_ROTATED')
+		}
+		recordAuthDiagnosticEvent('WEBRTC_AUTH_EPOCH_STARTED', {
+			path,
+			source: 'handle_login_response',
+			preAuthEpoch: currentWebRtcVerificationEpoch(),
+			outcome: 'authenticated'
+		})
+		// #ifdef H5
+		scheduleH5WebRtcVerification({
+			path,
+			source: 'authenticated_epoch_started'
+		})
+		// #endif
 		// #ifdef APP-PLUS
 		// Android 保持后台 WebView 校验，不阻塞登录成功响应。
 		void startAndroidWebRtcVerificationInBackground().catch(() => {})
 		// #endif
 	}
 	return response
+}
+
+async function authenticationCompletionRequest(
+	path,
+	options = {},
+	{
+		cancelReason = 'AUTHENTICATED_EPOCH_ROTATED',
+		handleLogin = true
+	} = {}
+) {
+	// 完成类请求可能轮换 PreAuth；必须在发送前切断旧 report 的所有权。
+	invalidateWebRtcVerification(cancelReason)
+	const response = await publicRequest(path, {
+		...options,
+		disableAutomaticReplay: true,
+		webRtcSchedulingPolicy: WebRtcSchedulingPolicy.SUPPRESS
+	})
+	return handleLogin ? handleLoginResponse(response, true, path) : response
 }
 
 export const authApi = {
@@ -142,9 +186,13 @@ export const authApi = {
 		return response
 	},
 	oauthNativeGoogleComplete(idToken, flow = null) {
-		return publicRequest('/api/auth/oauth2/google/native/complete', {
+		return authenticationCompletionRequest('/api/auth/oauth2/google/native/complete', {
 			headers: oauthHeaders(flow),
-			data: { idToken }
+			data: { idToken },
+			timeout: 30000
+		}, {
+			cancelReason: 'OAUTH_COMPLETE_BOUNDARY',
+			handleLogin: false
 		})
 	},
 	async oauthPhoneStart(data, flow = null) {
@@ -170,10 +218,11 @@ export const authApi = {
 		})
 	},
 	async oauthComplete(flow = null) {
-		const response = await publicRequest('/api/auth/oauth2/complete', {
+		const handled = await authenticationCompletionRequest('/api/auth/oauth2/complete', {
 			headers: oauthHeaders(flow)
+		}, {
+			cancelReason: 'OAUTH_COMPLETE_BOUNDARY'
 		})
-		const handled = handleLoginResponse(response)
 		if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
 		return handled
 	},
@@ -248,8 +297,7 @@ export const authApi = {
 	},
 	async passwordLogin(data) {
 		assertPasswordLoginAllowed(data?.password)
-		const response = await publicRequest('/api/auth/login/password', { data })
-		return handleLoginResponse(response)
+		return authenticationCompletionRequest('/api/auth/login/password', { data })
 	},
 	loginCodeStart(data) {
 		return publicRequest('/api/auth/login/code/start', { data })
@@ -266,10 +314,9 @@ export const authApi = {
 		})
 	},
 	async loginCodeVerify(flow, strategyType, code) {
-		const response = await publicRequest('/api/auth/login/code/verify', {
+		return authenticationCompletionRequest('/api/auth/login/code/verify', {
 			headers: flowHeaders('login', flow), data: { strategyType, code }
 		})
-		return handleLoginResponse(response)
 	},
 	async totpLoginVerify(code) {
 		const headers = {}
@@ -283,11 +330,10 @@ export const authApi = {
 			headers['X-TOTP-Flow-Token'] = flow.totpFlowToken
 		}
 		try {
-			const response = await publicRequest('/api/auth/login/totp/verify', {
+			return await authenticationCompletionRequest('/api/auth/login/totp/verify', {
 				headers,
 				data: { code }
 			})
-			return handleLoginResponse(response)
 		} catch (error) {
 			if (['TOTP_FLOW_EXPIRED', 'TOTP_ATTEMPTS_EXHAUSTED', 'TOTP_FLOW_FORBIDDEN']
 				.includes(error?.code)) clearTotpLoginFlow()

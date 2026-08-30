@@ -27,6 +27,9 @@ let probeSequence = 0
  * 在Android屏幕外本地WebView中执行WebRTC，并通过调用方注入的UTS原生桥解密一次性回传结果。
  */
 export async function collectAndroidWebRtcIpsInBackground(options = {}) {
+	if (options.signal?.aborted === true) {
+		throw webRtcAbortError(options.signal.reason)
+	}
 	const startedAt = Date.now()
 	const diagnosticsEnabled = options.diagnosticsEnabled === true
 	const onDiagnostic = typeof options.onDiagnostic === 'function'
@@ -109,8 +112,8 @@ export async function collectAndroidWebRtcIpsInBackground(options = {}) {
 	let probeStarted = false
 	let callbackCount = 0
 
-	return new Promise(resolve => {
-		const finish = (value, reason) => {
+	return new Promise((resolve, reject) => {
+		const finish = (value, reason, cancellationError = null) => {
 			if (settled) return
 			const webRtcIps = Array.isArray(value) ? value.slice(0, 8) : []
 			trace('finish_started', {
@@ -119,6 +122,7 @@ export async function collectAndroidWebRtcIpsInBackground(options = {}) {
 				...candidateFamilyCounts(webRtcIps)
 			})
 			settled = true
+			options.signal?.removeEventListener?.('abort', onAbort)
 			if (timer) {
 				clearTimeout(timer)
 				timer = null
@@ -147,11 +151,25 @@ export async function collectAndroidWebRtcIpsInBackground(options = {}) {
 			channelId = ''
 			nonce = ''
 			key = ''
+			if (cancellationError) {
+				trace('promise_rejecting', { reason: 'aborted' })
+				reject(cancellationError)
+				return
+			}
 			trace('promise_resolving', {
 				candidateCount: webRtcIps.length,
 				...candidateFamilyCounts(webRtcIps)
 			})
 			resolve(webRtcIps)
+		}
+		const onAbort = () => finish(
+			[],
+			'aborted',
+			webRtcAbortError(options.signal?.reason))
+		options.signal?.addEventListener?.('abort', onAbort, { once: true })
+		if (options.signal?.aborted === true) {
+			onAbort()
+			return
 		}
 
 		try {
@@ -293,6 +311,13 @@ export async function collectAndroidWebRtcIpsInBackground(options = {}) {
 			finish([], 'webview_setup_failed')
 		}
 	})
+}
+
+function webRtcAbortError(reason) {
+	const error = new Error('WebRTC attempt was cancelled.')
+	error.code = 'WEBRTC_ATTEMPT_ABORTED'
+	error.cancelReason = String(reason || 'EPOCH_INVALIDATED')
+	return error
 }
 
 async function decryptResult(

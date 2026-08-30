@@ -106,14 +106,20 @@ class SecurityConfigurationTest {
                 .contains(
                         "X-Turnstile-Attempt-Id",
                         "X-AI-Client-Request-Id",
+                        "X-AIT-Client-Request-Id",
+                        "X-AIT-Page-Instance-Id",
+                        "X-AIT-Client-Queue-Ms",
+                        "X-AIT-WebRTC-Probe-Run-Id",
                         "X-Refresh-Token");
         assertThat(configuration.getExposedHeaders())
                 .contains(
                         HttpHeaders.ETAG,
                         "X-Trace-Id",
+                        "Server-Timing",
                         "X-AI-Generation-Id",
                         "X-New-Access-Token",
                         "X-Session-Renewed",
+                        "X-AIT-WebRTC-Probe-Run-Id",
                         "CF-Ray",
                         "cf-mitigated");
     }

@@ -21,6 +21,16 @@ function assertInputWrapped(source, id) {
 	)
 }
 
+test('login page dismisses the native startup layer only after its first painted frame', () => {
+	const login = read('pages/auth/login.vue')
+
+	assert.match(login, /eagle-native-splash\.js/)
+	assert.match(login, /createNativeSplashHandoff\(this,\s*'login-ready'\)/)
+	assert.match(login, /onReady\(\)\s*\{[\s\S]{0,260}\$nextTick/)
+	assert.match(login, /nativeSplashHandoff\?\.markDomReady\(\)/)
+	assert.doesNotMatch(login, /dismissNativeSplash\('login-ready'\)/)
+})
+
 test('auth pages render fields through the shared input shell', () => {
 	const files = {
 		identifier: read('components/auth/identifier-fields.vue'),

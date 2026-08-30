@@ -14,6 +14,7 @@ import com.example.temperate.service.risk.webrtc.domain.WebRtcVerificationOutcom
 import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationService;
 import com.example.temperate.service.risk.webrtc.validation.WebRtcInvalidReportException;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
@@ -212,6 +213,7 @@ public final class WebRtcEdgeController {
                     body.probeGeneration(),
                     body.webRtcIps());
         } catch (WebRtcInvalidReportException exception) {
+            AuthRequestTiming.recordErrorCode(request, "WEBRTC_REPORT_INVALID");
             metrics.verification(
                     scope,
                     "invalid",
@@ -235,6 +237,9 @@ public final class WebRtcEdgeController {
                 properties.mode());
         recordReportTransition(scope, platform, access, decision);
         HttpStatus status = reportStatus(decision.outcome(), properties.mode());
+        if (!status.is2xxSuccessful()) {
+            AuthRequestTiming.recordErrorCode(request, code(decision.outcome()));
+        }
         String httpIp = switch (decision.outcome()) {
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
                     IP_FAMILY_INCOMPLETE, IP_MISMATCH ->

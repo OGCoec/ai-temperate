@@ -16,6 +16,14 @@ import {
 import { getDeviceInstallationId } from './device-installation.js'
 import { captureEtagPayload } from './http-response-metadata.js'
 import {
+	authDiagnosticRequestHeaders,
+	createAuthRequestDiagnostic,
+	recordAuthDiagnosticEvent,
+	recordAuthDiagnosticFailure,
+	recordAuthDiagnosticResponse,
+	runAuthDiagnosticStage
+} from './auth-diagnostics.js'
+import {
 	acceptAndroidRiskChallenge,
 	currentPreAuthToken,
 	ensurePreAuth,
@@ -26,6 +34,10 @@ import { repeatedAndroidRiskChallengeError } from './android-risk-challenge.js'
 import { presentRiskBlock } from './risk-block-navigation.js'
 import { beginRiskChallenge } from './risk-challenge-navigation.js'
 import { hasCompleteSessionCredentials } from './session-credentials.js'
+import {
+	beginRuntimeTerminalSessionTransition,
+	claimRuntimeTerminalSessionRedirect
+} from './authenticated-session-state.js'
 import { SessionRenewalMode, sessionRenewalMode } from './session-retry-policy.js'
 import { clearSession, currentSession, saveSession } from './session-vault.js'
 import {
@@ -38,27 +50,25 @@ import {
 	isWebRtcRetryCode
 } from '@shared-auth/webrtc-verification-core.js'
 import {
+	currentWebRtcVerificationEpoch,
+	ensureH5WebRtcVerified,
 	invalidateWebRtcVerification,
-	presentWebRtcFailure
+	observeWebRtcVerificationHeaders,
+	presentWebRtcFailure,
+	scheduleH5WebRtcVerification
 } from './webrtc-verification.js'
-// #ifdef H5
-import { ensureH5WebRtcVerified } from './webrtc-verification.js'
-// #endif
 // #ifdef APP-PLUS
 import {
-	observeAndroidWebRtcVerificationHeaders,
 	startAndroidWebRtcVerificationInBackground
 } from './webrtc-verification.js'
 // #endif
 
 const CSRF_PATH = '/api/auth/csrf'
 const BOOTSTRAP_PATH = '/api/auth/session/bootstrap'
-const PHONE_COUNTRY_PATH = '/api/auth/phone-country'
-const OAUTH_START_PATH = '/api/auth/oauth2/start'
-const H5_WEBRTC_BACKGROUND_PATHS = new Set([
-	PHONE_COUNTRY_PATH,
-	OAUTH_START_PATH
-])
+export const WebRtcSchedulingPolicy = Object.freeze({
+	NORMAL: 'NORMAL',
+	SUPPRESS: 'SUPPRESS'
+})
 const TERMINAL_SESSION_ERRORS = new Set([
 	'AT_REQUIRED',
 	'AT_INVALID',
@@ -70,28 +80,28 @@ const TERMINAL_SESSION_ERRORS = new Set([
 	'ACCOUNT_UNAVAILABLE',
 	'SESSION_RESPONSE_INVALID'
 ])
+const TERMINAL_SESSION_CLEARED = Symbol('terminalSessionCleared')
 
 let bootstrapInFlight = null
 let csrfInFlight = null
 
-function shouldAwaitH5WebRtc(path) {
-	return !H5_WEBRTC_BACKGROUND_PATHS.has(path)
-}
-
 function rawRequestTask(options) {
 	return new Promise((resolve, reject) => {
+		const requestEpoch = currentWebRtcVerificationEpoch()
+		if (options.authDiagnostic) options.authDiagnostic.requestEpoch = requestEpoch
+		const diagnosticHeaders = authDiagnosticRequestHeaders(options.authDiagnostic)
 		uni.request({
 			url: `${AUTH_API_BASE_URL}${options.path}`,
 			method: options.method || 'POST',
 			data: options.data,
-			header: androidEdgeRequestHeaders(options.headers || {}),
+			header: androidEdgeRequestHeaders({
+				...(options.headers || {}),
+				...diagnosticHeaders
+			}),
 			timeout: options.timeout,
 			withCredentials: true,
 			success(response) {
-				// #ifdef APP-PLUS
-				// Android 根据响应头推进后台 WebView 探测；H5 不消费这条异步触发链路。
-				observeAndroidWebRtcVerificationHeaders(response.header || response.headers || {})
-				// #endif
+				recordAuthDiagnosticResponse(options.authDiagnostic, response)
 				try {
 					// Android 必须在解释业务状态前保存同请求续签的 AT；H5 由浏览器接收 HttpOnly Cookie。
 					applySessionRenewalHeaders(response.header || {})
@@ -101,6 +111,32 @@ function rawRequestTask(options) {
 				}
 				const diagnostics = inspectAuthResponse(response)
 				notifyResponseObserver(options.onResponse, diagnostics)
+				// 认证完成边界只消费业务响应；新 Session 提交后再显式建立 WebRTC epoch。
+				if (webRtcSchedulingPolicy(options) === WebRtcSchedulingPolicy.SUPPRESS) {
+					recordWebRtcSchedulingSuppressed(
+						options.authDiagnostic,
+						'response_headers')
+				} else {
+					try {
+						observeWebRtcVerificationHeaders(
+						response.header || response.headers || {},
+						{
+							clientRequestId: options.authDiagnostic?.clientRequestId,
+							errorCode: diagnostics.classification === 'EDGE_CHALLENGE'
+								? 'EDGE_CHALLENGE'
+								: response.data?.code,
+							path: options.path,
+							requestEpoch,
+							responseAccepted: diagnostics.classification !== 'EDGE_CHALLENGE'
+								&& response.statusCode >= 200
+								&& response.statusCode < 300,
+							source: 'response_headers',
+							status: response.statusCode
+						})
+					} catch (_) {
+						// 后台观察器的格式异常不能吞掉已经到达的业务响应。
+					}
+				}
 				if (diagnostics.classification === 'EDGE_CHALLENGE') {
 					const edgeError = new Error('Cloudflare 安全检查尚未完成，请重新完成人机验证。')
 					edgeError.code = 'EDGE_CHALLENGE'
@@ -141,6 +177,7 @@ function rawRequestTask(options) {
 				notifyResponseObserver(options.onResponse, diagnostics)
 				const networkError = new Error('网络连接失败，请检查后重试。')
 				networkError.code = 'NETWORK_ERROR'
+				recordAuthDiagnosticFailure(options.authDiagnostic, networkError)
 				reject(applyDiagnosticsToError(networkError, diagnostics))
 			}
 		})
@@ -148,7 +185,10 @@ function rawRequestTask(options) {
 }
 
 async function requestTask(options) {
-	await ensureCookieScopeMigration()
+	await runAuthDiagnosticStage(
+		options.authDiagnostic,
+		'COOKIE_MIGRATION',
+		() => ensureCookieScopeMigration())
 	return runAndroidRequestWithEdgeRecovery(() => rawRequestTask(options))
 }
 
@@ -172,43 +212,99 @@ function clientContextHeaders() {
 	return headers
 }
 
+function scheduleH5WebRtcForRequest(authDiagnostic, source = 'request_ready') {
+	if (clientPlatform() !== 'H5') return
+	scheduleH5WebRtcVerification({
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source
+	})
+}
+
+function webRtcSchedulingPolicy(options = {}) {
+	return options.webRtcSchedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS
+		? WebRtcSchedulingPolicy.SUPPRESS
+		: WebRtcSchedulingPolicy.NORMAL
+}
+
+function recordWebRtcSchedulingSuppressed(authDiagnostic, phase) {
+	recordAuthDiagnosticEvent('WEBRTC_SCHEDULING_SUPPRESSED', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		phase,
+		outcome: 'suppressed'
+	})
+}
+
 export async function initializeBrowserCsrf(
 	migrationRetried = false,
 	preAuthRetried = false,
-	webRtcRetried = false
+	webRtcRetried = false,
+	schedulingPolicy = WebRtcSchedulingPolicy.NORMAL
 ) {
 	if (clientPlatform() !== 'H5') return ''
+	const authDiagnostic = createAuthRequestDiagnostic(
+		CSRF_PATH,
+		'initialize_browser_csrf')
 	// 必须先清理旧父域 Cookie，再建立 Host-only PreAuth 和读取 CSRF。
-	await ensureCookieScopeMigration()
-	await ensurePreAuth()
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'COOKIE_MIGRATION',
+		() => ensureCookieScopeMigration())
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'PREAUTH',
+		() => ensurePreAuth())
+	if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
+		recordWebRtcSchedulingSuppressed(authDiagnostic, 'csrf_ready')
+	} else {
+		scheduleH5WebRtcForRequest(authDiagnostic, 'csrf_ready')
+	}
 	try {
-		await ensureH5WebRtcVerified()
 		const existing = browserCsrfToken()
 		if (existing) return existing
 		if (!csrfInFlight) {
 			csrfInFlight = requestTask({
 				path: CSRF_PATH,
 				method: 'GET',
-				headers: clientContextHeaders()
+				headers: clientContextHeaders(),
+				webRtcSchedulingPolicy: schedulingPolicy,
+				authDiagnostic
 			}).finally(() => { csrfInFlight = null })
 		}
 		await csrfInFlight
 	} catch (error) {
+		recordAuthDiagnosticFailure(authDiagnostic, error)
 		if (presentRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
-		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
+		if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS
+			&& !webRtcRetried
+			&& isWebRtcRetryCode(error.code)) {
 			await recoverH5WebRtc()
-			return initializeBrowserCsrf(migrationRetried, preAuthRetried, true)
+			return initializeBrowserCsrf(
+				migrationRetried,
+				preAuthRetried,
+				true,
+				schedulingPolicy)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
 			beginRiskChallenge(error)
 		}
-		if (!preAuthRetried && error.code === 'PREAUTH_REQUIRED') {
+		if (error.code === 'PREAUTH_REQUIRED') {
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
-			await ensurePreAuth()
-			await ensureH5WebRtcVerified()
-			return initializeBrowserCsrf(migrationRetried, true, webRtcRetried)
+			if (!preAuthRetried) {
+				await ensurePreAuth()
+				if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS) {
+					scheduleH5WebRtcForRequest(authDiagnostic, 'preauth_recovered')
+				}
+				return initializeBrowserCsrf(
+					migrationRetried,
+					true,
+					webRtcRetried,
+					schedulingPolicy)
+			}
 		}
 		if (migrationRetried
 			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
@@ -218,7 +314,11 @@ export async function initializeBrowserCsrf(
 		invalidatePreAuth()
 		invalidateWebRtcVerification()
 		await ensureCookieScopeMigration()
-		return initializeBrowserCsrf(true, preAuthRetried, webRtcRetried)
+		return initializeBrowserCsrf(
+			true,
+			preAuthRetried,
+			webRtcRetried,
+			schedulingPolicy)
 	}
 	return browserCsrfToken()
 }
@@ -231,20 +331,34 @@ export async function publicRequest(
 	webRtcRetried = false,
 	riskChallengeRetried = false
 ) {
-	await ensureCookieScopeMigration()
-	await ensurePreAuth()
+	const automaticReplayAllowed = options.disableAutomaticReplay !== true
+	const authDiagnostic = createAuthRequestDiagnostic(
+		path,
+		options.diagnosticSource || 'public_request')
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'COOKIE_MIGRATION',
+		() => ensureCookieScopeMigration())
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'PREAUTH',
+		() => ensurePreAuth())
+	const schedulingPolicy = webRtcSchedulingPolicy(options)
+	if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
+		recordWebRtcSchedulingSuppressed(authDiagnostic, 'request_ready')
+	} else {
+		scheduleH5WebRtcForRequest(authDiagnostic)
+	}
 	try {
-		// #ifdef H5
-		// 国家解析和 OAuth 握手只依赖已建立的 PreAuth，允许后台探针并行完成；其余请求等待 report 终态。
-		if (shouldAwaitH5WebRtc(path)) {
-			await ensureH5WebRtcVerified()
-		}
-		// #endif
 		const method = String(options.method || 'POST').toUpperCase()
 		const headers = clientContextHeaders()
 		Object.assign(headers, options.headers || {})
 		if (clientPlatform() === 'H5' && requiresCsrf(method) && path !== BOOTSTRAP_PATH) {
-			const csrfToken = browserCsrfToken() || await initializeBrowserCsrf()
+			const csrfToken = browserCsrfToken() || await initializeBrowserCsrf(
+				false,
+				false,
+				false,
+				schedulingPolicy)
 			if (!csrfToken) {
 				const error = new Error('CSRF token is unavailable.')
 				error.code = 'CSRF_INVALID'
@@ -257,13 +371,18 @@ export async function publicRequest(
 			method,
 			data: options.data,
 			headers,
+			authDiagnostic,
+			webRtcSchedulingPolicy: schedulingPolicy,
 			timeout: options.timeout,
 			onResponse: options.onResponse
 		})
 	} catch (error) {
+		recordAuthDiagnosticFailure(authDiagnostic, error)
 		if (presentRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
-		if (!webRtcRetried && isWebRtcRetryCode(error.code)) {
+		if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS
+			&& !webRtcRetried
+			&& isWebRtcRetryCode(error.code)) {
 			// #ifdef H5
 			await recoverH5WebRtc()
 			// #endif
@@ -280,6 +399,7 @@ export async function publicRequest(
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
 			if (clientPlatform() === 'H5') beginRiskChallenge(error)
+			if (!automaticReplayAllowed) throw error
 			if (riskChallengeRetried) {
 				throw repeatedAndroidRiskChallengeError(error)
 			}
@@ -293,27 +413,31 @@ export async function publicRequest(
 				webRtcRetried,
 				true)
 		}
-		if (!preAuthRetried && error.code === 'PREAUTH_REQUIRED') {
+		if (error.code === 'PREAUTH_REQUIRED') {
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
-			await ensurePreAuth()
-			// #ifdef H5
-			if (shouldAwaitH5WebRtc(path)) {
-				await ensureH5WebRtcVerified()
+			if (!automaticReplayAllowed) throw error
+			if (!preAuthRetried) {
+				await ensurePreAuth()
+				if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS) {
+					scheduleH5WebRtcForRequest(authDiagnostic, 'preauth_recovered')
+				}
+				// #ifdef APP-PLUS
+				if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS) {
+					void startAndroidWebRtcVerificationInBackground().catch(() => {})
+				}
+				// #endif
+				return publicRequest(
+					path,
+					options,
+					migrationRetried,
+					true,
+					webRtcRetried,
+					riskChallengeRetried)
 			}
-			// #endif
-			// #ifdef APP-PLUS
-			void startAndroidWebRtcVerificationInBackground().catch(() => {})
-			// #endif
-			return publicRequest(
-				path,
-				options,
-				migrationRetried,
-				true,
-				webRtcRetried,
-				riskChallengeRetried)
 		}
-		if (clientPlatform() !== 'H5'
+		if (!automaticReplayAllowed
+			|| clientPlatform() !== 'H5'
 			|| migrationRetried
 			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
 			throw error
@@ -332,23 +456,39 @@ export async function publicRequest(
 	}
 }
 
-async function bootstrapBrowserSession() {
-	const response = await publicRequest(BOOTSTRAP_PATH)
-	saveSession(response)
-	return response
+async function bootstrapBrowserSession(authDiagnostic = null) {
+	try {
+		const response = await publicRequest(BOOTSTRAP_PATH, {
+			diagnosticSource: 'session_bootstrap'
+		})
+		saveSession(response)
+		return response
+	} catch (error) {
+		// Session Gate 负责选择登录页；这里先终止旧会话任务，避免跨域返回后的旧回调覆盖新状态。
+		clearTerminalSessionState(error, authDiagnostic)
+		throw error
+	}
 }
 
-export function restoreBrowserSession() {
+export function restoreBrowserSession(authDiagnostic = null) {
 	if (clientPlatform() !== 'H5') return Promise.resolve(null)
+	const owner = !bootstrapInFlight
+	recordAuthDiagnosticEvent('SESSION_BOOTSTRAP_SINGLE_FLIGHT', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path || BOOTSTRAP_PATH,
+		source: authDiagnostic?.source || 'restore_browser_session',
+		owner,
+		waiter: !owner
+	})
 	if (!bootstrapInFlight) {
-		bootstrapInFlight = bootstrapBrowserSession()
+		bootstrapInFlight = bootstrapBrowserSession(authDiagnostic)
 			.finally(() => { bootstrapInFlight = null })
 	}
 	return bootstrapInFlight
 }
 
-export function restorePersistedSession() {
-	if (clientPlatform() === 'H5') return restoreBrowserSession()
+export function restorePersistedSession(authDiagnostic = null) {
+	if (clientPlatform() === 'H5') return restoreBrowserSession(authDiagnostic)
 	const credentials = currentSession()
 	return Promise.resolve(hasCompleteSessionCredentials(credentials)
 		? { restored: true }
@@ -357,24 +497,33 @@ export function restorePersistedSession() {
 
 export async function authorizedRequest(path, options = {}, retryState = {}) {
 	const preserveSessionOnFailure = options.preserveSessionOnFailure === true
+	const authDiagnostic = createAuthRequestDiagnostic(
+		path,
+		options.diagnosticSource || 'authorized_request')
 	try {
-		// H5 保持 WebRTC 前置校验；Android 的 Report 继续由独立后台 WebView 完成。
-		await ensureCookieScopeMigration()
-		await ensurePreAuth()
-		// #ifdef H5
-		await ensureH5WebRtcVerified()
-		// #endif
-		const headers = await protectedCredentialHeaders(options.headers)
+		// 两端普通请求只等待 Cookie/PreAuth；H5 RTCPeerConnection 和 Android WebView 都在后台完成。
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'COOKIE_MIGRATION',
+			() => ensureCookieScopeMigration())
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'PREAUTH',
+			() => ensurePreAuth())
+		scheduleH5WebRtcForRequest(authDiagnostic)
+		const headers = await protectedCredentialHeaders(options.headers, authDiagnostic)
 		return await requestTask({
 			path,
 			method: options.method || 'POST',
 			data: options.data,
 			headers,
+			authDiagnostic,
 			captureEtag: options.captureEtag === true,
 			timeout: options.timeout,
 			onResponse: options.onResponse
 		})
 	} catch (error) {
+		recordAuthDiagnosticFailure(authDiagnostic, error)
 		handleAuthorizedSecurityFailure(error)
 		if (error?.code === 'RISK_CHALLENGE_REQUIRED') {
 			if (clientPlatform() === 'H5') beginRiskChallenge(error)
@@ -388,18 +537,32 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 				options,
 				{ ...retryState, riskChallenge: true })
 		}
-		if (!retryState.preAuth && error?.code === 'PREAUTH_REQUIRED') {
-			await ensurePreAuth()
+		if (!retryState.webRtc && isWebRtcRetryCode(error?.code)) {
 			// #ifdef H5
-			await ensureH5WebRtcVerified()
+			await recoverH5WebRtc()
+			return authorizedRequest(
+				path,
+				options,
+				{ ...retryState, webRtc: true })
 			// #endif
 			// #ifdef APP-PLUS
-			void startAndroidWebRtcVerificationInBackground().catch(() => {})
+			recoverAndroidWebRtc()
 			// #endif
-			return authorizedRequest(path, options, { ...retryState, preAuth: true })
+		}
+		if (error?.code === 'PREAUTH_REQUIRED') {
+			invalidatePreAuth()
+			invalidateWebRtcVerification()
+			if (!retryState.preAuth) {
+				await ensurePreAuth()
+				scheduleH5WebRtcForRequest(authDiagnostic, 'preauth_recovered')
+				// #ifdef APP-PLUS
+				void startAndroidWebRtcVerificationInBackground().catch(() => {})
+				// #endif
+				return authorizedRequest(path, options, { ...retryState, preAuth: true })
+			}
 		}
 		if (!preserveSessionOnFailure || TERMINAL_SESSION_ERRORS.has(error?.code)) {
-			handleTerminalSessionError(error)
+			handleTerminalSessionError(error, authDiagnostic)
 		}
 		throw error
 	}
@@ -409,10 +572,6 @@ function handleAuthorizedSecurityFailure(error) {
 	if (presentRiskBlock(error)) return
 	if (isWebRtcFailureCode(error?.code)) {
 		presentWebRtcFailure(error)
-		invalidateWebRtcVerification()
-	}
-	if (error?.code === 'PREAUTH_REQUIRED') {
-		invalidatePreAuth()
 		invalidateWebRtcVerification()
 	}
 	if (error?.code === 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
@@ -427,13 +586,20 @@ function handleAuthorizedSecurityFailure(error) {
  * 调用方只能把结果用于一次受保护的 SSE 请求，不得写入本地存储或日志。
  */
 export async function prepareAuthorizedStreamingRequest(path, options = {}) {
-	await ensureCookieScopeMigration()
-	await ensurePreAuth()
-	// #ifdef H5
-	await ensureH5WebRtcVerified()
-	// #endif
+	const authDiagnostic = createAuthRequestDiagnostic(
+		path,
+		options.diagnosticSource || 'authorized_streaming_request')
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'COOKIE_MIGRATION',
+		() => ensureCookieScopeMigration())
+	await runAuthDiagnosticStage(
+		authDiagnostic,
+		'PREAUTH',
+		() => ensurePreAuth())
+	scheduleH5WebRtcForRequest(authDiagnostic, 'streaming_ready')
 	const method = String(options.method || 'POST').toUpperCase()
-	const headers = await protectedCredentialHeaders(options.headers)
+	const headers = await protectedCredentialHeaders(options.headers, authDiagnostic)
 	return Object.freeze({
 		url: `${AUTH_API_BASE_URL}${path}`,
 		method,
@@ -462,7 +628,7 @@ export async function recoverAuthorizedStreamingSession(error) {
 	return true
 }
 
-async function protectedCredentialHeaders(additionalHeaders = {}) {
+async function protectedCredentialHeaders(additionalHeaders = {}, authDiagnostic = null) {
 	const headers = clientContextHeaders()
 	Object.assign(headers, additionalHeaders || {})
 	const session = currentSession()
@@ -474,7 +640,10 @@ async function protectedCredentialHeaders(additionalHeaders = {}) {
 	}
 	if (!browserCsrfToken()) {
 		// 受保护会话丢失 CSRF 时必须通过 bootstrap 同步轮换 Redis 绑定，不能只领取未绑定的新 Cookie。
-		await restoreBrowserSession()
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'SESSION_BOOTSTRAP',
+			() => restoreBrowserSession(authDiagnostic))
 	}
 	const csrfToken = browserCsrfToken()
 	if (!csrfToken) {
@@ -507,9 +676,43 @@ function responseHeader(headers, expectedName) {
 	return entry ? entry[1] : ''
 }
 
-function handleTerminalSessionError(error) {
-	if (!TERMINAL_SESSION_ERRORS.has(error?.code)) return
+function clearTerminalSessionState(error, authDiagnostic = null) {
+	if (!TERMINAL_SESSION_ERRORS.has(error?.code)) return false
+	if (error[TERMINAL_SESSION_CLEARED] === true) return false
+	error[TERMINAL_SESSION_CLEARED] = true
+	if (!beginRuntimeTerminalSessionTransition()) {
+		recordAuthDiagnosticEvent('SESSION_CLEAR_COALESCED', {
+			clientRequestId: authDiagnostic?.clientRequestId,
+			path: authDiagnostic?.path,
+			source: authDiagnostic?.source,
+			errorCode: error.code,
+			outcome: 'joined'
+		})
+		return false
+	}
+	recordAuthDiagnosticEvent('SESSION_CLEAR_TRIGGERED', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		errorCode: error.code
+	})
+	// 终止性 401 必须按固定顺序废弃会话、PreAuth 和 WebRTC epoch，旧异步回调随后只能被忽略。
 	clearSession()
+	invalidatePreAuth()
+	invalidateWebRtcVerification()
+	return true
+}
+
+function handleTerminalSessionError(error, authDiagnostic = null) {
+	if (!clearTerminalSessionState(error, authDiagnostic)) return
+	if (!claimRuntimeTerminalSessionRedirect()) return
+	recordAuthDiagnosticEvent('LOGIN_REDIRECT_TRIGGERED', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		errorCode: error.code,
+		route: AUTH_ROUTES.login
+	})
 	uni.reLaunch({ url: AUTH_ROUTES.login })
 }
 

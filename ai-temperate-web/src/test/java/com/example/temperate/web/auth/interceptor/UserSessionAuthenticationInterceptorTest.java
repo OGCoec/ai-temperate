@@ -22,6 +22,7 @@ import com.example.temperate.service.user.membership.MembershipExpirationService
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentLoadtestProperties;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestAccessService;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import com.example.temperate.web.user.membership.payment.loadtest.MembershipPaymentLoadtestRequestPolicy;
 import jakarta.servlet.Filter;
@@ -194,6 +195,7 @@ class UserSessionAuthenticationInterceptorTest {
     @Test
     void missingRefreshTokenKeepsTheRefreshRequiredErrorAheadOfPreAuthBinding() {
         MockHttpServletRequest request = request("ANDROID");
+        AuthRequestTiming.initialize(request, true);
         request.addHeader("Authorization", "Bearer android-at");
         request.setAttribute(
                 NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
@@ -211,6 +213,14 @@ class UserSessionAuthenticationInterceptorTest {
 
         verifyNoInteractions(preAuthService);
         verifyNoInteractions(membershipExpirationService);
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.REFRESH_CREDENTIAL_PRESENT_ATTRIBUTE))
+                .isEqualTo(Boolean.FALSE);
+        assertThat(request.getAttribute(
+                UserSessionAuthenticationInterceptor.PREAUTH_ACCESS_PRESENT_ATTRIBUTE))
+                .isEqualTo(Boolean.TRUE);
+        assertThat(AuthRequestTiming.durationMillis(
+                request, AuthRequestTiming.Stage.SESSION)).isPresent();
     }
 
     @Test

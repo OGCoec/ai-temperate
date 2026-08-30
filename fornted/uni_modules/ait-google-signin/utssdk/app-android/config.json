@@ -1,8 +1,9 @@
 {
-  "minSdkVersion": "21",
+  "minSdkVersion": "23",
   "dependencies": [
     "androidx.credentials:credentials:1.6.0",
     "androidx.credentials:credentials-play-services-auth:1.6.0",
-    "com.google.android.libraries.identity.googleid:googleid:1.2.0"
+    "com.google.android.libraries.identity.googleid:googleid:1.2.0",
+    "com.google.android.gms:play-services-base:18.3.0"
   ]
 }
