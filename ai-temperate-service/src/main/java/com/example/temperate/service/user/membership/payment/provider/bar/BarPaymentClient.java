@@ -2,6 +2,8 @@ package com.example.temperate.service.user.membership.payment.provider.bar;
 
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryCommand;
@@ -15,6 +17,8 @@ import com.example.temperate.service.user.membership.payment.provider.PaymentRef
 public interface BarPaymentClient {
 
     PaymentCheckoutResult createCheckout(PaymentCheckoutCommand command);
+
+    PaymentCreateResult createPayment(PaymentCreateCommand command);
 
     PaymentQueryResult queryPayment(PaymentQueryCommand command);
 

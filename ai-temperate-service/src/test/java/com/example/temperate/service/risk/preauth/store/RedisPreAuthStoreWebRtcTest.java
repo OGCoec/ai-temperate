@@ -66,7 +66,9 @@ class RedisPreAuthStoreWebRtcTest {
                         "retainsEvidence",
                         "redis.call('TIME')",
                         "return -2",
-                        "return 4")
+                        "return 4",
+                        "webRtcOwner",
+                        "return 5")
                 .contains("HSET", "PEXPIRE")
                 .doesNotContain("webRtcStatus");
         assertThat(script.indexOf("if currentPhase == 'FAILED'"))

@@ -457,6 +457,8 @@ public final class RedisRefreshSessionStore implements RefreshSessionStore {
                     RefreshSessionValidation.Status.PREAUTH_MISMATCH, null);
             case 6 -> new RefreshSessionValidation(
                     RefreshSessionValidation.Status.TTL_INVARIANT_VIOLATION, null);
+            case 7 -> new RefreshSessionValidation(
+                    RefreshSessionValidation.Status.WEBRTC_VERDICT_REJECTED, null);
             default -> throw unavailable("Unexpected refresh session validation result.");
         };
     }

@@ -142,7 +142,8 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
 
     private static HttpStatus sessionStatus(SessionAuthenticationErrorCode code) {
         return switch (code) {
-            case PREAUTH_REQUIRED -> HttpStatus.PRECONDITION_REQUIRED;
+            case PREAUTH_REQUIRED, WEBRTC_VERIFICATION_TIMEOUT ->
+                    HttpStatus.PRECONDITION_REQUIRED;
             case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.UNAUTHORIZED;
         };
@@ -312,7 +313,8 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
         HttpStatus status = switch (exception.code()) {
             case FLOW_NOT_FOUND, FLOW_EXPIRED -> HttpStatus.GONE;
             case FLOW_FORBIDDEN, STATE_REJECTED, NONCE_REJECTED -> HttpStatus.FORBIDDEN;
-            case INVALID_TRANSITION -> HttpStatus.CONFLICT;
+            case INVALID_TRANSITION, COMPLETION_IN_PROGRESS, ALREADY_COMPLETED ->
+                    HttpStatus.CONFLICT;
             case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
         };
         return response(status, exception.code().name(), "OAuth 登录流程无效或已过期，请重新开始。");

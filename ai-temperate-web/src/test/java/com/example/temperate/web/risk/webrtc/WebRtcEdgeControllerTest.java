@@ -3,6 +3,7 @@ package com.example.temperate.web.risk.webrtc;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -25,10 +26,12 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 
 /**
  * 验证 WebRTC Start/Report 的固定协议、状态码、失败详情与禁止缓存响应。
@@ -51,14 +54,14 @@ class WebRtcEdgeControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().probeRequired()).isTrue();
-        assertThat(response.getBody().verificationState()).isEqualTo("PENDING");
-        assertThat(response.getBody().probeGeneration()).isEqualTo("12");
-        assertThat(response.getBody().pendingRemainingMillis()).isEqualTo(15_000L);
-        assertThat(response.getBody().timeoutMillis()).isEqualTo(12_000L);
-        assertThat(response.getBody().reportGraceMillis()).isEqualTo(3_000L);
-        assertThat(response.getBody().stunUrls()).containsExactly(
+        var body = Objects.requireNonNull(response.getBody());
+        assertThat(body.probeRequired()).isTrue();
+        assertThat(body.verificationState()).isEqualTo("PENDING");
+        assertThat(body.probeGeneration()).isEqualTo("12");
+        assertThat(body.pendingRemainingMillis()).isEqualTo(15_000L);
+        assertThat(body.timeoutMillis()).isEqualTo(12_000L);
+        assertThat(body.reportGraceMillis()).isEqualTo(3_000L);
+        assertThat(body.stunUrls()).containsExactly(
                 "stun:stun.l.google.com:19302",
                 "stun:stun.cloudflare.com:3478",
                 "stun:global.stun.twilio.com:3478",
@@ -72,6 +75,7 @@ class WebRtcEdgeControllerTest {
                         any(),
                         eq("8.8.8.8"),
                         eq("12"),
+                        isNull(),
                         eq(List.of("1.1.1.1"))))
                 .thenReturn(WebRtcVerificationDecision.failed(
                         12L,
@@ -86,15 +90,16 @@ class WebRtcEdgeControllerTest {
                 new WebRtcEdgeController.WebRtcReportRequest(
                         "12",
                         List.of("1.1.1.1")),
-                request("POST", "/api/_edge/webrtc/report"));
+                request("POST", "/api/_edge/webrtc/report"),
+                new MockHttpServletResponse());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().code()).isEqualTo("WEBRTC_IP_MISMATCH");
-        assertThat(response.getBody().verificationState()).isEqualTo("FAILED");
-        assertThat(response.getBody().httpIp()).isEqualTo("8.8.8.8");
-        assertThat(response.getBody().webRtcIps()).containsExactly("1.1.1.1");
+        var body = Objects.requireNonNull(response.getBody());
+        assertThat(body.code()).isEqualTo("WEBRTC_IP_MISMATCH");
+        assertThat(body.verificationState()).isEqualTo("FAILED");
+        assertThat(body.httpIp()).isEqualTo("8.8.8.8");
+        assertThat(body.webRtcIps()).containsExactly("1.1.1.1");
     }
 
     @Test
@@ -104,6 +109,7 @@ class WebRtcEdgeControllerTest {
                         any(),
                         eq("8.8.8.8"),
                         eq("13"),
+                        isNull(),
                         eq(List.of("2606:4700:4700::1111"))))
                 .thenReturn(WebRtcVerificationDecision.failed(
                         13L,
@@ -119,21 +125,50 @@ class WebRtcEdgeControllerTest {
                 new WebRtcEdgeController.WebRtcReportRequest(
                         "13",
                         List.of("2606:4700:4700::1111")),
-                request);
+                request,
+                new MockHttpServletResponse());
 
         assertThat(response.getStatusCode())
                 .isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().code())
+        var body = Objects.requireNonNull(response.getBody());
+        assertThat(body.code())
                 .isEqualTo("WEBRTC_IP_FAMILY_INCOMPLETE");
-        assertThat(response.getBody().verificationState()).isEqualTo("FAILED");
-        assertThat(response.getBody().webRtcStatus()).isFalse();
-        assertThat(response.getBody().retryable()).isFalse();
-        assertThat(response.getBody().httpIp()).isEqualTo("8.8.8.8");
-        assertThat(response.getBody().webRtcIps())
+        assertThat(body.verificationState()).isEqualTo("FAILED");
+        assertThat(body.webRtcStatus()).isFalse();
+        assertThat(body.retryable()).isFalse();
+        assertThat(body.httpIp()).isEqualTo("8.8.8.8");
+        assertThat(body.webRtcIps())
                 .containsExactly("2606:4700:4700::1111");
         assertThat(AuthRequestTiming.errorCode(request))
                 .isEqualTo("WEBRTC_IP_FAMILY_INCOMPLETE");
+    }
+
+    @Test
+    void genericReportForOAuthOwnedGenerationReturns409WithoutClearingCookies() {
+        Fixture fixture = fixture();
+        when(fixture.service().report(
+                        any(),
+                        eq("8.8.8.8"),
+                        eq("14"),
+                        isNull(),
+                        eq(List.of("8.8.8.8"))))
+                .thenReturn(WebRtcVerificationDecision.oauthAttemptRequired());
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        var response = fixture.controller().reportUser(
+                "device-installation-0001",
+                "H5",
+                new WebRtcEdgeController.WebRtcReportRequest(
+                        "14",
+                        List.of("8.8.8.8")),
+                request("POST", "/api/_edge/webrtc/report"),
+                servletResponse);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(Objects.requireNonNull(response.getBody()).code())
+                .isEqualTo("WEBRTC_OAUTH_ATTEMPT_REQUIRED");
+        assertThat(response.getBody().retryable()).isFalse();
+        assertThat(servletResponse.getHeaders("Set-Cookie")).isEmpty();
     }
 
     @Test
@@ -154,6 +189,7 @@ class WebRtcEdgeControllerTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                Duration.ofSeconds(15),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),
@@ -197,7 +233,7 @@ class WebRtcEdgeControllerTest {
                 ? PreAuthWebRtcPhase.PENDING
                 : PreAuthWebRtcPhase.REQUIRED);
         request.setAttribute(
-                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                Objects.requireNonNull(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE),
                 access);
         return request;
     }

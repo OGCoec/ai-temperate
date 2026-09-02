@@ -1,4 +1,7 @@
-import { parseAbsoluteHttpUrl } from '../platform/http-url.js'
+import {
+	canonicalHttpUrl,
+	parseAbsoluteHttpUrl
+} from '../platform/http-url.js'
 
 const STORAGE_KEY = 'ait.user.ai.research.v1'
 const SCHEMA_VERSION = 2
@@ -83,6 +86,11 @@ function normalizeSource(value) {
 		role: text(value.role, 32),
 		occurredAt: text(value.occurredAt, 64)
 	}
+}
+
+function sourceDedupeKey(value) {
+	const canonicalUrl = canonicalHttpUrl(value?.url, { stripFragment: true })
+	return canonicalUrl ? `${String(value?.role || '')}\n${canonicalUrl}` : ''
 }
 
 function normalizeSummary(value) {
@@ -204,7 +212,11 @@ export function createAiConversationResearchSession(initial) {
 		terminalState: 'ACTIVE'
 	})
 	if (!record) throw new Error('Invalid AI conversation research session')
-	let lastSequence = 0
+	const lastSequences = {
+		activity: 0,
+		source: 0,
+		reasoningSummary: 0
+	}
 	let immediateQueued = false
 	let summaryTimer = null
 	const sourceKeys = new Set()
@@ -212,10 +224,11 @@ export function createAiConversationResearchSession(initial) {
 		record.activities.map(activityDedupeKey))
 
 	function touch() { record.updatedAt = new Date().toISOString() }
-	function accepts(value) {
+	function accepts(type, value) {
 		const sequence = safeSequence(value?.sequence)
-		if (sequence == null || sequence <= lastSequence) return false
-		lastSequence = sequence
+		if (sequence == null || sequence <= lastSequences[type]) return false
+		// 三类 SSE 事件各自递增，跨类型序号不能互相抬高拒收门槛。
+		lastSequences[type] = sequence
 		return true
 	}
 	function flush() {
@@ -252,7 +265,7 @@ export function createAiConversationResearchSession(initial) {
 		},
 		appendActivity(value) {
 			const normalized = normalizeActivity(value)
-			if (!normalized || !accepts(normalized)) return false
+			if (!normalized || !accepts('activity', normalized)) return false
 			const eventKey = activityDedupeKey(normalized)
 			if (activityEventKeys.has(eventKey)
 				|| activityEventKeys.size >= MAX_ACTIVITIES) return false
@@ -263,8 +276,8 @@ export function createAiConversationResearchSession(initial) {
 		},
 		appendSource(value) {
 			const normalized = normalizeSource(value)
-			if (!normalized || !accepts(normalized)) return false
-			const key = `${normalized.role}\n${normalized.url}`
+			if (!normalized || !accepts('source', normalized)) return false
+			const key = sourceDedupeKey(normalized)
 			if (sourceKeys.has(key)) return false
 			sourceKeys.add(key)
 			record.sources.push(normalized)
@@ -273,7 +286,8 @@ export function createAiConversationResearchSession(initial) {
 		},
 		appendReasoningSummary(value) {
 			const normalized = normalizeSummary(value)
-			if (!normalized || !accepts(normalized)) return false
+			if (!normalized
+				|| !accepts('reasoningSummary', normalized)) return false
 			record.reasoningSummaries.push(normalized)
 			record.reasoningSummaries = boundedSummaries(
 				record.reasoningSummaries.slice(-MAX_SUMMARIES))

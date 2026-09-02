@@ -14,10 +14,18 @@ const SAFE_FIELD_NAMES = new Set([
 	'cancelReason',
 	'classification',
 	'clientRequestId',
+	'migrationClientRequestId',
+	'cookieScopeReset',
+	'cookieScopeState',
+	'cfRay',
 	'deadlineRemainingMs',
 	'documentVisibility',
 	'durationMs',
+	'errno',
 	'errorCode',
+	'edgeOutcome',
+	'errMsg',
+	'failureReason',
 	'finishReason',
 	'generation',
 	'hostCount',
@@ -27,8 +35,10 @@ const SAFE_FIELD_NAMES = new Set([
 	'method',
 	'mode',
 	'outcome',
+	'oauthFlowId',
 	'owner',
 	'pageInstanceId',
+	'pagesDeployment',
 	'pageState',
 	'path',
 	'pendingRemainingMs',
@@ -59,10 +69,13 @@ const SAFE_FIELD_NAMES = new Set([
 	'timeoutMs',
 	'traceId',
 	'triggerClientRequestId',
+	'upstreamAttempted',
 	'verificationState',
 	'waiter',
 	'webRtcGeneration',
-	'webRtcStatus'
+	'webRtcStatus',
+	'workerVersion',
+	'backendRelease'
 ])
 
 let sequence = 0
@@ -143,10 +156,15 @@ export function recordAuthDiagnosticEvent(event, fields = {}) {
 	return record
 }
 
-export function createAuthRequestDiagnostic(path, source = 'auth_http_client') {
+export function createAuthRequestDiagnostic(
+	path,
+	source = 'auth_http_client',
+	correlation = {}) {
 	const diagnostic = {
 		clientRequestId: createUuid(),
 		pageInstanceId,
+		triggerClientRequestId: validatedUuid(
+			correlation?.triggerClientRequestId),
 		path: safePath(path),
 		source: safeCode(source, 'auth_http_client'),
 		createdAt: monotonicNow(),
@@ -207,6 +225,9 @@ export function authDiagnosticRequestHeaders(diagnostic, correlation = {}) {
 		'X-AIT-Client-Queue-Ms': String(queueMs)
 	}
 	if (probeRunId) headers['X-AIT-WebRTC-Probe-Run-Id'] = probeRunId
+	if (diagnostic.triggerClientRequestId) {
+		headers['X-AIT-Trigger-Request-Id'] = diagnostic.triggerClientRequestId
+	}
 	return headers
 }
 
@@ -214,6 +235,10 @@ export function recordAuthDiagnosticResponse(diagnostic, response = {}) {
 	if (diagnostic) diagnostic.completed = true
 	const headers = response.header || response.headers || {}
 	const status = Number(response.statusCode || response.status || 0)
+	const upstreamAttemptedHeader = responseHeader(
+		headers, 'X-AIT-Edge-Upstream-Attempted')
+	const cookieScopeResetHeader = responseHeader(
+		headers, 'X-AIT-Cookie-Scope-Reset')
 	const errorCode = status >= 400
 		? response.data?.code || `HTTP_${status || 0}`
 		: ''
@@ -221,6 +246,16 @@ export function recordAuthDiagnosticResponse(diagnostic, response = {}) {
 		...requestFields(diagnostic),
 		status,
 		errorCode,
+		cfRay: responseHeader(headers, 'CF-Ray'),
+		edgeOutcome: responseHeader(headers, 'X-AIT-Edge-Outcome'),
+		upstreamAttempted: upstreamAttemptedHeader
+			? upstreamAttemptedHeader === '1' : undefined,
+		cookieScopeState: responseHeader(headers, 'X-AIT-Cookie-Scope-State'),
+		cookieScopeReset: cookieScopeResetHeader
+			? cookieScopeResetHeader === '1' : undefined,
+		workerVersion: responseHeader(headers, 'X-AIT-Worker-Version'),
+		pagesDeployment: responseHeader(headers, 'X-AIT-Pages-Deployment'),
+		backendRelease: responseHeader(headers, 'X-AIT-Backend-Release'),
 		traceId: responseHeader(headers, 'X-Trace-Id'),
 		serverTiming: responseHeader(headers, 'Server-Timing'),
 		durationMs: diagnostic?.sentAt == null
@@ -242,6 +277,11 @@ export function recordAuthDiagnosticFailure(diagnostic, error) {
 		...requestFields(diagnostic),
 		status: error?.statusCode || 0,
 		errorCode: error?.code || 'NETWORK_ERROR',
+		errno: error?.errno,
+		errMsg: error?.errMsg,
+		timeoutMs: error?.timeoutMs,
+		phase: error?.oauthPhase,
+		preAuthReady: error?.preAuthReady,
 		outcome: 'failed',
 		durationMs: diagnostic?.sentAt == null
 			? 0
@@ -256,8 +296,13 @@ export function exportAuthDiagnostics() {
 		pageInstanceId,
 		consoleEnabled: isAuthDiagnosticsConsoleEnabled(),
 		exportedAt: new Date().toISOString(),
+		runtime: Object.freeze(coarseRuntimeContext()),
 		records: Object.freeze(records.map(record => Object.freeze({ ...record })))
 	})
+}
+
+export function exportAuthDiagnosticsJson() {
+	return JSON.stringify(exportAuthDiagnostics())
 }
 
 export function flushAuthDiagnostics() {
@@ -308,7 +353,8 @@ function requestFields(diagnostic) {
 		path: diagnostic.path,
 		probeRunId: diagnostic.probeRunId,
 		requestEpoch: diagnostic.requestEpoch,
-		source: diagnostic.source
+		source: diagnostic.source,
+		triggerClientRequestId: diagnostic.triggerClientRequestId
 	}
 }
 
@@ -321,6 +367,8 @@ function normalizeField(name, value) {
 		'reportDispatched',
 		'retry',
 		'retryable',
+		'cookieScopeReset',
+		'upstreamAttempted',
 		'waiter',
 		'webRtcStatus'
 	].includes(name)) {
@@ -358,12 +406,19 @@ function normalizeField(name, value) {
 			: 0
 	}
 	if (name === 'path' || name === 'route') return safePath(value)
+	if (name === 'errno') return safeText(value).replace(/[^A-Za-z0-9._+-]/g, '')
+	if (name === 'errMsg') return safeText(value)
 	if (name === 'serverTiming') {
 		return safeText(value).replace(/[^A-Za-z0-9._;,= -]/g, '')
 	}
-	if (name === 'clientRequestId' || name === 'pageInstanceId'
-		|| name === 'triggerClientRequestId') {
+	if (name === 'clientRequestId'
+		|| name === 'pageInstanceId'
+		|| name === 'oauthFlowId') {
 		return safeUuid(value)
+	}
+	if (name === 'triggerClientRequestId'
+		|| name === 'migrationClientRequestId') {
+		return validatedUuid(value) || undefined
 	}
 	if (name === 'probeRunId') return validatedUuid(value) || undefined
 	return safeCode(value, 'unavailable')
@@ -389,6 +444,7 @@ function syncDiagnosticBridge() {
 	}
 	const bridge = Object.freeze({
 		export: exportAuthDiagnostics,
+		exportJson: exportAuthDiagnosticsJson,
 		clear: clearAuthDiagnostics,
 		setConsoleEnabled: setAuthDiagnosticsConsoleEnabled
 	})
@@ -415,9 +471,56 @@ function mirrorRecordToConsole(record) {
 }
 
 function responseHeader(headers, expectedName) {
+	if (typeof headers?.get === 'function') {
+		return safeText(headers.get(expectedName))
+	}
 	const entry = Object.entries(headers || {})
 		.find(([name]) => String(name).toLowerCase() === expectedName.toLowerCase())
 	return entry ? safeText(entry[1]) : ''
+}
+
+function coarseRuntimeContext() {
+	const userAgent = String(globalThis.navigator?.userAgent || '')
+	const platform = String(globalThis.navigator?.platform || '')
+	const browser = browserIdentity(userAgent)
+	return {
+		browserFamily: browser.family,
+		browserMajor: browser.major,
+		osFamily: osFamily(userAgent, platform),
+		secureContext: globalThis.isSecureContext === true,
+		cookieEnabled: globalThis.navigator?.cookieEnabled === true,
+		originHost: safeOriginHost(globalThis.window?.location?.hostname)
+	}
+}
+
+function browserIdentity(userAgent) {
+	const patterns = [
+		['EDGE', /(?:Edg|Edge)\/(\d+)/],
+		['FIREFOX', /Firefox\/(\d+)/],
+		['CHROME', /(?:Chrome|CriOS)\/(\d+)/],
+		['SAFARI', /Version\/(\d+)[\s\S]*Safari\//]
+	]
+	for (const [family, pattern] of patterns) {
+		const match = userAgent.match(pattern)
+		if (match) return { family, major: Number(match[1]) || 0 }
+	}
+	return { family: 'OTHER', major: 0 }
+}
+
+function osFamily(userAgent, platform) {
+	const value = `${userAgent} ${platform}`
+	if (/Android/i.test(value)) return 'ANDROID'
+	if (/(?:iPhone|iPad|iPod)/i.test(value)) return 'IOS'
+	if (/Windows|Win32|Win64/i.test(value)) return 'WINDOWS'
+	if (/Macintosh|MacIntel/i.test(value)) return 'MACOS'
+	if (/Linux/i.test(value)) return 'LINUX'
+	return 'OTHER'
+}
+
+function safeOriginHost(value) {
+	const normalized = String(value || '').trim().toLowerCase()
+	return /^(?=.{1,253}$)[a-z0-9.-]+$/.test(normalized)
+		? normalized : 'unavailable'
 }
 
 function safePath(value) {

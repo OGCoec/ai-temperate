@@ -4,9 +4,12 @@ import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderInitializeCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentRefundCommand;
@@ -46,21 +49,67 @@ public final class BarMembershipPaymentProviderImpl
 
     @Override
     public PaymentCheckoutResult createCheckout(PaymentCheckoutCommand command) {
-        return client.createCheckout(command);
+        PaymentCheckoutResult result = client.createCheckout(command);
+        return new PaymentCheckoutResult(
+                tagged(result.providerTradeNo()),
+                result.expiresAt(),
+                result.created(),
+                result.checkoutSubmission());
+    }
+
+    @Override
+    public PaymentCreateResult createPayment(PaymentCreateCommand command) {
+        PaymentCreateResult result = client.createPayment(command);
+        return new PaymentCreateResult(
+                tagged(result.providerTradeNo()),
+                result.providerPayType(),
+                result.payInfo(),
+                result.created());
     }
 
     @Override
     public PaymentQueryResult queryPayment(PaymentQueryCommand command) {
-        return client.queryPayment(command);
+        PaymentQueryResult result = client.queryPayment(new PaymentQueryCommand(
+                command.orderId(), PaymentProviderReference.rawTradeNo(command.providerTradeNo())));
+        return new PaymentQueryResult(
+                result.orderId(),
+                taggedOrExisting(result.providerTradeNo(), command.providerTradeNo()),
+                result.channelTradeNo(),
+                result.status(),
+                result.amountYuan(),
+                result.finishedAt(),
+                result.callbackId());
     }
 
     @Override
     public PaymentCloseResult closePayment(PaymentCloseCommand command) {
-        return client.closePayment(command);
+        PaymentCloseResult result = client.closePayment(new PaymentCloseCommand(
+                command.orderId(), PaymentProviderReference.rawTradeNo(command.providerTradeNo())));
+        return new PaymentCloseResult(
+                result.status(), taggedOrExisting(result.providerTradeNo(), command.providerTradeNo()));
     }
 
     @Override
     public PaymentRefundResult refundPayment(PaymentRefundCommand command) {
-        return client.refundPayment(command);
+        PaymentRefundResult result = client.refundPayment(new PaymentRefundCommand(
+                command.orderId(),
+                PaymentProviderReference.rawTradeNo(command.providerTradeNo()),
+                command.amountYuan()));
+        return new PaymentRefundResult(
+                result.status(),
+                taggedOrExisting(result.providerTradeNo(), command.providerTradeNo()),
+                result.providerRefundNo(),
+                result.refundedAmountYuan());
+    }
+
+    private static String tagged(String providerTradeNo) {
+        return providerTradeNo == null
+                ? null
+                : PaymentProviderReference.trade(PaymentProviderType.BAR, providerTradeNo);
+    }
+
+    private static String taggedOrExisting(String providerTradeNo, String existing) {
+        String tagged = tagged(providerTradeNo);
+        return tagged == null ? existing : tagged;
     }
 }

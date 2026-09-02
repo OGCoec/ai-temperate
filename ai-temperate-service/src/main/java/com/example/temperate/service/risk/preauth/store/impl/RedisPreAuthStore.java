@@ -66,6 +66,10 @@ public final class RedisPreAuthStore implements PreAuthStore {
             longScript("lua/network-risk/preauth_consume_challenge.lua");
     private static final RedisScript<Long> ROTATE_AUTHENTICATED =
             longScript("lua/network-risk/preauth_rotate_authenticated.lua");
+    private static final RedisScript<Long> ROTATE_AUTHENTICATED_AFTER_WEBRTC_VERIFIED =
+            longScript(
+                    "lua/network-risk/"
+                            + "preauth_rotate_authenticated_after_webrtc_verified.lua");
 
     private final StringRedisTemplate redisTemplate;
     private final RedisKeyFactory keyFactory;
@@ -357,6 +361,9 @@ public final class RedisPreAuthStore implements PreAuthStore {
         if (Long.valueOf(4L).equals(result)) {
             return PreAuthWebRtcWriteResult.DEADLINE_EXPIRED;
         }
+        if (Long.valueOf(5L).equals(result)) {
+            return PreAuthWebRtcWriteResult.OAUTH_ATTEMPT_REQUIRED;
+        }
         if (Long.valueOf(-2L).equals(result)) {
             return PreAuthWebRtcWriteResult.STALE_GENERATION;
         }
@@ -526,6 +533,46 @@ public final class RedisPreAuthStore implements PreAuthStore {
                 Long.toString(webRtcGeneration),
                 encryptedWebRtcIps == null ? "" : encryptedWebRtcIps,
                 Long.toString(startGrace.toMillis()));
+        return Long.valueOf(1L).equals(result);
+    }
+
+    @Override
+    public boolean rotateAuthenticatedAfterWebRtcVerified(
+            RiskScope scope,
+            HmacIdentifier oldTokenDigest,
+            HmacIdentifier newTokenDigest,
+            HmacIdentifier deviceDigest,
+            HmacIdentifier expectedCurrentIpDigest,
+            HmacIdentifier expectedDecisionContextDigest,
+            RiskSessionType sessionType,
+            HmacIdentifier sessionRefDigest,
+            HmacIdentifier newDecisionContextDigest,
+            long expectedWebRtcGeneration,
+            String encryptedWebRtcIps,
+            Instant seenAt,
+            Duration ttl) {
+        if (expectedWebRtcGeneration <= 0
+                || encryptedWebRtcIps == null
+                || encryptedWebRtcIps.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Verified WebRTC generation and encrypted IPs are required.");
+        }
+        Long result = redisTemplate.execute(
+                ROTATE_AUTHENTICATED_AFTER_WEBRTC_VERIFIED,
+                List.of(
+                        key(scope, oldTokenDigest),
+                        key(scope, newTokenDigest)),
+                Integer.toString(PreAuthState.CURRENT_SCHEMA_VERSION),
+                deviceDigest.value(),
+                expectedCurrentIpDigest.value(),
+                protectedText(expectedDecisionContextDigest),
+                Long.toString(ttl.toMillis()),
+                seenAt.toString(),
+                sessionType.name(),
+                sessionRefDigest.value(),
+                newDecisionContextDigest.value(),
+                Long.toString(expectedWebRtcGeneration),
+                encryptedWebRtcIps);
         return Long.valueOf(1L).equals(result);
     }
 

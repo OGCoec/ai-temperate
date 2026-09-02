@@ -7,9 +7,12 @@ import com.example.temperate.service.user.membership.payment.MembershipPaymentEr
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutMode;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmission;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmissionFields;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
@@ -155,6 +158,15 @@ public final class BarPaymentRestClientImpl implements BarPaymentClient {
     }
 
     @Override
+    public PaymentCreateResult createPayment(PaymentCreateCommand command) {
+        PaymentCreateCommand value = Objects.requireNonNull(command);
+        PaymentCheckoutResult checkout = createCheckout(new PaymentCheckoutCommand(
+                value.orderId(), value.amountYuan(), value.payType(), value.orderName()));
+        return new PaymentCreateResult(
+                checkout.providerTradeNo(), value.payType(), null, checkout.created());
+    }
+
+    @Override
     public PaymentQueryResult queryPayment(PaymentQueryCommand command) {
         PaymentQueryCommand value = Objects.requireNonNull(command);
         Map<String, String> request = signedLocatorRequest(
@@ -266,6 +278,7 @@ public final class BarPaymentRestClientImpl implements BarPaymentClient {
         // API Key 从未进入 signed Map；类型化描述只允许随当前 no-store 响应短暂传给浏览器。
         return new PaymentCheckoutSubmission(
                 PaymentProviderType.BAR,
+                PaymentCheckoutMode.FORM_POST,
                 requireSubmitAction(),
                 "POST",
                 MediaType.APPLICATION_FORM_URLENCODED_VALUE,
@@ -346,7 +359,8 @@ public final class BarPaymentRestClientImpl implements BarPaymentClient {
             if (hasTimeoutCause(exception)) {
                 throw failure(
                         MembershipPaymentErrorCode.BAR_TIMEOUT,
-                        "BAR request timed out.");
+                        "BAR request timed out.",
+                        exception);
             }
             throw failure(
                     MembershipPaymentErrorCode.BAR_UNAVAILABLE,
@@ -620,6 +634,13 @@ public final class BarPaymentRestClientImpl implements BarPaymentClient {
             MembershipPaymentErrorCode code,
             String message) {
         return new MembershipPaymentException(code, message);
+    }
+
+    private static MembershipPaymentException failure(
+            MembershipPaymentErrorCode code,
+            String message,
+            Throwable cause) {
+        return new MembershipPaymentException(code, message, cause);
     }
 
     private record HttpJsonResponse(int status, Map<String, Object> body) {

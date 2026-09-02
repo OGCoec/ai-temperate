@@ -7,12 +7,14 @@ import com.example.temperate.mapper.user.membership.payment.MembershipOrderMappe
 import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.offer.MembershipPlanOffer;
 import com.example.temperate.service.user.membership.payment.offer.MembershipPlanOfferResult;
 import com.example.temperate.service.user.membership.payment.offer.MembershipPlanOfferService;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutMode;
 import com.example.temperate.service.user.membership.purchase.MembershipPlanPriceService;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionCommand;
 import com.example.temperate.service.user.membership.purchase.MembershipTransitionDecision;
@@ -139,7 +141,24 @@ public final class MembershipPlanOfferServiceImpl implements MembershipPlanOffer
                 properties.checkoutEnabled(),
                 MembershipPaymentTime.now(clock),
                 PAY_TYPES,
-                offers);
+                offers,
+                properties.publicProviders().stream()
+                        .filter(this::providerEnabled)
+                        .map(provider -> new MembershipPlanOfferResult.PaymentOption(
+                                provider,
+                                PAY_TYPES,
+                                provider == PaymentProviderType.LIUHAO
+                                        ? PaymentCheckoutMode.REDIRECT_URL
+                                        : PaymentCheckoutMode.FORM_POST))
+                        .toList());
+    }
+
+    private boolean providerEnabled(PaymentProviderType provider) {
+        return switch (provider) {
+            case BAR -> properties.bar().enabled();
+            case LIUHAO -> properties.liuhao().enabled();
+            case LOCAL_SIMULATOR -> false;
+        };
     }
 
     private UserMembershipQuota requireQuota(long loginIdentityId) {

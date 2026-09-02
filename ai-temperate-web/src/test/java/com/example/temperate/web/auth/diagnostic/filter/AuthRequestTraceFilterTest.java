@@ -8,6 +8,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
+import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -68,9 +69,30 @@ class AuthRequestTraceFilterTest {
     }
 
     @Test
+    void normalizesInvalidBackendReleaseWithoutReflectingDeploymentText()
+            throws Exception {
+        AuthRequestTraceFilter filter = new AuthRequestTraceFilter(
+                mock(TrustedClientIpResolver.class),
+                true,
+                true,
+                "unsafe release/value");
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/auth/csrf");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getHeader(AuthRequestTraceFilter.BACKEND_RELEASE_HEADER))
+                .isEqualTo("unknown");
+    }
+
+    @Test
     void tracesAiRequestAndCorrelatesValidatedClientTimingHeaders() throws Exception {
         AuthRequestTraceFilter filter = new AuthRequestTraceFilter(
-                mock(TrustedClientIpResolver.class));
+                mock(TrustedClientIpResolver.class),
+                true,
+                true,
+                "backend-release-test");
         MockHttpServletRequest request = new MockHttpServletRequest(
                 "GET", "/api/ai/conversations");
         request.addHeader(
@@ -83,6 +105,11 @@ class AuthRequestTraceFilterTest {
         request.addHeader(
                 AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
                 "123e4567-e89b-42d3-a456-426614174002");
+        request.addHeader(
+                AuthRequestTraceFilter.TRIGGER_REQUEST_HEADER,
+                "123e4567-e89b-42d3-a456-426614174003");
+        request.addHeader("CF-Ray", "origin-ray-ord");
+        request.addHeader("X-AIT-Edge-Ray", "forged-must-not-be-trusted");
         MockHttpServletResponse response = new MockHttpServletResponse();
         Logger logger = (Logger) LoggerFactory.getLogger(AuthRequestTraceFilter.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -96,6 +123,12 @@ class AuthRequestTraceFilterTest {
                         .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
                 AuthRequestTiming.recordMillis(request, AuthRequestTiming.Stage.RISK, 821L);
                 AuthRequestTiming.recordErrorCode(request, "REFRESH_TOKEN_REQUIRED");
+                request.setAttribute(
+                        EdgeProxySignatureFilter.VERIFIED_RAY_ATTRIBUTE,
+                        "worker-ray-ord");
+                request.setAttribute(
+                        EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE,
+                        "VERIFIED");
                 ((HttpServletResponse) servletResponse).setStatus(401);
             });
 
@@ -107,6 +140,10 @@ class AuthRequestTraceFilterTest {
                     .isEqualTo(1432L);
             assertThat(request.getAttribute(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE))
                     .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
+            assertThat(request.getAttribute(AuthRequestTraceFilter.TRIGGER_REQUEST_ATTRIBUTE))
+                    .isEqualTo("123e4567-e89b-42d3-a456-426614174003");
+            assertThat(response.getHeader(AuthRequestTraceFilter.BACKEND_RELEASE_HEADER))
+                    .isEqualTo("backend-release-test");
             assertThat(response.getHeader(AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER))
                     .isEqualTo("123e4567-e89b-42d3-a456-426614174002");
             assertThat(MDC.get(AuthRequestTraceFilter.PAGE_INSTANCE_MDC_KEY)).isNull();
@@ -117,9 +154,15 @@ class AuthRequestTraceFilterTest {
                     .satisfies(event -> assertThat(event.getFormattedMessage())
                             .contains(
                                     "status=401",
-                                    "errorCode=REFRESH_TOKEN_REQUIRED",
-                                    "pageInstanceId=123e4567-e89b-42d3-a456-426614174001",
-                                    "probeRunId=123e4567-e89b-42d3-a456-426614174002"));
+                                     "errorCode=REFRESH_TOKEN_REQUIRED",
+                                     "pageInstanceId=123e4567-e89b-42d3-a456-426614174001",
+                                     "probeRunId=123e4567-e89b-42d3-a456-426614174002",
+                                     "triggerClientRequestId=123e4567-e89b-42d3-a456-426614174003",
+                                     "workerRay=worker-ray-ord",
+                                     "originCfRay=origin-ray-ord",
+                                     "edgeProxyOutcome=VERIFIED",
+                                     "backendRelease=backend-release-test")
+                             .doesNotContain("forged-must-not-be-trusted"));
         } finally {
             logger.detachAppender(appender);
             appender.stop();

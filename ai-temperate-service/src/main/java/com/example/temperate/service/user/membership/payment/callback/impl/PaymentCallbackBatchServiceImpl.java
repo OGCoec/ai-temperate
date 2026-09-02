@@ -4,13 +4,13 @@ import com.example.temperate.common.codec.id.HybridBase64UrlCodec;
 import com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
 import com.example.temperate.model.user.membership.payment.MembershipOrderEntitlementResolution;
-import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult;
-import com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
 import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackResolution;
+import com.example.temperate.model.user.membership.payment.MembershipPaymentCallbackWriteResult;
+import com.example.temperate.model.user.membership.payment.MembershipPaymentRefundTerminalFact;
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentCallbackDecision;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentCallbackDecisionService;
-import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundService;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackResumeService;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundRequiredFinalizationCommand;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackReleaseCommand;
@@ -27,13 +27,16 @@ import com.example.temperate.service.user.membership.payment.entitlement.Members
 import com.example.temperate.service.user.membership.payment.entitlement.MembershipPaymentRefundEntitlementCommand;
 import com.example.temperate.service.user.membership.payment.loadtest.MembershipPaymentLoadtestFaultGate;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderPaidCommand;
+import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentLifecycleDiagnostics;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentTraceContext;
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentWorker;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
 import com.example.temperate.service.user.membership.payment.provider.PaymentRefundCommand;
+import com.example.temperate.service.user.membership.payment.refund.MembershipRefundAttemptCoordinator;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.MembershipPaymentUnappliedCallbackStore;
 import com.example.temperate.service.user.membership.payment.store.MembershipPaymentMissingSnapshotReleaseOutcome;
@@ -86,7 +89,7 @@ public final class PaymentCallbackBatchServiceImpl
     private final PaymentCallbackPersistenceService persistenceService;
     private final MembershipPaymentEntitlementSettlementService entitlementService;
     private final MembershipPaymentCallbackDecisionService decisionService;
-    private final MembershipPaymentRefundService refundService;
+    private final MembershipRefundAttemptCoordinator refundCoordinator;
     private final MembershipPaymentRejectedCallbackResumeService rejectedResumeService;
     private final MembershipPaymentLoadtestFaultGate loadtestFaultGate;
     private final HybridBase64UrlCodec base64UrlCodec;
@@ -104,7 +107,7 @@ public final class PaymentCallbackBatchServiceImpl
             PaymentCallbackPersistenceService persistenceService,
             MembershipPaymentEntitlementSettlementService entitlementService,
             MembershipPaymentCallbackDecisionService decisionService,
-            MembershipPaymentRefundService refundService,
+            MembershipRefundAttemptCoordinator refundCoordinator,
             MembershipPaymentRejectedCallbackResumeService rejectedResumeService,
             MembershipPaymentLoadtestFaultGate loadtestFaultGate,
             HybridBase64UrlCodec base64UrlCodec,
@@ -119,7 +122,7 @@ public final class PaymentCallbackBatchServiceImpl
         this.persistenceService = Objects.requireNonNull(persistenceService);
         this.entitlementService = Objects.requireNonNull(entitlementService);
         this.decisionService = Objects.requireNonNull(decisionService);
-        this.refundService = Objects.requireNonNull(refundService);
+        this.refundCoordinator = Objects.requireNonNull(refundCoordinator);
         this.rejectedResumeService = Objects.requireNonNull(rejectedResumeService);
         this.loadtestFaultGate = Objects.requireNonNull(loadtestFaultGate);
         this.base64UrlCodec = Objects.requireNonNull(base64UrlCodec);
@@ -276,9 +279,10 @@ public final class PaymentCallbackBatchServiceImpl
                         new ArrayList<>();
                 List<MembershipPaymentRefundEntitlementCommand> refundEntitlements =
                         new ArrayList<>();
-                List<PaymentRefundCommand> refundCommands = new ArrayList<>();
+                List<RefundAttemptWork> refundCommands = new ArrayList<>();
                 List<MembershipPaymentRefundRequiredFinalizationCommand>
                         refundFinalizations = new ArrayList<>();
+                List<RefundRecoveryWork> refundRecoveries = new ArrayList<>();
                 List<MembershipPaymentRejectedCallbackReleaseCommand> rejectedReleases =
                         new ArrayList<>();
                 List<MembershipOrderSnapshot> rejectedOrders = new ArrayList<>();
@@ -317,14 +321,18 @@ public final class PaymentCallbackBatchServiceImpl
                     if (write.getResolution() != null) {
                         if (MembershipPaymentCallbackResolution.REFUND_REQUIRED.name()
                                 .equals(write.getResolution())) {
-                            // resolution 已提交但本地关单、HTTP 退款或 Redis complete 中断时，恢复任务必须重复收敛并执行同一幂等退款。
-                            refundCommands.add(refundCommand(callback));
+                            // 历史版本可能已经写入 REFUND_REQUIRED 却仍在订单表绑定第三方流水；
+                            // 同源回调恢复时必须重放幂等终态事务，先修复数据库事实，再执行 Redis 收敛和外部退款。
+                            refundCommands.add(refundAttemptWork(claimsById, callback));
                             refundFinalizations.add(refundFinalizationCommand(
                                     claimsById, callback, resolvedOrder, resolvedAt));
-                            if (write.getOrderEntitlementResolution() == null) {
-                                refundEntitlements.add(refundEntitlementCommand(
-                                        write, callback, resolvedAt));
-                            }
+                            refundEntitlements.add(refundEntitlementCommand(
+                                    write, callback, resolvedAt));
+                            refundRecoveries.add(new RefundRecoveryWork(
+                                    refundProvider(callback.providerTradeNo()),
+                                    entitlementClass(write.getOrderEntitlementResolution()),
+                                    resolvedOrder != null
+                                            && resolvedOrder.providerTradeNo() != null));
                         } else if (MembershipPaymentCallbackResolution.APPLIED.name()
                                 .equals(write.getResolution())
                                 && write.getOrderEntitlementResolution() == null
@@ -362,7 +370,7 @@ public final class PaymentCallbackBatchServiceImpl
                         if (decision.refundRequired()) {
                             refundEntitlements.add(refundEntitlementCommand(
                                     write, callback, resolvedAt));
-                            refundCommands.add(refundCommand(callback));
+                            refundCommands.add(refundAttemptWork(claimsById, callback));
                             refundFinalizations.add(refundFinalizationCommand(
                                     claimsById, callback, resolvedOrder, resolvedAt));
                         } else {
@@ -409,13 +417,41 @@ public final class PaymentCallbackBatchServiceImpl
                     entitlementService.settleApplied(entitlementCommands);
                 }
                 if (!refundEntitlements.isEmpty()) {
-                    entitlementService.settleRefundRequired(refundEntitlements);
+                    logRefundRecovery(
+                            refundRecoveries,
+                            "started",
+                            "LEGACY_TERMINAL_REPAIR_REQUIRED");
+                    try {
+                        entitlementService.settleRefundRequired(refundEntitlements);
+                    } catch (RuntimeException exception) {
+                        logRefundRecovery(
+                                refundRecoveries,
+                                "failed",
+                                "TERMINAL_SETTLEMENT_FAILED");
+                        throw new SafeCallbackFailure(
+                                "refund_terminal_settlement",
+                                "TERMINAL_SETTLEMENT_FAILED",
+                                exception);
+                    }
+                    logRefundRecovery(
+                            refundRecoveries,
+                            "completed",
+                            "TERMINAL_SETTLEMENT_REAPPLIED");
                 }
                 persistenceService.resolve(resolutions);
                 finalizeRefundRequired(refundFinalizations);
                 releaseRejected(rejectedReleases);
                 resumeRejectedOrders(rejectedOrders);
-                refundCommands.stream().distinct().forEach(refundService::refund);
+                try {
+                    refundCommands.stream().distinct().forEach(work ->
+                            refundCoordinator.processInitial(
+                                    work.callbackId(), work.command()));
+                } catch (RuntimeException exception) {
+                    throw new SafeCallbackFailure(
+                            "refund_coordination",
+                            "REFUND_COORDINATION_FAILED",
+                            exception);
+                }
                 completeCallbacks(complete);
                 return fullyProcessed;
             }
@@ -423,12 +459,14 @@ public final class PaymentCallbackBatchServiceImpl
             return true;
         } catch (RuntimeException exception) {
             safeRequeue(retryOnFailure);
-            LOGGER.warn(
-                    "Membership payment callback batch will retry; "
-                            + "traceId={} count={} reason={}",
-                    MembershipPaymentTraceContext.currentTraceId(),
+            CallbackFailureClassification failure = classifyFailure(exception);
+            MembershipPaymentLifecycleDiagnostics.callbackRetry(
+                    failure.stage(),
+                    failure.reason(),
+                    failure.exceptionClass(),
                     retryOnFailure.size(),
-                    exception.getClass().getSimpleName());
+                    properties.flushIntervalMillis(),
+                    MembershipPaymentTraceContext.currentTraceId());
             return false;
         }
     }
@@ -441,7 +479,7 @@ public final class PaymentCallbackBatchServiceImpl
             List<PaymentCallbackResolutionCommand> resolutions,
             List<MembershipPaymentEntitlementCommand> entitlementCommands,
             List<MembershipPaymentRefundEntitlementCommand> refundEntitlements,
-            List<PaymentRefundCommand> refundCommands,
+            List<RefundAttemptWork> refundCommands,
             List<MembershipPaymentRefundRequiredFinalizationCommand> refundFinalizations,
             List<MembershipPaymentRejectedCallbackReleaseCommand> rejectedReleases,
             List<MembershipOrderSnapshot> rejectedOrders,
@@ -478,7 +516,7 @@ public final class PaymentCallbackBatchServiceImpl
             } else if (resolution == MembershipPaymentCallbackResolution.REFUND_REQUIRED) {
                 refundEntitlements.add(refundEntitlementCommand(
                         work.write(), work.callback(), resolvedAt));
-                refundCommands.add(refundCommand(work.callback()));
+                refundCommands.add(refundAttemptWork(claimsById, work.callback()));
                 refundFinalizations.add(refundFinalizationCommand(
                         claimsById, work.callback(), work.order(), resolvedAt));
                 // 告警只记录终态，不包含订单、回调或平台流水，避免高基数与敏感标识进入日志。
@@ -515,7 +553,7 @@ public final class PaymentCallbackBatchServiceImpl
     }
 
     /**
-     * 退款权益事务已经提交后，本地订单可以立即进入 CLOSED；真实退款仍由未完成的 callback claim 幂等重试。
+     * 退款权益事务已经提交后，本地订单可以立即进入 CLOSED；外部退款重试只由独立协调状态和延迟队列授权。
      */
     private void finalizeRefundRequired(
             Collection<MembershipPaymentRefundRequiredFinalizationCommand> commands) {
@@ -532,8 +570,21 @@ public final class PaymentCallbackBatchServiceImpl
         if (distinct.isEmpty()) {
             return;
         }
-        Map<String, MembershipOrderTransitionResult> results =
-                unappliedCallbackStore.finalizeRefundRequired(distinct);
+        Map<String, MembershipOrderTransitionResult> results;
+        try {
+            results = unappliedCallbackStore.finalizeRefundRequired(distinct);
+        } catch (RuntimeException exception) {
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    "REFUND_FINALIZATION_FAILED",
+                    exception);
+        }
+        if (results == null) {
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    "REFUND_FINALIZATION_INCOMPLETE",
+                    new IllegalStateException());
+        }
         List<MembershipPaymentRefundRequiredFinalizationCommand> missing =
                 new ArrayList<>();
         boolean complete = distinct.stream().allMatch(command -> {
@@ -552,8 +603,10 @@ public final class PaymentCallbackBatchServiceImpl
                     && terminalRefundStatus(result.status());
         });
         if (!complete || results.size() != distinct.size()) {
-            throw new IllegalStateException(
-                    "Membership refund-required finalization result is incomplete.");
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    "REFUND_FINALIZATION_INCOMPLETE",
+                    new IllegalStateException());
         }
         releaseMissingRefundRequired(missing);
     }
@@ -571,44 +624,179 @@ public final class PaymentCallbackBatchServiceImpl
                 .toList();
         Map<String, MembershipPaymentRefundTerminalFact> facts =
                 persistenceService.findRefundTerminalFacts(callbackIds);
-        boolean authoritative = facts.size() == missing.size()
-                && missing.stream().allMatch(command -> exactRefundTerminalFact(
-                        command, facts.get(command.claim().callbackId())));
-        if (!authoritative) {
-            throw new IllegalStateException(
-                    "Membership refund-required database terminal fact is incomplete.");
+        boolean authoritative = facts != null && facts.size() == missing.size();
+        String failureReason = authoritative ? null : "CALLBACK_FACT_MISSING";
+        for (MembershipPaymentRefundRequiredFinalizationCommand command : missing) {
+            MembershipPaymentRefundTerminalFact fact = facts == null
+                    ? null
+                    : facts.get(command.claim().callbackId());
+            RefundTerminalFactCheck check = exactRefundTerminalFact(command, fact);
+            authoritative &= check.verified();
+            if (!check.verified() && failureReason == null) {
+                failureReason = check.reason();
+            }
         }
-        Map<String, MembershipPaymentMissingSnapshotReleaseOutcome> releases =
-                unappliedCallbackStore.releaseMissingRefundRequired(missing);
-        boolean released = releases.size() == missing.size()
-                && missing.stream().allMatch(command -> {
-                    MembershipPaymentMissingSnapshotReleaseOutcome outcome =
-                            releases.get(command.claim().callbackId());
-                    return outcome == MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED
+        if (!authoritative) {
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    Objects.requireNonNullElse(failureReason, "CALLBACK_FACT_MISSING"),
+                    new IllegalStateException());
+        }
+        Map<String, MembershipPaymentMissingSnapshotReleaseOutcome> releases;
+        try {
+            releases = unappliedCallbackStore.releaseMissingRefundRequired(missing);
+        } catch (RuntimeException exception) {
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    "MISSING_SNAPSHOT_RELEASE_FAILED",
+                    exception);
+        }
+        boolean releaseSetMatches = releases != null && releases.size() == missing.size();
+        boolean released = releaseSetMatches;
+        for (MembershipPaymentRefundRequiredFinalizationCommand command : missing) {
+            MembershipPaymentMissingSnapshotReleaseOutcome outcome = releases == null
+                    ? null
+                    : releases.get(command.claim().callbackId());
+            boolean commandReleased = releaseSetMatches
+                    && (outcome == MembershipPaymentMissingSnapshotReleaseOutcome.RELEASED
                             || outcome
-                                    == MembershipPaymentMissingSnapshotReleaseOutcome.ALREADY_RELEASED;
-                });
+                            == MembershipPaymentMissingSnapshotReleaseOutcome.ALREADY_RELEASED);
+            MembershipPaymentLifecycleDiagnostics.refundPreflight(
+                    refundProvider(command.providerTradeNo()),
+                    "missing_snapshot_release",
+                    "missing",
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    false,
+                    commandReleased ? "verified" : "failed",
+                    commandReleased ? "VERIFIED" : "MISSING_SNAPSHOT_RELEASE_FAILED",
+                    MembershipPaymentTraceContext.currentTraceId());
+            released &= commandReleased;
+        }
         if (!released) {
-            throw new IllegalStateException(
-                    "Membership refund-required missing snapshot release is incomplete.");
+            throw new SafeCallbackFailure(
+                    "refund_preflight",
+                    "MISSING_SNAPSHOT_RELEASE_FAILED",
+                    new IllegalStateException());
         }
     }
 
-    private boolean exactRefundTerminalFact(
+    private RefundTerminalFactCheck exactRefundTerminalFact(
             MembershipPaymentRefundRequiredFinalizationCommand command,
             MembershipPaymentRefundTerminalFact fact) {
-        return fact != null
-                && Arrays.equals(
-                        fact.getCallbackId(),
-                        base64UrlCodec.decode(command.claim().callbackId()))
-                && Arrays.equals(fact.getOrderId(), base64UrlCodec.decode(command.orderId()))
-                && Objects.equals(fact.getProviderTradeNo(), command.providerTradeNo())
+        boolean factPresent = fact != null;
+        boolean callbackIdMatch = factPresent && Arrays.equals(
+                fact.getCallbackId(),
+                base64UrlCodec.decode(command.claim().callbackId()));
+        boolean orderIdMatch = factPresent && Arrays.equals(
+                fact.getOrderId(), base64UrlCodec.decode(command.orderId()));
+        boolean callbackOrderMatch = callbackIdMatch && orderIdMatch;
+        boolean callbackProviderTradeMatch = factPresent
+                && Objects.equals(fact.getProviderTradeNo(), command.providerTradeNo());
+        boolean callbackResolutionMatch = factPresent
                 && MembershipPaymentCallbackResolution.REFUND_REQUIRED.name()
-                        .equals(fact.getCallbackResolution())
-                && terminalRefundStatus(fact.getOrderStatus())
+                        .equals(fact.getCallbackResolution());
+        boolean orderTerminal = factPresent && terminalRefundStatus(fact.getOrderStatus());
+        boolean entitlementRefundRequired = factPresent
                 && fact.getOrderEntitlementResolution()
-                        == MembershipOrderEntitlementResolution.REFUND_REQUIRED
-                && fact.getOrderProviderTradeNo() == null;
+                        == MembershipOrderEntitlementResolution.REFUND_REQUIRED;
+        boolean orderProviderTradePresent = factPresent
+                && fact.getOrderProviderTradeNo() != null;
+        String reason;
+        if (!factPresent) {
+            reason = "CALLBACK_FACT_MISSING";
+        } else if (!callbackIdMatch) {
+            reason = "CALLBACK_ID_MISMATCH";
+        } else if (!orderIdMatch) {
+            reason = "ORDER_ID_MISMATCH";
+        } else if (!callbackProviderTradeMatch) {
+            reason = "CALLBACK_PROVIDER_TRADE_MISMATCH";
+        } else if (!callbackResolutionMatch) {
+            reason = "CALLBACK_RESOLUTION_MISMATCH";
+        } else if (!orderTerminal) {
+            reason = "ORDER_NOT_TERMINAL";
+        } else if (!entitlementRefundRequired) {
+            reason = "ENTITLEMENT_NOT_REFUND_REQUIRED";
+        } else if (orderProviderTradePresent) {
+            reason = "ORDER_PROVIDER_TRADE_STILL_BOUND";
+        } else {
+            reason = "VERIFIED";
+        }
+        boolean verified = "VERIFIED".equals(reason);
+        MembershipPaymentLifecycleDiagnostics.refundPreflight(
+                refundProvider(command.providerTradeNo()),
+                "database_terminal_fact",
+                "missing",
+                factPresent,
+                callbackOrderMatch,
+                callbackProviderTradeMatch,
+                callbackResolutionMatch,
+                orderTerminal,
+                entitlementRefundRequired,
+                orderProviderTradePresent,
+                verified ? "verified" : "failed",
+                reason,
+                MembershipPaymentTraceContext.currentTraceId());
+        return new RefundTerminalFactCheck(verified, reason);
+    }
+
+    /** 日志中的 Provider 只能来自受控交易引用；旧数据或非法引用降级为 unavailable，不能影响退款裁决。 */
+    private static PaymentProviderType refundProvider(String providerTradeNo) {
+        try {
+            return PaymentProviderReference.resolveTrade(providerTradeNo);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    /** 历史恢复日志只消费已经归一化的枚举和布尔事实，禁止携带订单或流水原值。 */
+    private static void logRefundRecovery(
+            Collection<RefundRecoveryWork> recoveries,
+            String outcome,
+            String reason) {
+        recoveries.stream().distinct().forEach(recovery ->
+                MembershipPaymentLifecycleDiagnostics.refundRecovery(
+                        recovery.provider(),
+                        recovery.orderEntitlementClass(),
+                        recovery.orderProviderTradePresent(),
+                        outcome,
+                        reason,
+                        MembershipPaymentTraceContext.currentTraceId()));
+    }
+
+    private static String entitlementClass(
+            MembershipOrderEntitlementResolution resolution) {
+        if (resolution == null) {
+            return "missing";
+        }
+        return switch (resolution) {
+            case NOT_GRANTED -> "not_granted";
+            case REFUND_REQUIRED -> "refund_required";
+            default -> "unexpected";
+        };
+    }
+
+    /** 将内部异常归一化为低基数阶段和固定原因，避免把异常正文写入重试日志。 */
+    private static CallbackFailureClassification classifyFailure(
+            RuntimeException exception) {
+        if (exception instanceof SafeCallbackFailure safeFailure) {
+            Throwable cause = safeFailure.getCause();
+            String exceptionClass = cause == null
+                    ? SafeCallbackFailure.class.getSimpleName()
+                    : cause.getClass().getSimpleName();
+            return new CallbackFailureClassification(
+                    safeFailure.stage(),
+                    safeFailure.reason(),
+                    exceptionClass);
+        }
+        return new CallbackFailureClassification(
+                "processing",
+                "PROCESSING_FAILED",
+                exception.getClass().getSimpleName());
     }
 
     private static boolean terminalRefundStatus(MembershipOrderStatus status) {
@@ -664,6 +852,14 @@ public final class PaymentCallbackBatchServiceImpl
                 callback.orderId(),
                 callback.providerTradeNo(),
                 callback.paidAmountYuan());
+    }
+
+    private static RefundAttemptWork refundAttemptWork(
+            Map<String, PaymentCallbackClaim> claimsById,
+            PaymentCallbackSnapshot callback) {
+        return new RefundAttemptWork(
+                requiredClaim(claimsById, callback.callbackId()).callbackId(),
+                refundCommand(callback));
     }
 
     private MembershipPaymentRefundRequiredFinalizationCommand refundFinalizationCommand(
@@ -959,6 +1155,52 @@ public final class PaymentCallbackBatchServiceImpl
             MembershipPaymentCallbackWriteResult write,
             PaymentCallbackSnapshot callback,
             MembershipOrderSnapshot order) {
+    }
+
+    /** 该值对象只保存历史终态重放所需的脱敏诊断分类。 */
+    private record RefundRecoveryWork(
+            PaymentProviderType provider,
+            String orderEntitlementClass,
+            boolean orderProviderTradePresent) {
+    }
+
+    /** 该工作项把 callbackId 与退款命令绑定，Redis 协调键不得由订单或第三方流水替代。 */
+    private record RefundAttemptWork(String callbackId, PaymentRefundCommand command) {
+    }
+
+    /** 该检查结果同时携带终态可信度和固定失败原因，供预检异常安全分类。 */
+    private record RefundTerminalFactCheck(boolean verified, String reason) {
+    }
+
+    /** 该值对象把失败阶段、固定原因和异常类型绑定后交给结构化日志。 */
+    private record CallbackFailureClassification(
+            String stage,
+            String reason,
+            String exceptionClass) {
+    }
+
+    /** 该安全异常仅跨编排层传递白名单分类，故意不承载外部异常正文或堆栈。 */
+    private static final class SafeCallbackFailure extends RuntimeException {
+
+        private final String stage;
+        private final String reason;
+
+        private SafeCallbackFailure(
+                String stage,
+                String reason,
+                RuntimeException cause) {
+            super(null, cause, false, false);
+            this.stage = stage;
+            this.reason = reason;
+        }
+
+        private String stage() {
+            return stage;
+        }
+
+        private String reason() {
+            return reason;
+        }
     }
 
     private void updateProcessingGauge() {

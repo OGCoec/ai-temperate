@@ -59,10 +59,10 @@ public final class EdgeProxySignatureVerifier {
     }
 
     /**
-     * 验证当前请求并返回可供后续安全边界使用的外部 Host。
+     * 验证当前请求并返回可供后续安全与诊断边界使用的外部 Host、Worker Ray 和网络上下文。
      *
      * @param request 当前 API 请求
-     * @return 已通过签名和白名单校验的外部 Host
+     * @return 已通过签名和白名单校验的边缘请求结果
      * @throws EdgeProxyVerificationException 签名契约任何部分无效时抛出
      */
     public EdgeProxyVerificationResult verify(HttpServletRequest request) {
@@ -112,6 +112,7 @@ public final class EdgeProxySignatureVerifier {
         return new EdgeProxyVerificationResult(
                 version,
                 externalHost,
+                ray,
                 networkContext);
     }
 

@@ -48,6 +48,22 @@ export function isPreAuthReady() {
 	return ready === true
 }
 
+/**
+ * OAuth complete 已由服务端轮换并写回 HttpOnly PreAuth；这里只采纳该事实，禁止再次 bootstrap。
+ */
+export function adoptExistingH5PreAuth() {
+	if (clientPlatform() !== 'H5') return false
+	preAuthLifecycleEpoch += 1
+	ready = true
+	resetRequested = false
+	bootstrapInFlight = null
+	recordAuthDiagnosticEvent('PREAUTH_EXISTING_ADOPTED', {
+		source: 'oauth_async_complete',
+		outcome: 'adopted'
+	})
+	return true
+}
+
 export function invalidatePreAuth() {
 	preAuthLifecycleEpoch += 1
 	ready = false

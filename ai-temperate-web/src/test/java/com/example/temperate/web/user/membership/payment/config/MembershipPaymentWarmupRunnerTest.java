@@ -63,6 +63,18 @@ final class MembershipPaymentWarmupRunnerTest {
         verify(channel).exchangeDeclarePassive(MembershipPaymentRabbitNames.CLOSING_EXCHANGE);
         verify(channel).queueDeclarePassive(MembershipPaymentRabbitNames.PAYMENT_QUEUE);
         verify(channel).queueDeclarePassive(MembershipPaymentRabbitNames.CLOSING_QUEUE);
+        verify(channel).exchangeDeclarePassive(
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_EXCHANGE);
+        verify(channel).queueDeclarePassive(
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_QUEUE);
+        verify(channel).exchangeDeclarePassive(
+                MembershipPaymentRabbitNames.REFUND_RETRY_EXCHANGE);
+        verify(channel).exchangeDeclarePassive(
+                MembershipPaymentRabbitNames.REFUND_TERMINAL_EXCHANGE);
+        verify(channel).queueDeclarePassive(
+                MembershipPaymentRabbitNames.REFUND_RETRY_QUEUE);
+        verify(channel).queueDeclarePassive(
+                MembershipPaymentRabbitNames.REFUND_TERMINAL_QUEUE);
     }
 
     @Test

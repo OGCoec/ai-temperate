@@ -284,6 +284,7 @@ class ExternalIpIntelligenceProviderTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                Duration.ofSeconds(15),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),

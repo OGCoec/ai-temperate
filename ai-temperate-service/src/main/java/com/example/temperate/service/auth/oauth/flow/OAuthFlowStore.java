@@ -84,7 +84,10 @@ public interface OAuthFlowStore {
             String verifiedPhone,
             Instant now);
 
-    void claimCompletion(ProtectedOAuthFlowAccess access, Instant now);
+    /**
+     * 原子领取完成权；调用方必须只对 CLAIMED 执行数据库会话签发。
+     */
+    OAuthCompletionClaim claimCompletion(ProtectedOAuthFlowAccess access, Instant now);
 
     void releaseCompletionClaim(ProtectedOAuthFlowAccess access);
 

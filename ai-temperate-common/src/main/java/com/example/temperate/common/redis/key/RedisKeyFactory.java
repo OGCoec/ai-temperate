@@ -224,6 +224,13 @@ public final class RedisKeyFactory {
     }
 
     /**
+     * 生成 H5 OAuth WebRTC 恢复任务 Key，标识必须是原始 attemptId 的用途隔离 HMAC。
+     */
+    public String oauthWebRtcAttemptKey(HmacIdentifier identifier) {
+        return authKey("oauth-webrtc", IdentifierType.OAUTH_WEBRTC_ATTEMPT, identifier);
+    }
+
+    /**
      * 生成第一因子通过后等待 TOTP 校验的短期登录挑战 Key。
      */
     public String totpLoginChallengeKey(HmacIdentifier identifier) {
@@ -464,6 +471,19 @@ public final class RedisKeyFactory {
                 Objects.requireNonNull(orderId).value());
     }
 
+    /** 生成单用户会员订单创建协调锁 Key，用户标识必须来自已认证会话而不是客户端请求体。 */
+    public String membershipOrderCreationLockKey(long loginIdentityId) {
+        if (loginIdentityId <= 0L) {
+            throw new IllegalArgumentException("Membership order lock identity must be positive.");
+        }
+        return create(
+                "payment",
+                "membership-order",
+                "v2",
+                IdentifierType.PAYMENT_ORDER_CREATE_LOCK,
+                Long.toString(loginIdentityId));
+    }
+
     /** 生成单个支付回调的 Redis Hash 数据 Key。 */
     public String paymentCallbackDataKey(PaymentCallbackRedisId callbackId) {
         return create(
@@ -522,6 +542,16 @@ public final class RedisKeyFactory {
                 "v2",
                 IdentifierType.PAYMENT_CALLBACK_PROVIDER_IDEMPOTENCY,
                 requireHmacIdentifier(fingerprint));
+    }
+
+    /** 生成单个退款回调的二十四小时协调 Hash Key，只保存尝试状态和消息幂等标识。 */
+    public String paymentRefundCoordinationKey(PaymentCallbackRedisId callbackId) {
+        return create(
+                "payment",
+                "refund",
+                "v1",
+                IdentifierType.PAYMENT_REFUND_COORDINATION,
+                Objects.requireNonNull(callbackId).value());
     }
 
     /** 生成订单当前尚未完成落库的支付回调标记 Key。 */
@@ -1104,6 +1134,7 @@ public final class RedisKeyFactory {
         OAUTH_PHONE_SEND_RISK("phone-send-risk"),
         OAUTH_PHONE_CONFLICT_RISK("phone-conflict-risk"),
         OAUTH_PHONE_BLOCK("phone-block"),
+        OAUTH_WEBRTC_ATTEMPT("attempt"),
         TOTP_LOGIN_FLOW("login-flow"),
         TOTP_USED_STEP("used-step"),
         TOTP_SETUP("setup"),
@@ -1130,12 +1161,14 @@ public final class RedisKeyFactory {
         API_KEY_CREDENTIAL("credential"),
         API_KEY_CREATE_LOCK("create-lock"),
         PAYMENT_ORDER_SNAPSHOT("snapshot"),
+        PAYMENT_ORDER_CREATE_LOCK("create-lock"),
         PAYMENT_CALLBACK_DATA("data"),
         PAYMENT_CALLBACK_READY("ready"),
         PAYMENT_CALLBACK_PROCESSING("processing"),
         PAYMENT_CALLBACK_IDEMPOTENCY("idem"),
         PAYMENT_CALLBACK_ORDER_IDEMPOTENCY("order-idem"),
         PAYMENT_CALLBACK_PROVIDER_IDEMPOTENCY("provider-idem"),
+        PAYMENT_REFUND_COORDINATION("coordination"),
         PAYMENT_ORDER_CALLBACK("callback"),
         PAYMENT_PROVIDER_RESULT_STATUS("status"),
         PAYMENT_ORDER_PERSIST_DIRTY("dirty"),

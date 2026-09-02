@@ -62,8 +62,15 @@ public final class MembershipPaymentWarmupRunner implements ApplicationRunner {
         rabbitTemplate.execute(channel -> {
             channel.exchangeDeclarePassive(MembershipPaymentRabbitNames.PAYMENT_EXCHANGE);
             channel.exchangeDeclarePassive(MembershipPaymentRabbitNames.CLOSING_EXCHANGE);
+            channel.exchangeDeclarePassive(
+                    MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_EXCHANGE);
+            channel.exchangeDeclarePassive(MembershipPaymentRabbitNames.REFUND_RETRY_EXCHANGE);
+            channel.exchangeDeclarePassive(MembershipPaymentRabbitNames.REFUND_TERMINAL_EXCHANGE);
             channel.queueDeclarePassive(MembershipPaymentRabbitNames.PAYMENT_QUEUE);
             channel.queueDeclarePassive(MembershipPaymentRabbitNames.CLOSING_QUEUE);
+            channel.queueDeclarePassive(MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_QUEUE);
+            channel.queueDeclarePassive(MembershipPaymentRabbitNames.REFUND_RETRY_QUEUE);
+            channel.queueDeclarePassive(MembershipPaymentRabbitNames.REFUND_TERMINAL_QUEUE);
             return null;
         });
     }

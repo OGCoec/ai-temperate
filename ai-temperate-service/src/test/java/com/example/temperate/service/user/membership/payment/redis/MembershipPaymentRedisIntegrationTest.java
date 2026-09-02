@@ -17,12 +17,15 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentCal
 import com.example.temperate.service.user.membership.payment.callback.PaymentProviderResultCompletionAction;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundRequiredFinalizationCommand;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackReleaseCommand;
+import com.example.temperate.service.user.membership.payment.order.MembershipClosingFinalizationSource;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderPaidCommand;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
+import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionResult;
 import com.example.temperate.service.user.membership.payment.persistence.OrderPersistToken;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderResult;
 import com.example.temperate.service.user.membership.payment.provider.SimulatedPaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
 import com.example.temperate.service.user.membership.payment.store.impl.RedisMembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.MembershipPaymentMissingSnapshotReleaseOutcome;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCommand;
@@ -203,30 +206,51 @@ final class MembershipPaymentRedisIntegrationTest {
     @Test
     void providerTradePatchIsConditionalAndNeverChangesTheStateVersion() {
         String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        String tradeReference = "LIUHAO:TRADE:provider-trade-1";
         MembershipOrderSnapshot initial = order(orderId);
         assertThat(orderStore.patchProviderTradeNo(
-                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                        orderId, initial.loginIdentityId(), tradeReference))
                 .isEqualTo(MembershipProviderTradeNoPatchOutcome.MISSING);
 
         orderStore.put(initial);
         assertThat(orderStore.patchProviderTradeNo(
-                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                        orderId, initial.loginIdentityId(), tradeReference))
                 .isEqualTo(MembershipProviderTradeNoPatchOutcome.APPLIED);
         assertThat(orderStore.patchProviderTradeNo(
-                        orderId, initial.loginIdentityId(), "provider-trade-1"))
+                        orderId, initial.loginIdentityId(), tradeReference))
                 .isEqualTo(MembershipProviderTradeNoPatchOutcome.UNCHANGED);
         assertThat(orderStore.patchProviderTradeNo(
-                        orderId, initial.loginIdentityId(), "provider-trade-2"))
+                        orderId, initial.loginIdentityId(), "LIUHAO:TRADE:provider-trade-2"))
                 .isEqualTo(MembershipProviderTradeNoPatchOutcome.CONFLICT);
         assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
-            assertThat(snapshot.providerTradeNo()).isEqualTo("provider-trade-1");
+            assertThat(snapshot.providerTradeNo()).isEqualTo(tradeReference);
             assertThat(snapshot.stateVersion()).isEqualTo(1L);
         });
 
         orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
         assertThat(orderStore.patchProviderTradeNo(
-                        orderId, initial.loginIdentityId(), "provider-trade-1"))
-                .isEqualTo(MembershipProviderTradeNoPatchOutcome.CONFLICT);
+                        orderId, initial.loginIdentityId(), tradeReference))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.UNCHANGED);
+    }
+
+    @Test
+    void providerTradePatchCanBindARealTradeDiscoveredAfterClosingStarted() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1Piw";
+        MembershipOrderSnapshot initial = order(orderId);
+        orderStore.put(initial);
+        orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
+
+        assertThat(orderStore.patchProviderTradeNo(
+                        orderId,
+                        initial.loginIdentityId(),
+                        "BAR:TRADE:provider-trade-discovered-while-closing"))
+                .isEqualTo(MembershipProviderTradeNoPatchOutcome.APPLIED);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.providerTradeNo())
+                    .isEqualTo("BAR:TRADE:provider-trade-discovered-while-closing");
+            assertThat(snapshot.status()).isEqualTo(MembershipOrderStatus.CLOSING);
+            assertThat(snapshot.stateVersion()).isEqualTo(2L);
+        });
     }
 
     @Test
@@ -307,7 +331,7 @@ final class MembershipPaymentRedisIntegrationTest {
         MembershipOrderTransitionResult paid = orderStore.markPaid(
                 orderId,
                 "AaAjECcaAQGqi_h2Rl1PiQ",
-                "provider-trade-1",
+                "LIUHAO:TRADE:provider-trade-1",
                 new BigDecimal("20.00"),
                 NOW.plusMinutes(6));
         assertThat(paid.applied()).isTrue();
@@ -325,6 +349,23 @@ final class MembershipPaymentRedisIntegrationTest {
                 .isEqualTo(3L);
         assertThat(persistenceQueue.complete(paidClaim)).isEqualTo(1);
         assertThat(orderStore.find(orderId)).isEmpty();
+    }
+
+    @Test
+    void luaRejectsClosingDeadlineBeforeTheOriginalOrderBoundary() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+
+        MembershipOrderTransitionResult rejected = orderStore.startClosing(
+                orderId,
+                NOW.plusMinutes(6),
+                NOW.plusMinutes(5),
+                NOW.plusMinutes(10));
+
+        assertThat(rejected.outcome().name()).isEqualTo("TOO_EARLY");
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
     }
 
     @Test
@@ -354,7 +395,7 @@ final class MembershipPaymentRedisIntegrationTest {
                                 .putLong(index + 1L)
                                 .array()),
                         snapshots.get(index).orderId(),
-                        "provider-trade-" + index,
+                        "LIUHAO:TRADE:provider-trade-" + index,
                         new BigDecimal("20.00"),
                         NOW.plusMinutes(1),
                         NOW.plusMinutes(1)))
@@ -952,6 +993,66 @@ final class MembershipPaymentRedisIntegrationTest {
     }
 
     @Test
+    void timeoutUnconfirmedAllowsUnknownOnlyAfterClosingDeadline() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
+
+        MembershipOrderTransitionResult early = orderStore.finalizeClosing(
+                orderId,
+                PaymentProviderStatus.UNKNOWN,
+                MembershipClosingFinalizationSource.TIMEOUT_UNCONFIRMED,
+                NOW.plusMinutes(9));
+        MembershipOrderTransitionResult expired = orderStore.finalizeClosing(
+                orderId,
+                PaymentProviderStatus.UNKNOWN,
+                MembershipClosingFinalizationSource.TIMEOUT_UNCONFIRMED,
+                NOW.plusMinutes(10));
+
+        assertThat(early.outcome()).isEqualTo(MembershipOrderTransitionOutcome.TOO_EARLY);
+        assertThat(expired.outcome()).isEqualTo(MembershipOrderTransitionOutcome.APPLIED);
+        assertThat(expired.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+    }
+
+    @Test
+    void providerConfirmedRejectsUnknownAtFinalBoundary() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
+
+        MembershipOrderTransitionResult result = orderStore.finalizeClosing(
+                orderId,
+                PaymentProviderStatus.UNKNOWN,
+                MembershipClosingFinalizationSource.PROVIDER_CONFIRMED,
+                NOW.plusMinutes(11));
+
+        assertThat(result.outcome())
+                .isEqualTo(MembershipOrderTransitionOutcome.PROVIDER_STATUS_UNSAFE);
+    }
+
+    @Test
+    void callbackMarkerStillWinsOverTimeoutUnconfirmedFinalization() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        orderStore.startClosing(orderId, NOW.plusMinutes(10), NOW.plusMinutes(5));
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                "AaAjECcaAQGqi_h2Rl1Pig");
+
+        MembershipOrderTransitionResult result = orderStore.finalizeClosing(
+                orderId,
+                PaymentProviderStatus.UNKNOWN,
+                MembershipClosingFinalizationSource.TIMEOUT_UNCONFIRMED,
+                NOW.plusMinutes(11));
+
+        assertThat(result.outcome())
+                .isEqualTo(MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS);
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.CLOSING);
+    }
+
+    @Test
     void duplicateAfterCompletionDoesNotRecreateMarkerOrReadyWork() {
         String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
         PaymentCallbackSnapshot first = callback(
@@ -1013,6 +1114,102 @@ final class MembershipPaymentRedisIntegrationTest {
                 .isEqualTo(MembershipOrderStatus.CLOSING);
     }
 
+    @Test
+    void replacementCancelsAnOrderThatNeverStartedPayment() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+
+        MembershipOrderTransitionResult result = orderStore.supersedeForReplacement(
+                orderId, false, NOW.plusMinutes(1));
+
+        assertThat(result.outcome()).isEqualTo(MembershipOrderTransitionOutcome.APPLIED);
+        assertThat(result.status()).isEqualTo(MembershipOrderStatus.CANCELLED);
+        assertThat(orderStore.find(orderId)).get().satisfies(snapshot -> {
+            assertThat(snapshot.status()).isEqualTo(MembershipOrderStatus.CANCELLED);
+            assertThat(snapshot.stateVersion()).isEqualTo(2L);
+        });
+    }
+
+    @Test
+    void replacementClosesAnOrderThatStartedPaymentOrWasAlreadyClosing() {
+        String startedOrderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(startedOrderId));
+
+        MembershipOrderTransitionResult started = orderStore.supersedeForReplacement(
+                startedOrderId, true, NOW.plusMinutes(1));
+
+        assertThat(started.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+
+        String closingOrderId = "AaAjECcaAQGqi_h2Rl1Pig";
+        orderStore.put(order(closingOrderId));
+        orderStore.startClosing(
+                closingOrderId, NOW.plusMinutes(10), NOW.plusMinutes(1));
+
+        MembershipOrderTransitionResult closing = orderStore.supersedeForReplacement(
+                closingOrderId, true, NOW.plusMinutes(2));
+
+        assertThat(closing.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+        assertThat(orderStore.find(closingOrderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.CLOSED);
+    }
+
+    @Test
+    void replacementNeverOverridesAnInProgressCallback() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                "AaAjECcaAQGqi_h2Rl1Pig");
+
+        MembershipOrderTransitionResult result = orderStore.supersedeForReplacement(
+                orderId, true, NOW.plusMinutes(1));
+
+        assertThat(result.outcome())
+                .isEqualTo(MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS);
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+    }
+
+    @Test
+    void replacementRetryDefersToALateCallbackMarkerEvenAfterRedisBecameTerminal() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        orderStore.supersedeForReplacement(orderId, true, NOW.plusMinutes(1));
+        redisTemplate.opsForValue().set(
+                KEYS.membershipOrderCallbackMarkerKey(new MembershipOrderRedisId(orderId)),
+                "AaAjECcaAQGqi_h2Rl1Pig");
+
+        MembershipOrderTransitionResult retry = orderStore.supersedeForReplacement(
+                orderId, true, NOW.plusMinutes(2));
+
+        assertThat(retry.outcome())
+                .isEqualTo(MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS);
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.CLOSED);
+    }
+
+    @Test
+    void replacementPromotesItsCancelledDecisionWhenDatabaseLaterShowsPaymentStarted() {
+        String orderId = "AaAjECcaAQGqi_h2Rl1PiA";
+        orderStore.put(order(orderId));
+        MembershipOrderTransitionResult cancelled = orderStore.supersedeForReplacement(
+                orderId, false, NOW.plusMinutes(1));
+
+        MembershipOrderTransitionResult promoted = orderStore.supersedeForReplacement(
+                orderId, true, NOW.plusMinutes(2));
+
+        assertThat(cancelled.status()).isEqualTo(MembershipOrderStatus.CANCELLED);
+        assertThat(promoted.outcome()).isEqualTo(MembershipOrderTransitionOutcome.APPLIED);
+        assertThat(promoted.status()).isEqualTo(MembershipOrderStatus.CLOSED);
+        assertThat(promoted.stateVersion()).isEqualTo(cancelled.stateVersion() + 1L);
+        assertThat(orderStore.find(orderId)).get()
+                .extracting(MembershipOrderSnapshot::status)
+                .isEqualTo(MembershipOrderStatus.CLOSED);
+    }
+
     @ParameterizedTest
     @EnumSource(
             value = MembershipOrderStatus.class,
@@ -1031,7 +1228,7 @@ final class MembershipPaymentRedisIntegrationTest {
             case PAID -> orderStore.markPaid(
                     orderId,
                     "AaAjECcaAQGqi_h2Rl1Piw",
-                    "provider-terminal-paid",
+                    "LIUHAO:TRADE:provider-terminal-paid",
                     new BigDecimal("20.00"),
                     NOW.plusMinutes(1));
             case CANCELLED -> orderStore.cancel(orderId, NOW.plusMinutes(1));

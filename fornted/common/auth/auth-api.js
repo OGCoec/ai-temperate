@@ -1,8 +1,9 @@
 import {
 	publicRequest,
+	PreAuthBootstrapPolicy,
 	WebRtcSchedulingPolicy
 } from './http-client.js'
-import { saveSession } from './session-vault.js'
+import { commitAndroidOAuthSession, saveSession } from './session-vault.js'
 import { markRuntimeSessionAuthenticated } from './authenticated-session-state.js'
 import { recordAuthDiagnosticEvent } from './auth-diagnostics.js'
 import { clientPlatform } from './config.js'
@@ -75,6 +76,31 @@ function oauthHeaders(flow = null, includePhone = false) {
 	return headers
 }
 
+function oauthRequestOptions(options = {}) {
+	if (clientPlatform() !== 'H5') return options
+	return {
+		...options,
+		// 外部 OAuth 跳转期间禁止普通请求创建后台 WebRTC，避免 pagehide 留下过期 generation。
+		webRtcSchedulingPolicy: WebRtcSchedulingPolicy.SUPPRESS
+	}
+}
+
+function existingH5OAuthRequestOptions(options = {}) {
+	return oauthRequestOptions({
+		...options,
+		disableAutomaticReplay: true,
+		preAuthBootstrapPolicy: PreAuthBootstrapPolicy.REQUIRE_EXISTING
+	})
+}
+
+const H5WebRtcCompletionGate = Object.freeze({
+	DEFAULT: 'DEFAULT',
+	OAUTH_ASYNC_PENDING: 'OAUTH_ASYNC_PENDING'
+})
+
+let androidOAuthCompletePromise = null
+let androidOAuthNativeCompletePromise = null
+
 function forgetTokenHeaders(providedForgetToken) {
 	if (clientPlatform() !== 'ANDROID') return {}
 	const flow = loadAndroidPasswordResetFlow() || {}
@@ -114,8 +140,12 @@ function assertPasswordLoginAllowed(password) {
 
 function handleLoginResponse(
 	response,
-	boundaryEstablished = false,
-	path = 'authentication_complete'
+	{
+		boundaryEstablished = false,
+		path = 'authentication_complete',
+		scheduleH5AfterAuthentication = true,
+		commitAndroidCredentials = false
+	} = {}
 ) {
 	if (response?.status === 'TOTP_REQUIRED') {
 		beginTotpLoginFlow(response)
@@ -123,9 +153,10 @@ function handleLoginResponse(
 	}
 	if (response?.status === 'AUTHENTICATED') {
 		clearTotpLoginFlow()
-		saveSession(response)
+		if (commitAndroidCredentials) commitAndroidOAuthSession(response)
+		else saveSession(response)
 		markRuntimeSessionAuthenticated()
-		// 非标准调用仍需主动建立边界；标准完成请求已经在发送前完成 epoch 切换。
+		// 普通完成请求已在发送前切换 epoch；严格 OAuth 闸门则等 complete 成功后再切换。
 		if (!boundaryEstablished) {
 			invalidateWebRtcVerification('AUTHENTICATED_EPOCH_ROTATED')
 		}
@@ -136,14 +167,18 @@ function handleLoginResponse(
 			outcome: 'authenticated'
 		})
 		// #ifdef H5
-		scheduleH5WebRtcVerification({
-			path,
-			source: 'authenticated_epoch_started'
-		})
+		if (scheduleH5AfterAuthentication) {
+			scheduleH5WebRtcVerification({
+				path,
+				source: 'authenticated_epoch_started'
+			})
+		}
 		// #endif
 		// #ifdef APP-PLUS
 		// Android 保持后台 WebView 校验，不阻塞登录成功响应。
-		void startAndroidWebRtcVerificationInBackground().catch(() => {})
+		if (!commitAndroidCredentials) {
+			void startAndroidWebRtcVerificationInBackground().catch(() => {})
+		}
 		// #endif
 	}
 	return response
@@ -154,83 +189,165 @@ async function authenticationCompletionRequest(
 	options = {},
 	{
 		cancelReason = 'AUTHENTICATED_EPOCH_ROTATED',
-		handleLogin = true
+		handleLogin = true,
+		h5WebRtcGate = H5WebRtcCompletionGate.DEFAULT,
+		commitAndroidCredentials = false,
+		preAuthBootstrapPolicy = null
 	} = {}
 ) {
-	// 完成类请求可能轮换 PreAuth；必须在发送前切断旧 report 的所有权。
-	invalidateWebRtcVerification(cancelReason)
+	const pendingH5OAuthVerdict = clientPlatform() === 'H5'
+		&& h5WebRtcGate === H5WebRtcCompletionGate.OAUTH_ASYNC_PENDING
+	// OAuth pending attempt 必须跨 complete 保留；其他认证完成仍切换到新的认证 epoch。
+	if (!pendingH5OAuthVerdict) invalidateWebRtcVerification(cancelReason)
 	const response = await publicRequest(path, {
 		...options,
 		disableAutomaticReplay: true,
-		webRtcSchedulingPolicy: WebRtcSchedulingPolicy.SUPPRESS
+		webRtcSchedulingPolicy: WebRtcSchedulingPolicy.SUPPRESS,
+		...(pendingH5OAuthVerdict || preAuthBootstrapPolicy
+			? { preAuthBootstrapPolicy: PreAuthBootstrapPolicy.REQUIRE_EXISTING }
+			: {})
 	})
-	return handleLogin ? handleLoginResponse(response, true, path) : response
+	return handleLogin
+		? handleLoginResponse(response, {
+			boundaryEstablished: pendingH5OAuthVerdict,
+			path,
+			scheduleH5AfterAuthentication: !pendingH5OAuthVerdict,
+			commitAndroidCredentials
+		})
+		: response
 }
 
 export const authApi = {
-	async oauthStart(provider, interactionMode) {
-		const response = await publicRequest('/api/auth/oauth2/start', {
-			data: { provider, interactionMode }
-		})
+	async oauthStart(provider, interactionMode, attempt = null) {
+		// 跳转前允许建立缺失的 CSRF，但 prepare 已保证复用当前 PreAuth；严格禁止 bootstrap 从回调页开始。
+		const response = await publicRequest('/api/auth/oauth2/start', oauthRequestOptions({
+			data: {
+				provider,
+				interactionMode,
+				...(attempt?.probeGeneration
+					? { probeGeneration: attempt.probeGeneration } : {}),
+				...(attempt?.probeRunId ? { probeRunId: attempt.probeRunId } : {})
+			}
+		}))
 		if (clientPlatform() === 'ANDROID' && response?.oauthFlowToken) {
 			saveAndroidOAuthFlow({ ...response, provider })
 		}
 		return response
 	},
 	async oauthStatus(flow = null) {
-		const response = await publicRequest('/api/auth/oauth2/flow/status', {
+		const response = await publicRequest('/api/auth/oauth2/flow/status',
+			(clientPlatform() === 'H5' ? existingH5OAuthRequestOptions : oauthRequestOptions)({
 			method: 'GET',
 			headers: oauthHeaders(flow)
-		})
+		}))
 		if (clientPlatform() === 'ANDROID') updateAndroidOAuthFlowExpiry(response)
 		return response
 	},
+	oauthWebRtcResume(attempt) {
+		return publicRequest('/api/auth/oauth2/webrtc/resume', existingH5OAuthRequestOptions({
+			data: {
+				attemptId: attempt?.attemptId,
+				probeGeneration: attempt?.generation || attempt?.probeGeneration
+			}
+		}))
+	},
+	oauthWebRtcVerdictStatus(attempt) {
+		return publicRequest('/api/_edge/webrtc/verdict-status', existingH5OAuthRequestOptions({
+			data: {
+				attemptId: attempt?.attemptId,
+				probeGeneration: attempt?.generation || attempt?.probeGeneration
+			}
+		}))
+	},
 	oauthNativeGoogleComplete(idToken, flow = null) {
-		return authenticationCompletionRequest('/api/auth/oauth2/google/native/complete', {
+		if (clientPlatform() === 'ANDROID' && androidOAuthNativeCompletePromise) {
+			return androidOAuthNativeCompletePromise
+		}
+		const request = authenticationCompletionRequest('/api/auth/oauth2/google/native/complete', {
 			headers: oauthHeaders(flow),
 			data: { idToken },
 			timeout: 30000
 		}, {
 			cancelReason: 'OAUTH_COMPLETE_BOUNDARY',
-			handleLogin: false
+			handleLogin: false,
+			preAuthBootstrapPolicy: PreAuthBootstrapPolicy.REQUIRE_EXISTING
 		})
+		if (clientPlatform() !== 'ANDROID') return request
+		androidOAuthNativeCompletePromise = request.finally(() => {
+			androidOAuthNativeCompletePromise = null
+		})
+		return androidOAuthNativeCompletePromise
 	},
 	async oauthPhoneStart(data, flow = null) {
-		const response = await publicRequest('/api/auth/oauth2/phone/start', {
+		const requestOptions = clientPlatform() === 'H5'
+			? existingH5OAuthRequestOptions
+			: oauthRequestOptions
+		const response = await publicRequest('/api/auth/oauth2/phone/start', requestOptions({
 			headers: oauthHeaders(flow), data
-		})
+		}))
 		if (clientPlatform() === 'ANDROID') updateAndroidOAuthPhoneFlow(response)
 		return response
 	},
 	oauthPhoneTurnstile(turnstileToken, flow = null) {
-		return publicRequest('/api/auth/oauth2/phone/turnstile', {
+		const requestOptions = clientPlatform() === 'H5'
+			? existingH5OAuthRequestOptions
+			: oauthRequestOptions
+		return publicRequest('/api/auth/oauth2/phone/turnstile', requestOptions({
 			headers: oauthHeaders(flow, true), data: { turnstileToken }
-		})
+		}))
 	},
 	oauthPhoneSend(deliveryMethod, flow = null) {
-		return publicRequest('/api/auth/oauth2/phone/send', {
+		const requestOptions = clientPlatform() === 'H5'
+			? existingH5OAuthRequestOptions
+			: oauthRequestOptions
+		return publicRequest('/api/auth/oauth2/phone/send', requestOptions({
 			headers: oauthHeaders(flow, true), data: { deliveryMethod }
-		})
+		}))
 	},
 	oauthPhoneVerify(code, flow = null) {
-		return publicRequest('/api/auth/oauth2/phone/verify', {
+		const requestOptions = clientPlatform() === 'H5'
+			? existingH5OAuthRequestOptions
+			: oauthRequestOptions
+		return publicRequest('/api/auth/oauth2/phone/verify', requestOptions({
 			headers: oauthHeaders(flow, true), data: { code }
-		})
+		}))
 	},
-	async oauthComplete(flow = null) {
-		const handled = await authenticationCompletionRequest('/api/auth/oauth2/complete', {
-			headers: oauthHeaders(flow)
-		}, {
-			cancelReason: 'OAUTH_COMPLETE_BOUNDARY'
+	oauthComplete(flow = null, attempt = null) {
+		if (clientPlatform() === 'ANDROID' && androidOAuthCompletePromise) {
+			return androidOAuthCompletePromise
+		}
+		const execute = async () => {
+			const headers = oauthHeaders(flow)
+			if (attempt?.attemptId) {
+				headers['X-AIT-OAuth-WebRTC-Attempt-Id'] = attempt.attemptId
+				headers['X-AIT-WebRTC-Probe-Generation'] =
+					attempt.generation || attempt.probeGeneration
+			}
+			const handled = await authenticationCompletionRequest('/api/auth/oauth2/complete', {
+				headers
+			}, {
+				cancelReason: 'OAUTH_COMPLETE_BOUNDARY',
+				commitAndroidCredentials: clientPlatform() === 'ANDROID',
+				preAuthBootstrapPolicy: clientPlatform() === 'ANDROID'
+					? PreAuthBootstrapPolicy.REQUIRE_EXISTING : null,
+				h5WebRtcGate: attempt?.attemptId
+					? H5WebRtcCompletionGate.OAUTH_ASYNC_PENDING
+					: H5WebRtcCompletionGate.DEFAULT
+			})
+			if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
+			return handled
+		}
+		if (clientPlatform() !== 'ANDROID') return execute()
+		androidOAuthCompletePromise = execute().finally(() => {
+			androidOAuthCompletePromise = null
 		})
-		if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
-		return handled
+		return androidOAuthCompletePromise
 	},
 	async oauthCancel(flow = null) {
 		try {
-			return await publicRequest('/api/auth/oauth2/cancel', {
+			return await publicRequest('/api/auth/oauth2/cancel', oauthRequestOptions({
 				headers: oauthHeaders(flow)
-			})
+			}))
 		} finally {
 			if (clientPlatform() === 'ANDROID') clearAndroidOAuthFlow()
 		}

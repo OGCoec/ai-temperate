@@ -24,6 +24,10 @@ function offerResponse(overrides = {}) {
 		checkoutEnabled: true,
 		quotedAt: '2026-08-21T12:00:00Z',
 		payTypes: ['alipay', 'wxpay'],
+		paymentOptions: [
+			{ provider: 'BAR', payTypes: ['alipay', 'wxpay'], checkoutMode: 'FORM_POST' },
+			{ provider: 'LIUHAO', payTypes: ['alipay', 'wxpay'], checkoutMode: 'REDIRECT_URL' }
+		],
 		offers: [{
 			targetTier: 'GO',
 			displayName: 'Go',
@@ -73,11 +77,54 @@ function checkoutFields(overrides = {}) {
 function checkoutSubmission(overrides = {}) {
 	return {
 		provider: 'BAR',
+		checkoutMode: 'FORM_POST',
 		action: 'https://ihaveagoddamnplan.com/api/pay/submit',
 		method: 'POST',
 		contentType: 'application/x-www-form-urlencoded',
 		submitExpiresAt: '2099-08-21T12:04:00Z',
 		fields: checkoutFields(),
+		...overrides
+	}
+}
+
+function liuhaoCheckoutFields(overrides = {}) {
+	return {
+		pid: '1001',
+		out_trade_no: 'AaAjECcaAQGqi_h2Rl1PiA',
+		type: 'wxpay',
+		name: '会员支付订单',
+		money: '0.05',
+		notify_url: 'https://niko000o.site/api/payment/liuhao/notify',
+		return_url: 'https://niko000o.site/pages/account/payment-result',
+		timestamp: '4080470400',
+		sign_type: 'RSA',
+		sign: 'c2lnbmF0dXJl',
+		...overrides
+	}
+}
+
+function liuhaoCheckoutSubmission(overrides = {}) {
+	return {
+		provider: 'LIUHAO',
+		checkoutMode: 'FORM_POST',
+		action: 'https://liuhao.net/api/pay/submit',
+		method: 'POST',
+		contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+		submitExpiresAt: '2099-08-21T12:04:00Z',
+		fields: liuhaoCheckoutFields(),
+		...overrides
+	}
+}
+
+function legacyLiuhaoRedirectSubmission(overrides = {}) {
+	return {
+		provider: 'LIUHAO',
+		checkoutMode: 'REDIRECT_URL',
+		action: 'https://cashier.liuhao.net/pay/session-123',
+		method: 'GET',
+		contentType: null,
+		submitExpiresAt: '2099-08-21T12:04:00Z',
+		fields: null,
 		...overrides
 	}
 }
@@ -106,6 +153,7 @@ test('loads immutable server-priced personal membership offers', async () => {
 	assert.equal(result.offers[0].payAmountYuan, '0.05')
 	assert.equal(Object.isFrozen(result), true)
 	assert.equal(Object.isFrozen(result.offers[0]), true)
+	assert.deepEqual(result.paymentOptions.map(option => option.provider), ['BAR', 'LIUHAO'])
 })
 
 test('creates and starts an order without sending a client price', async () => {
@@ -122,7 +170,7 @@ test('creates and starts an order without sending a client price', async () => {
 		payType: 'alipay',
 		idempotencyKey: '550e8400-e29b-41d4-a716-446655440000'
 	})
-	const attempt = await membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA')
+	const attempt = await membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'BAR')
 
 	assert.deepEqual(calls[0], [
 		'/api/user/membership-orders',
@@ -138,7 +186,7 @@ test('creates and starts an order without sending a client price', async () => {
 	])
 	assert.deepEqual(calls[1], [
 		'/api/user/membership-orders/AaAjECcaAQGqi_h2Rl1PiA/payment-attempts',
-		{ method: 'POST', preserveSessionOnFailure: true }
+		{ method: 'POST', preserveSessionOnFailure: true, data: { provider: 'BAR' } }
 	])
 	assert.equal('payAmountYuan' in calls[0][1].data, false)
 	assert.equal(attempt.order.orderId, 'AaAjECcaAQGqi_h2Rl1PiA')
@@ -154,7 +202,7 @@ test('accepts an explicit null checkout submission for the local provider', asyn
 		checkoutSubmission: null
 	}))
 
-	const attempt = await membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA')
+	const attempt = await membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'BAR')
 
 	assert.equal(attempt.checkoutSubmission, null)
 })
@@ -183,7 +231,7 @@ test('rejects unknown payment-attempt and checkout field keys', async () => {
 	]) {
 		const { membershipPaymentApi } = await loadApi(async () => response)
 		await assert.rejects(
-			() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA'),
+			() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'BAR'),
 			error => error.code === 'MEMBERSHIP_PAYMENT_RESPONSE_INVALID')
 	}
 })
@@ -215,7 +263,7 @@ test('rejects unsafe or inconsistent BAR checkout submissions', async () => {
 			checkoutSubmission
 		}))
 		await assert.rejects(
-			() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA'),
+			() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'BAR'),
 			error => error.code === 'MEMBERSHIP_PAYMENT_RESPONSE_INVALID')
 	}
 })
@@ -226,8 +274,40 @@ test('marks an otherwise valid expired submission for one bounded refresh', asyn
 	}))
 
 	await assert.rejects(
-		() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA'),
+		() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'BAR'),
 		error => error.code === 'BAR_CHECKOUT_SUBMISSION_EXPIRED')
+})
+
+test('rejects the obsolete Liuhao browser page-submit contract', async () => {
+	const { membershipPaymentApi } = await loadApi(async () => paymentAttemptResponse({
+		order: orderResponse({ payType: 'wxpay' }),
+		checkoutSubmission: liuhaoCheckoutSubmission()
+	}))
+	await assert.rejects(
+		() => membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'LIUHAO'),
+		error => error.code === 'MEMBERSHIP_PAYMENT_RESPONSE_INVALID')
+
+	const unsafe = await loadApi(async () => paymentAttemptResponse({
+		order: orderResponse({ payType: 'wxpay' }),
+		checkoutSubmission: liuhaoCheckoutSubmission({
+			action: 'https://evil.example/api/pay/submit'
+		})
+	}))
+	await assert.rejects(
+		() => unsafe.membershipPaymentApi.startPayment('AaAjECcaAQGqi_h2Rl1PiA', 'LIUHAO'),
+		error => error.code === 'MEMBERSHIP_PAYMENT_RESPONSE_INVALID')
+})
+
+test('accepts the Liuhao HTTPS cashier redirect after backend validation', async () => {
+	const { membershipPaymentApi } = await loadApi(async () => paymentAttemptResponse({
+		checkoutSubmission: legacyLiuhaoRedirectSubmission()
+	}))
+
+	const attempt = await membershipPaymentApi.startPayment(
+		'AaAjECcaAQGqi_h2Rl1PiA', 'LIUHAO')
+
+	assert.equal(attempt.checkoutSubmission.checkoutMode, 'REDIRECT_URL')
+	assert.equal(attempt.checkoutSubmission.fields, null)
 })
 
 test('queries only canonical 22-character order identifiers', async () => {

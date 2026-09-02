@@ -26,9 +26,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 该配置类是来声明会员支付和软关闭的持久延时交换机、Quorum 业务队列、独立 DLQ、Confirm 模板及手动 ACK 容器。
+ * 该配置类是来声明会员支付、关单与仅超时退款重试的持久交换机、Quorum 队列、独立 DLQ、Confirm 模板及手动 ACK 容器。
  *
- * <p>两条业务队列使用独立拓扑，每条队列固定四十八个消费者且 prefetch 为 20；监听失败由 Quorum Queue
+ * <p>四条可消费业务队列使用独立拓扑，每条队列固定四十八个消费者且 prefetch 为 20；监听失败由 Quorum Queue
  * 的三次 delivery limit 有限重投，耗尽后进入独立 DLQ，禁止异常消息无限循环。</p>
  */
 @Configuration
@@ -84,6 +84,39 @@ public class MembershipPaymentRabbitConfiguration {
                 .quorum()
                 .build();
 
+        CustomExchange supersededCloseExchange = delayedExchange(
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_EXCHANGE);
+        DirectExchange supersededCloseDeadExchange = new DirectExchange(
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLX, true, false);
+        Queue supersededCloseQueue = businessQueue(
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_QUEUE,
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLX,
+                MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLQ_ROUTING_KEY);
+        Queue supersededCloseDeadQueue = QueueBuilder
+                .durable(MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLQ)
+                .quorum()
+                .build();
+
+        CustomExchange refundRetryExchange = delayedExchange(
+                MembershipPaymentRabbitNames.REFUND_RETRY_EXCHANGE);
+        DirectExchange refundRetryDeadExchange = new DirectExchange(
+                MembershipPaymentRabbitNames.REFUND_RETRY_DLX, true, false);
+        Queue refundRetryQueue = businessQueue(
+                MembershipPaymentRabbitNames.REFUND_RETRY_QUEUE,
+                MembershipPaymentRabbitNames.REFUND_RETRY_DLX,
+                MembershipPaymentRabbitNames.REFUND_RETRY_DLQ_ROUTING_KEY);
+        Queue refundRetryDeadQueue = QueueBuilder
+                .durable(MembershipPaymentRabbitNames.REFUND_RETRY_DLQ)
+                .quorum()
+                .build();
+
+        DirectExchange refundTerminalExchange = new DirectExchange(
+                MembershipPaymentRabbitNames.REFUND_TERMINAL_EXCHANGE, true, false);
+        Queue refundTerminalQueue = QueueBuilder
+                .durable(MembershipPaymentRabbitNames.REFUND_TERMINAL_QUEUE)
+                .quorum()
+                .build();
+
         List<Declarable> topology = List.of(
                 paymentExchange,
                 paymentDeadExchange,
@@ -106,7 +139,34 @@ public class MembershipPaymentRabbitConfiguration {
                         .noargs(),
                 BindingBuilder.bind(closingDeadQueue)
                         .to(closingDeadExchange)
-                        .with(MembershipPaymentRabbitNames.CLOSING_DLQ_ROUTING_KEY));
+                        .with(MembershipPaymentRabbitNames.CLOSING_DLQ_ROUTING_KEY),
+                supersededCloseExchange,
+                supersededCloseDeadExchange,
+                supersededCloseQueue,
+                supersededCloseDeadQueue,
+                BindingBuilder.bind(supersededCloseQueue)
+                        .to(supersededCloseExchange)
+                        .with(MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_ROUTING_KEY)
+                        .noargs(),
+                BindingBuilder.bind(supersededCloseDeadQueue)
+                        .to(supersededCloseDeadExchange)
+                        .with(MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLQ_ROUTING_KEY),
+                refundRetryExchange,
+                refundRetryDeadExchange,
+                refundRetryQueue,
+                refundRetryDeadQueue,
+                BindingBuilder.bind(refundRetryQueue)
+                        .to(refundRetryExchange)
+                        .with(MembershipPaymentRabbitNames.REFUND_RETRY_ROUTING_KEY)
+                        .noargs(),
+                BindingBuilder.bind(refundRetryDeadQueue)
+                        .to(refundRetryDeadExchange)
+                        .with(MembershipPaymentRabbitNames.REFUND_RETRY_DLQ_ROUTING_KEY),
+                refundTerminalExchange,
+                refundTerminalQueue,
+                BindingBuilder.bind(refundTerminalQueue)
+                        .to(refundTerminalExchange)
+                        .with(MembershipPaymentRabbitNames.REFUND_TERMINAL_ROUTING_KEY));
         return new Declarables(topology);
     }
 
@@ -145,7 +205,7 @@ public class MembershipPaymentRabbitConfiguration {
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         factory.setDefaultRequeueRejected(false);
         factory.setPrefetchCount(20);
-        // 两条队列各自使用固定四十八个消费者，提高同点到期消息的处理时效，并避免自动扩缩容引入不可复现抖动。
+        // 四条可消费队列各自使用固定四十八个消费者，提高同点到期消息的处理时效，并避免自动扩缩容引入不可复现抖动。
         factory.setConcurrentConsumers(48);
         factory.setMaxConcurrentConsumers(48);
         return factory;

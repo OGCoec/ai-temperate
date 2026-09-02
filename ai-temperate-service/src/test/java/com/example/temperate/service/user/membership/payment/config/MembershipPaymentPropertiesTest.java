@@ -3,8 +3,11 @@ package com.example.temperate.service.user.membership.payment.config;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -73,6 +76,21 @@ final class MembershipPaymentPropertiesTest {
     }
 
     @Test
+    void refundRetryPlanMustUseFixedTimeoutOnlySchedule() {
+        MembershipPaymentProperties.Rabbit invalid =
+                new MembershipPaymentProperties.Rabbit(
+                        validRabbit().paymentCheckDelaysMillis(),
+                        validRabbit().closingCheckDelaysMillis(),
+                        List.of(5_000L, 10_000L),
+                        Duration.ofSeconds(30),
+                        3);
+
+        assertThatThrownBy(() -> properties(true, false, invalid, 100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("refund retry");
+    }
+
+    @Test
     void callbackBatchCannotExceedRedisBatchBoundary() {
         assertThatThrownBy(() -> properties(true, false, validRabbit(), 501))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -118,6 +136,14 @@ final class MembershipPaymentPropertiesTest {
         assertThatThrownBy(() -> properties(true, false, validRabbit(), changed))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("callback data TTL");
+    }
+
+    @Test
+    void liuhaoConfigurationDoesNotInventAProviderChannelId() {
+        assertThatCode(() -> propertiesWithLiuhao(liuhao(true)))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> propertiesWithLiuhao(liuhao(false)))
+                .doesNotThrowAnyException();
     }
 
     private static MembershipPaymentProperties properties(
@@ -228,6 +254,67 @@ final class MembershipPaymentPropertiesTest {
                         Duration.ofSeconds(60),
                         Duration.ofMillis(100)),
                 validRabbit());
+    }
+
+    private static MembershipPaymentProperties propertiesWithLiuhao(
+            MembershipPaymentProperties.Liuhao liuhao) {
+        return new MembershipPaymentProperties(
+                liuhao.enabled(),
+                liuhao.enabled(),
+                PaymentProviderType.LIUHAO,
+                Duration.ofMinutes(5),
+                Duration.ofMinutes(5),
+                new MembershipPaymentProperties.Simulator(
+                        false,
+                        "",
+                        "",
+                        Duration.ofMinutes(5),
+                        16_384,
+                        false),
+                new MembershipPaymentProperties.Bar(
+                        false,
+                        URI.create("https://ihaveagoddamnplan.com"),
+                        "",
+                        0,
+                        Map.of(),
+                        null,
+                        null,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        65_536),
+                new MembershipPaymentProperties.Callback(
+                        5_000L,
+                        100,
+                        20,
+                        Duration.ofSeconds(60),
+                        Duration.ofSeconds(30),
+                        Duration.ofMinutes(10),
+                        Duration.ofHours(6)),
+                new MembershipPaymentProperties.OrderPersist(
+                        5_000L,
+                        100,
+                        20,
+                        Duration.ofSeconds(60),
+                        Duration.ofMillis(100)),
+                validRabbit(),
+                liuhao,
+                List.of(PaymentProviderType.LIUHAO));
+    }
+
+    private static MembershipPaymentProperties.Liuhao liuhao(boolean enabled) {
+        return new MembershipPaymentProperties.Liuhao(
+                enabled,
+                URI.create("https://liuhao.net"),
+                enabled ? "1001" : "",
+                enabled ? "merchant-private-key" : "",
+                enabled ? "platform-public-key" : "",
+                enabled ? "merchant-public-key" : "",
+                enabled ? URI.create("https://niko000o.site/api/payment/liuhao/notify") : null,
+                enabled ? URI.create("https://niko000o.site/pages/account/payment-result") : null,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(5),
+                65_536,
+                Duration.ofMinutes(5));
     }
 
     private static MembershipPaymentProperties.Rabbit validRabbit() {

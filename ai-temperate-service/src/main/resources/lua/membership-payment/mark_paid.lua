@@ -35,7 +35,13 @@ if status == 'CANCELLED' or status == 'CLOSED' then
 end
 
 local existing_trade_no = snapshot[3]
-if existing_trade_no and existing_trade_no ~= '' and existing_trade_no ~= provider_trade_no then
+local valid_provider_trade = string.match(provider_trade_no, '^BAR:TRADE:.+$')
+        or string.match(provider_trade_no, '^LIUHAO:TRADE:.+$')
+if not valid_provider_trade then
+    return 'PROVIDER_TRADE_CONFLICT|' .. status .. '|' .. current_version
+end
+if existing_trade_no and existing_trade_no ~= ''
+        and existing_trade_no ~= provider_trade_no then
     return 'PROVIDER_TRADE_CONFLICT|' .. status .. '|' .. current_version
 end
 

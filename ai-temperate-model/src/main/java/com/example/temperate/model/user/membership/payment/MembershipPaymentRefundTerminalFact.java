@@ -1,5 +1,6 @@
 package com.example.temperate.model.user.membership.payment;
 
+import java.math.BigDecimal;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -17,6 +18,7 @@ public class MembershipPaymentRefundTerminalFact {
     private byte[] callbackId;
     private byte[] orderId;
     private String providerTradeNo;
+    private BigDecimal paidAmountYuan;
     private String callbackResolution;
     private MembershipOrderStatus orderStatus;
     private MembershipOrderEntitlementResolution orderEntitlementResolution;

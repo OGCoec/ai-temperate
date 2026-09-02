@@ -12,6 +12,7 @@ import com.example.temperate.web.risk.NetworkRiskWebMvcConfiguration;
 import com.example.temperate.web.risk.webrtc.WebRtcVerificationInterceptor;
 import com.example.temperate.web.risk.webrtc.WebRtcWebMvcConfiguration;
 import com.example.temperate.web.user.membership.payment.callback.BarPaymentCallbackController;
+import com.example.temperate.web.user.membership.payment.callback.LiuhaoPaymentCallbackController;
 import com.example.temperate.web.user.membership.payment.callback.SimulatedLiuhaoPaymentCallbackController;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -86,6 +87,18 @@ final class MembershipPaymentInterceptorPathTest {
     @Test
     void barCallbackDoesNotRequireBrowserSessionOrBrowserRiskContext() {
         String callbackPath = BarPaymentCallbackController.CALLBACK_PATH;
+
+        assertThat(matching(authInterceptors, callbackPath))
+                .doesNotContain(userSessionInterceptor);
+        assertThat(matching(networkInterceptors, callbackPath))
+                .doesNotContain(networkRiskInterceptor);
+        assertThat(matching(webRtcInterceptors, callbackPath))
+                .doesNotContain(webRtcInterceptor);
+    }
+
+    @Test
+    void liuhaoCallbackDoesNotRequireBrowserSessionOrBrowserRiskContext() {
+        String callbackPath = LiuhaoPaymentCallbackController.CALLBACK_PATH;
 
         assertThat(matching(authInterceptors, callbackPath))
                 .doesNotContain(userSessionInterceptor);

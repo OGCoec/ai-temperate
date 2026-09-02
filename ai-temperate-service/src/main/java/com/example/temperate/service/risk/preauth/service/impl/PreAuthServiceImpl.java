@@ -9,6 +9,7 @@ import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthChallengeActivation;
 import com.example.temperate.service.risk.preauth.domain.PreAuthIssue;
 import com.example.temperate.service.risk.preauth.domain.PreAuthNetworkSnapshot;
+import com.example.temperate.service.risk.preauth.domain.PreAuthRequiredException;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
 import com.example.temperate.service.risk.preauth.domain.PreAuthWebRtcPhase;
@@ -362,6 +363,110 @@ public final class PreAuthServiceImpl implements PreAuthService {
             }
         }
         throw new IllegalStateException("Authenticated PreAuth rotation failed.");
+    }
+
+    @Override
+    public PreAuthIssue promoteAuthenticatedAfterWebRtcVerified(
+            PreAuthAccess access,
+            RiskSessionType sessionType,
+            String rawSessionReference,
+            String currentHttpIp,
+            Instant seenAt) {
+        if (access == null || access.state() == null
+                || currentHttpIp == null || currentHttpIp.isBlank()) {
+            throw new PreAuthRequiredException();
+        }
+        if (sessionType == null
+                || sessionType == RiskSessionType.NONE
+                || rawSessionReference == null
+                || rawSessionReference.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Authenticated session reference is required.");
+        }
+        HmacIdentifier currentIpDigest;
+        try {
+            currentIpDigest = identifier.identifyIp(currentHttpIp);
+        } catch (IllegalArgumentException exception) {
+            throw new PreAuthRequiredException();
+        }
+        RiskScope scope = access.state().scope();
+        HmacIdentifier sessionDigest = identifier.identifySession(rawSessionReference);
+        for (int attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+            // OAuth complete 可能与 report 并发；每次尝试都必须重读旧 Token，并锁定进入请求时的 generation。
+            Optional<PreAuthState> freshState = store.find(scope, access.tokenDigest())
+                    .filter(state -> state.schemaVersion()
+                            == PreAuthState.CURRENT_SCHEMA_VERSION)
+                    .filter(state -> state.scope() == scope)
+                    .filter(state -> state.deviceDigest().equals(
+                            access.state().deviceDigest()))
+                    .filter(state -> state.currentIpDigest().equals(currentIpDigest))
+                    .filter(state -> state.webRtcPhase()
+                            == PreAuthWebRtcPhase.VERIFIED)
+                    .filter(state -> state.webRtcGeneration()
+                            == access.state().webRtcGeneration());
+            if (freshState.isEmpty()) {
+                throw new PreAuthRequiredException();
+            }
+            PreAuthState verifiedState = freshState.get();
+            List<String> verifiedIps;
+            try {
+                verifiedIps = webRtcIpProtector.decrypt(
+                        verifiedState.webRtcIps(),
+                        scope,
+                        access.tokenDigest(),
+                        currentIpDigest);
+            } catch (WebRtcIpProtectionException exception) {
+                throw new PreAuthRequiredException();
+            }
+            if (verifiedIps.isEmpty()) {
+                throw new PreAuthRequiredException();
+            }
+
+            String newRawToken = randomToken();
+            HmacIdentifier newTokenDigest =
+                    identifier.identifyPreAuthToken(newRawToken);
+            HmacIdentifier newContextDigest =
+                    identifier.identifyDecisionContext(
+                            scope.name()
+                                    + "|"
+                                    + newTokenDigest.value()
+                                    + "|"
+                                    + verifiedState.deviceDigest().value()
+                                    + "|"
+                                    + currentIpDigest.value());
+            String rotatedWebRtcIps;
+            try {
+                rotatedWebRtcIps = webRtcIpProtector.encrypt(
+                        verifiedIps,
+                        scope,
+                        newTokenDigest,
+                        currentIpDigest);
+            } catch (WebRtcIpProtectionException exception) {
+                throw new PreAuthRequiredException();
+            }
+            // 专用 Lua 原子核对源 phase/generation/IP/决策上下文；失败时绝不生成 REQUIRED 下一代。
+            if (store.rotateAuthenticatedAfterWebRtcVerified(
+                    scope,
+                    access.tokenDigest(),
+                    newTokenDigest,
+                    verifiedState.deviceDigest(),
+                    currentIpDigest,
+                    verifiedState.lastDecisionContextDigest(),
+                    sessionType,
+                    sessionDigest,
+                    newContextDigest,
+                    verifiedState.webRtcGeneration(),
+                    rotatedWebRtcIps,
+                    seenAt,
+                    properties.authenticatedPreAuthTtl())) {
+                return new PreAuthIssue(
+                        newRawToken,
+                        seenAt.plus(properties.authenticatedPreAuthTtl()),
+                        PreAuthWebRtcPhase.VERIFIED,
+                        verifiedState.webRtcGeneration());
+            }
+        }
+        throw new PreAuthRequiredException();
     }
 
     private WebRtcRotationState decryptWebRtcForRotation(PreAuthAccess oldAccess) {

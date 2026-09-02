@@ -7,6 +7,7 @@ import com.example.temperate.service.auth.oauth.domain.OAuthProvider;
 import com.example.temperate.service.auth.oauth.domain.TrustedOAuthIdentity;
 import com.example.temperate.service.auth.oauth.flow.OAuthAuthorizationStateSnapshot;
 import com.example.temperate.service.auth.oauth.flow.OAuthClientPlatform;
+import com.example.temperate.service.auth.oauth.flow.OAuthCompletionClaim;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowErrorCode;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowException;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowSnapshot;
@@ -322,7 +323,7 @@ public final class RedisOAuthFlowStore implements OAuthFlowStore {
     }
 
     @Override
-    public void claimCompletion(ProtectedOAuthFlowAccess access, Instant now) {
+    public OAuthCompletionClaim claimCompletion(ProtectedOAuthFlowAccess access, Instant now) {
         ProtectedOAuthFlowAccess valid = requireAccess(access);
         long result = execute(
                 CLAIM_COMPLETION,
@@ -330,7 +331,20 @@ public final class RedisOAuthFlowStore implements OAuthFlowStore {
                 Long.toString(now.toEpochMilli()),
                 valid.deviceId().value(),
                 valid.clientIpId().value());
-        requireTransitionResult(result);
+        return switch (Math.toIntExact(result)) {
+            case 0 -> OAuthCompletionClaim.CLAIMED;
+            case 4 -> OAuthCompletionClaim.IN_PROGRESS;
+            case 5 -> OAuthCompletionClaim.ALREADY_COMPLETED;
+            case 1 -> throw new OAuthFlowException(
+                    OAuthFlowErrorCode.FLOW_NOT_FOUND, "OAuth flow was not found.");
+            case 2 -> throw new OAuthFlowException(
+                    OAuthFlowErrorCode.FLOW_EXPIRED, "OAuth flow expired.");
+            case 3 -> throw new OAuthFlowException(
+                    OAuthFlowErrorCode.FLOW_FORBIDDEN, "OAuth flow is forbidden.");
+            default -> throw new OAuthFlowException(
+                    OAuthFlowErrorCode.INVALID_TRANSITION,
+                    "OAuth flow is not ready to complete.");
+        };
     }
 
     @Override

@@ -775,6 +775,7 @@
 	} from '@/common/aichat/ai-conversation-stream.js'
 	import {
 		asyncGenerationEnabled,
+		findGenerationResearchSources,
 		getGeneration,
 		listActiveGenerations,
 		listPendingGenerationRequests,
@@ -3327,8 +3328,7 @@
 						this.streamDiagnostics?.finish?.('SSE_ERROR')
 					})
 				} else if (event.type === 'source') {
-					if (this.activeResearchSession?.appendSource?.(event.data)) {
-						this.patchResearch(localId)
+					if (this.applyLiveResearchSource(localId, event.data)) {
 						this.recordResearchRendered('source')
 					}
 				} else if (event.type === 'reasoning_summary') {
@@ -3601,9 +3601,46 @@
 					this.streamDiagnostics?.record?.('FRONTEND_RENDERED', { eventType })
 				})
 			},
+			mergeResearchState(base, ...sourceCollections) {
+				const current = base && typeof base === 'object' ? base : {}
+				return {
+					...current,
+					activities: Array.isArray(current.activities)
+						? current.activities : [],
+					sources: mergeAiConversationSources(
+						current.sources, ...sourceCollections),
+					reasoningSummaries: Array.isArray(current.reasoningSummaries)
+						? current.reasoningSummaries : []
+				}
+			},
+			applyLiveResearchSource(localId, value) {
+				const current = this.messages.find(message => message.localId === localId)
+				if (!current) return false
+				const previousCount = this.researchSources(current).length
+				const sessionAccepted = this.activeResearchSession?.appendSource?.(value)
+					=== true
+				const sessionResearch = this.activeResearchSession?.snapshot?.()
+				const research = this.mergeResearchState({
+					...(current.research || {}),
+					...(sessionResearch || {})
+				}, current.research?.sources, [value])
+				const sourceAdded = research.sources.length > previousCount
+				if (!sessionAccepted && !sourceAdded) return false
+				// 来源显示不能依赖可恢复会话是否存在；合法 SSE 一到达就先进入响应式消息状态。
+				this.applyStore(patchLocalMessage(localId, { research }))
+				return sessionAccepted || sourceAdded
+			},
 			patchResearch(localId) {
-				const research = this.activeResearchSession?.snapshot?.()
-				if (!research) return
+				const current = this.messages.find(message => message.localId === localId)
+				const sessionResearch = this.activeResearchSession?.snapshot?.()
+				const generationSources = this.activeGenerationPublicId
+					? getGeneration(this.activeGenerationPublicId)?.researchSources : []
+				if (!current?.research && !sessionResearch
+					&& !generationSources?.length) return
+				const research = this.mergeResearchState({
+					...(current?.research || {}),
+					...(sessionResearch || {})
+				}, current?.research?.sources, generationSources)
 				this.applyStore(patchLocalMessage(localId, { research }))
 			},
 			modelActivityText(message) {
@@ -3674,12 +3711,22 @@
 					|| !this.messages.length) return
 				for (const message of this.messages) {
 					if (!message.messagePublicId) continue
-					const research = findAiConversationResearchSession({
+					let storedResearch = findAiConversationResearchSession({
 						messagePublicId: message.messagePublicId
 					})
-					if (!research
-						|| research.conversationPublicId
-							!== this.currentConversationPublicId) continue
+					if (storedResearch?.conversationPublicId
+							!== this.currentConversationPublicId) {
+						storedResearch = null
+					}
+					const generationSources = findGenerationResearchSources({
+						conversationPublicId: this.currentConversationPublicId,
+						messagePublicId: message.messagePublicId
+					})
+					if (!storedResearch && !generationSources.length) continue
+					const research = this.mergeResearchState({
+						...(message.research || {}),
+						...(storedResearch || {})
+					}, message.research?.sources, generationSources)
 					this.applyStore(patchMessage(
 						message.localId || message.messagePublicId,
 						{ research, researchExpanded: false }))
@@ -4792,10 +4839,14 @@
 						const imagePresentationOrder = appendMissingImagePresentationOrder(
 							task.imagePresentationOrder || current?.imagePresentationOrder,
 							responseAttachments)
+						const research = this.mergeResearchState(
+							current?.research, task.researchSources)
 						this.applyStore(patchLocalMessage(localId, {
 							messagePublicId: task.messagePublicId || '',
 							responseText: task.responseText || '',
 							mediaUploadProgressByKey: task.mediaUploadProgressByKey || {},
+							...(current?.research || research.sources.length
+								? { research } : {}),
 							...(Array.isArray(task.previewImages) && task.previewImages.length
 								? { responseAttachments: task.previewImages }
 								: task.previewImage

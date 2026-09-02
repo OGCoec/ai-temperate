@@ -206,6 +206,7 @@
 	import { authErrorMessage } from '@/common/auth/auth-error.js'
 	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
 	import { initializeBrowserCsrf } from '@/common/auth/http-client.js'
+	import { isPreAuthReady } from '@/common/auth/pre-auth.js'
 	import { presentRiskBlock } from '@/common/auth/risk-block-navigation.js'
 	import { startOAuth } from '@/common/auth/oauth-flow.js'
 	import { createNativeSplashHandoff } from '@/common/launch/eagle-native-splash.js'
@@ -343,6 +344,8 @@
 		methods: {
 			async oauthLogin(provider) {
 				if (this.busy) return
+				// 启动阶段的 PreAuth 尚未完成时静默忽略点击，避免无安全凭证地启动第三方登录。
+				if (!isPreAuthReady()) return
 				this.oauthProvider = provider
 				const result = await this.run(() => startOAuth(provider))
 				this.oauthProvider = ''

@@ -38,6 +38,7 @@ class OAuthFlowLuaContractTest {
         assertThat(lua).contains("completionclaim");
         assertThat(lua).contains("devicehash");
         assertThat(lua).contains("iphash");
+        assertThat(lua).contains("authenticated", "totp_required", "return 5", "return 4");
     }
 
     @Test

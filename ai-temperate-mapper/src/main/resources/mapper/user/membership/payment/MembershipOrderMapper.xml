@@ -192,6 +192,7 @@
           AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
           AND status = #{pendingStatus,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler}
           AND payment_started_at IS NULL
+          AND provider_trade_no IS NULL
           AND expires_at &gt; #{startedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
         RETURNING <include refid="MembershipOrderColumns"/>
     </select>
@@ -236,6 +237,28 @@
         LIMIT 1
         FOR UPDATE
     </select>
+
+    <update id="supersedeActiveForReplacement">
+        UPDATE membership_order
+        SET status = #{terminalStatus,jdbcType=SMALLINT,typeHandler=com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler},
+            closing_deadline_at = NULL,
+            entitlement_resolution = COALESCE(
+                membership_order.entitlement_resolution,
+                'NOT_GRANTED'),
+            entitlement_resolved_at = CASE
+                WHEN membership_order.entitlement_resolution IS NULL
+                THEN #{changedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+                ELSE membership_order.entitlement_resolved_at
+            END,
+            state_version = #{terminalStateVersion,jdbcType=BIGINT},
+            updated_at = GREATEST(
+                membership_order.updated_at,
+                #{changedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE})
+        WHERE id = #{orderId,jdbcType=BINARY}
+          AND login_identity_id = #{loginIdentityId,jdbcType=BIGINT}
+          AND status IN (0, 1)
+          AND state_version &lt;= #{terminalStateVersion,jdbcType=BIGINT}
+    </update>
 
     <select id="findLatestPaidOrder" resultMap="MembershipOrderResultMap">
         SELECT <include refid="MembershipOrderColumns"/>
@@ -360,14 +383,9 @@
         )
         UPDATE membership_order
         SET status = snapshots.status,
-            provider_trade_no = CASE
-                WHEN snapshots.status IN (3, 4)
-                  AND COALESCE(snapshots.paid_at, membership_order.paid_at) IS NULL
-                THEN NULL
-                ELSE COALESCE(
-                    snapshots.provider_trade_no,
-                    membership_order.provider_trade_no)
-            END,
+            provider_trade_no = COALESCE(
+                membership_order.provider_trade_no,
+                snapshots.provider_trade_no),
             payment_started_at = COALESCE(
                 snapshots.payment_started_at,
                 membership_order.payment_started_at),
@@ -391,6 +409,11 @@
             updated_at = snapshots.updated_at
         FROM snapshots
         WHERE membership_order.id = snapshots.order_id
+          AND (
+              snapshots.provider_trade_no IS NULL
+              OR membership_order.provider_trade_no IS NULL
+              OR membership_order.provider_trade_no = snapshots.provider_trade_no
+          )
           AND (
               membership_order.state_version &lt; snapshots.state_version
               OR (
@@ -437,7 +460,7 @@
         )
         UPDATE membership_order
         SET provider_trade_no = CASE
-                WHEN entitlements.resolution IN ('REFUND_REQUIRED', 'NOT_GRANTED')
+                WHEN entitlements.resolution = 'REFUND_REQUIRED'
                 THEN NULL
                 ELSE COALESCE(
                     membership_order.provider_trade_no,
@@ -471,7 +494,7 @@
         FROM entitlements
         WHERE membership_order.id = entitlements.order_id
           AND (
-              entitlements.resolution IN ('REFUND_REQUIRED', 'NOT_GRANTED')
+              entitlements.provider_trade_no IS NULL
               OR membership_order.provider_trade_no IS NULL
               OR membership_order.provider_trade_no = entitlements.provider_trade_no
           )

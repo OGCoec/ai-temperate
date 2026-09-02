@@ -176,6 +176,7 @@ public record NetworkRiskProperties(
             @NotNull Duration startGrace,
             @NotNull Duration probeTimeout,
             @NotNull Duration reportGrace,
+            @NotNull Duration oauthAsyncVerdictWindow,
             @NotNull List<@NotNull URI> stunUrls,
             @Min(1) @Max(32) int maxReportedIps,
             String ipEncryptionKeyBase64) {
@@ -184,6 +185,11 @@ public record NetworkRiskProperties(
             requirePositive(startGrace, "webRtc.startGrace");
             requirePositive(probeTimeout, "webRtc.probeTimeout");
             requirePositive(reportGrace, "webRtc.reportGrace");
+            requirePositive(oauthAsyncVerdictWindow, "webRtc.oauthAsyncVerdictWindow");
+            if (oauthAsyncVerdictWindow.compareTo(Duration.ofSeconds(15)) > 0) {
+                throw new IllegalArgumentException(
+                        "webRtc.oauthAsyncVerdictWindow must not exceed 15 seconds");
+            }
             stunUrls = stunUrls == null ? List.of() : List.copyOf(stunUrls);
         }
 
@@ -196,6 +202,7 @@ public record NetworkRiskProperties(
             return "WebRtc[probeTimeout=" + probeTimeout
                     + ", startGrace=" + startGrace
                     + ", reportGrace=" + reportGrace
+                    + ", oauthAsyncVerdictWindow=" + oauthAsyncVerdictWindow
                     + ", stunUrls=" + stunUrls
                     + ", maxReportedIps=" + maxReportedIps
                     + ", ipEncryptionKeyBase64=redacted]";

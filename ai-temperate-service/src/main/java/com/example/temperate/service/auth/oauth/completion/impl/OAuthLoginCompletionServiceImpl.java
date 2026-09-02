@@ -4,14 +4,16 @@ import com.example.temperate.model.auth.domain.AuthenticationContext;
 import com.example.temperate.service.auth.login.completion.LoginCompletionService;
 import com.example.temperate.service.auth.login.dto.result.LoginResult;
 import com.example.temperate.service.auth.oauth.completion.OAuthLoginCompletionService;
+import com.example.temperate.service.auth.oauth.completion.observability.OAuthCompletionMetrics;
+import com.example.temperate.service.auth.oauth.flow.OAuthCompletionClaim;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowAccess;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowErrorCode;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowException;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowSnapshot;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowState;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowStore;
-import com.example.temperate.service.auth.oauth.flow.ProtectedOAuthFlowAccess;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowService;
+import com.example.temperate.service.auth.oauth.flow.ProtectedOAuthFlowAccess;
 import com.example.temperate.service.auth.oauth.identity.OAuthAccountFinalizationService;
 import com.example.temperate.service.auth.oauth.identity.OAuthAccountErrorCode;
 import com.example.temperate.service.auth.oauth.identity.OAuthAccountException;
@@ -40,6 +42,7 @@ public final class OAuthLoginCompletionServiceImpl
     private final OAuthAccountFinalizationService finalizationService;
     private final LoginCompletionService loginCompletionService;
     private final OAuthPhoneRiskService phoneRiskService;
+    private final OAuthCompletionMetrics metrics;
     private final Clock clock;
 
     public OAuthLoginCompletionServiceImpl(
@@ -48,12 +51,14 @@ public final class OAuthLoginCompletionServiceImpl
             OAuthAccountFinalizationService finalizationService,
             LoginCompletionService loginCompletionService,
             OAuthPhoneRiskService phoneRiskService,
+            OAuthCompletionMetrics metrics,
             Clock clock) {
         this.flowService = Objects.requireNonNull(flowService);
         this.flowStore = Objects.requireNonNull(flowStore);
         this.finalizationService = Objects.requireNonNull(finalizationService);
         this.loginCompletionService = Objects.requireNonNull(loginCompletionService);
         this.phoneRiskService = Objects.requireNonNull(phoneRiskService);
+        this.metrics = Objects.requireNonNull(metrics);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -62,9 +67,26 @@ public final class OAuthLoginCompletionServiceImpl
         Objects.requireNonNull(access, "access must not be null");
         ProtectedOAuthFlowAccess protectedAccess = flowService.protect(access);
         OAuthFlowSnapshot snapshot = flowService.getRequired(access);
-        requireReady(snapshot);
-        flowStore.claimCompletion(protectedAccess, clock.instant());
+        OAuthCompletionClaim claim = flowStore.claimCompletion(protectedAccess, clock.instant());
+        if (claim == null) {
+            throw new OAuthFlowException(
+                    OAuthFlowErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+                    "OAuth completion claim could not be determined.");
+        }
+        if (claim == OAuthCompletionClaim.IN_PROGRESS) {
+            metrics.completionInProgress();
+            throw new OAuthFlowException(
+                    OAuthFlowErrorCode.COMPLETION_IN_PROGRESS,
+                    "OAuth completion is already in progress.");
+        }
+        if (claim == OAuthCompletionClaim.ALREADY_COMPLETED) {
+            metrics.alreadyCompleted();
+            throw new OAuthFlowException(
+                    OAuthFlowErrorCode.ALREADY_COMPLETED,
+                    "OAuth completion has already finished.");
+        }
         try {
+            requireReady(snapshot);
             AuthenticationContext context = finalizationService.finalizeIdentity(
                     snapshot.trustedIdentity(),
                     snapshot.phoneVerified() ? snapshot.lockedPhone() : null);

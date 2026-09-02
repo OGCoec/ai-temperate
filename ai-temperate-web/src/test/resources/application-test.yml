@@ -336,6 +336,8 @@ app:
       probe-timeout: 12s
       # 测试报告预留三秒，确保 start 后总窗口不超过十五秒。
       report-grace: 3s
+      # 测试 OAuth 待裁决会话沿用生产十五秒硬截止时间。
+      oauth-async-verdict-window: 15s
       # 测试保持生产环境相同的四个 STUN 地址和顺序。
       stun-urls:
         # Google STUN 测试配置只作为响应数据。

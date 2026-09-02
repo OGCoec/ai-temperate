@@ -10,11 +10,18 @@ import {
 const ENV = {
 	API_UPSTREAM_ORIGIN: 'https://api.niko000o.site',
 	H5_PAGES_ORIGIN: 'https://ai-temperate-frontend.pages.dev',
+	AUTH_EDGE_DIAGNOSTICS_ENABLED: 'false',
+	AUTH_EDGE_SUCCESS_LOG_SAMPLE_RATE: '0.01',
 	API_KEY_STREAM_DIAGNOSTICS_ENABLED: 'true',
 	SSE_ROUTE_LOG_SAMPLE_RATE: '0',
+	CF_VERSION_METADATA: { id: 'worker-version-test' },
 	EDGE_PROXY_HMAC_SECRET_BASE64: Buffer
 		.from('worker-edge-test-secret-0123456789abcdef')
 		.toString('base64')
+}
+const AUTH_DIAGNOSTIC_ENV = {
+	...ENV,
+	AUTH_EDGE_DIAGNOSTICS_ENABLED: 'true'
 }
 const NOW = 1784916000000
 const TURNSTILE_CHALLENGE = 'A'.repeat(38)
@@ -72,11 +79,12 @@ function request(host, path, options = {}) {
 	return value
 }
 
-function runtime(fetchImpl, log = { info() {}, warn() {} }) {
+function runtime(fetchImpl, log = { info() {}, warn() {} }, overrides = {}) {
 	return {
 		fetch: fetchImpl,
 		now: () => NOW,
-		log
+		log,
+		...overrides
 	}
 }
 
@@ -1918,6 +1926,38 @@ test('BAR callback is forwarded as the exact GET server callback without adding 
 	assert.equal(rejectedPost.status, 405)
 })
 
+test('Liuhao callback preserves its query string and rejects POST', async () => {
+	const query = '?pid=1001&trade_no=123&sign=masked'
+	let captured
+	const accepted = await handleRequest(
+		request('niko000o.site', `/api/payment/liuhao/notify${query}`, {
+			headers: { Cookie: '' },
+			migrated: false
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response('success', {
+				headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
+			})
+		})
+	)
+	const rejectedPost = await handleRequest(
+		request('niko000o.site', '/api/payment/liuhao/notify', {
+			method: 'POST',
+			migrated: false
+		}),
+		ENV,
+		runtime(() => { throw new Error('POST callback must not reach Origin') })
+	)
+
+	assert.equal(accepted.status, 200)
+	assert.equal(await accepted.text(), 'success')
+	assert.equal(captured.method, 'GET')
+	assert.equal(captured.url, `https://api.niko000o.site/api/payment/liuhao/notify${query}`)
+	assert.equal(rejectedPost.status, 405)
+})
+
 test('API Key management preserves strong ETags and disables response transforms', async () => {
 	const cases = [
 		{ method: 'POST', path: '/api/users/me/api-keys', status: 201 },
@@ -2820,7 +2860,7 @@ test('Android voice WebSocket accepts App-Plus browser metadata and strips unsaf
 				'Sec-Fetch-Site': 'same-origin',
 				'Sec-Fetch-Mode': 'websocket',
 				'Sec-Fetch-Dest': 'empty',
-				Authorization: 'Bearer must-not-pass-to-websocket',
+				Authorization: 'Bearer test-bearer-fixture',
 				Cookie: 'captured_proxy_cookie=must-not-pass'
 			}
 		}),
@@ -3193,6 +3233,11 @@ test('ordinary WebRTC edge endpoints are forwarded only on the root host', async
 		ENV,
 		runtime(fetchImpl)
 	)
+	const verdictStatus = await handleRequest(
+		request('niko000o.site', '/api/_edge/webrtc/verdict-status', { method: 'POST' }),
+		ENV,
+		runtime(fetchImpl)
+	)
 	const crossed = await handleRequest(
 		request('admin.niko000o.site', '/api/_edge/webrtc/start'),
 		ENV,
@@ -3203,41 +3248,134 @@ test('ordinary WebRTC edge endpoints are forwarded only on the root host', async
 
 	assert.equal(start.status, 204)
 	assert.equal(report.status, 204)
+	assert.equal(verdictStatus.status, 204)
 	assert.equal(crossed.status, 403)
 	assert.deepEqual(forwarded, [
 		'/api/_edge/webrtc/start',
-		'/api/_edge/webrtc/report'
+		'/api/_edge/webrtc/report',
+		'/api/_edge/webrtc/verdict-status'
 	])
 })
 
 test('business requests fail closed until the cookie-scope migration marker exists', async () => {
+	const { entries, logger } = diagnosticLogger()
+	let upstreamCalls = 0
 	const response = await handleRequest(
-		request('niko000o.site', '/api/auth/csrf', { migrated: false }),
-		ENV,
+		request('niko000o.site', '/api/auth/csrf', {
+			migrated: false,
+			headers: {
+				Cookie: 'access_token=must-not-be-logged',
+				'X-AIT-Client-Request-Id': '11111111-1111-4111-8111-111111111111',
+				'X-AIT-Page-Instance-Id': '22222222-2222-4222-8222-222222222222'
+			}
+		}),
+		{
+			...AUTH_DIAGNOSTIC_ENV,
+			H5_PAGES_ORIGIN: 'https://e1444b89.ai-temperate-frontend.pages.dev'
+		},
 		runtime(() => {
+			upstreamCalls += 1
 			throw new Error('upstream must not be called')
-		})
+		}, logger)
 	)
 
 	assert.equal(response.status, 428)
 	assert.equal((await response.json()).code, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
+	assert.equal(response.headers.get('X-AIT-Edge-Outcome'), 'COOKIE_SCOPE_MARKER_MISSING')
+	assert.equal(response.headers.get('X-AIT-Edge-Upstream-Attempted'), '0')
+	assert.equal(response.headers.get('X-AIT-Cookie-Scope-State'), 'MISSING')
+	assert.equal(response.headers.get('X-AIT-Worker-Version'), 'worker-version-test')
+	assert.equal(response.headers.get('X-AIT-Pages-Deployment'), 'e1444b89')
+	assert.equal(response.headers.get('X-AIT-Backend-Release'), 'unknown')
+	assert.deepEqual(
+		response.headers.get('Access-Control-Expose-Headers')
+			.split(',').map(value => value.trim()).sort(),
+		[
+			'CF-Ray',
+			'X-AIT-Backend-Release',
+			'X-AIT-Cookie-Scope-Reset',
+			'X-AIT-Cookie-Scope-State',
+			'X-AIT-Edge-Outcome',
+			'X-AIT-Edge-Upstream-Attempted',
+			'X-AIT-Pages-Deployment',
+			'X-AIT-Worker-Version'
+		].sort())
+	assert.equal(upstreamCalls, 0)
+	assert.deepEqual(entries, [{
+		event: 'auth_edge_request_completed',
+		diagnosticSchema: 'auth-edge-diag-v1',
+		occurredAt: new Date(NOW).toISOString(),
+		workerVersion: 'worker-version-test',
+		pagesDeployment: 'e1444b89',
+		backendRelease: 'unknown',
+		cfRay: 'test-ray-ord',
+		clientRequestId: '11111111-1111-4111-8111-111111111111',
+		pageInstanceId: '22222222-2222-4222-8222-222222222222',
+		triggerRequestId: 'ABSENT',
+		probeRunId: 'ABSENT',
+		route: '/api/auth/csrf',
+		method: 'GET',
+		platform: 'H5',
+		returnedStatus: 428,
+		errorCode: 'EDGE_COOKIE_SCOPE_RESET_REQUIRED',
+		edgeOutcome: 'COOKIE_SCOPE_MARKER_MISSING',
+		upstreamAttempted: false,
+		upstreamStatus: -1,
+		cookieHeaderPresent: true,
+		cookieHeaderBytes: 31,
+		cookieScopeMarkerPresent: false,
+		cookieScopeState: 'MISSING',
+		cookieScopeReset: false,
+		elapsedMs: 0
+	}])
+	assert.equal(JSON.stringify(entries).includes('must-not-be-logged'), false)
+})
+
+test('auth edge diagnostics template rejected routes and never log query values', async () => {
+	const { entries, logger } = diagnosticLogger()
+	const response = await handleRequest(
+		request(
+			'niko000o.site',
+			'/api/auth/private-token-value?code=oauth-secret&state=state-secret'),
+		AUTH_DIAGNOSTIC_ENV,
+		runtime(() => {
+			throw new Error('rejected route must not call upstream')
+		}, logger)
+	)
+
+	assert.equal(response.status, 404)
+	const authEntries = entries.filter(entry =>
+		entry.event === 'auth_edge_request_completed')
+	assert.equal(authEntries.length, 1)
+	assert.equal(authEntries[0].route, '/api/{auth-diagnostic-route}')
+	assert.equal(authEntries[0].upstreamAttempted, false)
+	assert.equal(JSON.stringify(entries).includes('oauth-secret'), false)
+	assert.equal(JSON.stringify(entries).includes('state-secret'), false)
+	assert.equal(JSON.stringify(entries).includes('private-token-value'), false)
 })
 
 test('migration endpoint expires legacy parent cookies before issuing the shared version marker', async () => {
+	const { entries, logger } = diagnosticLogger()
 	const response = await handleRequest(
 		request('niko000o.site', '/api/_edge/cookie-scope', {
 			method: 'POST',
-			migrated: false
+			migrated: false,
+			headers: {
+				'X-AIT-Client-Request-Id': '33333333-3333-4333-8333-333333333333',
+				'X-AIT-Trigger-Request-Id': '11111111-1111-4111-8111-111111111111'
+			}
 		}),
-		ENV,
+		AUTH_DIAGNOSTIC_ENV,
 		runtime(() => {
 			throw new Error('migration endpoint must not call upstream')
-		})
+		}, logger)
 	)
 	const setCookies = response.headers.getSetCookie()
 
 	assert.equal(response.status, 204)
 	assert.equal(response.headers.get('X-AIT-Cookie-Scope-Reset'), '1')
+	assert.equal(response.headers.get('X-AIT-Edge-Outcome'), 'COOKIE_SCOPE_RESET_ISSUED')
+	assert.equal(response.headers.get('X-AIT-Cookie-Scope-State'), 'RESET_ISSUED')
 	assert.ok(setCookies.some(value =>
 		value.startsWith('XSRF-TOKEN=') &&
 		value.includes('Domain=niko000o.site') &&
@@ -3250,6 +3388,68 @@ test('migration endpoint expires legacy parent cookies before issuing the shared
 		value.startsWith(`${COOKIE_SCOPE_MARKER_NAME}=1`) &&
 		value.includes('Max-Age=31536000') &&
 		value.includes('HttpOnly')))
+	assert.equal(entries.length, 1)
+	assert.equal(entries[0].edgeOutcome, 'COOKIE_SCOPE_RESET_ISSUED')
+	assert.equal(entries[0].cookieScopeReset, true)
+	assert.equal(entries[0].triggerRequestId, '11111111-1111-4111-8111-111111111111')
+})
+
+test('migration endpoint reports an already-current marker without issuing another reset', async () => {
+	const { entries, logger } = diagnosticLogger()
+	const response = await handleRequest(
+		request('niko000o.site', '/api/_edge/cookie-scope', { method: 'POST' }),
+		AUTH_DIAGNOSTIC_ENV,
+		runtime(() => {
+			throw new Error('migration endpoint must not call upstream')
+		}, logger)
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(response.headers.get('X-AIT-Cookie-Scope-Reset'), '0')
+	assert.equal(response.headers.get('X-AIT-Edge-Outcome'), 'COOKIE_SCOPE_ALREADY_CURRENT')
+	assert.equal(response.headers.get('X-AIT-Cookie-Scope-State'), 'CURRENT')
+	assert.equal(entries.length, 1)
+	assert.equal(entries[0].edgeOutcome, 'COOKIE_SCOPE_ALREADY_CURRENT')
+	assert.equal(entries[0].cookieScopeMarkerPresent, true)
+})
+
+test('auth edge diagnostics sample successes but always retain upstream failures', async () => {
+	const sampled = diagnosticLogger()
+	const omitted = diagnosticLogger()
+	const failed = diagnosticLogger()
+	const successResponse = () => new Response(null, {
+		status: 204,
+		headers: { 'X-AIT-Backend-Release': 'backend-release-test' }
+	})
+
+	const sampledResponse = await handleRequest(
+		request('niko000o.site', '/api/_edge/webrtc/start'),
+		AUTH_DIAGNOSTIC_ENV,
+		runtime(successResponse, sampled.logger, { random: () => 0 }))
+	await handleRequest(
+		request('niko000o.site', '/api/_edge/webrtc/start'),
+		AUTH_DIAGNOSTIC_ENV,
+		runtime(successResponse, omitted.logger, { random: () => 1 }))
+	const failureResponse = await handleRequest(
+		request('niko000o.site', '/api/_edge/webrtc/start'),
+		AUTH_DIAGNOSTIC_ENV,
+		runtime(() => {
+			throw new TypeError('sensitive upstream detail')
+		}, failed.logger, { random: () => 1 }))
+
+	assert.equal(sampled.entries.filter(entry =>
+		entry.event === 'auth_edge_request_completed').length, 1)
+	assert.equal(
+		sampledResponse.headers.get('X-AIT-Backend-Release'),
+		'backend-release-test')
+	assert.equal(sampled.entries[0].backendRelease, 'backend-release-test')
+	assert.equal(omitted.entries.filter(entry =>
+		entry.event === 'auth_edge_request_completed').length, 0)
+	assert.equal(failureResponse.status, 502)
+	assert.equal(failed.entries.length, 1)
+	assert.equal(failed.entries[0].edgeOutcome, 'UPSTREAM_FETCH_FAILED')
+	assert.equal(failed.entries[0].upstreamAttempted, true)
+	assert.equal(JSON.stringify(failed.entries).includes('sensitive upstream detail'), false)
 })
 
 test('response policy rejects parent-domain and cross-surface business cookies', async () => {

@@ -28,7 +28,8 @@ redis.call('HSET', KEYS[1],
         'csrfHash', csrfHash,
         'email', email,
         'phone', phone,
-        'deviceHash', deviceHash)
+        'deviceHash', deviceHash,
+        'riskVerdict', 'ACTIVE')
 redis.call('PEXPIREAT', KEYS[1], expiresAt)
 
 -- 用户索引的值保存完整 RT Key，撤销阶段才能直接批量 UNLINK 而无需逐项拼接键名。

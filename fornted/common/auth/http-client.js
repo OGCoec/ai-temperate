@@ -14,6 +14,13 @@ import {
 	invalidateCookieScopeMigration
 } from './cookie-scope-migration.js'
 import { getDeviceInstallationId } from './device-installation.js'
+import { currentPhase as currentAndroidOAuthPhase,
+	isBlockingWebRtc as isAndroidOAuthBlockingWebRtc } from './android-oauth-coordinator.js'
+import { clearAndroidOAuthFlow } from './android-flow-keystore.js'
+import {
+	clearH5OAuthWebRtcGate,
+	ownsH5WebRtcScheduling
+} from './h5-oauth-webrtc-gate.js'
 import { captureEtagPayload } from './http-response-metadata.js'
 import {
 	authDiagnosticRequestHeaders,
@@ -28,6 +35,7 @@ import {
 	currentPreAuthToken,
 	ensurePreAuth,
 	invalidatePreAuth,
+	isPreAuthReady,
 	recheckPreAuthAfterRiskChallenge
 } from './pre-auth.js'
 import { repeatedAndroidRiskChallengeError } from './android-risk-challenge.js'
@@ -69,6 +77,10 @@ export const WebRtcSchedulingPolicy = Object.freeze({
 	NORMAL: 'NORMAL',
 	SUPPRESS: 'SUPPRESS'
 })
+export const PreAuthBootstrapPolicy = Object.freeze({
+	ENSURE: 'ENSURE',
+	REQUIRE_EXISTING: 'REQUIRE_EXISTING'
+})
 const TERMINAL_SESSION_ERRORS = new Set([
 	'AT_REQUIRED',
 	'AT_INVALID',
@@ -78,6 +90,7 @@ const TERMINAL_SESSION_ERRORS = new Set([
 	'DEVICE_MISMATCH',
 	'CSRF_INVALID',
 	'ACCOUNT_UNAVAILABLE',
+	'WEBRTC_VERIFICATION_TIMEOUT',
 	'SESSION_RESPONSE_INVALID'
 ])
 const TERMINAL_SESSION_CLEARED = Symbol('terminalSessionCleared')
@@ -112,7 +125,7 @@ function rawRequestTask(options) {
 				const diagnostics = inspectAuthResponse(response)
 				notifyResponseObserver(options.onResponse, diagnostics)
 				// 认证完成边界只消费业务响应；新 Session 提交后再显式建立 WebRTC epoch。
-				if (webRtcSchedulingPolicy(options) === WebRtcSchedulingPolicy.SUPPRESS) {
+				if (effectiveWebRtcSchedulingPolicy(options) === WebRtcSchedulingPolicy.SUPPRESS) {
 					recordWebRtcSchedulingSuppressed(
 						options.authDiagnostic,
 						'response_headers')
@@ -172,11 +185,21 @@ function rawRequestTask(options) {
 				error.retryable = response.data?.retryable === true
 				reject(applyDiagnosticsToError(error, diagnostics))
 			},
-			fail() {
-				const diagnostics = networkFailureDiagnostics()
+			fail(cause) {
+				const diagnostics = networkFailureDiagnostics(cause, {
+					path: options.path,
+					timeoutMs: options.timeout,
+					phase: currentAndroidOAuthPhase(),
+					preAuthReady: Boolean(currentPreAuthToken())
+				})
 				notifyResponseObserver(options.onResponse, diagnostics)
 				const networkError = new Error('网络连接失败，请检查后重试。')
 				networkError.code = 'NETWORK_ERROR'
+				networkError.errno = diagnostics.errno
+				networkError.errMsg = diagnostics.errMsg
+				networkError.timeoutMs = diagnostics.timeoutMs
+				networkError.oauthPhase = diagnostics.phase
+				networkError.preAuthReady = diagnostics.preAuthReady
 				recordAuthDiagnosticFailure(options.authDiagnostic, networkError)
 				reject(applyDiagnosticsToError(networkError, diagnostics))
 			}
@@ -188,7 +211,9 @@ async function requestTask(options) {
 	await runAuthDiagnosticStage(
 		options.authDiagnostic,
 		'COOKIE_MIGRATION',
-		() => ensureCookieScopeMigration())
+		() => ensureCookieScopeMigration({
+			triggerClientRequestId: options.authDiagnostic?.triggerClientRequestId
+		}))
 	return runAndroidRequestWithEdgeRecovery(() => rawRequestTask(options))
 }
 
@@ -221,10 +246,22 @@ function scheduleH5WebRtcForRequest(authDiagnostic, source = 'request_ready') {
 	})
 }
 
-function webRtcSchedulingPolicy(options = {}) {
+function effectiveWebRtcSchedulingPolicy(options = {}) {
+	if (clientPlatform() === 'H5' && ownsH5WebRtcScheduling()) {
+		return WebRtcSchedulingPolicy.SUPPRESS
+	}
 	return options.webRtcSchedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS
 		? WebRtcSchedulingPolicy.SUPPRESS
 		: WebRtcSchedulingPolicy.NORMAL
+}
+
+function effectivePreAuthBootstrapPolicy(options = {}) {
+	if (clientPlatform() === 'H5' && ownsH5WebRtcScheduling()) {
+		return PreAuthBootstrapPolicy.REQUIRE_EXISTING
+	}
+	return options.preAuthBootstrapPolicy === PreAuthBootstrapPolicy.REQUIRE_EXISTING
+		? PreAuthBootstrapPolicy.REQUIRE_EXISTING
+		: PreAuthBootstrapPolicy.ENSURE
 }
 
 function recordWebRtcSchedulingSuppressed(authDiagnostic, phase) {
@@ -241,22 +278,37 @@ export async function initializeBrowserCsrf(
 	migrationRetried = false,
 	preAuthRetried = false,
 	webRtcRetried = false,
-	schedulingPolicy = WebRtcSchedulingPolicy.NORMAL
+	schedulingPolicy = WebRtcSchedulingPolicy.NORMAL,
+	triggerClientRequestId = ''
 ) {
 	if (clientPlatform() !== 'H5') return ''
+	const effectiveScheduling = effectiveWebRtcSchedulingPolicy({
+		webRtcSchedulingPolicy: schedulingPolicy
+	})
+	const bootstrapPolicy = effectivePreAuthBootstrapPolicy()
 	const authDiagnostic = createAuthRequestDiagnostic(
 		CSRF_PATH,
-		'initialize_browser_csrf')
-	// 必须先清理旧父域 Cookie，再建立 Host-only PreAuth 和读取 CSRF。
+		'initialize_browser_csrf',
+		{ triggerClientRequestId })
+	// 必须先清理旧父域 Cookie；OAuth attempt 已拥有调度权时只能复用现有 HttpOnly PreAuth。
 	await runAuthDiagnosticStage(
 		authDiagnostic,
 		'COOKIE_MIGRATION',
-		() => ensureCookieScopeMigration())
-	await runAuthDiagnosticStage(
-		authDiagnostic,
-		'PREAUTH',
-		() => ensurePreAuth())
-	if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
+		() => ensureCookieScopeMigration({ triggerClientRequestId }))
+	if (bootstrapPolicy === PreAuthBootstrapPolicy.ENSURE) {
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'PREAUTH',
+			() => ensurePreAuth())
+	} else {
+		recordAuthDiagnosticEvent('PREAUTH_EXISTING_REQUIRED', {
+			clientRequestId: authDiagnostic.clientRequestId,
+			path: CSRF_PATH,
+			preAuthReady: isPreAuthReady(),
+			outcome: 'oauth_attempt_owned'
+		})
+	}
+	if (effectiveScheduling === WebRtcSchedulingPolicy.SUPPRESS) {
 		recordWebRtcSchedulingSuppressed(authDiagnostic, 'csrf_ready')
 	} else {
 		scheduleH5WebRtcForRequest(authDiagnostic, 'csrf_ready')
@@ -269,7 +321,7 @@ export async function initializeBrowserCsrf(
 				path: CSRF_PATH,
 				method: 'GET',
 				headers: clientContextHeaders(),
-				webRtcSchedulingPolicy: schedulingPolicy,
+				webRtcSchedulingPolicy: effectiveScheduling,
 				authDiagnostic
 			}).finally(() => { csrfInFlight = null })
 		}
@@ -278,7 +330,7 @@ export async function initializeBrowserCsrf(
 		recordAuthDiagnosticFailure(authDiagnostic, error)
 		if (presentRiskBlock(error)) throw error
 		if (isWebRtcFailureCode(error.code)) presentWebRtcFailure(error)
-		if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS
+		if (effectiveScheduling !== WebRtcSchedulingPolicy.SUPPRESS
 			&& !webRtcRetried
 			&& isWebRtcRetryCode(error.code)) {
 			await recoverH5WebRtc()
@@ -286,39 +338,42 @@ export async function initializeBrowserCsrf(
 				migrationRetried,
 				preAuthRetried,
 				true,
-				schedulingPolicy)
+				effectiveScheduling,
+				triggerClientRequestId)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
 			beginRiskChallenge(error)
 		}
 		if (error.code === 'PREAUTH_REQUIRED') {
+			if (terminateAuthenticatedAndroidSession(error, authDiagnostic)) throw error
+			if (bootstrapPolicy === PreAuthBootstrapPolicy.REQUIRE_EXISTING) throw error
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
 			if (!preAuthRetried) {
 				await ensurePreAuth()
-				if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS) {
+				if (effectiveScheduling !== WebRtcSchedulingPolicy.SUPPRESS) {
 					scheduleH5WebRtcForRequest(authDiagnostic, 'preauth_recovered')
 				}
 				return initializeBrowserCsrf(
 					migrationRetried,
 					true,
 					webRtcRetried,
-					schedulingPolicy)
+					effectiveScheduling,
+					triggerClientRequestId)
 			}
 		}
 		if (migrationRetried
 			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
 			throw error
 		}
-		invalidateCookieScopeMigration()
-		invalidatePreAuth()
-		invalidateWebRtcVerification()
-		await ensureCookieScopeMigration()
+		const recoveryTriggerClientRequestId = authDiagnostic.clientRequestId
+		await recoverCookieScopeAfter428(authDiagnostic)
 		return initializeBrowserCsrf(
 			true,
 			preAuthRetried,
 			webRtcRetried,
-			schedulingPolicy)
+			effectiveScheduling,
+			recoveryTriggerClientRequestId)
 	}
 	return browserCsrfToken()
 }
@@ -329,21 +384,33 @@ export async function publicRequest(
 	migrationRetried = false,
 	preAuthRetried = false,
 	webRtcRetried = false,
-	riskChallengeRetried = false
+	riskChallengeRetried = false,
+	triggerClientRequestId = ''
 ) {
 	const automaticReplayAllowed = options.disableAutomaticReplay !== true
+	const bootstrapPolicy = effectivePreAuthBootstrapPolicy(options)
 	const authDiagnostic = createAuthRequestDiagnostic(
 		path,
-		options.diagnosticSource || 'public_request')
+		options.diagnosticSource || 'public_request',
+		{ triggerClientRequestId })
 	await runAuthDiagnosticStage(
 		authDiagnostic,
 		'COOKIE_MIGRATION',
-		() => ensureCookieScopeMigration())
-	await runAuthDiagnosticStage(
-		authDiagnostic,
-		'PREAUTH',
-		() => ensurePreAuth())
-	const schedulingPolicy = webRtcSchedulingPolicy(options)
+		() => ensureCookieScopeMigration({ triggerClientRequestId }))
+	if (bootstrapPolicy === PreAuthBootstrapPolicy.ENSURE) {
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'PREAUTH',
+			() => ensurePreAuth())
+	} else {
+		recordAuthDiagnosticEvent('PREAUTH_EXISTING_REQUIRED', {
+			clientRequestId: authDiagnostic.clientRequestId,
+			path,
+			preAuthReady: isPreAuthReady(),
+			outcome: 'bootstrap_suppressed'
+		})
+	}
+	const schedulingPolicy = effectiveWebRtcSchedulingPolicy(options)
 	if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
 		recordWebRtcSchedulingSuppressed(authDiagnostic, 'request_ready')
 	} else {
@@ -354,11 +421,14 @@ export async function publicRequest(
 		const headers = clientContextHeaders()
 		Object.assign(headers, options.headers || {})
 		if (clientPlatform() === 'H5' && requiresCsrf(method) && path !== BOOTSTRAP_PATH) {
-			const csrfToken = browserCsrfToken() || await initializeBrowserCsrf(
+			const csrfToken = browserCsrfToken() || (bootstrapPolicy === PreAuthBootstrapPolicy.ENSURE
+				? await initializeBrowserCsrf(
 				false,
 				false,
 				false,
-				schedulingPolicy)
+				schedulingPolicy,
+				triggerClientRequestId)
+				: '')
 			if (!csrfToken) {
 				const error = new Error('CSRF token is unavailable.')
 				error.code = 'CSRF_INVALID'
@@ -395,7 +465,8 @@ export async function publicRequest(
 				migrationRetried,
 				preAuthRetried,
 				true,
-				riskChallengeRetried)
+				riskChallengeRetried,
+				triggerClientRequestId)
 		}
 		if (error.code === 'RISK_CHALLENGE_REQUIRED') {
 			if (clientPlatform() === 'H5') beginRiskChallenge(error)
@@ -411,9 +482,12 @@ export async function publicRequest(
 				migrationRetried,
 				preAuthRetried,
 				webRtcRetried,
-				true)
+				true,
+				triggerClientRequestId)
 		}
 		if (error.code === 'PREAUTH_REQUIRED') {
+			if (terminateAuthenticatedAndroidSession(error, authDiagnostic)) throw error
+			if (bootstrapPolicy === PreAuthBootstrapPolicy.REQUIRE_EXISTING) throw error
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
 			if (!automaticReplayAllowed) throw error
@@ -433,7 +507,8 @@ export async function publicRequest(
 					migrationRetried,
 					true,
 					webRtcRetried,
-					riskChallengeRetried)
+					riskChallengeRetried,
+					triggerClientRequestId)
 			}
 		}
 		if (!automaticReplayAllowed
@@ -442,17 +517,59 @@ export async function publicRequest(
 			|| error.code !== 'EDGE_COOKIE_SCOPE_RESET_REQUIRED') {
 			throw error
 		}
-		invalidateCookieScopeMigration()
-		invalidatePreAuth()
-		invalidateWebRtcVerification()
-		await ensureCookieScopeMigration()
+		const recoveryTriggerClientRequestId = authDiagnostic.clientRequestId
+		await recoverCookieScopeAfter428(authDiagnostic)
 		return publicRequest(
 			path,
 			options,
 			true,
 			preAuthRetried,
 			webRtcRetried,
-			riskChallengeRetried)
+			riskChallengeRetried,
+			recoveryTriggerClientRequestId)
+	}
+}
+
+async function recoverCookieScopeAfter428(authDiagnostic) {
+	const triggerClientRequestId = authDiagnostic?.clientRequestId || ''
+	recordAuthDiagnosticEvent('COOKIE_SCOPE_428_RECOVERY_STARTED', {
+		clientRequestId: triggerClientRequestId,
+		pageInstanceId: authDiagnostic?.pageInstanceId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		triggerClientRequestId,
+		outcome: 'started'
+	})
+	invalidateCookieScopeMigration()
+	invalidatePreAuth()
+	invalidateWebRtcVerification()
+	try {
+		const migration = await ensureCookieScopeMigration({
+			triggerClientRequestId
+		})
+		recordAuthDiagnosticEvent('COOKIE_SCOPE_428_RECOVERY_COMPLETED', {
+			clientRequestId: triggerClientRequestId,
+			migrationClientRequestId: migration.clientRequestId,
+			pageInstanceId: authDiagnostic?.pageInstanceId,
+			path: authDiagnostic?.path,
+			source: authDiagnostic?.source,
+			triggerClientRequestId,
+			cookieScopeReset: migration.reset,
+			cookieScopeState: migration.cookieScopeState,
+			edgeOutcome: migration.edgeOutcome,
+			outcome: 'succeeded'
+		})
+	} catch (error) {
+		recordAuthDiagnosticEvent('COOKIE_SCOPE_428_RECOVERY_FAILED', {
+			clientRequestId: triggerClientRequestId,
+			pageInstanceId: authDiagnostic?.pageInstanceId,
+			path: authDiagnostic?.path,
+			source: authDiagnostic?.source,
+			triggerClientRequestId,
+			errorCode: error?.code || 'NETWORK_ERROR',
+			outcome: 'failed'
+		})
+		throw error
 	}
 }
 
@@ -497,6 +614,8 @@ export function restorePersistedSession(authDiagnostic = null) {
 
 export async function authorizedRequest(path, options = {}, retryState = {}) {
 	const preserveSessionOnFailure = options.preserveSessionOnFailure === true
+	const bootstrapPolicy = effectivePreAuthBootstrapPolicy(options)
+	const schedulingPolicy = effectiveWebRtcSchedulingPolicy(options)
 	const authDiagnostic = createAuthRequestDiagnostic(
 		path,
 		options.diagnosticSource || 'authorized_request')
@@ -506,11 +625,24 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 			authDiagnostic,
 			'COOKIE_MIGRATION',
 			() => ensureCookieScopeMigration())
-		await runAuthDiagnosticStage(
-			authDiagnostic,
-			'PREAUTH',
-			() => ensurePreAuth())
-		scheduleH5WebRtcForRequest(authDiagnostic)
+		if (bootstrapPolicy === PreAuthBootstrapPolicy.ENSURE) {
+			await runAuthDiagnosticStage(
+				authDiagnostic,
+				'PREAUTH',
+				() => ensurePreAuth())
+		} else {
+			recordAuthDiagnosticEvent('PREAUTH_EXISTING_REQUIRED', {
+				clientRequestId: authDiagnostic.clientRequestId,
+				path,
+				preAuthReady: isPreAuthReady(),
+				outcome: 'oauth_attempt_owned'
+			})
+		}
+		if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
+			recordWebRtcSchedulingSuppressed(authDiagnostic, 'authorized_request_ready')
+		} else {
+			scheduleH5WebRtcForRequest(authDiagnostic)
+		}
 		const headers = await protectedCredentialHeaders(options.headers, authDiagnostic)
 		return await requestTask({
 			path,
@@ -518,6 +650,7 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 			data: options.data,
 			headers,
 			authDiagnostic,
+			webRtcSchedulingPolicy: schedulingPolicy,
 			captureEtag: options.captureEtag === true,
 			timeout: options.timeout,
 			onResponse: options.onResponse
@@ -537,7 +670,9 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 				options,
 				{ ...retryState, riskChallenge: true })
 		}
-		if (!retryState.webRtc && isWebRtcRetryCode(error?.code)) {
+		if (schedulingPolicy !== WebRtcSchedulingPolicy.SUPPRESS
+			&& !retryState.webRtc
+			&& isWebRtcRetryCode(error?.code)) {
 			// #ifdef H5
 			await recoverH5WebRtc()
 			return authorizedRequest(
@@ -550,6 +685,11 @@ export async function authorizedRequest(path, options = {}, retryState = {}) {
 			// #endif
 		}
 		if (error?.code === 'PREAUTH_REQUIRED') {
+			if (terminateAuthenticatedAndroidSession(error, authDiagnostic)) throw error
+			if (bootstrapPolicy === PreAuthBootstrapPolicy.REQUIRE_EXISTING) {
+				terminateOwnedH5OAuthSession(error, authDiagnostic)
+				throw error
+			}
 			invalidatePreAuth()
 			invalidateWebRtcVerification()
 			if (!retryState.preAuth) {
@@ -586,6 +726,8 @@ function handleAuthorizedSecurityFailure(error) {
  * 调用方只能把结果用于一次受保护的 SSE 请求，不得写入本地存储或日志。
  */
 export async function prepareAuthorizedStreamingRequest(path, options = {}) {
+	const bootstrapPolicy = effectivePreAuthBootstrapPolicy(options)
+	const schedulingPolicy = effectiveWebRtcSchedulingPolicy(options)
 	const authDiagnostic = createAuthRequestDiagnostic(
 		path,
 		options.diagnosticSource || 'authorized_streaming_request')
@@ -593,11 +735,24 @@ export async function prepareAuthorizedStreamingRequest(path, options = {}) {
 		authDiagnostic,
 		'COOKIE_MIGRATION',
 		() => ensureCookieScopeMigration())
-	await runAuthDiagnosticStage(
-		authDiagnostic,
-		'PREAUTH',
-		() => ensurePreAuth())
-	scheduleH5WebRtcForRequest(authDiagnostic, 'streaming_ready')
+	if (bootstrapPolicy === PreAuthBootstrapPolicy.ENSURE) {
+		await runAuthDiagnosticStage(
+			authDiagnostic,
+			'PREAUTH',
+			() => ensurePreAuth())
+	} else {
+		recordAuthDiagnosticEvent('PREAUTH_EXISTING_REQUIRED', {
+			clientRequestId: authDiagnostic.clientRequestId,
+			path,
+			preAuthReady: isPreAuthReady(),
+			outcome: 'oauth_attempt_owned'
+		})
+	}
+	if (schedulingPolicy === WebRtcSchedulingPolicy.SUPPRESS) {
+		recordWebRtcSchedulingSuppressed(authDiagnostic, 'streaming_ready')
+	} else {
+		scheduleH5WebRtcForRequest(authDiagnostic, 'streaming_ready')
+	}
 	const method = String(options.method || 'POST').toUpperCase()
 	const headers = await protectedCredentialHeaders(options.headers, authDiagnostic)
 	return Object.freeze({
@@ -698,6 +853,7 @@ function clearTerminalSessionState(error, authDiagnostic = null) {
 	})
 	// 终止性 401 必须按固定顺序废弃会话、PreAuth 和 WebRTC epoch，旧异步回调随后只能被忽略。
 	clearSession()
+	clearH5OAuthWebRtcGate()
 	invalidatePreAuth()
 	invalidateWebRtcVerification()
 	return true
@@ -716,7 +872,35 @@ function handleTerminalSessionError(error, authDiagnostic = null) {
 	uni.reLaunch({ url: AUTH_ROUTES.login })
 }
 
+function terminateAuthenticatedAndroidSession(error, authDiagnostic = null) {
+	if (clientPlatform() !== 'ANDROID'
+		|| !hasCompleteSessionCredentials(currentSession())) return false
+	if (!beginRuntimeTerminalSessionTransition()) return true
+	clearSession()
+	clearAndroidOAuthFlow()
+	invalidatePreAuth()
+	invalidateWebRtcVerification('ANDROID_PREAUTH_MISMATCH')
+	recordAuthDiagnosticEvent('ANDROID_SESSION_CLEARED_PREAUTH_MISMATCH', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		errorCode: error?.code || 'PREAUTH_REQUIRED',
+		outcome: 'cleared'
+	})
+	if (claimRuntimeTerminalSessionRedirect()) {
+		uni.reLaunch({ url: AUTH_ROUTES.login })
+	}
+	return true
+}
+
 async function recoverH5WebRtc() {
+	if (ownsH5WebRtcScheduling()) {
+		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
+			source: 'recover_h5_webrtc',
+			outcome: 'oauth_attempt_owned'
+		})
+		return null
+	}
 	invalidateWebRtcVerification()
 	try {
 		return await ensureH5WebRtcVerified()
@@ -729,7 +913,23 @@ async function recoverH5WebRtc() {
 	}
 }
 
+function terminateOwnedH5OAuthSession(error, authDiagnostic) {
+	if (!ownsH5WebRtcScheduling()) return false
+	clearSession()
+	clearH5OAuthWebRtcGate()
+	invalidateWebRtcVerification('OAUTH_PREAUTH_REQUIRED')
+	recordAuthDiagnosticEvent('OAUTH_WEBRTC_VERDICT_REJECTED', {
+		clientRequestId: authDiagnostic?.clientRequestId,
+		path: authDiagnostic?.path,
+		source: authDiagnostic?.source,
+		errorCode: error?.code || 'PREAUTH_REQUIRED',
+		outcome: 'preauth_missing'
+	})
+	return true
+}
+
 function recoverAndroidWebRtc() {
+	if (isAndroidOAuthBlockingWebRtc()) return
 	invalidateWebRtcVerification()
 	void startAndroidWebRtcVerificationInBackground().catch(verificationError => {
 		if (presentRiskBlock(verificationError)) return
@@ -762,6 +962,7 @@ export async function logoutSession() {
 		}
 	} finally {
 		clearSession()
+		clearH5OAuthWebRtcGate()
 		invalidatePreAuth()
 		invalidateWebRtcVerification()
 	}
@@ -773,6 +974,7 @@ export async function logoutAllSessions() {
 		preserveSessionOnFailure: true
 	})
 	clearSession()
+	clearH5OAuthWebRtcGate()
 	invalidatePreAuth()
 	invalidateWebRtcVerification()
 }

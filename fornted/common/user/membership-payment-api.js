@@ -3,7 +3,8 @@ import { authorizedRequest } from '../auth/http-client.js'
 const PERSONAL_TIERS = new Set(['GO', 'PLUS', 'PRO', 'MAX'])
 const ALL_TIERS = new Set(['FREE', 'GO', 'EDU', 'TEAM', 'PLUS', 'PRO', 'MAX'])
 const PAY_TYPES = new Set(['alipay', 'wxpay'])
-const PROVIDERS = new Set(['LOCAL_SIMULATOR', 'BAR'])
+const PROVIDERS = new Set(['LOCAL_SIMULATOR', 'BAR', 'LIUHAO'])
+const PUBLIC_PROVIDERS = new Set(['BAR', 'LIUHAO'])
 const TRANSITIONS = new Set(['NEW_PURCHASE', 'UPGRADE'])
 const ORDER_STATUSES = new Set([
 	'PENDING_PAYMENT', 'CLOSING', 'PAID', 'CANCELLED', 'CLOSED'
@@ -23,12 +24,14 @@ const ORDER_KEYS = Object.freeze([
 ])
 const PAYMENT_ATTEMPT_KEYS = Object.freeze(['checkoutSubmission', 'order'])
 const CHECKOUT_SUBMISSION_KEYS = Object.freeze([
-	'action', 'contentType', 'fields', 'method', 'provider', 'submitExpiresAt'
+	'action', 'checkoutMode', 'contentType', 'fields', 'method', 'provider', 'submitExpiresAt'
 ])
-const CHECKOUT_FIELD_KEYS = Object.freeze([
+const BAR_CHECKOUT_FIELD_KEYS = Object.freeze([
 	'key_version', 'money', 'name', 'notify_url', 'out_trade_no', 'pid',
 	'return_url', 'sign', 'sign_type', 'timestamp', 'type'
 ])
+const FORM_CONTENT_TYPE_PATTERN = /^application\/x-www-form-urlencoded(?:;\s*charset=UTF-8)?$/i
+const MAX_REDIRECT_URL_LENGTH = 4096
 const DISPLAY_NAMES = Object.freeze({
 	GO: 'Go',
 	PLUS: 'Plus',
@@ -50,8 +53,10 @@ function responseError(message = '会员支付响应格式无效。') {
 	return clientError(message, 'MEMBERSHIP_PAYMENT_RESPONSE_INVALID')
 }
 
-function expiredSubmissionError() {
-	return clientError('支付提交描述已过期，请重新获取。', 'BAR_CHECKOUT_SUBMISSION_EXPIRED')
+function expiredSubmissionError(provider) {
+	return clientError(
+		'支付提交描述已过期，请重新获取。',
+		`${provider}_CHECKOUT_SUBMISSION_EXPIRED`)
 }
 
 function objectValue(value) {
@@ -109,6 +114,7 @@ function normalizedOffers(value) {
 		|| !PROVIDERS.has(source.provider)
 		|| typeof source.checkoutEnabled !== 'boolean'
 		|| !Array.isArray(source.payTypes)
+		|| !Array.isArray(source.paymentOptions)
 		|| !Array.isArray(source.offers)
 		|| source.offers.length > PERSONAL_TIERS.size) throw responseError()
 	const payTypes = source.payTypes.map(item => {
@@ -120,12 +126,34 @@ function normalizedOffers(value) {
 	if (new Set(offers.map(offer => offer.targetTier)).size !== offers.length) {
 		throw responseError()
 	}
+	const paymentOptions = source.paymentOptions.map(value => {
+		const option = objectValue(value)
+		const expectedMode = option.provider === 'LIUHAO' ? 'REDIRECT_URL' : 'FORM_POST'
+		if (!PUBLIC_PROVIDERS.has(option.provider)
+			|| option.checkoutMode !== expectedMode
+			|| !Array.isArray(option.payTypes)) throw responseError()
+		const optionPayTypes = option.payTypes.map(item => {
+			if (!PAY_TYPES.has(item)) throw responseError()
+			return item
+		})
+		if (optionPayTypes.length !== 2
+			|| new Set(optionPayTypes).size !== optionPayTypes.length) throw responseError()
+		return Object.freeze({
+			provider: option.provider,
+			payTypes: Object.freeze(optionPayTypes),
+			checkoutMode: option.checkoutMode
+		})
+	})
+	if (new Set(paymentOptions.map(option => option.provider)).size !== paymentOptions.length) {
+		throw responseError()
+	}
 	return Object.freeze({
 		currentTier: source.currentTier,
 		provider: source.provider,
 		checkoutEnabled: source.checkoutEnabled,
 		quotedAt: isoTime(source.quotedAt),
 		payTypes: Object.freeze(payTypes),
+		paymentOptions: Object.freeze(paymentOptions),
 		offers: Object.freeze(offers)
 	})
 }
@@ -158,12 +186,47 @@ function normalizedCheckoutSubmission(value, order, nowMillis = Date.now()) {
 	if (value == null) return null
 	const source = objectValue(value)
 	if (!hasExactKeys(source, CHECKOUT_SUBMISSION_KEYS)
-		|| source.provider !== 'BAR'
-		|| source.action !== BAR_SUBMIT_ACTION
-		|| source.method !== 'POST'
-		|| source.contentType !== 'application/x-www-form-urlencoded') {
+		|| !PUBLIC_PROVIDERS.has(source.provider)) {
 		throw responseError()
 	}
+	const submitExpiresAt = isoTime(source.submitExpiresAt)
+	const submitExpiresAtMillis = Date.parse(submitExpiresAt)
+	if (submitExpiresAtMillis <= nowMillis) throw expiredSubmissionError(source.provider)
+	if (submitExpiresAtMillis > Date.parse(order.expiresAt)) throw responseError()
+
+	// 六号只接收后端验签并绑定真实流水后的 HTTPS 顶层跳转，不再接受浏览器直提六号表单。
+	if (source.provider === 'LIUHAO' && source.checkoutMode === 'REDIRECT_URL') {
+		if (source.checkoutMode !== 'REDIRECT_URL'
+			|| source.method !== 'GET'
+			|| source.contentType !== null
+			|| source.fields !== null
+			|| typeof source.action !== 'string'
+			|| source.action.length > MAX_REDIRECT_URL_LENGTH
+			|| /[\u0000-\u001f\u007f]/.test(source.action)) throw responseError()
+		const action = absoluteUrl(source.action)
+		if (!action
+			|| action.protocol !== 'https:'
+			|| action.hostname === ''
+			|| action.username !== ''
+			|| action.password !== '') throw responseError()
+		return Object.freeze({
+			provider: source.provider,
+			checkoutMode: source.checkoutMode,
+			action: source.action,
+			method: source.method,
+			contentType: null,
+			submitExpiresAt,
+			fields: null
+		})
+	}
+
+	if (source.provider !== 'BAR') throw responseError()
+	const contract = { action: BAR_SUBMIT_ACTION, fields: BAR_CHECKOUT_FIELD_KEYS }
+	if (source.checkoutMode !== 'FORM_POST'
+		|| source.method !== 'POST'
+		|| typeof source.contentType !== 'string'
+		|| !FORM_CONTENT_TYPE_PATTERN.test(source.contentType)
+		|| source.action !== contract.action) throw responseError()
 	const action = absoluteUrl(source.action)
 	if (!action
 		|| action.protocol !== 'https:'
@@ -176,7 +239,7 @@ function normalizedCheckoutSubmission(value, order, nowMillis = Date.now()) {
 		|| action.hash !== '') throw responseError()
 
 	const fields = objectValue(source.fields)
-	if (!hasExactKeys(fields, CHECKOUT_FIELD_KEYS)
+	if (!hasExactKeys(fields, contract.fields)
 		|| !Object.values(fields).every(field => typeof field === 'string')) {
 		throw responseError()
 	}
@@ -203,16 +266,12 @@ function normalizedCheckoutSubmission(value, order, nowMillis = Date.now()) {
 		throw responseError()
 	}
 
-	const submitExpiresAt = isoTime(source.submitExpiresAt)
-	const submitExpiresAtMillis = Date.parse(submitExpiresAt)
-	if (submitExpiresAtMillis <= nowMillis) throw expiredSubmissionError()
-	if (submitExpiresAtMillis > Date.parse(order.expiresAt)) throw responseError()
-
 	// 签名字段一旦通过边界校验即整体冻结，避免响应式代码在原生 Form 提交前改写金额、地址或签名。
 	const normalizedFields = Object.freeze(Object.fromEntries(
-		CHECKOUT_FIELD_KEYS.map(key => [key, fields[key]])))
+		contract.fields.map(key => [key, fields[key]])))
 	return Object.freeze({
 		provider: source.provider,
+		checkoutMode: source.checkoutMode,
 		action: source.action,
 		method: source.method,
 		contentType: source.contentType,
@@ -264,11 +323,18 @@ export const membershipPaymentApi = Object.freeze({
 		}))
 	},
 
-	async startPayment(orderId) {
+	async startPayment(orderId, provider) {
 		const id = requiredOrderId(orderId)
+		if (!PUBLIC_PROVIDERS.has(provider)) {
+			throw inputError('支付提供方无效。')
+		}
 		return normalizedPaymentAttempt(await authorizedRequest(
 			`/api/user/membership-orders/${id}/payment-attempts`,
-			{ method: 'POST', preserveSessionOnFailure: true }
+			{
+				method: 'POST',
+				preserveSessionOnFailure: true,
+				data: { provider }
+			}
 		))
 	},
 
@@ -277,6 +343,14 @@ export const membershipPaymentApi = Object.freeze({
 		return normalizedOrder(await authorizedRequest(
 			`/api/user/membership-orders/${id}`,
 			{ method: 'GET', preserveSessionOnFailure: true }
+		))
+	},
+
+	async cancelOrder(orderId) {
+		const id = requiredOrderId(orderId)
+		return normalizedOrder(await authorizedRequest(
+			`/api/user/membership-orders/${id}/cancel`,
+			{ method: 'POST', preserveSessionOnFailure: true }
 		))
 	}
 })

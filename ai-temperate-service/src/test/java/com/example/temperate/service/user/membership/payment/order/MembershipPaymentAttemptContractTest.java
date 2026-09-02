@@ -2,6 +2,7 @@ package com.example.temperate.service.user.membership.payment.order;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +20,12 @@ final class MembershipPaymentAttemptContractTest {
                 "com.example.temperate.service.user.membership.payment.order."
                         + "MembershipPaymentAttemptResult");
 
-        Method start = serviceType.getMethod("start", long.class, byte[].class);
+        Method start = serviceType.getMethod(
+                "start",
+                long.class,
+                byte[].class,
+                PaymentProviderType.class,
+                String.class);
 
         assertThat(serviceType.isInterface()).isTrue();
         assertThat(start.getReturnType()).isEqualTo(resultType);

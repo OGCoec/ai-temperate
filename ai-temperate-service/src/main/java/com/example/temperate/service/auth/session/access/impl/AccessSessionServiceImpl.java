@@ -219,6 +219,11 @@ public final class AccessSessionServiceImpl implements AccessSessionService {
                 throw error(SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID,
                         "Refresh session is invalid.", true);
             }
+            case WEBRTC_VERDICT_REJECTED -> {
+                metrics.refreshInvalid();
+                throw error(SessionAuthenticationErrorCode.WEBRTC_VERIFICATION_TIMEOUT,
+                        "WebRTC verification did not complete within the allowed window.", true);
+            }
         };
     }
 

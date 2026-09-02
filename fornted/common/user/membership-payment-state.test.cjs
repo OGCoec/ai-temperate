@@ -26,6 +26,7 @@ function memoryStorage() {
 function checkoutSubmission(fields = {}) {
 	return Object.freeze({
 		provider: 'BAR',
+		checkoutMode: 'FORM_POST',
 		action: 'https://ihaveagoddamnplan.com/api/pay/submit',
 		method: 'POST',
 		contentType: 'application/x-www-form-urlencoded',
@@ -44,6 +45,41 @@ function checkoutSubmission(fields = {}) {
 			sign: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
 			...fields
 		})
+	})
+}
+
+function liuhaoCheckoutSubmission() {
+	return Object.freeze({
+		provider: 'LIUHAO',
+		checkoutMode: 'FORM_POST',
+		action: 'https://liuhao.net/api/pay/submit',
+		method: 'POST',
+		contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+		submitExpiresAt: '2099-08-21T12:04:00Z',
+		fields: Object.freeze({
+			pid: '1001',
+			out_trade_no: 'AaAjECcaAQGqi_h2Rl1PiA',
+			type: 'wxpay',
+			name: '会员支付订单',
+			money: '0.05',
+			notify_url: 'https://niko000o.site/api/payment/liuhao/notify',
+			return_url: 'https://niko000o.site/pages/account/payment-result',
+			timestamp: '4080470400',
+			sign_type: 'RSA',
+			sign: 'c2lnbmF0dXJl'
+		})
+	})
+}
+
+function legacyLiuhaoRedirectSubmission() {
+	return Object.freeze({
+		provider: 'LIUHAO',
+		checkoutMode: 'REDIRECT_URL',
+		action: 'https://cashier.liuhao.net/pay/qrcode/session-123',
+		method: 'GET',
+		contentType: null,
+		submitExpiresAt: '2099-08-21T12:04:00Z',
+		fields: null
 	})
 }
 
@@ -131,6 +167,35 @@ test('rejects extra checkout fields before any form submission', async () => {
 	assert.equal(fake.submittedForm(), null)
 })
 
+test('submits the normalized Liuhao page contract without navigating or adding fields', async () => {
+	const { submitPaymentCheckout } = await loadState()
+	const fake = fakeDomAdapter()
+	let navigatedTo = null
+	fake.adapter.navigate = value => { navigatedTo = value }
+
+	submitPaymentCheckout(liuhaoCheckoutSubmission(), fake.adapter)
+
+	assert.equal(navigatedTo, null)
+	assert.equal(fake.form.action, 'https://liuhao.net/api/pay/submit')
+	assert.equal(fake.form.method, 'post')
+	assert.equal(fake.form.children.length, 10)
+	assert.equal(fake.form.children.some(input => input.name === 'key_version'), false)
+	assert.equal(fake.submittedForm(), fake.form)
+})
+
+test('temporarily navigates legacy Liuhao redirects during frontend-first rollout', async () => {
+	const { submitPaymentCheckout } = await loadState()
+	const fake = fakeDomAdapter()
+	let navigatedTo = null
+	fake.adapter.navigate = value => { navigatedTo = value }
+
+	submitPaymentCheckout(legacyLiuhaoRedirectSubmission(), fake.adapter)
+
+	assert.equal(navigatedTo, 'https://cashier.liuhao.net/pay/qrcode/session-123')
+	assert.equal(fake.form.children.length, 0)
+	assert.equal(fake.submittedForm(), null)
+})
+
 test('removes the temporary form when input creation or filling fails', async () => {
 	const { submitBarCheckout } = await loadState()
 	const fake = fakeDomAdapter({ failInputAt: 3 })
@@ -201,6 +266,10 @@ test('keeps idempotency only for uncertain transport outcomes', async () => {
 	const { isUncertainPaymentError } = await loadState()
 	assert.equal(isUncertainPaymentError({ code: 'NETWORK_ERROR' }), true)
 	assert.equal(isUncertainPaymentError({ code: 'BAR_TIMEOUT', statusCode: 504 }), true)
+	assert.equal(isUncertainPaymentError({ code: 'LIUHAO_TIMEOUT', statusCode: 504 }), true)
+	assert.equal(isUncertainPaymentError({ code: 'LIUHAO_CREATE_OUTCOME_UNKNOWN' }), true)
+	assert.equal(isUncertainPaymentError({ code: 'PAYMENT_CREATE_OUTCOME_UNKNOWN' }), true)
+	assert.equal(isUncertainPaymentError({ code: 'LIUHAO_CHECKOUT_UNAVAILABLE' }), true)
 	assert.equal(isUncertainPaymentError({ statusCode: 503 }), true)
 	assert.equal(isUncertainPaymentError({ code: 'BAR_ORDER_CONFLICT', statusCode: 409 }), false)
 })

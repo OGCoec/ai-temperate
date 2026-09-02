@@ -14,6 +14,8 @@ public class NetworkRiskWebMvcConfiguration implements WebMvcConfigurer {
 
     private static final String BAR_PAYMENT_CALLBACK_PATH =
             "/api/payment/bar/notify";
+    private static final String LIUHAO_PAYMENT_CALLBACK_PATH =
+            "/api/payment/liuhao/notify";
 
     private final NetworkRiskInterceptor interceptor;
 
@@ -36,6 +38,7 @@ public class NetworkRiskWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/admin/_edge/risk-challenge",
                         // 服务器回调无法提供浏览器网络风险上下文，来源真实性由回调 HMAC 与 BAR 主动查询保证。
                         BAR_PAYMENT_CALLBACK_PATH,
+                        LIUHAO_PAYMENT_CALLBACK_PATH,
                         // OAuth Provider 顶层导航不能附加应用请求头，只由一次性 state/PKCE/nonce/握手 Cookie 保护。
                         "/api/auth/oauth2/authorization/**",
                         "/api/auth/oauth2/code/**",

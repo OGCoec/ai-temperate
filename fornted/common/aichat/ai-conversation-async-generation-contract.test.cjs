@@ -91,6 +91,21 @@ test('global manager can retain many observers and notify a newly opened convers
 	assert.match(manager, /previous && previous !== observer/)
 })
 
+test('research sources update immediately and survive async generation recovery', () => {
+	const manager = source('ai-conversation-generation-manager.js')
+	const stream = source('ai-conversation-stream.js')
+	const panel = source('../../components/user/workspace/user-chat-panel.vue')
+
+	assert.match(manager, /researchSources:\s*\[\]/)
+	assert.match(manager, /export function findGenerationResearchSources/)
+	assert.match(stream, /event\.type === 'source'/)
+	assert.match(stream, /mergeAiConversationSources\(/)
+	assert.match(stream, /researchSources/)
+	assert.match(panel, /applyLiveResearchSource\(localId, event\.data\)/)
+	assert.match(panel, /task\.researchSources/)
+	assert.match(panel, /findGenerationResearchSources\(/)
+})
+
 test('transport reconnects with GET and never turns an SSE error into a refund command', () => {
 	const stream = source('ai-conversation-stream.js')
 

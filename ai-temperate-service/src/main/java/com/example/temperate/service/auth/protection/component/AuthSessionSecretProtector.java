@@ -23,6 +23,8 @@ public final class AuthSessionSecretProtector {
     private static final Pattern NANO_ID = Pattern.compile("^[A-Za-z0-9_-]{38}$");
     private static final Pattern NANO_ID_32 = Pattern.compile("^[A-Za-z0-9_-]{32}$");
     private static final Pattern CSRF = Pattern.compile("^[A-Za-z0-9_-]{43}$");
+    private static final Pattern UUID = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
     private static final Base64.Decoder BASE64_URL_DECODER = Base64.getUrlDecoder();
     private static final Base64.Encoder BASE64_URL_ENCODER =
             Base64.getUrlEncoder().withoutPadding();
@@ -106,6 +108,24 @@ public final class AuthSessionSecretProtector {
     public HmacIdentifier oauthClientIp(String canonicalIp) {
         return identify("auth:oauth:ip:v1",
                 requireText("OAuth client IP", canonicalIp, 64));
+    }
+
+    /**
+     * 保护浏览器可见的 OAuth WebRTC attemptId，Redis Key 与 Value 均不保存原始 UUID。
+     */
+    public HmacIdentifier oauthWebRtcAttempt(String rawAttemptId) {
+        return identify(
+                "auth:oauth:webrtc-attempt:v1",
+                requireUuid("OAuth WebRTC attempt", rawAttemptId));
+    }
+
+    /**
+     * 保护前端探测运行标识，防止跨层日志关联值直接进入 Redis 持久状态。
+     */
+    public HmacIdentifier oauthWebRtcProbeRun(String rawProbeRunId) {
+        return identify(
+                "auth:oauth:webrtc-probe:v1",
+                requireUuid("OAuth WebRTC probe run", rawProbeRunId));
     }
 
     public HmacIdentifier passwordResetFlowToken(String rawFlowToken) {
@@ -273,6 +293,14 @@ public final class AuthSessionSecretProtector {
             throw invalid("Device installation ID must be a canonical UUID v4.");
         }
         return value;
+    }
+
+    private static String requireUuid(String name, String value) {
+        String valid = requireText(name, value, 36).toLowerCase(Locale.ROOT);
+        if (!UUID.matcher(valid).matches()) {
+            throw invalid(name + " must be a canonical UUID v4.");
+        }
+        return valid;
     }
 
     private static String requireCanonicalBase64Url32(String name, String value) {

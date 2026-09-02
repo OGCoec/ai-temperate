@@ -27,6 +27,11 @@ if (ARGV[6] == 'VERIFIED' and (ARGV[7] ~= '' or ARGV[8] == '' or ARGV[9] ~= '1')
     return 0
 end
 
+-- OAuth 异步会话拥有该 generation 时，普通 report 不能抢先改变 PreAuth 终态。
+if redis.call('HGET', KEYS[1], 'webRtcOwner') == 'OAUTH' then
+    return 5
+end
+
 local currentPhase = redis.call('HGET', KEYS[1], 'webRtcPhase')
 if currentPhase == 'VERIFIED' then
     redis.call('PEXPIRE', KEYS[1], ARGV[10])

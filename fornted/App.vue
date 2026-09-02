@@ -13,12 +13,18 @@
 		recordAuthDiagnosticEvent,
 		renewAuthDiagnosticPage
 	} from '@/common/auth/auth-diagnostics.js'
+
 	// #ifdef H5
 	import { ensureCookieScopeMigration } from '@/common/auth/cookie-scope-migration.js'
 	import {
 		scheduleH5WebRtcVerification
 	} from '@/common/auth/webrtc-verification.js'
 	import { prewarmTurnstile } from '@/common/auth/turnstile-prewarm.js'
+	import { ownsH5WebRtcScheduling } from '@/common/auth/h5-oauth-webrtc-gate.js'
+	import {
+		hasPendingH5OAuthWebRtcVerdict,
+		settlePendingH5OAuthWebRtcVerdict
+	} from '@/common/auth/oauth-flow.js'
 	// #endif
 	// #ifdef APP-PLUS
 	import {
@@ -28,10 +34,31 @@
 		startAndroidWebRtcVerificationInBackground
 	} from '@/common/auth/webrtc-verification.js'
 	import { resumePendingOAuth } from '@/common/auth/oauth-flow.js'
+	import {
+		androidOAuthCoordinator,
+		isBlockingWebRtc as isAndroidOAuthBlockingWebRtc
+	} from '@/common/auth/android-oauth-coordinator.js'
+	import { loadAndroidOAuthFlow } from '@/common/auth/android-flow-keystore.js'
 	// #endif
 	// #ifdef APP
 	import checkUpdate from '@/uni_modules/uni-upgrade-center-app/utils/check-update'
 	// #endif
+
+	function isH5OAuthReturnPath(path) {
+		const normalized = `/${String(path || '')}`
+			.split(/[?#]/, 1)[0]
+			.replace(/^\/+/, '/')
+		return normalized === '/pages/auth/oauth-return'
+	}
+
+	function shouldScheduleInitialH5WebRtc() {
+		// #ifdef H5
+		return !ownsH5WebRtcScheduling()
+		// #endif
+		// #ifndef H5
+		return true
+		// #endif
+	}
 
 	export default {
 		onLaunch(options) {
@@ -46,7 +73,27 @@
 				'background:#37d39a;padding:1px;border-radius:0 3px 3px 0;color:#04110c;font-weight:bold'
 			)
 			// #endif
-			if (!isRiskChallengeFlowPage(options?.path)) {
+			let h5OAuthReturn = false
+			let h5OAuthPending = false
+			// #ifdef H5
+			h5OAuthReturn = isH5OAuthReturnPath(options?.path)
+			h5OAuthPending = hasPendingH5OAuthWebRtcVerdict()
+			// #endif
+			if (h5OAuthReturn) {
+				recordAuthDiagnosticEvent('OAUTH_WEBRTC_GATE_SKIPPED', {
+					path: '/pages/auth/oauth-return',
+					source: 'app_launch_background_probe',
+					outcome: 'oauth_callback_gate_owns_probe'
+				})
+			}
+			// #ifdef H5
+			if (h5OAuthPending) {
+				void settlePendingH5OAuthWebRtcVerdict().catch(() => {})
+			}
+			// #endif
+			if (!isRiskChallengeFlowPage(options?.path)
+				&& !h5OAuthReturn
+				&& shouldScheduleInitialH5WebRtc()) {
 				// #ifdef H5
 				// H5 只等待 PreAuth；RTCPeerConnection 探测由 single-flight 在后台完成。
 				void ensureCookieScopeMigration()
@@ -65,7 +112,11 @@
 				// #ifdef APP-PLUS
 				// Android 只启动屏幕外本地 WebView 探测，不允许回退到 H5 浏览器实现。
 				void ensurePreAuth()
-					.then(() => startAndroidWebRtcVerificationInBackground())
+					.then(() => {
+						// 持久化 OAuth Flow 或活动原生回调拥有优先权，避免探测改写其 PreAuth/epoch。
+						if (isAndroidOAuthBlockingWebRtc() || loadAndroidOAuthFlow()) return null
+						return startAndroidWebRtcVerificationInBackground()
+					})
 					.catch(error => {
 						if (presentRiskBlock(error)) return
 						if (presentWebRtcFailure(error)) return
@@ -86,9 +137,16 @@
 				pageState: 'active'
 			})
 			console.log('App Show')
+			// #ifdef H5
+			if (hasPendingH5OAuthWebRtcVerdict()) {
+				void settlePendingH5OAuthWebRtcVerdict().catch(() => {})
+			}
+			// #endif
 			// #ifdef APP-PLUS
-			// 系统浏览器经 App Link 返回或用户手动回到 App 时，都从 KeyStore 中恢复同一个待处理 Flow。
-			void resumePendingOAuth()
+			// 原生回调和 onShow 只加入同一个 Promise；没有活动操作时才从 KeyStore 恢复待处理 Flow。
+			const activeOAuth = androidOAuthCoordinator.join('google-native')
+			const oauthResume = activeOAuth || resumePendingOAuth()
+			void Promise.resolve(oauthResume)
 				.catch(error => {
 					uni.showToast({
 						title: error?.message || '第三方登录恢复失败',
@@ -96,7 +154,8 @@
 					})
 				})
 				.finally(() => {
-					// OAuth 恢复先完成，再用当前 PreAuth single-flight 启动一次新探测。
+					// OAuth 完成并释放协调器后，才允许用当前 PreAuth 启动后台探测。
+					if (isAndroidOAuthBlockingWebRtc() || loadAndroidOAuthFlow()) return
 					void ensurePreAuth()
 						.then(() => startAndroidWebRtcVerificationInBackground())
 						.catch(error => {

@@ -7,11 +7,13 @@ import com.example.temperate.service.user.membership.payment.order.MembershipOrd
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderService;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptResult;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptService;
+import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import com.example.temperate.web.user.membership.payment.id.MembershipOrderPublicId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.Objects;
@@ -30,7 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 该 Controller 是来为已认证 H5、Android、curl 和 Apifox 客户端创建、查询及取消当前用户会员支付订单。
  *
- * <p>接口不接收客户端价格、不发放会员权益；支付发起可返回 BAR 沙箱的短时签名 POST 提交描述，但不接入真实资金渠道。</p>
+ * <p>接口不接收客户端价格、不直接发放会员权益；支付发起返回 BAR 表单或六号已验签 HTTPS 跳转描述。</p>
  */
 @RestController
 @RequestMapping("/api/user/membership-orders")
@@ -40,25 +42,28 @@ import org.springframework.web.bind.annotation.RestController;
         havingValue = "true")
 @Tag(
         name = "会员-支付订单",
-        description = "供已通过会话认证的用户创建服务端定价的会员模拟支付订单、查询 Redis 优先实时状态、取消待支付订单及获取当前 Provider 的短时提交描述；接口执行资源级所有权校验，不发生真实资金操作或会员权益发放。")
+        description = "供已通过会话认证的用户创建服务端定价的会员支付订单、查询 Redis 优先实时状态、取消待支付订单及获取当前 Provider 的短时提交描述；接口执行资源级所有权校验，支付事实和权益发放由独立回调链裁决。")
 public final class CurrentUserMembershipOrderController {
 
     private static final String CDN_CACHE_CONTROL = "CDN-Cache-Control";
 
     private final MembershipOrderService membershipOrderService;
     private final MembershipPaymentAttemptService paymentAttemptService;
+    private final TrustedClientIpResolver clientIpResolver;
 
     public CurrentUserMembershipOrderController(
             MembershipOrderService membershipOrderService,
-            MembershipPaymentAttemptService paymentAttemptService) {
+            MembershipPaymentAttemptService paymentAttemptService,
+            TrustedClientIpResolver clientIpResolver) {
         this.membershipOrderService = Objects.requireNonNull(membershipOrderService);
         this.paymentAttemptService = Objects.requireNonNull(paymentAttemptService);
+        this.clientIpResolver = Objects.requireNonNull(clientIpResolver);
     }
 
     @PostMapping
     @Operation(
             summary = "创建当前用户会员支付订单",
-            description = "请求只提交目标会员等级、alipay/wxpay 支付方式和 UUIDv4 幂等键；金额由服务端定价。同一意图首次创建返回 201，确认过的幂等重放返回 200。")
+            description = "请求只提交目标会员等级、alipay/wxpay 支付方式和 UUIDv4 幂等键；金额由服务端定价。同一幂等键重放返回原订单，不同幂等键会先把旧待支付订单本地终结并创建新订单，第三方旧单在后台关单；旧单回调正在处理的短暂窗口返回 409。")
     public ResponseEntity<MembershipOrderResponse> create(
             @AuthenticationPrincipal SessionPrincipal principal,
             @Valid @RequestBody CreateMembershipOrderRequest request) {
@@ -67,7 +72,8 @@ public final class CurrentUserMembershipOrderController {
                 new MembershipOrderCreateCommand(
                         request.targetTier(),
                         request.payType(),
-                        request.idempotencyKey()));
+                        request.idempotencyKey(),
+                        request.provider()));
         MembershipOrderResponse response = MembershipOrderResponse.from(result.snapshot());
         ResponseEntity.BodyBuilder builder = ResponseEntity
                 .status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
@@ -98,7 +104,7 @@ public final class CurrentUserMembershipOrderController {
     @PostMapping("/{orderId}/cancel")
     @Operation(
             summary = "取消当前用户待支付会员订单",
-            description = "仅 PENDING_PAYMENT 可取消；存在回调 marker 或订单已进入 CLOSING/PAID/CLOSED 时返回 409。")
+            description = "未发起外部支付的 PENDING_PAYMENT 直接取消；已发起 BAR/六号支付的订单进入 CLOSING 并异步关单，重复取消 CLOSING 返回当前状态；存在回调 marker 或订单已进入 PAID/CLOSED 时返回 409。")
     public ResponseEntity<MembershipOrderResponse> cancel(
             @AuthenticationPrincipal SessionPrincipal principal,
             @PathVariable
@@ -114,8 +120,8 @@ public final class CurrentUserMembershipOrderController {
 
     @PostMapping("/{orderId}/payment-attempts")
     @Operation(
-            summary = "发起当前用户会员模拟支付",
-            description = "仅未过期的 PENDING_PAYMENT 可首次记录并返回 201；有效期内幂等重放返回 200。BAR 环境返回一次短时签名 POST 提交描述，供浏览器立即提交；Local 环境明确返回 checkoutSubmission:null。")
+            summary = "发起当前用户会员支付",
+            description = "请求必须明确选择 BAR 或六号；仅首个未过期 PENDING_PAYMENT 请求可以调用外部平台。真实平台流水绑定数据库和 Redis 后才返回浏览器支付入口，内部模拟器不能从公开接口选择。")
     public ResponseEntity<MembershipPaymentAttemptResponse> startPayment(
             @AuthenticationPrincipal SessionPrincipal principal,
             @PathVariable
@@ -124,9 +130,14 @@ public final class CurrentUserMembershipOrderController {
                     maxLength = HybridBase64UrlCodec.ENCODED_LENGTH,
                     pattern = HybridBase64UrlCodec.ENCODED_PATTERN,
                     example = "AaAjECcaAQGqi_h2Rl1PiA"))
-            MembershipOrderPublicId orderId) {
+            MembershipOrderPublicId orderId,
+            @Valid @RequestBody CreateMembershipPaymentAttemptRequest request,
+            HttpServletRequest servletRequest) {
         MembershipPaymentAttemptResult result = paymentAttemptService.start(
-                principal.userId(), orderId.internalValue());
+                principal.userId(),
+                orderId.internalValue(),
+                request.provider(),
+                clientIpResolver.resolve(servletRequest).orElse(null));
         return ResponseEntity
                 .status(result.started() ? HttpStatus.CREATED : HttpStatus.OK)
                 .cacheControl(noStore())

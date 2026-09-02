@@ -44,6 +44,13 @@ public interface MembershipOrderMapper {
     MembershipOrder findActiveByLoginIdentityId(
             @Param("loginIdentityId") long loginIdentityId);
 
+    int supersedeActiveForReplacement(
+            @Param("orderId") byte[] orderId,
+            @Param("loginIdentityId") long loginIdentityId,
+            @Param("terminalStatus") MembershipOrderStatus terminalStatus,
+            @Param("terminalStateVersion") long terminalStateVersion,
+            @Param("changedAt") OffsetDateTime changedAt);
+
     MembershipOrder findLatestPaidOrder(
             @Param("loginIdentityId") long loginIdentityId,
             @Param("membershipTier") MembershipTier membershipTier);

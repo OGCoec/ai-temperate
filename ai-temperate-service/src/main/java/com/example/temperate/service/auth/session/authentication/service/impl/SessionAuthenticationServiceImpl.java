@@ -202,6 +202,9 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
             case TTL_INVARIANT_VIOLATION -> throw error(
                     SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID,
                     "Refresh session is invalid.", true);
+            case WEBRTC_VERDICT_REJECTED -> throw error(
+                    SessionAuthenticationErrorCode.WEBRTC_VERIFICATION_TIMEOUT,
+                    "WebRTC verification did not complete within the allowed window.", true);
         };
     }
 

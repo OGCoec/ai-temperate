@@ -1,6 +1,7 @@
 package com.example.temperate.service.risk.webrtc.service.impl;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcSessionVerdictService;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.service.risk.preauth.domain.PreAuthState;
@@ -19,13 +20,15 @@ import com.example.temperate.service.risk.webrtc.validation.WebRtcIpNormalizer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
  * 使用 PreAuth v7 与 Redis 时间实现 WebRTC 完全异步四态门禁及双栈同族校验。
  *
  * <p>业务请求读取 REQUIRED/PENDING 后立即放行；只有 GET start 能把 REQUIRED 原子转换为
- * PENDING，report 只能完成当前 PENDING generation，任何终态都不能被迟到结果覆盖。</p>
+ * PENDING。普通 report 只能完成当前 PENDING generation；OAuth report 则必须优先进入跨键原子裁决，
+ * 以便在历史竞态已把 PreAuth 写成 VERIFIED 时仍安全激活绑定的 Refresh Session。</p>
  */
 @Service
 public final class WebRtcVerificationServiceImpl
@@ -36,6 +39,7 @@ public final class WebRtcVerificationServiceImpl
     private final NetworkRiskIdentifier identifier;
     private final WebRtcIpProtector protector;
     private final WebRtcIpNormalizer normalizer;
+    private final OAuthWebRtcSessionVerdictService oauthVerdictService;
 
     public WebRtcVerificationServiceImpl(
             NetworkRiskProperties properties,
@@ -43,11 +47,23 @@ public final class WebRtcVerificationServiceImpl
             NetworkRiskIdentifier identifier,
             WebRtcIpProtector protector,
             WebRtcIpNormalizer normalizer) {
+        this(properties, preAuthStore, identifier, protector, normalizer, null);
+    }
+
+    @Autowired
+    public WebRtcVerificationServiceImpl(
+            NetworkRiskProperties properties,
+            PreAuthStore preAuthStore,
+            NetworkRiskIdentifier identifier,
+            WebRtcIpProtector protector,
+            WebRtcIpNormalizer normalizer,
+            OAuthWebRtcSessionVerdictService oauthVerdictService) {
         this.properties = Objects.requireNonNull(properties);
         this.preAuthStore = Objects.requireNonNull(preAuthStore);
         this.identifier = Objects.requireNonNull(identifier);
         this.protector = Objects.requireNonNull(protector);
         this.normalizer = Objects.requireNonNull(normalizer);
+        this.oauthVerdictService = oauthVerdictService;
     }
 
     @Override
@@ -103,6 +119,16 @@ public final class WebRtcVerificationServiceImpl
             String currentHttpIp,
             String probeGeneration,
             List<String> reportedWebRtcIps) {
+        return report(access, currentHttpIp, probeGeneration, null, reportedWebRtcIps);
+    }
+
+    @Override
+    public WebRtcVerificationDecision report(
+            PreAuthAccess access,
+            String currentHttpIp,
+            String probeGeneration,
+            String oauthAttemptId,
+            List<String> reportedWebRtcIps) {
         Objects.requireNonNull(access);
         PreAuthState state = access.state();
         long generation = parseGeneration(probeGeneration);
@@ -113,7 +139,8 @@ public final class WebRtcVerificationServiceImpl
         if (!requestIpDigest.equals(state.currentIpDigest())) {
             return WebRtcVerificationDecision.networkChanged();
         }
-        if (state.webRtcPhase() != PreAuthWebRtcPhase.PENDING) {
+        boolean oauthReport = oauthAttemptId != null && !oauthAttemptId.isBlank();
+        if (!oauthReport && state.webRtcPhase() != PreAuthWebRtcPhase.PENDING) {
             // report 不允许隐式 start；终态返回服务端现状，REQUIRED 视为旧任务提交。
             return state.webRtcPhase() == PreAuthWebRtcPhase.REQUIRED
                     ? WebRtcVerificationDecision.stale()
@@ -149,17 +176,29 @@ public final class WebRtcVerificationServiceImpl
                         state.scope(),
                         access.tokenDigest(),
                         state.currentIpDigest());
-        PreAuthWebRtcWriteResult writeResult = preAuthStore.writeWebRtcResult(
-                state.scope(),
-                access.tokenDigest(),
-                state.deviceDigest(),
-                state.currentIpDigest(),
-                generation,
-                matched,
-                failureReason,
-                encrypted,
-                !normalized.isEmpty(),
-                ttl(state));
+        // OAuth 回调后的 report 必须同时裁决正式 Session；普通登录仍沿用单 PreAuth 状态机。
+        PreAuthWebRtcWriteResult writeResult = !oauthReport
+                ? preAuthStore.writeWebRtcResult(
+                        state.scope(),
+                        access.tokenDigest(),
+                        state.deviceDigest(),
+                        state.currentIpDigest(),
+                        generation,
+                        matched,
+                        failureReason,
+                        encrypted,
+                        !normalized.isEmpty(),
+                        ttl(state))
+                : oauthVerdictService == null
+                        ? PreAuthWebRtcWriteResult.PREAUTH_UNAVAILABLE
+                        : oauthVerdictService.decideReport(
+                        access,
+                        oauthAttemptId,
+                        generation,
+                        matched,
+                        failureReason,
+                        encrypted,
+                        !normalized.isEmpty());
         return switch (writeResult) {
             case UPDATED -> matched
                     ? WebRtcVerificationDecision.verified(generation, normalized)
@@ -173,7 +212,9 @@ public final class WebRtcVerificationServiceImpl
             case DEADLINE_EXPIRED -> WebRtcVerificationDecision.failed(
                     generation,
                     PreAuthWebRtcFailureReason.REPORT_TIMEOUT,
-                    List.of());
+                            List.of());
+            case OAUTH_ATTEMPT_REQUIRED ->
+                    WebRtcVerificationDecision.oauthAttemptRequired();
             case STALE_GENERATION -> WebRtcVerificationDecision.stale();
             case NETWORK_CHANGED -> WebRtcVerificationDecision.networkChanged();
             case PREAUTH_UNAVAILABLE -> WebRtcVerificationDecision.stateInvalid();

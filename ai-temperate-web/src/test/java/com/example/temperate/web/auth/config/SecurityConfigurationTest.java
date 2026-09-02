@@ -110,6 +110,7 @@ class SecurityConfigurationTest {
                         "X-AIT-Page-Instance-Id",
                         "X-AIT-Client-Queue-Ms",
                         "X-AIT-WebRTC-Probe-Run-Id",
+                        "X-AIT-Trigger-Request-Id",
                         "X-Refresh-Token");
         assertThat(configuration.getExposedHeaders())
                 .contains(
@@ -120,6 +121,13 @@ class SecurityConfigurationTest {
                         "X-New-Access-Token",
                         "X-Session-Renewed",
                         "X-AIT-WebRTC-Probe-Run-Id",
+                        "X-AIT-Backend-Release",
+                        "X-AIT-Edge-Outcome",
+                        "X-AIT-Edge-Upstream-Attempted",
+                        "X-AIT-Cookie-Scope-State",
+                        "X-AIT-Cookie-Scope-Reset",
+                        "X-AIT-Worker-Version",
+                        "X-AIT-Pages-Deployment",
                         "CF-Ray",
                         "cf-mitigated");
     }

@@ -139,3 +139,41 @@ test('authentication completion requests can disable generic request replay', ()
 	assert.match(publicRequest, /PREAUTH_REQUIRED[\s\S]*!automaticReplayAllowed[\s\S]*throw error/)
 	assert.match(publicRequest, /RISK_CHALLENGE_REQUIRED[\s\S]*!automaticReplayAllowed[\s\S]*throw error/)
 })
+
+test('cookie-scope recovery links the rejected request, migration, and one replay without changing retry limits', () => {
+	const publicRequest = section(
+		'export async function publicRequest',
+		'async function bootstrapBrowserSession')
+
+	assert.match(publicRequest, /COOKIE_SCOPE_428_RECOVERY_STARTED/)
+	assert.match(publicRequest, /ensureCookieScopeMigration\([\s\S]*triggerClientRequestId/)
+	assert.match(publicRequest, /COOKIE_SCOPE_428_RECOVERY_COMPLETED/)
+	assert.match(publicRequest, /COOKIE_SCOPE_428_RECOVERY_FAILED/)
+	assert.match(publicRequest, /migrationRetried/)
+	assert.match(publicRequest, /triggerClientRequestId/)
+	assert.doesNotMatch(publicRequest, /migrationRetried\s*<\s*2/)
+})
+
+test('Android PreAuth mismatch clears an authenticated session without replaying anonymously', () => {
+	const publicRequest = section(
+		'export async function publicRequest',
+		'async function bootstrapBrowserSession')
+	const authorized = section(
+		'export async function authorizedRequest',
+		'function handleAuthorizedSecurityFailure')
+	const androidTermination = section(
+		'function terminateAuthenticatedAndroidSession',
+		'async function recoverH5WebRtc')
+	const diagnostics = section('function rawRequestTask', 'async function requestTask')
+
+	assert.match(publicRequest, /terminateAuthenticatedAndroidSession\(error, authDiagnostic\)/)
+	assert.match(authorized, /terminateAuthenticatedAndroidSession\(error, authDiagnostic\)/)
+	assert.match(publicRequest, /disableAutomaticReplay/)
+	assert.match(androidTermination, /clearSession\(\)/)
+	assert.match(androidTermination, /clearAndroidOAuthFlow\(\)/)
+	assert.match(androidTermination, /invalidatePreAuth\(\)/)
+	assert.match(androidTermination, /uni\.reLaunch\(\{ url: AUTH_ROUTES\.login \}\)/)
+	assert.match(diagnostics, /networkFailureDiagnostics\(cause,/)
+	assert.match(diagnostics, /currentAndroidOAuthPhase\(\)/)
+	assert.match(diagnostics, /preAuthReady/)
+})

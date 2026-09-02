@@ -365,6 +365,7 @@ class WebRtcVerificationInterceptorAsyncIdempotencyTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                Duration.ofSeconds(15),
                 List.of(URI.create("stun:stun.cloudflare.com:3478")),
                 8,
                 ""));

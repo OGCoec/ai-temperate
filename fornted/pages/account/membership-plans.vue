@@ -1,5 +1,5 @@
 <template>
-	<view class="membership-page" :class="{ 'android-readonly': androidClient }">
+	<view class="membership-page" :class="{ 'app-readonly': appClient }">
 		<view class="membership-shell" :aria-busy="loading || Boolean(purchasingTier)">
 			<view class="membership-header">
 				<button class="icon-button" type="button" aria-label="返回个人资料" @click="returnToProfile">
@@ -9,14 +9,14 @@
 					<text class="membership-kicker">MEMBERSHIP STUDIO</text>
 					<text class="membership-title">选择你的套餐</text>
 					<text class="membership-subtitle">
-						{{ androidClient
+						{{ appClient
 							? '查看服务端实时价格，购买和升级请在网页版完成。'
-							: '服务端实时计算价格，一次点击即可安全提交到 BAR 模拟支付页面。' }}
+							: '服务端实时计算价格，可选择支付宝或微信支付。' }}
 					</text>
 				</view>
 				<view class="simulation-badge">
 					<text class="simulation-dot"></text>
-					<text>{{ androidClient ? '只读报价' : '沙箱模拟' }}</text>
+					<text>{{ appClient ? '只读报价' : '在线支付' }}</text>
 				</view>
 			</view>
 
@@ -28,17 +28,17 @@
 				<view class="context-boundary">
 					<text class="context-label">支付边界</text>
 					<text class="context-detail">
-						{{ androidClient
-							? 'Android 客户端不创建订单、不提供支付'
-							: '仅确认模拟订单，不发放会员权益' }}
+						{{ appClient
+							? 'App 客户端不创建订单、不提供支付'
+							: '支付成功仅以本项目后端确认状态为准' }}
 					</text>
 				</view>
 			</view>
 
-			<view v-if="!androidClient" class="payment-method-block">
+			<view v-if="h5Client" class="payment-method-block">
 				<view>
 					<text class="section-eyebrow">PAYMENT METHOD</text>
-					<text class="section-title">选择支付展示方式</text>
+					<text class="section-title">选择支付方式</text>
 				</view>
 				<view class="payment-methods" role="tablist" aria-label="支付方式">
 					<button
@@ -49,10 +49,10 @@
 						type="button"
 						role="tab"
 						:aria-selected="payType === method.value"
-						:disabled="Boolean(purchasingTier)"
+						:disabled="Boolean(purchasingTier) || paymentProviderLocked"
 						@click="payType = method.value"
 					>
-						<text class="method-mark">{{ method.mark }}</text>
+						<image class="method-logo" :src="method.icon" mode="aspectFit" aria-hidden="true" />
 						<text>{{ method.label }}</text>
 					</button>
 				</view>
@@ -84,9 +84,9 @@
 					<view class="offer-price">
 						<text class="price-currency">¥</text>
 						<text class="price-value">{{ offer.payAmountYuan }}</text>
-						<text class="price-period">{{ androidClient ? '最终费用' : '本次模拟订单' }}</text>
+						<text class="price-period">{{ appClient ? '最终费用' : '本次支付' }}</text>
 					</view>
-					<view v-if="androidClient || offer.creditAmountYuan !== '0.00'" class="offer-credit">
+					<view v-if="appClient || offer.creditAmountYuan !== '0.00'" class="offer-credit">
 						<text>套餐原价 ¥{{ offer.listPriceYuan }}</text>
 						<text>已抵扣 −¥{{ offer.creditAmountYuan }}</text>
 					</view>
@@ -97,7 +97,7 @@
 					<button
 						class="purchase-button"
 						type="button"
-						:loading="!androidClient && purchasingTier === offer.targetTier"
+						:loading="h5Client && purchasingTier === offer.targetTier"
 						:disabled="purchaseDisabled(offer)"
 						@click="handleOfferAction(offer)"
 					>
@@ -112,11 +112,11 @@
 			</view>
 
 			<view class="membership-footnote">
-				<text>{{ androidClient ? '只读报价' : 'BAR SANDBOX' }}</text>
+				<text>{{ appClient ? '只读报价' : payTypeLabel }}</text>
 				<text>
-					{{ androidClient
-						? '价格以服务端最新报价为准。Android 客户端仅供查看。'
-						: '短时签名提交描述只用于本次 Form POST，不保存、不缓存、不写入日志。' }}
+					{{ appClient
+						? '价格以服务端最新报价为准。App 客户端仅供查看。'
+						: '短时支付入口只用于本次跳转，不保存、不缓存、不写入日志。' }}
 				</text>
 			</view>
 		</view>
@@ -124,20 +124,29 @@
 </template>
 
 <script>
-	import { AUTH_ROUTES, clientPlatform } from '@/common/auth/config.js'
+	import { AUTH_ROUTES } from '@/common/auth/config.js'
 	import { membershipPaymentApi } from '@/common/user/membership-payment-api.js'
 	// #ifdef H5
 	import {
 		createPaymentIdempotencyKey,
 		isUncertainPaymentError,
-		submitBarCheckout,
+		submitPaymentCheckout,
 		writePaymentReturnContext
 	} from '@/common/user/membership-payment-state.js'
 	// #endif
 
+	const PAYMENT_PROVIDER = 'LIUHAO'
 	const PAY_TYPE_PRESENTATION = Object.freeze({
-		alipay: Object.freeze({ value: 'alipay', label: '支付宝', mark: '支' }),
-		wxpay: Object.freeze({ value: 'wxpay', label: '微信支付', mark: '微' })
+		alipay: Object.freeze({
+			value: 'alipay',
+			label: '支付宝渠道一',
+			icon: '/static/icons/payment/alipay.svg'
+		}),
+		wxpay: Object.freeze({
+			value: 'wxpay',
+			label: '微信支付渠道一',
+			icon: '/static/icons/payment/wechat.svg'
+		})
 	})
 	const TIER_LABELS = Object.freeze({
 		FREE: 'Free', GO: 'Go', EDU: 'Education', TEAM: 'Team',
@@ -150,30 +159,41 @@
 				loading: false,
 				error: '',
 				currentTier: 'FREE',
-				provider: '',
 				checkoutEnabled: false,
-				payTypes: [],
+				paymentOption: null,
 				payType: 'alipay',
 				offers: [],
 				purchasingTier: '',
-				paymentIntents: Object.create(null)
+				paymentIntents: Object.create(null),
+				paymentProviderLocked: false
 			}
 		},
 		computed: {
-			androidClient() {
-				return clientPlatform() === 'ANDROID'
+			h5Client() {
+				// #ifdef H5
+				return true
+				// #endif
+				// #ifndef H5
+				return false
+				// #endif
+			},
+			appClient() {
+				return !this.h5Client
 			},
 			currentTierLabel() {
 				return TIER_LABELS[this.currentTier] || '未设置'
 			},
 			availablePayTypes() {
-				return this.payTypes
+				return (this.paymentOption?.payTypes || [])
 					.map(value => PAY_TYPE_PRESENTATION[value])
 					.filter(Boolean)
 			},
+			payTypeLabel() {
+				return PAY_TYPE_PRESENTATION[this.payType]?.label || '未选择'
+			},
 			webCheckoutAvailable() {
 				return this.checkoutEnabled
-					&& this.provider === 'BAR'
+					&& Boolean(this.paymentOption)
 					&& this.availablePayTypes.length > 0
 			}
 		},
@@ -188,12 +208,15 @@
 				try {
 					const result = await membershipPaymentApi.offers()
 					this.currentTier = result.currentTier
-					this.provider = result.provider
 					this.checkoutEnabled = result.checkoutEnabled
-					this.payTypes = [...result.payTypes]
+					const paymentOption = result.paymentOptions.find(
+						option => option.provider === PAYMENT_PROVIDER)
+					this.paymentOption = paymentOption
+						? { payTypes: [...paymentOption.payTypes] }
+						: null
 					this.offers = [...result.offers]
-					if (!this.payTypes.includes(this.payType)) {
-						this.payType = this.payTypes[0] || ''
+					if (!this.paymentOption?.payTypes.includes(this.payType)) {
+						this.payType = this.paymentOption?.payTypes[0] || ''
 					}
 				} catch (error) {
 					this.error = this.paymentErrorMessage(error, '套餐报价暂时无法读取。')
@@ -202,36 +225,38 @@
 				}
 			},
 			purchaseDisabled() {
-				if (this.androidClient) return !this.webCheckoutAvailable
+				if (this.appClient) return !this.webCheckoutAvailable
 				return Boolean(this.purchasingTier)
+					|| this.paymentProviderLocked
 					|| !this.checkoutEnabled
-					|| this.provider !== 'BAR'
+					|| !this.paymentOption
 					|| !this.payType
 			},
 			purchaseLabel(offer) {
-				if (this.androidClient) {
+				if (this.appClient) {
 					return this.webCheckoutAvailable
 						? '请前往网页版升级'
 						: '网页版升级维护中'
 				}
 				if (this.purchasingTier === offer.targetTier) return '正在创建支付…'
+				if (this.paymentProviderLocked) return '支付结果确认中'
 				if (!this.checkoutEnabled) return '支付维护中'
-				if (this.provider !== 'BAR') return '当前环境不提供 H5 支付'
+				if (!this.paymentOption) return '当前环境不提供 H5 支付'
 				return '立即购买'
 			},
 			handleOfferAction(offer) {
-				if (this.androidClient) {
-					this.showAndroidUpgradeNotice(offer)
+				if (this.appClient) {
+					this.showAppUpgradeNotice(offer)
 					return
 				}
 				// #ifdef H5
 				this.purchase(offer)
 				// #endif
 			},
-			showAndroidUpgradeNotice(offer) {
+			showAppUpgradeNotice(offer) {
 				uni.showModal({
 					title: '请前往网页版升级',
-					content: `升级到 ${offer.displayName} 的当前费用为 ¥${offer.payAmountYuan}。\nAndroid 客户端暂不提供支付，请使用浏览器访问 niko000o.site，登录同一账号后完成升级。`,
+					content: `升级到 ${offer.displayName} 的当前费用为 ¥${offer.payAmountYuan}。\nApp 客户端暂不提供支付，请使用浏览器访问 niko000o.site，登录同一账号后完成升级。`,
 					showCancel: false,
 					confirmText: '我知道了'
 				})
@@ -239,6 +264,7 @@
 			// #ifdef H5
 			async purchase(offer) {
 				if (this.purchaseDisabled(offer)) return
+				// 本地订单幂等身份只由购买目标和支付渠道组成；切换外部 Provider 必须复用同一订单。
 				const intentName = `${offer.targetTier}:${this.payType}`
 				const idempotencyKey = this.paymentIntents[intentName]
 					|| createPaymentIdempotencyKey()
@@ -248,8 +274,9 @@
 				}
 				this.purchasingTier = offer.targetTier
 				this.error = ''
+				let order = null
 				try {
-					const order = await membershipPaymentApi.createOrder({
+					order = await membershipPaymentApi.createOrder({
 						targetTier: offer.targetTier,
 						payType: this.payType,
 						idempotencyKey
@@ -264,35 +291,50 @@
 						})
 						return
 					}
-					const payment = await this.startBarPaymentAttempt(order)
+					const payment = await this.startPaymentAttempt(order)
 					const submission = payment.checkoutSubmission
 					writePaymentReturnContext(sessionStorage, order.orderId)
 					this.removePaymentIntent(intentName)
-					submitBarCheckout(submission)
+					submitPaymentCheckout(submission)
 				} catch (error) {
+					if (error?.code === 'LIUHAO_CHECKOUT_REPLAY_UNAVAILABLE'
+						&& order?.orderId) {
+						uni.showModal({
+							title: '旧支付入口无法恢复',
+							content: '是否关闭这笔旧六号订单？安全关闭后可重新创建支付订单。',
+							confirmText: '关闭旧订单',
+							success: async result => {
+								if (!result.confirm) return
+								try {
+									await membershipPaymentApi.cancelOrder(order.orderId)
+									this.removePaymentIntent(intentName)
+									this.error = '旧订单正在关闭，请稍后重新购买。'
+								} catch (cancelError) {
+									this.error = this.paymentErrorMessage(
+										cancelError,
+										'旧订单暂时无法关闭。')
+								}
+							}
+						})
+					}
 					if (!isUncertainPaymentError(error)) this.removePaymentIntent(intentName)
 					this.error = this.paymentErrorMessage(error, '支付暂时无法发起。')
 				} finally {
 					this.purchasingTier = ''
 				}
 			},
-			async startBarPaymentAttempt(order) {
+			async startPaymentAttempt(order) {
 				const orderId = order.orderId
-				let payment
-				try {
-					payment = await membershipPaymentApi.startPayment(orderId)
-					return this.requireLiveBarSubmission(payment, order)
-				} catch (error) {
-					if (error?.code !== 'BAR_CHECKOUT_SUBMISSION_EXPIRED') throw error
-				}
-				// 提交前过期只允许为同一订单刷新一次；第二次失败会直接向上抛出，不形成循环重试。
-				payment = await membershipPaymentApi.startPayment(orderId)
-				return this.requireLiveBarSubmission(payment, order)
+				// 请求一旦可能到达后端，就不能再切换 Provider；后端 CAS 会继续作为最终并发保护。
+				this.paymentProviderLocked = true
+				// 外部请求可能已经创建第三方订单，提交描述失效也不能再次调用创建接口。
+				const payment = await membershipPaymentApi.startPayment(orderId, PAYMENT_PROVIDER)
+				return this.requireLiveSubmission(payment, order)
 			},
-			requireLiveBarSubmission(payment, originalOrder) {
+			requireLiveSubmission(payment, originalOrder) {
 				const submission = payment?.checkoutSubmission
-				if (!submission || submission.provider !== 'BAR') {
-					const error = new Error('当前支付提供方不支持 H5 提交。')
+				if (!submission || submission.provider !== PAYMENT_PROVIDER) {
+					const error = new Error('当前支付渠道不支持 H5 提交。')
 					error.code = 'PAYMENT_PROVIDER_UNSUPPORTED'
 					throw error
 				}
@@ -300,13 +342,13 @@
 					|| payment.order.payType !== originalOrder.payType
 					|| payment.order.payAmountYuan !== originalOrder.payAmountYuan) {
 					const error = new Error('支付提交描述与本地订单不一致。')
-					error.code = 'BAR_CHECKOUT_SUBMISSION_INVALID'
+					error.code = 'PAYMENT_CHECKOUT_SUBMISSION_INVALID'
 					throw error
 				}
 				const expiresAt = Date.parse(submission.submitExpiresAt)
 				if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
 					const error = new Error('支付提交描述已过期。')
-					error.code = 'BAR_CHECKOUT_SUBMISSION_EXPIRED'
+					error.code = `${PAYMENT_PROVIDER}_CHECKOUT_SUBMISSION_EXPIRED`
 					throw error
 				}
 				return payment
@@ -323,14 +365,19 @@
 			// #endif
 			paymentErrorMessage(error, fallback) {
 				const messages = {
-					PAYMENT_CHECKOUT_DISABLED: '当前暂停创建新的模拟支付。',
+					PAYMENT_CHECKOUT_DISABLED: '当前暂停创建新的支付。',
 					PAYMENT_PROVIDER_UNSUPPORTED: '当前支付渠道不可用。',
-					BAR_TIMEOUT: 'BAR 响应超时，可以安全重试本次购买。',
-					BAR_UNAVAILABLE: 'BAR 暂时不可连接，可以稍后重试。',
-					BAR_ORDER_CONFLICT: '支付订单状态发生冲突，请刷新报价后重试。',
+					LIUHAO_TIMEOUT: '六号易支付响应超时，支付结果正在确认中，请勿重复下单。',
+					LIUHAO_UNAVAILABLE: '六号易支付请求结果暂时不明确，正在确认中，请勿重复下单。',
+					LIUHAO_CLIENT_IP_UNAVAILABLE: '暂时无法确认可信客户端地址，请稍后重试。',
+					PAYMENT_CREATE_OUTCOME_UNKNOWN: '支付请求已经发出，第三方结果正在确认中，请勿切换提供方或重复下单。',
+					LIUHAO_CREATE_OUTCOME_UNKNOWN: '六号下单结果暂时不明确，请勿重复支付。',
+					LIUHAO_CHECKOUT_UNAVAILABLE: '六号已创建订单，但返回的支付入口暂时无法安全打开，请勿重复下单。',
+					LIUHAO_CHECKOUT_REPLAY_UNAVAILABLE: '旧支付入口无法安全恢复，请先关闭旧订单后重建。',
+					LIUHAO_ORDER_CONFLICT: '六号支付订单状态冲突，请刷新报价后重试。',
 					MEMBERSHIP_UPGRADE_HISTORY_MISSING: '缺少可信历史支付周期，暂时无法计算升级价。',
-					BAR_CHECKOUT_SUBMISSION_EXPIRED: '支付提交描述已过期，请重新发起本次支付。',
-					BAR_CHECKOUT_SUBMISSION_INVALID: '支付提交描述与订单不一致，已阻止提交。'
+					LIUHAO_CHECKOUT_SUBMISSION_EXPIRED: '六号支付提交描述已过期，请重新发起。',
+					PAYMENT_CHECKOUT_SUBMISSION_INVALID: '支付提交描述与订单不一致，已阻止提交。'
 				}
 				return messages[error?.code] || error?.message || fallback
 			},
@@ -380,8 +427,7 @@
 	.payment-methods { display: flex; padding: 4px; gap: 4px; border: 1px solid #2b332f; border-radius: 13px; background: #111513; }
 	.payment-method { min-height: 42px; margin: 0; padding: 0 15px; display: flex; align-items: center; gap: 8px; border-radius: 9px; background: transparent; color: #929e98; font-size: 13px; font-weight: 650; }
 	.payment-method.active { background: #e8f5ef; color: #102018; }
-	.method-mark { width: 22px; height: 22px; border-radius: 7px; background: rgba(55, 211, 154, .14); text-align: center; line-height: 22px; font-size: 11px; font-weight: 800; }
-	.payment-method.active .method-mark { background: #37d39a; color: #07130e; }
+	.method-logo { width: 22px; height: 22px; flex: 0 0 22px; }
 	.offer-grid { margin-top: 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 	.offer-card { position: relative; min-width: 0; padding: 25px; overflow: hidden; border: 1px solid #2b332f; border-radius: 20px; background: linear-gradient(145deg, #151a17 0%, #101311 100%); box-shadow: 0 22px 50px rgba(0, 0, 0, .18); }
 	.offer-card.featured { border-color: rgba(86, 214, 162, .4); background: linear-gradient(145deg, #17231d 0%, #101512 70%); }

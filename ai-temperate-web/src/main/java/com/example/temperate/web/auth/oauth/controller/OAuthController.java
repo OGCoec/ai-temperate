@@ -15,6 +15,7 @@ import com.example.temperate.service.auth.oauth.flow.OAuthFlowErrorCode;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowException;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowService;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowSnapshot;
+import com.example.temperate.service.auth.oauth.flow.OAuthFlowState;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowStartCommand;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowStartResult;
 import com.example.temperate.service.auth.oauth.flow.OAuthFlowStore;
@@ -24,8 +25,13 @@ import com.example.temperate.service.auth.oauth.phone.OAuthPhoneAccess;
 import com.example.temperate.service.auth.oauth.phone.OAuthPhoneFlowService;
 import com.example.temperate.service.auth.oauth.phone.OAuthPhoneStartCommand;
 import com.example.temperate.service.auth.oauth.phone.OAuthPhoneStartResult;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService.ResumeResult;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService.SuspendResult;
 import com.example.temperate.service.registration.enums.VerificationDeliveryMethod;
+import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.TrustedNetworkObservation;
+import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
 import com.example.temperate.web.auth.api.WebInvalidInputException;
 import com.example.temperate.web.auth.oauth.config.OAuthClientProperties;
 import com.example.temperate.web.auth.oauth.diagnostic.OAuthCallbackFailureLogger;
@@ -39,6 +45,7 @@ import com.example.temperate.web.auth.oauth.transport.OAuthLoginResultTransport;
 import com.example.temperate.web.auth.oauth.transport.OAuthLoginResultTransport.OAuthLoginResponse;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
+import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -90,6 +97,8 @@ public final class OAuthController {
     private static final String FLOW_HEADER = "X-OAuth-Flow-Token";
     private static final String PHONE_FLOW_HEADER = "X-OAuth-Phone-Flow-Token";
     private static final String CHALLENGE_HEADER = "X-Turnstile-Challenge";
+    private static final String WEBRTC_ATTEMPT_HEADER = "X-AIT-OAuth-WebRTC-Attempt-Id";
+    private static final String WEBRTC_GENERATION_HEADER = "X-AIT-WebRTC-Probe-Generation";
 
     private final OAuthFlowService flowService;
     private final OAuthFlowStore flowStore;
@@ -104,6 +113,8 @@ public final class OAuthController {
     private final OAuthClientProperties properties;
     private final RiskRequestContextResolver riskContextResolver;
     private final Clock clock;
+    private final OAuthWebRtcAttemptService oauthWebRtcAttemptService;
+    private final NetworkRiskProperties networkRiskProperties;
 
     public OAuthController(
             OAuthFlowService flowService,
@@ -118,7 +129,9 @@ public final class OAuthController {
             OAuthCallbackFailureLogger callbackFailureLogger,
             OAuthClientProperties properties,
             RiskRequestContextResolver riskContextResolver,
-            Clock clock) {
+            Clock clock,
+            OAuthWebRtcAttemptService oauthWebRtcAttemptService,
+            NetworkRiskProperties networkRiskProperties) {
         this.flowService = Objects.requireNonNull(flowService);
         this.flowStore = Objects.requireNonNull(flowStore);
         this.providerRegistry = Objects.requireNonNull(providerRegistry);
@@ -132,6 +145,8 @@ public final class OAuthController {
         this.properties = Objects.requireNonNull(properties);
         this.riskContextResolver = Objects.requireNonNull(riskContextResolver);
         this.clock = Objects.requireNonNull(clock);
+        this.oauthWebRtcAttemptService = Objects.requireNonNull(oauthWebRtcAttemptService);
+        this.networkRiskProperties = Objects.requireNonNull(networkRiskProperties);
     }
 
     @PostMapping("/start")
@@ -146,8 +161,25 @@ public final class OAuthController {
         OAuthClientPlatform platform = transportPlatform == AuthClientPlatform.ANDROID
                 ? OAuthClientPlatform.ANDROID : OAuthClientPlatform.H5;
         OAuthInteractionMode mode = interactionMode(body, platform);
+        if ((body.probeGeneration() == null) != (body.probeRunId() == null)) {
+            // generation 与 probeRunId 是同一次 start 的不可拆分关联，禁止残缺输入创建孤立 OAuth Flow。
+            throw new WebInvalidInputException();
+        }
         OAuthFlowStartResult result = flowService.start(new OAuthFlowStartCommand(
                 body.provider(), platform, mode, deviceId, canonicalIp(request)));
+        SuspendResult webRtcAttempt = null;
+        if (platform == OAuthClientPlatform.H5
+                && body.probeGeneration() != null
+                && body.probeRunId() != null) {
+            // Flow 已落库后才绑定现有 generation，确保暂停记录总能指向一个真实且同设备的 OAuth Flow。
+            webRtcAttempt = oauthWebRtcAttemptService.suspend(
+                    flowService.protect(new OAuthFlowAccess(
+                            result.rawFlowToken(), deviceId, canonicalIp(request))),
+                    requirePreAuth(request),
+                    body.probeGeneration(),
+                    body.probeRunId(),
+                    result.absoluteExpiresAt());
+        }
         URI authorizationUrl = null;
         if (mode == OAuthInteractionMode.BROWSER) {
             authorizationUrl = authorizationEntry(body.provider(), result.launchTicket());
@@ -168,7 +200,11 @@ public final class OAuthController {
                 mode == OAuthInteractionMode.GOOGLE_NATIVE
                         ? properties.google().androidServerClientId() : null,
                 result.expiresAt(),
-                result.absoluteExpiresAt());
+                result.absoluteExpiresAt(),
+                webRtcAttempt == null ? null : webRtcAttempt.state().name(),
+                webRtcAttempt == null ? null : webRtcAttempt.attemptId(),
+                webRtcAttempt == null ? null : webRtcAttempt.probeGeneration(),
+                webRtcAttempt != null && webRtcAttempt.fallbackUsed());
     }
 
     @GetMapping("/authorization/{provider}")
@@ -298,6 +334,44 @@ public final class OAuthController {
         return status(flowService.getRequired(access));
     }
 
+    @PostMapping("/webrtc/resume")
+    @Operation(summary = "恢复 H5 OAuth 跳转前暂停的 WebRTC attempt")
+    public OAuthWebRtcResumeResponse resumeWebRtc(
+            @Valid @RequestBody OAuthWebRtcResumeRequest body,
+            @RequestHeader(DEVICE_HEADER) String deviceId,
+            @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        if (AuthClientPlatform.fromHeader(platformHeader) != AuthClientPlatform.H5) {
+            throw new WebInvalidInputException();
+        }
+        OAuthFlowAccess access = oauthAccess(null, deviceId, platformHeader, request);
+        OAuthFlowSnapshot snapshot = flowService.getRequired(access);
+        if (snapshot.platform() != OAuthClientPlatform.H5
+                || snapshot.state() != OAuthFlowState.READY_TO_COMPLETE) {
+            throw new OAuthFlowException(
+                    OAuthFlowErrorCode.INVALID_TRANSITION,
+                    "OAuth flow is not ready for WebRTC resume.");
+        }
+        ResumeResult resumed = oauthWebRtcAttemptService.resume(
+                flowService.protect(access),
+                requirePreAuth(request),
+                body.attemptId(),
+                body.probeGeneration());
+        noStore(response);
+        return new OAuthWebRtcResumeResponse(
+                resumed.state().name(),
+                resumed.attemptId(),
+                resumed.probeGeneration(),
+                networkRiskProperties.webRtc().stunUrls().stream()
+                        .map(Object::toString)
+                        .toList(),
+                networkRiskProperties.webRtc().probeTimeout().toMillis(),
+                networkRiskProperties.webRtc().reportGrace().toMillis(),
+                "/api/_edge/webrtc/report",
+                resumed.fallbackUsed());
+    }
+
     @PostMapping("/phone/start")
     @Operation(summary = "选择并锁定 OAuth 待验证手机号")
     public OAuthPhoneStartResponse startPhone(
@@ -383,18 +457,48 @@ public final class OAuthController {
             @RequestHeader(value = FLOW_HEADER, required = false) String androidFlowToken,
             @RequestHeader(DEVICE_HEADER) String deviceId,
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
+            @RequestHeader(value = WEBRTC_ATTEMPT_HEADER, required = false)
+                    String webRtcAttemptId,
+            @RequestHeader(value = WEBRTC_GENERATION_HEADER, required = false)
+                    String webRtcGeneration,
             HttpServletRequest request,
             HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
+        validateWebRtcAttemptHeaders(platform, webRtcAttemptId, webRtcGeneration);
         OAuthFlowAccess access = oauthAccess(
                 androidFlowToken, deviceId, platformHeader, request);
+        var protectedAccess = flowService.protect(access);
         LoginResult result = loginCompletionService.complete(access);
         OAuthLoginResponse transported = loginResultTransport.write(
-                result, platform, request, response);
+                result,
+                platform,
+                protectedAccess,
+                webRtcAttemptId,
+                webRtcGeneration,
+                deviceId,
+                request,
+                response);
         if (platform == AuthClientPlatform.H5) {
             cookieWriter.clearAll(response);
         }
         return transported;
+    }
+
+    private static void validateWebRtcAttemptHeaders(
+            AuthClientPlatform platform,
+            String attemptId,
+            String generation) {
+        boolean attemptPresent = attemptId != null && !attemptId.isBlank();
+        boolean generationPresent = generation != null && !generation.isBlank();
+        // 两个字段共同标识同一服务端状态机；必须在消费 OAuth Flow 和创建 Refresh Session 前拒绝残缺输入。
+        if (attemptPresent != generationPresent
+                || (attemptPresent && platform != AuthClientPlatform.H5)
+                || (attemptPresent
+                        && (!attemptId.matches(
+                                "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                                || !generation.matches("^[1-9][0-9]{0,18}$")))) {
+            throw new WebInvalidInputException();
+        }
     }
 
     @PostMapping("/cancel")
@@ -521,9 +625,28 @@ public final class OAuthController {
         response.setHeader("Pragma", "no-cache");
     }
 
+    private static PreAuthAccess requirePreAuth(HttpServletRequest request) {
+        Object value = request.getAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE);
+        if (value instanceof PreAuthAccess access) {
+            return access;
+        }
+        throw new OAuthFlowException(
+                OAuthFlowErrorCode.FLOW_FORBIDDEN,
+                "OAuth WebRTC PreAuth is missing.");
+    }
+
     public record OAuthStartRequest(
             @NotNull OAuthProvider provider,
-            OAuthInteractionMode interactionMode) {
+            OAuthInteractionMode interactionMode,
+            @Pattern(regexp = "^[1-9][0-9]{0,18}$") String probeGeneration,
+            @Pattern(regexp = "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                    String probeRunId) {
+
+        public OAuthStartRequest(
+                OAuthProvider provider,
+                OAuthInteractionMode interactionMode) {
+            this(provider, interactionMode, null, null);
+        }
     }
 
     public record OAuthStartResponse(
@@ -533,7 +656,31 @@ public final class OAuthController {
             String nonce,
             String googleServerClientId,
             Instant expiresAt,
-            Instant absoluteExpiresAt) {
+            Instant absoluteExpiresAt,
+            String webRtcAttemptState,
+            String webRtcAttemptId,
+            String probeGeneration,
+            boolean fallbackUsed) {
+    }
+
+    /** OAuth 回调恢复请求只携带公开 UUID 与 generation，不携带候选、Cookie 或 OAuth state。 */
+    public record OAuthWebRtcResumeRequest(
+            @NotBlank
+            @Pattern(regexp = "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                    String attemptId,
+            @NotBlank @Pattern(regexp = "^[1-9][0-9]{0,18}$") String probeGeneration) {
+    }
+
+    /** 返回恢复后的同一 attempt、固定 STUN 配置和是否已消耗唯一 fallback。 */
+    public record OAuthWebRtcResumeResponse(
+            String state,
+            String attemptId,
+            String probeGeneration,
+            java.util.List<String> stunUrls,
+            long timeoutMillis,
+            long reportGraceMillis,
+            String reportPath,
+            boolean fallbackUsed) {
     }
 
     public record NativeGoogleRequest(

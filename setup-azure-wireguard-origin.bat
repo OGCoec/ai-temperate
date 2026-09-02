@@ -3,7 +3,7 @@ setlocal EnableExtensions
 
 if /I "%~1"=="--elevated" goto elevated
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
   "Start-Process -FilePath '%~f0' -ArgumentList '--elevated' -Verb RunAs"
 exit /b %ERRORLEVEL%
 
@@ -45,7 +45,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%INSTALL_SCRIPT%" ^
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%INSTALL_SCRIPT%" ^
   -ServerPublicKey "%SERVER_PUBLIC_KEY%"
 if errorlevel 1 (
   echo ERROR: WireGuard tunnel configuration failed.
@@ -53,7 +53,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%FORWARD_SCRIPT%" ^
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%FORWARD_SCRIPT%" ^
   -Action Apply
 if errorlevel 1 (
   echo ERROR: Restricted origin forwarding configuration failed.
@@ -62,7 +62,7 @@ if errorlevel 1 (
 )
 
 echo Registering WireGuard origin forwarding startup task...
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REGISTER_SCRIPT%" ^
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REGISTER_SCRIPT%" ^
   -Action Register
 if errorlevel 1 (
   echo ERROR: WireGuard origin startup task registration failed.

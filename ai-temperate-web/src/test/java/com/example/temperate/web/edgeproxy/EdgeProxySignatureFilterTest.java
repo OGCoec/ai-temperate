@@ -48,6 +48,10 @@ class EdgeProxySignatureFilterTest {
         assertThat(response.getContentAsString())
                 .contains("EDGE_PROXY_SIGNATURE_INVALID");
         assertThat(chain.getRequest()).isNull();
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("MISSING_REQUIRED");
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.VERIFIED_RAY_ATTRIBUTE))
+                .isNull();
     }
 
     @Test
@@ -92,6 +96,7 @@ class EdgeProxySignatureFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE)).isNull();
     }
 
     @Test
@@ -130,6 +135,10 @@ class EdgeProxySignatureFilterTest {
         assertThat(request.getAttribute(
                 TrustedExternalHostResolver.VERIFIED_EXTERNAL_HOST_ATTRIBUTE))
                 .isEqualTo("niko000o.site");
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("VERIFIED");
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.VERIFIED_RAY_ATTRIBUTE))
+                .isEqualTo("test-ray-ord");
     }
 
     @Test
@@ -149,6 +158,10 @@ class EdgeProxySignatureFilterTest {
 
         assertThat(response.getStatus()).isEqualTo(403);
         assertThat(chain.getRequest()).isNull();
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("INVALID");
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.VERIFIED_RAY_ATTRIBUTE))
+                .isNull();
     }
 
     @Test
@@ -201,6 +214,8 @@ class EdgeProxySignatureFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("UNSIGNED_OPTIONAL");
     }
 
     @Test
@@ -289,6 +304,8 @@ class EdgeProxySignatureFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("UNSIGNED_OPTIONAL");
     }
 
     @Test
@@ -349,6 +366,8 @@ class EdgeProxySignatureFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE))
+                .isEqualTo("DISABLED");
     }
 
     @Test

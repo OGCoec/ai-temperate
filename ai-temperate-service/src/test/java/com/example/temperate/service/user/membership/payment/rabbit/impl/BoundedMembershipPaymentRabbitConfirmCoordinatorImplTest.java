@@ -14,6 +14,7 @@ import com.example.temperate.service.user.membership.payment.observability.Membe
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentRabbitPublishBreakdown;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -218,6 +219,47 @@ final class BoundedMembershipPaymentRabbitConfirmCoordinatorImplTest {
 
             assertThat(delayHeader.get()).isEqualTo(1L);
             assertThat(breakdown.submissionSize()).isEqualTo(1);
+        } finally {
+            coordinator.destroy();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void terminalFailureUsesMandatoryCompatibleMessageWithoutDelayedHeader() {
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        AtomicReference<Message> published = new AtomicReference<>();
+        doAnswer(invocation -> {
+                    MessagePostProcessor processor = invocation.getArgument(3);
+                    Message message = processor.postProcessMessage(new Message(new byte[0]));
+                    published.set(message);
+                    CorrelationData correlation = invocation.getArgument(4);
+                    correlation.getFuture().complete(new CorrelationData.Confirm(true, null));
+                    return null;
+                })
+                .when(rabbitTemplate)
+                .convertAndSend(
+                        anyString(),
+                        anyString(),
+                        any(),
+                        any(MessagePostProcessor.class),
+                        any(CorrelationData.class));
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        BoundedMembershipPaymentRabbitConfirmCoordinatorImpl coordinator =
+                coordinator(rabbitTemplate, executor);
+
+        try {
+            coordinator.publishAndAwait(
+                    MembershipPaymentRabbitNames.REFUND_TERMINAL_EXCHANGE,
+                    MembershipPaymentRabbitNames.REFUND_TERMINAL_ROUTING_KEY,
+                    envelope((byte) 6),
+                    Duration.ZERO);
+
+            assertThat(published.get()).isNotNull();
+            Object delayHeader = published.get()
+                    .getMessageProperties()
+                    .getHeader("x-delay");
+            assertThat(delayHeader).isNull();
         } finally {
             coordinator.destroy();
             executor.shutdownNow();

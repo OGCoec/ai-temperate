@@ -27,7 +27,9 @@ public record MembershipPaymentProperties(
         @DefaultValue Bar bar,
         @DefaultValue Callback callback,
         @DefaultValue OrderPersist orderPersist,
-        @DefaultValue Rabbit rabbit) {
+        @DefaultValue Rabbit rabbit,
+        @DefaultValue Liuhao liuhao,
+        @DefaultValue({"BAR", "LIUHAO"}) List<PaymentProviderType> publicProviders) {
 
     private static final Duration REQUIRED_STATE_WINDOW = Duration.ofMinutes(5);
     private static final Duration FAST_PENDING_WINDOW = Duration.ofSeconds(45);
@@ -45,8 +47,10 @@ public record MembershipPaymentProperties(
     private static final Pattern BAR_API_KEY =
             Pattern.compile("^bar_sk_[A-Za-z0-9_-]{43}$");
     private static final String BAR_CALLBACK_PATH = "/api/payment/bar/notify";
-    private static final String BAR_MERCHANT_HOST = "niko000o.site";
+    private static final String PAYMENT_MERCHANT_HOST = "niko000o.site";
     private static final String BAR_PROVIDER_HOST = "ihaveagoddamnplan.com";
+    private static final String LIUHAO_CALLBACK_PATH = "/api/payment/liuhao/notify";
+    private static final String LIUHAO_PROVIDER_HOST = "liuhao.net";
 
     @ConstructorBinding
     public MembershipPaymentProperties {
@@ -57,19 +61,27 @@ public record MembershipPaymentProperties(
                 || bar == null
                 || callback == null
                 || orderPersist == null
-                || rabbit == null) {
+                || rabbit == null
+                || liuhao == null
+                || publicProviders == null) {
             throw new IllegalArgumentException("Membership payment configuration groups are required.");
         }
         if (simulator.enabled() && !enabled) {
             throw new IllegalArgumentException(
                     "Membership payment must be enabled before the simulator can be enabled.");
         }
-        if (simulator.enabled() && bar.enabled()) {
+        publicProviders = List.copyOf(publicProviders);
+        if (publicProviders.isEmpty()
+                || publicProviders.stream().anyMatch(provider ->
+                        provider == null
+                                || provider == PaymentProviderType.LOCAL_SIMULATOR)
+                || publicProviders.stream().distinct().count() != publicProviders.size()) {
             throw new IllegalArgumentException(
-                    "The local simulator and BAR must not be enabled in the same environment.");
+                    "Public membership payment providers must be a unique BAR/LIUHAO allowlist.");
         }
         validateSimulator(simulator);
         validateBar(bar);
+        validateLiuhao(liuhao);
         validateCallback(callback);
         validateOrderPersist(orderPersist);
         validateRabbit(rabbit);
@@ -83,6 +95,10 @@ public record MembershipPaymentProperties(
             if (defaultProvider == PaymentProviderType.BAR && !bar.enabled()) {
                 throw new IllegalArgumentException(
                         "BAR must be enabled when it is the default provider.");
+            }
+            if (defaultProvider == PaymentProviderType.LIUHAO && !liuhao.enabled()) {
+                throw new IllegalArgumentException(
+                        "Liuhao must be enabled when it is the default provider.");
             }
         }
     }
@@ -118,7 +134,21 @@ public record MembershipPaymentProperties(
                         65_536),
                 callback,
                 orderPersist,
-                rabbit);
+                rabbit,
+                new Liuhao(
+                        false,
+                        URI.create("https://liuhao.net"),
+                        "",
+                        "",
+                        "",
+                        "",
+                        null,
+                        null,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        65_536,
+                        Duration.ofMinutes(5)),
+                List.of(PaymentProviderType.BAR, PaymentProviderType.LIUHAO));
     }
 
     /**
@@ -160,6 +190,22 @@ public record MembershipPaymentProperties(
         }
     }
 
+    /** 该配置组是来固定六号易支付 V2 RSA 商户身份、回调地址和 HTTPS 响应边界。 */
+    public record Liuhao(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("https://liuhao.net") URI baseUrl,
+            @DefaultValue("") String pid,
+            @DefaultValue("") String merchantPrivateKeyB64,
+            @DefaultValue("") String platformPublicKeyB64,
+            @DefaultValue("") String merchantPublicKeyB64,
+            URI notifyUrl,
+            URI returnUrl,
+            @DefaultValue("PT2S") Duration connectTimeout,
+            @DefaultValue("PT5S") Duration readTimeout,
+            @DefaultValue("65536") int responseMaxBytes,
+            @DefaultValue("PT5M") Duration timestampTolerance) {
+    }
+
     /** 该配置组是来约束回调 ZSet 五秒刷盘的批次、轮次、租约和固定 TTL。 */
     public record Callback(
             @DefaultValue("5000") long flushIntervalMillis,
@@ -186,9 +232,12 @@ public record MembershipPaymentProperties(
             List<Long> paymentCheckDelaysMillis,
             @DefaultValue({"30000", "30000", "60000", "60000", "120000"})
             List<Long> closingCheckDelaysMillis,
+            @DefaultValue({"10000", "20000", "30000", "60000", "120000"})
+            List<Long> refundRetryDelaysMillis,
             @DefaultValue("PT30S") Duration terminalQueryRetryDelay,
             @DefaultValue("3") int terminalQueryMaxRetries) {
 
+        @ConstructorBinding
         public Rabbit {
             paymentCheckDelaysMillis = paymentCheckDelaysMillis == null
                     ? null
@@ -196,6 +245,23 @@ public record MembershipPaymentProperties(
             closingCheckDelaysMillis = closingCheckDelaysMillis == null
                     ? null
                     : List.copyOf(closingCheckDelaysMillis);
+            refundRetryDelaysMillis = refundRetryDelaysMillis == null
+                    ? null
+                    : List.copyOf(refundRetryDelaysMillis);
+        }
+
+        /** 为既有测试和内部构造保留四参数入口，退款重试始终采用不可配置的五段默认节奏。 */
+        public Rabbit(
+                List<Long> paymentCheckDelaysMillis,
+                List<Long> closingCheckDelaysMillis,
+                Duration terminalQueryRetryDelay,
+                int terminalQueryMaxRetries) {
+            this(
+                    paymentCheckDelaysMillis,
+                    closingCheckDelaysMillis,
+                    List.of(10_000L, 20_000L, 30_000L, 60_000L, 120_000L),
+                    terminalQueryRetryDelay,
+                    terminalQueryMaxRetries);
         }
     }
 
@@ -250,11 +316,45 @@ public record MembershipPaymentProperties(
                 throw new IllegalArgumentException("BAR API key configuration is invalid.");
             }
         }
-        requireHttpsOrigin("BAR notify URL", value.notifyUrl(), BAR_MERCHANT_HOST, false);
-        requireHttpsOrigin("BAR return URL", value.returnUrl(), BAR_MERCHANT_HOST, false);
+        requireHttpsOrigin("BAR notify URL", value.notifyUrl(), PAYMENT_MERCHANT_HOST, false);
+        requireHttpsOrigin("BAR return URL", value.returnUrl(), PAYMENT_MERCHANT_HOST, false);
         if (!BAR_CALLBACK_PATH.equals(value.notifyUrl().getPath())) {
             throw new IllegalArgumentException(
                     "BAR notify URL must use the fixed payment callback path.");
+        }
+    }
+
+    private static void validateLiuhao(Liuhao value) {
+        requirePositive("Liuhao connect timeout", value.connectTimeout());
+        requirePositive("Liuhao read timeout", value.readTimeout());
+        requirePositive("Liuhao timestamp tolerance", value.timestampTolerance());
+        if (value.responseMaxBytes() < 1024 || value.responseMaxBytes() > 1_048_576) {
+            throw new IllegalArgumentException("Liuhao response limit must be between 1 KiB and 1 MiB.");
+        }
+        requireHttpsOrigin("Liuhao base URL", value.baseUrl(), LIUHAO_PROVIDER_HOST, true);
+        if (!value.enabled()) {
+            return;
+        }
+        if (value.pid() == null || !value.pid().matches("^[0-9]{1,18}$")) {
+            throw new IllegalArgumentException("Liuhao PID is required when enabled.");
+        }
+        requireKeyMaterial("Liuhao merchant private key", value.merchantPrivateKeyB64());
+        requireKeyMaterial("Liuhao platform public key", value.platformPublicKeyB64());
+        requireKeyMaterial("Liuhao merchant public key", value.merchantPublicKeyB64());
+        requireHttpsOrigin(
+                "Liuhao notify URL", value.notifyUrl(), PAYMENT_MERCHANT_HOST, false);
+        requireHttpsOrigin(
+                "Liuhao return URL", value.returnUrl(), PAYMENT_MERCHANT_HOST, false);
+        if (!LIUHAO_CALLBACK_PATH.equals(value.notifyUrl().getPath())) {
+            throw new IllegalArgumentException(
+                    "Liuhao notify URL must use the fixed payment callback path.");
+        }
+    }
+
+    private static void requireKeyMaterial(String name, String value) {
+        if (value == null || value.isBlank() || value.length() > 16_384
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(name + " must be provided as protected Base64 key material.");
         }
     }
 
@@ -316,6 +416,12 @@ public record MembershipPaymentProperties(
     private static void validateRabbit(Rabbit value) {
         requireDelayPlan("payment check", value.paymentCheckDelaysMillis());
         requireDelayPlan("closing check", value.closingCheckDelaysMillis());
+        requireDelayPlan("refund retry", value.refundRetryDelaysMillis());
+        if (!List.of(10_000L, 20_000L, 30_000L, 60_000L, 120_000L)
+                .equals(value.refundRetryDelaysMillis())) {
+            throw new IllegalArgumentException(
+                    "Membership refund retry delay plan must be 10, 20, 30, 60 and 120 seconds.");
+        }
         requirePositive("terminal query retry delay", value.terminalQueryRetryDelay());
         if (value.terminalQueryMaxRetries() < 0 || value.terminalQueryMaxRetries() > 10) {
             throw new IllegalArgumentException(

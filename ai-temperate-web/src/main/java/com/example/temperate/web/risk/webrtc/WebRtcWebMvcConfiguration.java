@@ -14,6 +14,8 @@ public class WebRtcWebMvcConfiguration implements WebMvcConfigurer {
 
     private static final String BAR_PAYMENT_CALLBACK_PATH =
             "/api/payment/bar/notify";
+    private static final String LIUHAO_PAYMENT_CALLBACK_PATH =
+            "/api/payment/liuhao/notify";
 
     private final WebRtcVerificationInterceptor interceptor;
 
@@ -36,6 +38,7 @@ public class WebRtcWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/admin/_edge/risk-challenge",
                         // BAR 的服务器请求没有浏览器 WebRTC 状态；只排除签名回调精确路径，不扩大普通用户接口。
                         BAR_PAYMENT_CALLBACK_PATH,
+                        LIUHAO_PAYMENT_CALLBACK_PATH,
                         /*
                          * Provider 顶层导航和回调无法携带站内 WebRTC 请求上下文；这里只精确排除两条入口，
                          * 其完整性继续由一次性 state、PKCE、OIDC nonce 与握手 Cookie 共同保证。
@@ -44,6 +47,7 @@ public class WebRtcWebMvcConfiguration implements WebMvcConfigurer {
                         "/api/auth/oauth2/code/**",
                         "/api/_edge/webrtc/start",
                         "/api/_edge/webrtc/report",
+                        "/api/_edge/webrtc/verdict-status",
                         "/api/admin/_edge/webrtc/start",
                         "/api/admin/_edge/webrtc/report",
                         /*

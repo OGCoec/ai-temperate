@@ -314,8 +314,10 @@ app:
       include-public-order-id: ${MEMBERSHIP_PAYMENT_TIMING_INCLUDE_PUBLIC_ORDER_ID:false}
     # 支付发起可独立暂停；关闭后仍保留 BAR 回调、主动查询、关单和退款处理能力。
     checkout-enabled: ${MEMBERSHIP_PAYMENT_CHECKOUT_ENABLED:true}
-    # 当前环境只选择一个 Provider，切换前必须先清空或等待旧 Provider 非终态订单结束。
+    # 历史无前缀订单使用该 Provider 兼容路由；新订单由请求选择并写入既有第三方流水号前缀。
     default-provider: ${MEMBERSHIP_PAYMENT_DEFAULT_PROVIDER:LOCAL_SIMULATOR}
+    # 普通前端只公开明确白名单中的外部 Provider，本地模拟器永远不能加入该列表。
+    public-providers: ${MEMBERSHIP_PAYMENT_PUBLIC_PROVIDERS:BAR,LIUHAO}
     # 压测认证默认关闭，允许列表只从本地受限环境变量绑定，不写入仓库或生产默认配置。
     loadtest:
       # 仅在本地专用 Profile 或 prod 与 loadtest-bar 的严格组合中允许开启 AT-only 路径。
@@ -342,7 +344,7 @@ app:
       request-max-bytes: ${SIMULATED_PAYMENT_REQUEST_MAX_BYTES:16384}
     # BAR 沙箱通过真实 HTTPS 完成创建、查询、关单、退款和异步回调，但不发生真实资金行为。
     bar:
-      # BAR 默认关闭；启用时必须同时关闭本地模拟器并提供完整商户配置。
+      # BAR 默认关闭；启用时必须提供完整商户配置，可与六号及仅供测试的本地模拟器同时注册。
       enabled: ${BAR_PAYMENT_ENABLED:false}
       # BAR Origin 固定为公开沙箱 HTTPS 默认四四三端口，禁止请求级覆盖。
       base-url: ${BAR_PAYMENT_BASE_URL:https://ihaveagoddamnplan.com}
@@ -364,6 +366,32 @@ app:
       read-timeout: ${BAR_PAYMENT_READ_TIMEOUT:PT5S}
       # BAR JSON 正文硬限制六十四 KiB，超过后在 Jackson 建树前拒绝。
       response-max-bytes: ${BAR_PAYMENT_RESPONSE_MAX_BYTES:65536}
+    # 六号易支付使用 V2 RSA 完成页面跳转、统一下单、查询、退款、关单和 GET 异步通知。
+    liuhao:
+      # 六号真实 Provider 默认关闭，启用后密钥只能由 Secret 环境注入。
+      enabled: ${LIUHAO_PAYMENT_ENABLED:false}
+      # 六号 HTTPS Origin 固定为官方域名且禁止请求级重定向。
+      base-url: ${LIUHAO_PAYMENT_BASE_URL:https://liuhao.net}
+      # 六号商户号只从环境变量读取，仓库不提供共享默认值。
+      pid: ${LIUHAO_PAYMENT_PID:}
+      # PKCS#8 商户私钥使用 Base64 保护传入，只在后端内存中生成 SHA256WithRSA 签名。
+      merchant-private-key-b64: ${LIUHAO_PAYMENT_MERCHANT_PRIVATE_KEY_B64:}
+      # X.509 平台公钥使用 Base64 保护传入，只用于验证六号响应和回调。
+      platform-public-key-b64: ${LIUHAO_PAYMENT_PLATFORM_PUBLIC_KEY_B64:}
+      # X.509 商户公钥只用于启动期校验私钥配对，不发送到六号或浏览器。
+      merchant-public-key-b64: ${LIUHAO_PAYMENT_MERCHANT_PUBLIC_KEY_B64:}
+      # 六号服务器通知地址必须是本项目固定 GET 回调路径。
+      notify-url: ${LIUHAO_PAYMENT_NOTIFY_URL:}
+      # 六号收银台结束后的浏览器返回地址只负责导航，不作为支付成功事实。
+      return-url: ${LIUHAO_PAYMENT_RETURN_URL:}
+      # 六号后端建连最多等待两秒，避免阻塞回调和 RabbitMQ 消费线程。
+      connect-timeout: ${LIUHAO_PAYMENT_CONNECT_TIMEOUT:PT2S}
+      # 六号响应最多等待五秒，超时后由现有有限重试和主动查询收敛。
+      read-timeout: ${LIUHAO_PAYMENT_READ_TIMEOUT:PT5S}
+      # 六号 JSON 响应硬限制六十四 KiB，超限内容在解析和日志之前拒绝。
+      response-max-bytes: ${LIUHAO_PAYMENT_RESPONSE_MAX_BYTES:65536}
+      # 六号 V2 十位秒级时间戳默认只允许前后五分钟偏差。
+      timestamp-tolerance: ${LIUHAO_PAYMENT_TIMESTAMP_TOLERANCE:PT5M}
     # 回调 ready/processing 双 ZSET 每五秒执行有界领取、恢复与批量落库。
     callback:
       # 调度固定延迟默认五秒，上一轮未完成时不会并发启动同一实例的新一轮。
@@ -425,6 +453,18 @@ app:
         # 第四段等待六十秒。
         - 60000
         # 第五段等待一百二十秒后进行最终裁决。
+        - 120000
+      # 退款只有受控网络超时才进入五段延迟重试，总尝试次数固定为六次。
+      refund-retry-delays-millis:
+        # 第二次退款在首次超时十秒后执行。
+        - 10000
+        # 第三次退款在再次超时二十秒后执行。
+        - 20000
+        # 第四次退款在再次超时三十秒后执行。
+        - 30000
+        # 第五次退款在再次超时六十秒后执行。
+        - 60000
+        # 第六次退款在再次超时一百二十秒后执行，仍超时即进入人工终态队列。
         - 120000
       # 最终 marker、PAID 或 UNKNOWN 状态每三十秒重查一次。
       terminal-query-retry-delay: ${MEMBERSHIP_PAYMENT_TERMINAL_QUERY_RETRY_DELAY:PT30S}
@@ -873,6 +913,8 @@ app:
       probe-timeout: ${WEBRTC_PROBE_TIMEOUT:12s}
       # ICE 探测结束后预留三秒提交同一 generation 的 Report，start 后总窗口不超过十五秒。
       report-grace: ${WEBRTC_REPORT_GRACE:3s}
+      # H5 OAuth 登录后允许待裁决 Session 正常访问的硬上限，超过该窗口即由 Redis 原子撤销。
+      oauth-async-verdict-window: ${WEBRTC_OAUTH_ASYNC_VERDICT_WINDOW:15s}
       # STUN 地址按固定优先顺序下发，服务端校验客户端上报结果的并集。
       stun-urls:
         # Google STUN 作为第一个全局候选来源。
@@ -1317,6 +1359,8 @@ app:
     enabled: ${AUTH_REQUEST_DIAGNOSTICS_ENABLED:true}
     # 默认向浏览器暴露固定阶段的 Server-Timing，内容只包含毫秒耗时而不包含凭据。
     server-timing-enabled: ${AUTH_SERVER_TIMING_ENABLED:true}
+    # 后端发布标识只接受镜像或 Git SHA 等非敏感短标识，缺失时统一显示 unknown。
+    release-id: ${APP_RELEASE_ID:unknown}
 
   # 受保护业务 API 的脱敏访问审计配置。
   access-audit:

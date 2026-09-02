@@ -8,6 +8,8 @@ import com.example.temperate.web.auth.oauth.provider.OAuthProviderErrorCode;
 import com.example.temperate.web.auth.oauth.provider.OAuthProviderException;
 import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.PreAuthTransport;
+import com.example.temperate.service.auth.oauth.flow.OAuthFlowErrorCode;
+import com.example.temperate.service.auth.oauth.flow.OAuthFlowException;
 import java.time.Clock;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -60,5 +62,22 @@ final class GlobalExceptionHandlerOAuthTest {
         assertThat(subjectResponse.getBody().message())
                 .doesNotContain("provider payload must not escape");
         assertThat(emailResponse.getBody().message()).doesNotContain("member@example.com");
+    }
+
+    @Test
+    void concurrentOAuthCompletionUsesStableConflictCodes() {
+        var inProgress = handler.handleOAuthFlow(new OAuthFlowException(
+                OAuthFlowErrorCode.COMPLETION_IN_PROGRESS,
+                "internal claim detail"));
+        var completed = handler.handleOAuthFlow(new OAuthFlowException(
+                OAuthFlowErrorCode.ALREADY_COMPLETED,
+                "internal state detail"));
+
+        assertThat(inProgress.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(completed.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(inProgress.getBody()).isNotNull();
+        assertThat(completed.getBody()).isNotNull();
+        assertThat(inProgress.getBody().message()).doesNotContain("internal");
+        assertThat(completed.getBody().message()).doesNotContain("internal");
     }
 }

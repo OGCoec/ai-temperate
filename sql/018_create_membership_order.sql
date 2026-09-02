@@ -35,6 +35,14 @@ CREATE TABLE membership_order (
         CHECK (state_version > 0),
     CONSTRAINT chk_membership_order_payment_started_before_expiry
         CHECK (payment_started_at IS NULL OR payment_started_at < expires_at),
+    CONSTRAINT chk_membership_order_no_external_order_reference
+        CHECK (
+            provider_trade_no IS NULL
+            OR (
+                provider_trade_no NOT LIKE 'LIUHAO:ORDER:%'
+                AND provider_trade_no NOT LIKE 'BAR:ORDER:%'
+            )
+        ),
     CONSTRAINT chk_membership_order_status
         CHECK (status IN (0, 1, 2, 3, 4)),
     CONSTRAINT chk_membership_order_entitlement_resolution
@@ -63,7 +71,7 @@ CREATE TABLE membership_order (
 );
 
 COMMENT ON TABLE membership_order IS
-    '会员支付订单主表；保存会员套餐模拟支付订单、支付状态和第三方交易流水，不连接真实六号支付、不保存回调原始报文或退款记录';
+    '会员支付订单主表；保存会员套餐订单、支付状态和 BAR/六号真实交易流水，不保存支付入口、回调原始报文或本地订单占位交易号';
 COMMENT ON COLUMN membership_order.id IS
     'HybridSemaphoreIdWorker 生成的固定 16 字节订单主键；跨 API、Redis、RabbitMQ 与模拟支付 out_trade_no 时统一编码为 22 字符无填充 Base64URL';
 COMMENT ON COLUMN membership_order.login_identity_id IS
@@ -79,7 +87,7 @@ COMMENT ON COLUMN membership_order.status IS
 COMMENT ON COLUMN membership_order.idempotency_key IS
     '前端创建订单时提交的 UUIDv4 幂等键；唯一约束保证同一幂等键只能创建一笔会员订单';
 COMMENT ON COLUMN membership_order.provider_trade_no IS
-    '模拟支付入口声明的第三方交易流水号 trade_no；支付成功前允许为空，必须按字符串保存，禁止转换为数字或 Hybrid ID';
+    '外部支付只保存 PROVIDER:TRADE:真实平台流水；支付未发起或结果不确定时为空，禁止保存本地订单 ID 占位值';
 COMMENT ON COLUMN membership_order.payment_started_at IS
     '用户在订单有效期内首次发起支付的服务端时间；为空表示尚未发起，迟到成功回调不得据此逆转终态';
 COMMENT ON COLUMN membership_order.expires_at IS
@@ -120,6 +128,9 @@ CREATE UNIQUE INDEX uk_membership_order_single_active_identity
 COMMENT ON CONSTRAINT uk_membership_order_provider_trade_no
     ON membership_order IS
     '保证同一个非空第三方支付交易流水号只能绑定一笔会员订单';
+COMMENT ON CONSTRAINT chk_membership_order_no_external_order_reference
+    ON membership_order IS
+    '禁止 BAR 与六号把本地订单 ID 以 PROVIDER:ORDER 形式伪装成第三方交易流水';
 COMMENT ON INDEX idx_membership_order_identity_created IS
     '支持按照用户登录身份查询会员订单，并按照订单创建时间倒序返回';
 COMMENT ON INDEX idx_membership_order_latest_paid IS

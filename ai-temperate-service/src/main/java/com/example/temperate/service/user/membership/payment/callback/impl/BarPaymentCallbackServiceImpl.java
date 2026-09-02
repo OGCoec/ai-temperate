@@ -23,6 +23,7 @@ import com.example.temperate.service.user.membership.payment.order.MembershipPay
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.provider.bar.BarPaymentSignatureService;
@@ -125,11 +126,15 @@ public final class BarPaymentCallbackServiceImpl
                 failure(
                         MembershipPaymentErrorCode.MEMBERSHIP_ORDER_NOT_FOUND,
                         "The membership order was not found."));
-        if (properties.defaultProvider() != PaymentProviderType.BAR
+        String taggedTradeNo = PaymentProviderReference.trade(
+                PaymentProviderType.BAR, command.tradeNo());
+        if ((order.providerTradeNo() != null
+                        && (!PaymentProviderReference.isTrade(
+                                        PaymentProviderType.BAR, order.providerTradeNo())
+                                || !order.providerTradeNo().equals(taggedTradeNo)))
                 || order.payAmountYuan().compareTo(amount) != 0
                 || !order.payType().equals(command.type())
-                || (order.providerTradeNo() != null
-                        && !order.providerTradeNo().equals(command.tradeNo()))) {
+                ) {
             throw failure(
                     MembershipPaymentErrorCode.BAR_ORDER_CONFLICT,
                     "BAR callback does not match the local order.");
@@ -138,15 +143,15 @@ public final class BarPaymentCallbackServiceImpl
             transactionService.bindProviderTradeNo(
                     order.loginIdentityId(),
                     base64UrlCodec.decode(orderId),
-                    command.tradeNo());
+                    taggedTradeNo);
         }
 
         MembershipPaymentProvider provider = providerRegistry.getRequired(PaymentProviderType.BAR);
         PaymentQueryResult query = provider.queryPayment(
-                new PaymentQueryCommand(orderId, command.tradeNo()));
+                new PaymentQueryCommand(orderId, taggedTradeNo));
         if (query.status() != PaymentProviderStatus.PAID
                 || !Objects.equals(query.orderId(), orderId)
-                || !Objects.equals(query.providerTradeNo(), command.tradeNo())
+                || !Objects.equals(query.providerTradeNo(), taggedTradeNo)
                 || !Objects.equals(query.channelTradeNo(), command.apiTradeNo())
                 || query.amountYuan() == null
                 || query.amountYuan().compareTo(amount) != 0
@@ -169,7 +174,7 @@ public final class BarPaymentCallbackServiceImpl
                 callbackId,
                 orderId,
                 properties.bar().pid(),
-                command.tradeNo(),
+                taggedTradeNo,
                 command.apiTradeNo(),
                 command.type(),
                 SUCCESS,

@@ -21,11 +21,14 @@ class MembershipPaymentProviderRegistryTest {
     void selectsProviderByStableEnumType() {
         MembershipPaymentProvider local = new StubProvider(PaymentProviderType.LOCAL_SIMULATOR);
         MembershipPaymentProvider bar = new StubProvider(PaymentProviderType.BAR);
+        MembershipPaymentProvider liuhao = new StubProvider(PaymentProviderType.LIUHAO);
         MembershipPaymentProviderRegistry registry =
-                new MembershipPaymentProviderRegistry(Map.of("local", local, "bar", bar));
+                new MembershipPaymentProviderRegistry(Map.of(
+                        "local", local, "bar", bar, "liuhao", liuhao));
 
         assertThat(registry.getRequired(PaymentProviderType.LOCAL_SIMULATOR)).isSameAs(local);
         assertThat(registry.getRequired(PaymentProviderType.BAR)).isSameAs(bar);
+        assertThat(registry.getRequired(PaymentProviderType.LIUHAO)).isSameAs(liuhao);
     }
 
     @Test
@@ -71,6 +74,11 @@ class MembershipPaymentProviderRegistryTest {
 
         @Override
         public PaymentCheckoutResult createCheckout(PaymentCheckoutCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public PaymentCreateResult createPayment(PaymentCreateCommand command) {
             throw new UnsupportedOperationException();
         }
 

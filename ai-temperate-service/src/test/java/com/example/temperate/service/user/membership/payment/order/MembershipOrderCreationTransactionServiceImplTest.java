@@ -21,7 +21,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * 该单元测试是来约束订单创建正常路径只调用一次 createOrResolve，并保留幂等、活动订单和空返回回退裁决。
+ * 该单元测试是来约束订单创建正常路径只调用一次 createOrResolve，并保留幂等、强制替换和空返回回退裁决。
  */
 final class MembershipOrderCreationTransactionServiceImplTest {
 
@@ -59,7 +59,7 @@ final class MembershipOrderCreationTransactionServiceImplTest {
     }
 
     @Test
-    void differentActiveOrderReturnedBySingleStatementIsRejected() {
+    void differentActiveOrderReturnedBySingleStatementRequiresReplacement() {
         MembershipOrderMapper mapper = mock(MembershipOrderMapper.class);
         MembershipOrder candidate = order(17L, MembershipTier.PRO, "wxpay");
         MembershipOrder active = order(17L, MembershipTier.PLUS, "alipay");
@@ -68,11 +68,85 @@ final class MembershipOrderCreationTransactionServiceImplTest {
                 UUID.fromString("550e8400-e29b-41d4-a716-446655440001"));
         when(mapper.createOrResolve(candidate)).thenReturn(active);
 
-        assertThatThrownBy(() -> new MembershipOrderCreationTransactionServiceImpl(mapper)
-                        .createOrGet(candidate))
-                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
-                        assertThat(exception.code()).isEqualTo(
-                                MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT));
+        MembershipOrderCreationResult result =
+                new MembershipOrderCreationTransactionServiceImpl(mapper)
+                        .createOrGet(candidate);
+
+        assertThat(result.created()).isFalse();
+        assertThat(result.replacementRequired()).isTrue();
+        assertThat(result.order()).isSameAs(active);
+    }
+
+    @Test
+    void replacementClosesExpectedActiveOrderAndCreatesCandidateInOneTransaction() {
+        MembershipOrderMapper mapper = mock(MembershipOrderMapper.class);
+        MembershipOrder candidate = order(17L, MembershipTier.PRO, "wxpay");
+        MembershipOrder active = order(17L, MembershipTier.PLUS, "alipay");
+        active.setId(new byte[] {1, 2, 3, 4});
+        active.setIdempotencyKey(
+                UUID.fromString("550e8400-e29b-41d4-a716-446655440001"));
+        active.setPaymentStartedAt(OffsetDateTime.parse("2026-08-20T12:01:00Z"));
+        when(mapper.findActiveByLoginIdentityId(17L)).thenReturn(active);
+        when(mapper.supersedeActiveForReplacement(
+                        active.getId(),
+                        17L,
+                        MembershipOrderStatus.CLOSED,
+                        2L,
+                        OffsetDateTime.parse("2026-08-20T12:02:00Z")))
+                .thenReturn(1);
+        when(mapper.insert(candidate)).thenReturn(1);
+        MembershipOrderReplacementCommand command = new MembershipOrderReplacementCommand(
+                candidate,
+                active.getId(),
+                MembershipOrderStatus.CLOSED,
+                2L,
+                OffsetDateTime.parse("2026-08-20T12:02:00Z"));
+
+        MembershipOrderCreationResult result =
+                new MembershipOrderCreationTransactionServiceImpl(mapper)
+                        .replaceActive(command);
+
+        assertThat(result.created()).isTrue();
+        assertThat(result.replacementRequired()).isFalse();
+        assertThat(result.order()).isSameAs(candidate);
+        verify(mapper).acquireCreationLock(17L);
+        verify(mapper).insert(candidate);
+    }
+
+    @Test
+    void replacementAcceptsConservativeClosedDecisionFromNewerRedisPaymentFact() {
+        MembershipOrderMapper mapper = mock(MembershipOrderMapper.class);
+        MembershipOrder candidate = order(17L, MembershipTier.PRO, "wxpay");
+        MembershipOrder active = order(17L, MembershipTier.PLUS, "alipay");
+        active.setId(new byte[] {1, 2, 3, 4});
+        active.setIdempotencyKey(
+                UUID.fromString("550e8400-e29b-41d4-a716-446655440001"));
+        when(mapper.findActiveByLoginIdentityId(17L)).thenReturn(active);
+        when(mapper.supersedeActiveForReplacement(
+                        active.getId(),
+                        17L,
+                        MembershipOrderStatus.CLOSED,
+                        2L,
+                        OffsetDateTime.parse("2026-08-20T12:02:00Z")))
+                .thenReturn(1);
+        when(mapper.insert(candidate)).thenReturn(1);
+
+        MembershipOrderCreationResult result =
+                new MembershipOrderCreationTransactionServiceImpl(mapper)
+                        .replaceActive(new MembershipOrderReplacementCommand(
+                                candidate,
+                                active.getId(),
+                                MembershipOrderStatus.CLOSED,
+                                2L,
+                                OffsetDateTime.parse("2026-08-20T12:02:00Z")));
+
+        assertThat(result.created()).isTrue();
+        verify(mapper).supersedeActiveForReplacement(
+                active.getId(),
+                17L,
+                MembershipOrderStatus.CLOSED,
+                2L,
+                OffsetDateTime.parse("2026-08-20T12:02:00Z"));
     }
 
     @Test

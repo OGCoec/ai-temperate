@@ -1,5 +1,7 @@
 package com.example.temperate.service.user.membership.payment.observability;
 
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
+import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
@@ -127,6 +129,16 @@ public final class MembershipPaymentMetrics {
         }
     }
 
+    /** 六号回调的 Web 传输拒绝只接受固定原因标签，并同时计入现有回调拒绝总数。 */
+    public void callbackTransportRejected(String reason) {
+        callbackRejected.increment();
+        meterRegistry.counter(
+                        "membership_payment_callback_transport_rejected_total",
+                        "provider", "liuhao",
+                        "reason", safeLiuhaoTransportReason(reason))
+                .increment();
+    }
+
     public void callbackRecovered(int count) {
         if (count > 0) {
             callbackRecovered.increment(count);
@@ -158,6 +170,32 @@ public final class MembershipPaymentMetrics {
 
     public void paymentQuery() {
         paymentQuery.increment();
+    }
+
+    /** 外部 Provider 指标只使用固定枚举和动作标签，禁止加入订单号、流水号或错误原文。 */
+    public void providerOperation(
+            PaymentProviderType provider,
+            String operation,
+            boolean succeeded) {
+        meterRegistry.counter(
+                        "membership_payment_provider_operation_total",
+                        "provider", tag(Objects.requireNonNull(provider)),
+                        "operation", safeTag(operation),
+                        "outcome", succeeded ? "success" : "failed")
+                .increment();
+    }
+
+    /** Provider 失败原因只接受固定错误枚举，避免上游原文或流水号形成敏感高基数标签。 */
+    public void providerFailure(
+            PaymentProviderType provider,
+            String operation,
+            MembershipPaymentErrorCode reason) {
+        meterRegistry.counter(
+                        "membership_payment_provider_failure_total",
+                        "provider", tag(Objects.requireNonNull(provider)),
+                        "operation", safeTag(operation),
+                        "reason", tag(Objects.requireNonNull(reason)))
+                .increment();
     }
 
     public void closing() {
@@ -395,6 +433,20 @@ public final class MembershipPaymentMetrics {
         return normalized.matches("^[a-z0-9_]{1,64}$")
                 ? normalized
                 : "unavailable";
+    }
+
+    // 指标层再次约束固定集合，避免未来调用方绕过 Web 枚举制造高基数标签。
+    private static String safeLiuhaoTransportReason(String value) {
+        return switch (Objects.requireNonNullElse(value, "unavailable")) {
+            case "missing_required",
+                    "too_many_parameters",
+                    "invalid_parameter_name",
+                    "repeated_parameter",
+                    "invalid_parameter_value",
+                    "value_too_large",
+                    "payload_too_large" -> value;
+            default -> "unavailable";
+        };
     }
 
     private static String safeStage(String flow, int stageIndex) {

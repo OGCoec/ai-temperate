@@ -41,14 +41,22 @@ export function inspectAuthResponse(response = {}) {
 	})
 }
 
-export function networkFailureDiagnostics() {
+export function networkFailureDiagnostics(cause = null, context = {}) {
+	const errno = safeDiagnosticText(cause?.errno, 64)
+	const errMsg = safeDiagnosticText(cause?.errMsg || cause?.message, 160)
 	return Object.freeze({
 		statusCode: 0,
 		contentType: '',
 		cfMitigated: '',
 		traceId: '',
 		cfRay: '',
-		classification: 'NETWORK_ERROR'
+		classification: 'NETWORK_ERROR',
+		errno,
+		errMsg,
+		timeoutMs: boundedNumber(context.timeoutMs),
+		path: safeDiagnosticText(String(context.path || '').split(/[?#]/, 1)[0], 160),
+		phase: safeDiagnosticText(context.phase, 64),
+		preAuthReady: context.preAuthReady === true
 	})
 }
 
@@ -76,4 +84,19 @@ export function createTurnstileAttemptId() {
 
 function isJsonValue(value) {
 	return value !== null && typeof value === 'object'
+}
+
+function safeDiagnosticText(value, maxLength) {
+	if (value == null) return ''
+	return String(value)
+		.replace(/[\r\n]/g, ' ')
+		.replace(/Bearer\s+[^\s]+/gi, 'Bearer [redacted]')
+		.replace(/([?&](?:token|code|state|nonce|secret)=)[^&\s]+/gi, '$1[redacted]')
+		.slice(0, maxLength)
+}
+
+function boundedNumber(value) {
+	const number = Number(value)
+	return Number.isFinite(number) && number >= 0 && number <= 120000
+		? Math.round(number) : 0
 }

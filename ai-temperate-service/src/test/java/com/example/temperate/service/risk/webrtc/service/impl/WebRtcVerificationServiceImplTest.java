@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.temperate.common.security.hmac.HmacIdentifier;
 import com.example.temperate.common.security.hmac.HmacSha256Identifier;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcSessionVerdictService;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskScope;
 import com.example.temperate.service.risk.preauth.domain.PreAuthAccess;
@@ -411,6 +412,86 @@ class WebRtcVerificationServiceImplTest {
     }
 
     @Test
+    void genericReportCannotClaimAnOAuthOwnedPendingGeneration() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = access(
+                fixture, PreAuthWebRtcPhase.PENDING, 27L, DEADLINE, null, null);
+        when(fixture.store().writeWebRtcResult(
+                eq(RiskScope.USER),
+                eq(TOKEN),
+                eq(DEVICE),
+                eq(fixture.httpIpDigest()),
+                eq(27L),
+                eq(true),
+                isNull(),
+                any(String.class),
+                eq(true),
+                eq(Duration.ofMinutes(30))))
+                .thenReturn(PreAuthWebRtcWriteResult.OAUTH_ATTEMPT_REQUIRED);
+
+        var decision = fixture.service().report(
+                access,
+                HTTP_IP,
+                "27",
+                List.of(HTTP_IP));
+
+        assertThat(decision.outcome())
+                .isEqualTo(WebRtcVerificationOutcome.OAUTH_ATTEMPT_REQUIRED);
+    }
+
+    @Test
+    void oauthReportReachesAtomicVerdictWhenPreAuthWasAlreadyVerified() {
+        Fixture fixture = fixture();
+        OAuthWebRtcSessionVerdictService verdictService =
+                mock(OAuthWebRtcSessionVerdictService.class);
+        WebRtcVerificationServiceImpl service = new WebRtcVerificationServiceImpl(
+                fixture.properties(),
+                fixture.store(),
+                fixture.identifier(),
+                fixture.protector(),
+                new WebRtcIpNormalizer(),
+                verdictService);
+        PreAuthAccess access = access(
+                fixture,
+                PreAuthWebRtcPhase.VERIFIED,
+                28L,
+                null,
+                null,
+                fixture.protector().encrypt(
+                        List.of(HTTP_IP),
+                        RiskScope.USER,
+                        TOKEN,
+                        fixture.httpIpDigest()));
+        String attemptId = "11111111-1111-4111-8111-111111111111";
+        when(verdictService.decideReport(
+                eq(access),
+                eq(attemptId),
+                eq(28L),
+                eq(true),
+                isNull(),
+                any(String.class),
+                eq(true)))
+                .thenReturn(PreAuthWebRtcWriteResult.UPDATED);
+
+        var decision = service.report(
+                access,
+                HTTP_IP,
+                "28",
+                attemptId,
+                List.of(HTTP_IP));
+
+        assertThat(decision.outcome()).isEqualTo(WebRtcVerificationOutcome.VERIFIED);
+        verify(verdictService).decideReport(
+                eq(access),
+                eq(attemptId),
+                eq(28L),
+                eq(true),
+                isNull(),
+                any(String.class),
+                eq(true));
+    }
+
+    @Test
     void mismatchFailureRetainsEncryptedCandidatesWithoutADeadline() {
         Fixture fixture = fixture();
         String ciphertext = fixture.protector().encrypt(
@@ -475,6 +556,7 @@ class WebRtcVerificationServiceImplTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                Duration.ofSeconds(15),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),
@@ -490,7 +572,7 @@ class WebRtcVerificationServiceImplTest {
                 identifier,
                 protector,
                 new WebRtcIpNormalizer());
-        return new Fixture(service, store, protector, ipDigest);
+        return new Fixture(service, store, protector, ipDigest, properties, identifier);
     }
 
     private static void expectWritten(
@@ -540,6 +622,8 @@ class WebRtcVerificationServiceImplTest {
             WebRtcVerificationServiceImpl service,
             PreAuthStore store,
             WebRtcIpProtector protector,
-            HmacIdentifier httpIpDigest) {
+            HmacIdentifier httpIpDigest,
+            NetworkRiskProperties properties,
+            NetworkRiskIdentifier identifier) {
     }
 }

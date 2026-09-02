@@ -12,6 +12,7 @@ public enum WebRtcVerificationOutcome {
     IP_FAMILY_INCOMPLETE,
     IP_MISMATCH,
     NETWORK_CHANGED,
+    OAUTH_ATTEMPT_REQUIRED,
     STALE_REPORT,
     STATE_INVALID
 }

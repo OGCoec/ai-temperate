@@ -1,7 +1,7 @@
 package com.example.temperate.service.user.membership.payment.rabbit;
 
 /**
- * 该异常是来指示 CLOSING 最终查询已耗尽有限重试，监听器必须拒绝且不重新入队，使消息进入 DLQ 并保留订单 CLOSING。
+ * 该异常是来指示第三方终态查询已耗尽有限重试，监听器必须按 Quorum Queue 的有限投递规则处理并最终进入 DLQ，且不得篡改既有本地状态。
  */
 public final class MembershipPaymentTerminalQueryExhaustedException
         extends RuntimeException {

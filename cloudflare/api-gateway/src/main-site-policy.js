@@ -104,6 +104,7 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/_edge/pre-auth', ['POST']),
 	route('/api/_edge/webrtc/start', ['GET']),
 	route('/api/_edge/webrtc/report', ['POST']),
+	route('/api/_edge/webrtc/verdict-status', ['POST']),
 	route('/ws/voice', ['GET'], {
 		webSocket: true,
 		routeTemplate: '/ws/voice'
@@ -128,6 +129,7 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/auth/oauth2/start', ['POST']),
 	route('/api/auth/oauth2/google/native/complete', ['POST']),
 	route('/api/auth/oauth2/flow/status', ['GET']),
+	route('/api/auth/oauth2/webrtc/resume', ['POST']),
 	route('/api/auth/oauth2/phone/start', ['POST']),
 	route('/api/auth/oauth2/phone/turnstile', ['POST']),
 	route('/api/auth/oauth2/phone/send', ['POST']),
@@ -157,6 +159,9 @@ const EXACT_ROOT_ROUTES = new Map([
 	route('/api/auth/session/logout', ['POST']),
 	route('/api/auth/session/logout-all', ['POST']),
 	route('/api/payment/bar/notify', ['GET'], {
+		providerCallback: true
+	}),
+	route('/api/payment/liuhao/notify', ['GET'], {
 		providerCallback: true
 	}),
 	route('/api/user/membership-plan-offers', ['GET']),

@@ -128,6 +128,34 @@ final class MembershipPaymentEntitlementSettlementServiceImplTest {
         verify(cacheInvalidationExecutor).evictAfterCommit(List.of(17L));
     }
 
+    @Test
+    void appliedPaymentBindsARealLiuhaoTradeWhenTheLocalReferenceIsMissing() {
+        String tradeReference = "LIUHAO:TRADE:202608301234567890";
+        MembershipOrder databaseOrder = databaseOrder(MembershipOrderStatus.CLOSING, 1L);
+        databaseOrder.setProviderTradeNo(null);
+        MembershipPaymentCallback callback = callback(null);
+        callback.setProviderTradeNo(tradeReference);
+        MembershipOrderSnapshot paid = paidSnapshot(PAID_AT, tradeReference);
+        when(orderMapper.findByIdsJsonForUpdate(anyString()))
+                .thenReturn(List.of(databaseOrder));
+        when(callbackMapper.findByIdsJsonForUpdate(anyString()))
+                .thenReturn(List.of(callback));
+        when(quotaMapper.findByLoginIdentityIdsForUpdate(List.of(17L)))
+                .thenReturn(List.of(quota()));
+        when(quotaPlanService.getRequired(MembershipTier.PLUS))
+                .thenReturn(new MembershipQuotaPlan(200_000L, Duration.ofDays(7)));
+        when(orderMapper.batchAdvanceState(anyString())).thenReturn(1);
+        when(quotaMapper.batchGrantPaidMemberships(anyString())).thenReturn(1);
+        when(orderMapper.batchResolveEntitlements(anyString())).thenReturn(1);
+        when(callbackMapper.batchResolve(anyString())).thenReturn(1);
+
+        service.settleApplied(List.of(new MembershipPaymentEntitlementCommand(
+                CALLBACK_ID, paid, RESOLVED_AT)));
+
+        verify(orderMapper).batchAdvanceState(anyString());
+        verify(orderMapper).batchResolveEntitlements(anyString());
+    }
+
     @ParameterizedTest
     @CsvSource({
         "2026-08-22T10:00:00Z,2026-09-22T10:00:00Z",
@@ -288,6 +316,46 @@ final class MembershipPaymentEntitlementSettlementServiceImplTest {
     }
 
     @Test
+    void historicalRefundRequiredSettlementIsIdempotentlyReappliedWithNullOrderTrade()
+            throws Exception {
+        MembershipOrder historical = databaseOrder(MembershipOrderStatus.CANCELLED, 3L);
+        historical.setProviderTradeNo("LIUHAO:TRADE:legacy-provider-trade");
+        historical.setEntitlementResolution(
+                MembershipOrderEntitlementResolution.REFUND_REQUIRED);
+        historical.setEntitlementResolvedAt(RESOLVED_AT.minusMinutes(1));
+        MembershipPaymentCallback resolvedCallback = callback("REFUND_REQUIRED");
+        resolvedCallback.setProviderTradeNo("LIUHAO:TRADE:legacy-provider-trade");
+        when(orderMapper.findByIdsJsonForUpdate(anyString()))
+                .thenReturn(List.of(historical));
+        when(callbackMapper.findByIdsJsonForUpdate(anyString()))
+                .thenReturn(List.of(resolvedCallback));
+        when(orderMapper.batchResolveEntitlements(anyString())).thenReturn(1);
+        when(callbackMapper.batchResolve(anyString())).thenReturn(1);
+
+        service.settleRefundRequired(List.of(
+                new MembershipPaymentRefundEntitlementCommand(
+                        CALLBACK_ID,
+                        ORDER_ID,
+                        RESOLVED_AT)));
+
+        ArgumentCaptor<String> entitlementJson = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> callbackResolutionJson = ArgumentCaptor.forClass(String.class);
+        verify(orderMapper).batchResolveEntitlements(entitlementJson.capture());
+        verify(callbackMapper).batchResolve(callbackResolutionJson.capture());
+        JsonNode entitlement = objectMapper.readTree(entitlementJson.getValue()).get(0);
+        JsonNode callbackResolution = objectMapper
+                .readTree(callbackResolutionJson.getValue())
+                .get(0);
+        assertThat(entitlement.get("providerTradeNo").isNull()).isTrue();
+        assertThat(entitlement.get("resolution").asText()).isEqualTo("REFUND_REQUIRED");
+        assertThat(callbackResolution.get("resolution").asText())
+                .isEqualTo("REFUND_REQUIRED");
+        assertThat(callbackResolutionJson.getValue())
+                .doesNotContain("legacy-provider-trade");
+        verify(quotaMapper, never()).batchGrantPaidMemberships(anyString());
+    }
+
+    @Test
     void terminalNotGrantedCannotBeConvertedIntoAppliedEntitlement() {
         MembershipOrder closed = databaseOrder(MembershipOrderStatus.CLOSED, 3L);
         closed.setEntitlementResolution(MembershipOrderEntitlementResolution.NOT_GRANTED);
@@ -321,6 +389,12 @@ final class MembershipPaymentEntitlementSettlementServiceImplTest {
     }
 
     private static MembershipOrderSnapshot paidSnapshot(OffsetDateTime paidAt) {
+        return paidSnapshot(paidAt, "provider-trade-1");
+    }
+
+    private static MembershipOrderSnapshot paidSnapshot(
+            OffsetDateTime paidAt,
+            String providerTradeNo) {
         return new MembershipOrderSnapshot(
                 MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
                 ORDER_ID,
@@ -330,7 +404,7 @@ final class MembershipPaymentEntitlementSettlementServiceImplTest {
                 "alipay",
                 MembershipOrderStatus.PAID,
                 UUID.fromString("550e8400-e29b-41d4-a716-446655440000"),
-                "provider-trade-1",
+                providerTradeNo,
                 paidAt.minusMinutes(1),
                 paidAt.plusMinutes(4),
                 paidAt.plusMinutes(9),

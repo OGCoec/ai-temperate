@@ -97,13 +97,13 @@ final class MembershipPaymentConfigurationContractTest {
         Collection<Queue> queues = declarables.getDeclarablesByType(Queue.class);
 
         assertThat(exchanges)
-                .hasSize(2)
+                .hasSize(4)
                 .allSatisfy(exchange -> {
                     assertThat(exchange.isDurable()).isTrue();
                     assertThat(exchange.getType()).isEqualTo("x-delayed-message");
                 });
         assertThat(deadLetterExchanges)
-                .hasSize(2)
+                .hasSize(5)
                 .allSatisfy(exchange -> assertThat(exchange.isDurable()).isTrue());
         assertThat(queues)
                 .extracting(Queue::getName)
@@ -111,7 +111,12 @@ final class MembershipPaymentConfigurationContractTest {
                         MembershipPaymentRabbitNames.PAYMENT_QUEUE,
                         MembershipPaymentRabbitNames.PAYMENT_DLQ,
                         MembershipPaymentRabbitNames.CLOSING_QUEUE,
-                        MembershipPaymentRabbitNames.CLOSING_DLQ);
+                        MembershipPaymentRabbitNames.CLOSING_DLQ,
+                        MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_QUEUE,
+                        MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_DLQ,
+                        MembershipPaymentRabbitNames.REFUND_RETRY_QUEUE,
+                        MembershipPaymentRabbitNames.REFUND_RETRY_DLQ,
+                        MembershipPaymentRabbitNames.REFUND_TERMINAL_QUEUE);
         assertThat(queues).allSatisfy(queue -> {
             assertThat(queue.isDurable()).isTrue();
             assertThat(queue.getArguments()).containsEntry("x-queue-type", "quorum");

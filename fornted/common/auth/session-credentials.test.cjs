@@ -44,3 +44,13 @@ test('requires all three credentials before persisting an Android session', asyn
 		accessToken: '', refreshToken: 'rt', csrfToken: 'csrf'
 	}), false)
 })
+
+test('Android OAuth completion requires the rotated PreAuth as part of the response', async () => {
+	const { hasCompleteAndroidOAuthCredentials } = await loadModule()
+	assert.equal(hasCompleteAndroidOAuthCredentials({
+		accessToken: 'at', refreshToken: 'rt', csrfToken: 'csrf', preAuthToken: 'preauth'
+	}), true)
+	assert.equal(hasCompleteAndroidOAuthCredentials({
+		accessToken: 'at', refreshToken: 'rt', csrfToken: 'csrf'
+	}), false)
+})

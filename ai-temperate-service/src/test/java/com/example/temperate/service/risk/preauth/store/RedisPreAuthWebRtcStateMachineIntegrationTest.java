@@ -9,6 +9,8 @@ import com.example.temperate.common.security.hmac.HmacSha256Identifier;
 import com.example.temperate.service.admin.config.properties.AdminProperties;
 import com.example.temperate.service.admin.security.AdminSecretProtector;
 import com.example.temperate.service.admin.session.impl.RedisAdminSessionStore;
+import com.example.temperate.service.auth.oauth.webrtc.store.OAuthWebRtcAttemptStore.ReportDecisionCommand;
+import com.example.temperate.service.auth.oauth.webrtc.store.impl.RedisOAuthWebRtcAttemptStore;
 import com.example.temperate.service.auth.session.refresh.dto.command.NewRefreshSession;
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionValidation;
 import com.example.temperate.service.auth.session.refresh.store.impl.RedisRefreshSessionStore;
@@ -32,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -74,6 +77,7 @@ class RedisPreAuthWebRtcStateMachineIntegrationTest {
     private static StringRedisTemplate redisTemplate;
 
     private RedisPreAuthStore store;
+    private RedisOAuthWebRtcAttemptStore oauthStore;
 
     @BeforeAll
     static void connectToRedis() {
@@ -98,6 +102,7 @@ class RedisPreAuthWebRtcStateMachineIntegrationTest {
             connection.serverCommands().flushAll();
         }
         store = new RedisPreAuthStore(redisTemplate, KEYS);
+        oauthStore = new RedisOAuthWebRtcAttemptStore(redisTemplate, KEYS);
     }
 
     @Test
@@ -386,6 +391,239 @@ class RedisPreAuthWebRtcStateMachineIntegrationTest {
         assertThat(fallback.webRtcPhase()).isEqualTo(PreAuthWebRtcPhase.REQUIRED);
         assertThat(fallback.webRtcGeneration()).isEqualTo(2L);
         assertThat(fallback.webRtcIps()).isNull();
+    }
+
+    @Test
+    void genericReportCannotClaimOAuthOwnedPendingGeneration() {
+        Identifiers ids = identifiers("oauth-owner-block");
+        create(RiskScope.USER, ids, START_GRACE);
+        begin(RiskScope.USER, ids, 1L);
+        redisTemplate.opsForHash().putAll(
+                KEYS.userPreAuthKey(ids.token()),
+                Map.of(
+                        "webRtcOwner", "OAUTH",
+                        "oauthWebRtcAttemptDigest", id("oauth-owner-attempt").value()));
+
+        assertThat(store.writeWebRtcResult(
+                        RiskScope.USER,
+                        ids.token(),
+                        ids.device(),
+                        ids.ip(),
+                        1L,
+                        true,
+                        null,
+                        "encrypted-generic-candidates",
+                        true,
+                        TTL))
+                .isEqualTo(PreAuthWebRtcWriteResult.OAUTH_ATTEMPT_REQUIRED);
+        assertThat(requiredState(RiskScope.USER, ids.token()).webRtcPhase())
+                .isEqualTo(PreAuthWebRtcPhase.PENDING);
+    }
+
+    @Test
+    void verifiedPreAuthAndResumedAttemptConvergePendingSessionToActive() {
+        Identifiers ids = identifiers("oauth-verified-convergence");
+        HmacIdentifier attempt = id("oauth-verified-convergence-attempt");
+        HmacIdentifier refresh = id("oauth-verified-convergence-refresh");
+        String preAuthKey = KEYS.userPreAuthKey(ids.token());
+        String attemptKey = KEYS.oauthWebRtcAttemptKey(attempt);
+        String refreshKey = KEYS.sessionRefreshTokenKey(refresh);
+        long deadline = redisNowMillis() + Duration.ofSeconds(15).toMillis();
+        create(RiskScope.USER, ids, START_GRACE);
+        begin(RiskScope.USER, ids, 1L);
+        redisTemplate.opsForHash().putAll(preAuthKey, Map.of(
+                "webRtcPhase", "VERIFIED",
+                "webRtcIps", "encrypted-generic-candidates",
+                "webRtcOwner", "OAUTH",
+                "oauthWebRtcAttemptDigest", attempt.value()));
+        redisTemplate.opsForHash().putAll(attemptKey, Map.of(
+                "generation", "1",
+                "preAuthTokenDigest", ids.token().value(),
+                "deviceDigest", ids.device().value(),
+                "currentIpDigest", ids.ip().value(),
+                "status", "RESUMED",
+                "verdictDeadlineAt", Long.toString(deadline),
+                "refreshTokenDigest", refresh.value()));
+        redisTemplate.opsForHash().putAll(refreshKey, Map.of(
+                "userId", "10001",
+                "riskVerdict", "PENDING",
+                "riskVerdictAttemptId", attempt.value(),
+                "riskVerdictGeneration", "1",
+                "riskVerdictDeadlineAt", Long.toString(deadline)));
+
+        assertThat(oauthStore.decideReport(new ReportDecisionCommand(
+                        RiskScope.USER,
+                        ids.token(),
+                        attempt,
+                        ids.device(),
+                        ids.ip(),
+                        1L,
+                        true,
+                        null,
+                        "encrypted-oauth-candidates",
+                        true,
+                        TTL)))
+                .isEqualTo(PreAuthWebRtcWriteResult.UPDATED);
+        assertThat(redisTemplate.opsForHash().get(refreshKey, "riskVerdict"))
+                .isEqualTo("ACTIVE");
+        assertThat(redisTemplate.opsForHash().get(attemptKey, "status"))
+                .isEqualTo("VERIFIED");
+        assertThat(redisTemplate.opsForHash().hasKey(preAuthKey, "webRtcOwner"))
+                .isFalse();
+        assertThat(redisTemplate.opsForHash().hasKey(
+                        preAuthKey, "oauthWebRtcAttemptDigest"))
+                .isFalse();
+        assertThat(redisTemplate.opsForHash().hasKey(
+                        refreshKey, "riskVerdictDeadlineAt"))
+                .isFalse();
+
+        // ACTIVE 会话已经脱离十五秒窗口；同一 report 只做幂等读取，不能重新写入截止时间。
+        assertThat(oauthStore.decideReport(new ReportDecisionCommand(
+                        RiskScope.USER,
+                        ids.token(),
+                        attempt,
+                        ids.device(),
+                        ids.ip(),
+                        1L,
+                        true,
+                        null,
+                        "encrypted-oauth-candidates",
+                        true,
+                        TTL)))
+                .isEqualTo(PreAuthWebRtcWriteResult.VERIFIED_PRESERVED);
+        assertThat(redisTemplate.opsForHash().get(refreshKey, "riskVerdict"))
+                .isEqualTo("ACTIVE");
+        assertThat(redisTemplate.opsForHash().hasKey(
+                        refreshKey, "riskVerdictDeadlineAt"))
+                .isFalse();
+    }
+
+    @Test
+    void failedOAuthReportRevokesThePendingRefreshSessionAndOwner() {
+        Identifiers ids = identifiers("oauth-failed-verdict");
+        HmacIdentifier attempt = id("oauth-failed-verdict-attempt");
+        HmacIdentifier refresh = id("oauth-failed-verdict-refresh");
+        String preAuthKey = KEYS.userPreAuthKey(ids.token());
+        String attemptKey = KEYS.oauthWebRtcAttemptKey(attempt);
+        String refreshKey = KEYS.sessionRefreshTokenKey(refresh);
+        String userIndexKey = KEYS.sessionUserIndexKey(10002L);
+        long deadline = redisNowMillis() + Duration.ofSeconds(15).toMillis();
+        create(RiskScope.USER, ids, START_GRACE);
+        begin(RiskScope.USER, ids, 1L);
+        redisTemplate.opsForHash().putAll(preAuthKey, Map.of(
+                "webRtcOwner", "OAUTH",
+                "oauthWebRtcAttemptDigest", attempt.value()));
+        redisTemplate.opsForHash().putAll(attemptKey, Map.of(
+                "generation", "1",
+                "preAuthTokenDigest", ids.token().value(),
+                "deviceDigest", ids.device().value(),
+                "currentIpDigest", ids.ip().value(),
+                "status", "RESUMED",
+                "verdictDeadlineAt", Long.toString(deadline),
+                "refreshTokenDigest", refresh.value()));
+        redisTemplate.opsForHash().putAll(refreshKey, Map.of(
+                "userId", "10002",
+                "riskVerdict", "PENDING",
+                "riskVerdictAttemptId", attempt.value(),
+                "riskVerdictGeneration", "1",
+                "riskVerdictDeadlineAt", Long.toString(deadline)));
+        redisTemplate.opsForHash().put(userIndexKey, refresh.value(), refreshKey);
+
+        assertThat(oauthStore.decideReport(new ReportDecisionCommand(
+                        RiskScope.USER,
+                        ids.token(),
+                        attempt,
+                        ids.device(),
+                        ids.ip(),
+                        1L,
+                        false,
+                        PreAuthWebRtcFailureReason.NO_PUBLIC_CANDIDATE,
+                        null,
+                        false,
+                        TTL)))
+                .isEqualTo(PreAuthWebRtcWriteResult.UPDATED);
+        assertThat(requiredState(RiskScope.USER, ids.token()).webRtcPhase())
+                .isEqualTo(PreAuthWebRtcPhase.FAILED);
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
+        assertThat(redisTemplate.opsForHash().hasKey(userIndexKey, refresh.value()))
+                .isFalse();
+        assertThat(redisTemplate.opsForHash().get(attemptKey, "status"))
+                .isEqualTo("FAILED");
+        assertThat(redisTemplate.opsForHash().hasKey(preAuthKey, "webRtcOwner"))
+                .isFalse();
+    }
+
+    @Test
+    void strictOAuthRotationRequiresUnchangedVerifiedContextAtomically() {
+        Identifiers verified = identifiers("strict-oauth-verified");
+        create(RiskScope.USER, verified, START_GRACE);
+        begin(RiskScope.USER, verified, 1L);
+        store.writeWebRtcResult(
+                RiskScope.USER,
+                verified.token(),
+                verified.device(),
+                verified.ip(),
+                1L,
+                true,
+                null,
+                "encrypted-source",
+                true,
+                TTL);
+        HmacIdentifier target = id("strict-oauth-target");
+
+        assertThat(store.rotateAuthenticatedAfterWebRtcVerified(
+                        RiskScope.USER,
+                        verified.token(),
+                        target,
+                        verified.device(),
+                        verified.ip(),
+                        id("context-" + verified.suffix()),
+                        RiskSessionType.USER_REFRESH,
+                        id("strict-oauth-session"),
+                        id("strict-oauth-new-context"),
+                        1L,
+                        "encrypted-target",
+                        Instant.EPOCH.plusSeconds(2),
+                        TTL))
+                .isTrue();
+        PreAuthState promoted = requiredState(RiskScope.USER, target);
+        assertThat(promoted.webRtcPhase()).isEqualTo(PreAuthWebRtcPhase.VERIFIED);
+        assertThat(promoted.webRtcGeneration()).isEqualTo(1L);
+        assertThat(promoted.webRtcIps()).isEqualTo("encrypted-target");
+
+        Identifiers changed = identifiers("strict-oauth-changed");
+        create(RiskScope.USER, changed, START_GRACE);
+        begin(RiskScope.USER, changed, 1L);
+        store.writeWebRtcResult(
+                RiskScope.USER,
+                changed.token(),
+                changed.device(),
+                changed.ip(),
+                1L,
+                true,
+                null,
+                "encrypted-source",
+                true,
+                TTL);
+        HmacIdentifier rejectedTarget = id("strict-oauth-rejected-target");
+
+        assertThat(store.rotateAuthenticatedAfterWebRtcVerified(
+                        RiskScope.USER,
+                        changed.token(),
+                        rejectedTarget,
+                        changed.device(),
+                        changed.ip(),
+                        id("different-context"),
+                        RiskSessionType.USER_REFRESH,
+                        id("strict-oauth-session"),
+                        id("strict-oauth-new-context"),
+                        1L,
+                        "encrypted-target",
+                        Instant.EPOCH.plusSeconds(2),
+                        TTL))
+                .isFalse();
+        assertThat(store.find(RiskScope.USER, changed.token())).isPresent();
+        assertThat(store.find(RiskScope.USER, rejectedTarget)).isEmpty();
     }
 
     @Test

@@ -11,7 +11,9 @@
 
 `membership_order.entitlement_resolution` 与 `entitlement_resolved_at` 记录订单权益裁决。两列必须同时为空或同时非空；`APPLIED` 表示订单、套餐额度和 callback resolution 已在同一 PostgreSQL 本地事务提交，`NOT_GRANTED` 表示未付款订单已经进入 CANCELLED/CLOSED 且没有发放权益，`REFUND_REQUIRED` 表示终态后又确认真实付款、不得发放且外部退款可以在事务提交后执行，`LEGACY_NOT_GRANTED` 表示迁移前的历史 PAID 订单不自动补发。只有 `NOT_GRANTED → REFUND_REQUIRED` 是允许的覆盖迁移；`NOT_GRANTED → APPLIED` 被禁止。Redis 订单快照和公开订单 JSON 不携带这些内部字段。
 
-同一用户只允许一笔活动订单。创建事务先解析 UUIDv4 幂等重放，再按用户取得事务级 advisory lock，锁内检查活动订单；部分唯一索引最终约束 `PENDING_PAYMENT`、`CLOSING` 以及 `PAID + entitlement_resolution IS NULL`。Redis 已终态但 PostgreSQL 尚未刷盘时仍返回 409，这是为避免第二笔订单越过旧订单的回调或权益结算窗口而接受的保守行为。
+同一用户只允许一笔活动订单。创建入口先取得单用户 Redisson 看门狗锁，再解析 UUIDv4 幂等重放；相同幂等键返回原订单，不同幂等键会由 Redis Lua 在 callback marker 保护下把未发起支付的旧单裁决为 `CANCELLED + NOT_GRANTED`，把已发起支付或已进入 CLOSING 的旧单裁决为 `CLOSED + NOT_GRANTED`。随后 PostgreSQL 事务取得同一用户的 advisory lock，在一次本地事务内落库旧单终态并插入新订单；部分唯一索引最终约束 `PENDING_PAYMENT`、`CLOSING` 以及 `PAID + entitlement_resolution IS NULL`。callback marker 已存在时替换返回 409，不能越过正在执行的支付事实或权益裁决。
+
+已发起第三方支付的旧单在本地替换事务提交后进入独立 RabbitMQ 关单队列；关单响应不可信或外部插件不支持关单时，本地终态不回滚，新订单仍可继续支付。旧单随后收到可信支付成功回调时，既有 `NOT_GRANTED → REFUND_REQUIRED` 路径负责自动退款。项目不使用 Outbox，因此 PostgreSQL 提交与 RabbitMQ 发布之间仍存在已接受的消息缺口；发布失败会记录固定字段日志，最终资金安全依赖迟到回调退款而不是宣称跨基础设施原子性。
 
 两张表的 Hybrid ID 在数据库中始终以 16 字节 `BYTEA` 保存。API、模拟支付 `out_trade_no`、Redis 与 RabbitMQ 统一使用 22 字符无填充 Base64URL；Navicat 人工排障应查询 `membership_order_readable` 与 `membership_payment_callback_readable`，禁止从界面显示的 BLOB 文本猜测订单号。两个视图由 `sql/migrations/029_create_membership_payment_readable_views.sql` 创建，视图中的订单关联值可直接按文本相等连接。
 
@@ -19,9 +21,9 @@
 
 状态恢复以 PostgreSQL 中 `membership_order.state_version` 与 Redis 订单快照版本比较：Redis 版本更高时进入脏队列重新批量持久化；Redis 缺失时以 PostgreSQL 重建非终态快照；终态数据库记录不得由更低版本覆盖。孤儿数据使用 `sql/checks/membership_payment_orphans.sql` 巡检，发现后先隔离写流量，再依据支付回调审计和日志确认真实归属，禁止直接猜测或级联删除。
 
-## BAR 沙箱 Provider 简化边界
+## 多支付 Provider 简化边界
 
-BAR 继续使用 `membership_order.provider_trade_no` 保存字符串交易号，并使用 `membership_payment_callback` 保存支付成功审计事实；新增的权益裁决字段属于主项目内部一致性边界，不改变 BAR 协议。当前环境通过 `app.membership-payment.default-provider` 在 `LOCAL_SIMULATOR` 与 `BAR` 之间二选一，Provider 类型不写入订单；因此切换前必须等待或清理旧 Provider 的全部非终态订单，禁止在同一环境同时启用两种 Provider。
+BAR 与六号易支付继续复用 `membership_order.provider_trade_no`，不增加 Provider 数据库字段。新本地订单必须保持该字段为 `NULL`；支付尝试由请求明确选择 BAR 或六号，取得平台真实流水后只允许原子绑定为 `BAR:TRADE:<真实流水>` 或 `LIUHAO:TRADE:<真实流水>`。数据库约束禁止 `BAR:ORDER:` 与 `LIUHAO:ORDER:`，查询、关单和补偿也禁止对空值或无前缀值使用 `app.membership-payment.default-provider` 猜测路由。本地模拟、BAR 与六号实现可以同时注册，但普通前端只接受 `public-providers` 白名单中的 BAR 和六号。
 
 BAR 的 `checkoutSubmission` 只在一次 `no-store` payment-attempts 响应和紧随其后的浏览器 Form POST 中短暂存在；不写 PostgreSQL、Redis、RabbitMQ、日志或浏览器 Storage。BAR 回调先按历史 `key_version` 验签，再通过 `/api/pay/query` 获取已签名 `finished_at`，最终仍写入原 Redis 回调队列；主动查询和关单继续复用原 RabbitMQ 队列。`REFUND_REQUIRED` 在回调 resolution 本地事务提交后直接调用 BAR 幂等 `/api/pay/refund`，失败由原 Redis 回调租约恢复重试，不保存本地退款流水，最终退款状态以 BAR `/api/pay/query` 为准。
 

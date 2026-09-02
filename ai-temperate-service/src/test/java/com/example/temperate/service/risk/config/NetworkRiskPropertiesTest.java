@@ -81,6 +81,8 @@ class NetworkRiskPropertiesTest {
         assertThat(properties.webRtc().startGrace()).isEqualTo(Duration.ofSeconds(8));
         assertThat(properties.webRtc().probeTimeout()).isEqualTo(Duration.ofSeconds(12));
         assertThat(properties.webRtc().reportGrace()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(properties.webRtc().oauthAsyncVerdictWindow())
+                .isEqualTo(Duration.ofSeconds(15));
         assertThat(properties.webRtc().pendingWindow()).isEqualTo(Duration.ofSeconds(15));
         assertThat(properties.isWebRtcConfigValid()).isTrue();
     }
@@ -125,6 +127,7 @@ class NetworkRiskPropertiesTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                        Duration.ofSeconds(15),
                         List.of(
                                 URI.create("stun:stun.l.google.com:19302"),
                                 URI.create("stun:stun.cloudflare.com:3478"),

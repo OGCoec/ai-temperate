@@ -30,6 +30,18 @@ if redis.call('HEXISTS', userIndexKey, tokenHash) ~= 1 then
     return {4}
 end
 
+local riskVerdict = redis.call('HGET', KEYS[1], 'riskVerdict') or 'ACTIVE'
+local riskDeadline = tonumber(redis.call('HGET', KEYS[1], 'riskVerdictDeadlineAt'))
+local riskTime = redis.call('TIME')
+local riskNowMillis = tonumber(riskTime[1]) * 1000
+        + math.floor(tonumber(riskTime[2]) / 1000)
+if riskVerdict ~= 'ACTIVE'
+        and (riskVerdict ~= 'PENDING' or riskDeadline == nil or riskNowMillis >= riskDeadline) then
+    redis.call('HDEL', userIndexKey, tokenHash)
+    redis.call('UNLINK', KEYS[1])
+    return {7}
+end
+
 local preAuth = redis.call('HMGET', KEYS[2],
         'schemaVersion', 'scope', 'authState', 'sessionType',
         'sessionRefDigest', 'deviceDigest')

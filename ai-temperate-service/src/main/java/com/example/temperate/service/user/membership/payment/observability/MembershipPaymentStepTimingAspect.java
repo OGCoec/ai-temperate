@@ -147,7 +147,8 @@ public final class MembershipPaymentStepTimingAspect {
                         "patchProviderTradeNo" ->
                         MembershipPaymentTimingStep.REDIS_ORDER_WRITE;
                 case "callbackInProgress" -> MembershipPaymentTimingStep.MARKER_READ;
-                case "markPaid", "markPaidAll", "cancel", "startClosing", "finalizeClosing" ->
+                case "markPaid", "markPaidAll", "cancel", "startClosing", "finalizeClosing",
+                        "supersedeForReplacement" ->
                         MembershipPaymentTimingStep.REDIS_STATE_TRANSITION;
                 default -> MembershipPaymentTimingStep.OTHER_REDIS;
             };

@@ -75,10 +75,14 @@ public class SecurityConfiguration {
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String BOOTSTRAP_PATH = "/api/auth/session/bootstrap";
     private static final String WEBRTC_REPORT_PATH = "/api/_edge/webrtc/report";
+    private static final String WEBRTC_VERDICT_STATUS_PATH =
+            "/api/_edge/webrtc/verdict-status";
     private static final String SIMULATED_PAYMENT_CALLBACK_PATH =
             "/internal/test/membership-payments/liuhao/notify";
     private static final String BAR_PAYMENT_CALLBACK_PATH =
             "/api/payment/bar/notify";
+    private static final String LIUHAO_PAYMENT_CALLBACK_PATH =
+            "/api/payment/liuhao/notify";
     private static final String MEMBERSHIP_LOADTEST_CONTROL_ROOT =
             "/internal/test/membership-payments/loadtest-control";
 
@@ -299,12 +303,15 @@ public class SecurityConfiguration {
                 AuthRequestTraceFilter.PAGE_INSTANCE_HEADER,
                 AuthRequestTraceFilter.CLIENT_QUEUE_HEADER,
                 AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
+                AuthRequestTraceFilter.TRIGGER_REQUEST_HEADER,
                 PLATFORM_HEADER,
                 "X-Register-Token",
                 "X-Register-CSRF",
                 "X-Login-Flow-Token",
                 "X-OAuth-Flow-Token",
                 "X-OAuth-Phone-Flow-Token",
+                "X-AIT-OAuth-WebRTC-Attempt-Id",
+                "X-AIT-WebRTC-Probe-Generation",
                 "X-TOTP-Flow-Token",
                 "X-Reset-Flow-Token",
                 "X-Forget-Token",
@@ -323,9 +330,16 @@ public class SecurityConfiguration {
                 WebRtcVerificationTransport.STATE_HEADER,
                 WebRtcVerificationTransport.GENERATION_HEADER,
                 AuthRequestTraceFilter.WEBRTC_PROBE_RUN_HEADER,
+                AuthRequestTraceFilter.BACKEND_RELEASE_HEADER,
                 "X-Session-Renewed",
                 "CF-Ray",
-                "cf-mitigated"));
+                "cf-mitigated",
+                "X-AIT-Edge-Outcome",
+                "X-AIT-Edge-Upstream-Attempted",
+                "X-AIT-Cookie-Scope-State",
+                "X-AIT-Cookie-Scope-Reset",
+                "X-AIT-Worker-Version",
+                "X-AIT-Pages-Deployment"));
         configuration.setMaxAge(600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);
@@ -480,6 +494,8 @@ public class SecurityConfiguration {
                         // BAR 精确 GET 通知免除用户会话，但仍由版本化 HMAC 认证；验签失败不会返回 success。
                         .requestMatchers(HttpMethod.GET, BAR_PAYMENT_CALLBACK_PATH)
                         .permitAll()
+                        .requestMatchers(HttpMethod.GET, LIUHAO_PAYMENT_CALLBACK_PATH)
+                        .permitAll()
                         // 模拟支付回调只对 GET/POST 精确路径公开，业务认证由常量时间测试密钥校验完成。
                         .requestMatchers(
                                 HttpMethod.GET,
@@ -513,6 +529,9 @@ public class SecurityConfiguration {
                                 .equals(request.getRequestURI())
                         // WebRTC 报告发生在常规 CSRF 初始化之前，只豁免这一条精确 PreAuth 绑定路径。
                         || (request.getContextPath() + WEBRTC_REPORT_PATH)
+                                .equals(request.getRequestURI())
+                        // Report 响应丢失后的只读查询不改变 generation，也必须在 Cookie CSRF 初始化之前可用。
+                        || (request.getContextPath() + WEBRTC_VERDICT_STATUS_PATH)
                                 .equals(request.getRequestURI())
                         // 模拟支付 POST 由独立测试密钥认证，只豁免这一条精确路径；GET 本身不受 CSRF 校验。
                         || (request.getContextPath() + SIMULATED_PAYMENT_CALLBACK_PATH)

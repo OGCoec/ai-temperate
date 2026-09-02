@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -25,10 +26,12 @@ import com.example.temperate.service.user.membership.payment.order.impl.Membersh
 import com.example.temperate.service.user.membership.payment.order.impl.MembershipPaymentAttemptTransactionServiceImpl;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutMode;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmission;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmissionFields;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
@@ -48,7 +51,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 /**
- * 该单元测试是来锁定支付发起写入、Redis 刷新、BAR 提交描述传播、幂等重放和并发取消保护。
+ * 该单元测试是来锁定支付发起写入、Redis 刷新、Provider 提交描述传播、幂等重放和并发取消保护。
  */
 final class MembershipPaymentAttemptServiceImplTest {
 
@@ -116,13 +119,13 @@ final class MembershipPaymentAttemptServiceImplTest {
     void providerTradeBindingTreatsTheSameValueAsIdempotentReplay() {
         MembershipOrderMapper mapper = mock(MembershipOrderMapper.class);
         MembershipOrder persisted = order(NOW_OFFSET.minusSeconds(1), NOW_OFFSET.plusMinutes(1));
-        persisted.setProviderTradeNo("1234567890123456789");
+        persisted.setProviderTradeNo("BAR:TRADE:1234567890123456789");
         when(mapper.findOwnedById(ORDER_ID, 17L)).thenReturn(persisted);
         MembershipPaymentAttemptTransactionServiceImpl service =
                 new MembershipPaymentAttemptTransactionServiceImpl(mapper);
 
         MembershipOrder result = service.bindProviderTradeNo(
-                17L, ORDER_ID, "1234567890123456789");
+                17L, ORDER_ID, "BAR:TRADE:1234567890123456789");
 
         assertThat(result).isSameAs(persisted);
     }
@@ -131,16 +134,16 @@ final class MembershipPaymentAttemptServiceImplTest {
     void providerTradeBindingRejectsADifferentExistingValue() {
         MembershipOrderMapper mapper = mock(MembershipOrderMapper.class);
         MembershipOrder persisted = order(NOW_OFFSET.minusSeconds(1), NOW_OFFSET.plusMinutes(1));
-        persisted.setProviderTradeNo("1234567890123456788");
+        persisted.setProviderTradeNo("BAR:TRADE:1234567890123456788");
         when(mapper.findOwnedById(ORDER_ID, 17L)).thenReturn(persisted);
         MembershipPaymentAttemptTransactionServiceImpl service =
                 new MembershipPaymentAttemptTransactionServiceImpl(mapper);
 
         assertThatThrownBy(() -> service.bindProviderTradeNo(
-                        17L, ORDER_ID, "1234567890123456789"))
+                        17L, ORDER_ID, "BAR:TRADE:1234567890123456789"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code())
-                                .isEqualTo(MembershipPaymentErrorCode.BAR_ORDER_CONFLICT));
+                                .isEqualTo(MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT));
     }
 
     @Test
@@ -158,13 +161,35 @@ final class MembershipPaymentAttemptServiceImplTest {
         MembershipPaymentAttemptServiceImpl service = attemptService(
                 transactionService, snapshotStore, snapshotWriteCoordinator);
 
-        MembershipPaymentAttemptResult result = service.start(17L, ORDER_ID);
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10");
 
         assertThat(result.started()).isTrue();
         assertThat(result.snapshot().paymentStartedAt()).isEqualTo(NOW_OFFSET);
         assertThat(result.snapshot().stateVersion()).isEqualTo(2L);
-        assertThat(result.checkoutSubmission()).isNull();
-        verify(snapshotWriteCoordinator).patchPaymentAttempt(result.snapshot());
+        assertThat(result.checkoutSubmission()).isNotNull();
+        // 支付发起事实先于 Provider 建单写入 Redis；该调用不能倒填稍后才获得的第三方流水号。
+        verify(snapshotWriteCoordinator).patchPaymentAttempt(
+                org.mockito.ArgumentMatchers.argThat(snapshot ->
+                        snapshot.paymentStartedAt().equals(NOW_OFFSET)
+                                && snapshot.stateVersion() == 2L
+                                && snapshot.providerTradeNo() == null));
+    }
+
+    @Test
+    void publicPaymentAttemptRejectsLocalSimulatorBeforeCreatingDatabaseFact() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService, snapshotStore);
+
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.LOCAL_SIMULATOR, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.PAYMENT_PROVIDER_UNSUPPORTED));
+        verifyNoInteractions(transactionService, snapshotStore);
     }
 
     @Test
@@ -197,7 +222,8 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 reconciliationService);
 
-        MembershipPaymentAttemptResult result = service.start(17L, ORDER_ID);
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10");
 
         assertThat(result.provider()).isEqualTo(PaymentProviderType.BAR);
         assertThat(result.checkoutSubmission()).isSameAs(submission);
@@ -208,12 +234,48 @@ final class MembershipPaymentAttemptServiceImplTest {
         ordered.verify(snapshotWriteCoordinator).patchPaymentAttempt(any());
         ordered.verify(provider).createCheckout(any());
         ordered.verify(transactionService).bindProviderTradeNo(
-                anyLong(), any(), org.mockito.ArgumentMatchers.eq("1234567890123456789"));
+                anyLong(), any(), org.mockito.ArgumentMatchers.eq(
+                        "BAR:TRADE:1234567890123456789"));
         ordered.verify(snapshotStore).patchProviderTradeNo(
-                any(), anyLong(), org.mockito.ArgumentMatchers.eq("1234567890123456789"));
+                any(), anyLong(), org.mockito.ArgumentMatchers.eq(
+                        "BAR:TRADE:1234567890123456789"));
         ordered.verify(snapshotStore).findRealtimeGuard(any());
         verify(provider, never()).closePayment(any());
         verifyNoInteractions(reconciliationService);
+    }
+
+    @Test
+    void barMissingSubmissionStillBindsRealTradeBeforeReturningControlledError() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createCheckout(any())).thenReturn(new PaymentCheckoutResult(
+                "1234567890123456789",
+                NOW_OFFSET.plusMinutes(10),
+                true,
+                null));
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.BAR,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.BAR_RESPONSE_INVALID));
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("BAR:TRADE:1234567890123456789"));
+        verify(snapshotStore).patchProviderTradeNo(
+                any(), anyLong(), eq("BAR:TRADE:1234567890123456789"));
+        verify(provider, never()).closePayment(any());
     }
 
     @Test
@@ -245,7 +307,8 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 mock(PaymentFactReconciliationService.class));
 
-        MembershipPaymentAttemptResult result = service.start(17L, ORDER_ID);
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10");
 
         assertThat(result.started()).isTrue();
         assertThat(result.checkoutSubmission().submitExpiresAt())
@@ -260,7 +323,7 @@ final class MembershipPaymentAttemptServiceImplTest {
     }
 
     @Test
-    void barIdempotentReplayStillReturnsTheFreshProviderSubmission() {
+    void barReplayWithStartedButUnboundTradeDoesNotCreateAnotherProviderOrder() {
         MembershipPaymentAttemptTransactionService transactionService =
                 mock(MembershipPaymentAttemptTransactionService.class);
         MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
@@ -269,13 +332,6 @@ final class MembershipPaymentAttemptServiceImplTest {
         when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
                 .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
         stubRealtimeGuards(snapshotStore, realtimeGuard(order));
-        PaymentCheckoutSubmission fresh = checkoutSubmission("1787241902", "b".repeat(64));
-        when(provider.createCheckout(any())).thenReturn(
-                new PaymentCheckoutResult(
-                        "1234567890123456789",
-                        NOW_OFFSET.plusMinutes(10),
-                        false,
-                        fresh));
         MembershipPaymentAttemptServiceImpl service = attemptService(
                 transactionService,
                 snapshotStore,
@@ -283,14 +339,16 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 mock(PaymentFactReconciliationService.class));
 
-        MembershipPaymentAttemptResult result = service.start(17L, ORDER_ID);
-
-        assertThat(result.started()).isFalse();
-        assertThat(result.checkoutSubmission()).isSameAs(fresh);
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.PAYMENT_CREATE_OUTCOME_UNKNOWN));
+        verify(provider, never()).createCheckout(any());
     }
 
     @Test
-    void barIdempotentReplayCapsSubmissionExpiryAtLocalOrderDeadline() {
+    void barReplayDoesNotRegenerateSubmissionEvenWhenLocalOrderHasTimeRemaining() {
         MembershipPaymentAttemptTransactionService transactionService =
                 mock(MembershipPaymentAttemptTransactionService.class);
         MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
@@ -300,16 +358,6 @@ final class MembershipPaymentAttemptServiceImplTest {
         when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
                 .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
         stubRealtimeGuards(snapshotStore, realtimeGuard(order));
-        PaymentCheckoutSubmission providerSubmission = checkoutSubmission(
-                "1787241902",
-                "0".repeat(64),
-                NOW_OFFSET.plusMinutes(5));
-        when(provider.createCheckout(any())).thenReturn(
-                new PaymentCheckoutResult(
-                        "1234567890123456789",
-                        NOW_OFFSET.plusMinutes(10),
-                        false,
-                        providerSubmission));
         MembershipPaymentAttemptServiceImpl service = attemptService(
                 transactionService,
                 snapshotStore,
@@ -317,18 +365,371 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 mock(PaymentFactReconciliationService.class));
 
-        MembershipPaymentAttemptResult result = service.start(17L, ORDER_ID);
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.PAYMENT_CREATE_OUTCOME_UNKNOWN));
+        verify(provider, never()).createCheckout(any());
+    }
+
+    @Test
+    void liuhaoWxpayBindsRealTradeBeforeReturningHttpsCashierRedirect() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        String publicOrderId = new HybridBase64UrlCodec().encode(ORDER_ID);
+        MembershipOrder boundOrder = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        boundOrder.setPayType("wxpay");
+        boundOrder.setProviderTradeNo("LIUHAO:TRADE:202608201234567890");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createPayment(any())).thenReturn(new PaymentCreateResult(
+                "LIUHAO:TRADE:202608201234567890",
+                "qrcode",
+                "https://liuhao.net/pay/qrcode/202608201234567890/",
+                true));
+        when(transactionService.bindProviderTradeNo(anyLong(), any(), any()))
+                .thenReturn(boundOrder);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                passthroughCoordinator(),
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        MembershipPaymentAttemptResult result =
+                service.start(17L, ORDER_ID, PaymentProviderType.LIUHAO, null);
+
+        assertThat(result.snapshot().providerTradeNo())
+                .isEqualTo("LIUHAO:TRADE:202608201234567890");
+        assertThat(result.checkoutSubmission().checkoutMode())
+                .isEqualTo(PaymentCheckoutMode.REDIRECT_URL);
+        assertThat(result.checkoutSubmission().action())
+                .isEqualTo(URI.create("https://liuhao.net/pay/qrcode/202608201234567890/"));
+        assertThat(result.checkoutSubmission().method()).isEqualTo("GET");
+        assertThat(result.checkoutSubmission().fields()).isNull();
+        verify(provider).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(snapshotStore).patchProviderTradeNo(
+                any(), anyLong(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(provider, never()).closePayment(any());
+    }
+
+    @Test
+    void liuhaoAlipayKeepsVerifiedJumpRedirectWithoutApplyingWxpayQrcodeRules() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        order.setPayType("alipay");
+        MembershipOrder boundOrder = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        boundOrder.setPayType("alipay");
+        boundOrder.setProviderTradeNo("LIUHAO:TRADE:2026090122033979958");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createPayment(any())).thenReturn(new PaymentCreateResult(
+                "LIUHAO:TRADE:2026090122033979958",
+                "jump",
+                "https://cashier.alipay.com/checkout",
+                true));
+        when(transactionService.bindProviderTradeNo(anyLong(), any(), any()))
+                .thenReturn(boundOrder);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10");
+
+        assertThat(result.snapshot().providerTradeNo())
+                .isEqualTo("LIUHAO:TRADE:2026090122033979958");
+        assertThat(result.checkoutSubmission().checkoutMode())
+                .isEqualTo(PaymentCheckoutMode.REDIRECT_URL);
+        assertThat(result.checkoutSubmission().method()).isEqualTo("GET");
+        assertThat(result.checkoutSubmission().action())
+                .isEqualTo(URI.create("https://cashier.alipay.com/checkout"));
+        verify(provider).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(provider, never()).closePayment(any());
+    }
+
+    @Test
+    void liuhaoUnsafeRedirectStillBindsRealTradeBeforeReturningControlledError() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createPayment(any())).thenReturn(new PaymentCreateResult(
+                "LIUHAO:TRADE:202608201234567890",
+                "qrcode",
+                "https://user:secret@liuhao.net/pay/qrcode/202608201234567890/",
+                true));
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE));
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(snapshotStore).patchProviderTradeNo(
+                any(), anyLong(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(provider, never()).closePayment(any());
+    }
+
+    @Test
+    void liuhaoRejectedJspayRouteStillBindsRealTradeWithoutClosingOrRecreating() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createPayment(any())).thenThrow(new MembershipPaymentException(
+                MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE,
+                "Liuhao created the order but returned the JSAPI route.",
+                "202608201234567890"));
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        assertThatThrownBy(() -> service.start(
+                        17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE));
+
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(snapshotStore).patchProviderTradeNo(
+                any(), anyLong(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(provider, never()).closePayment(any());
+        verify(provider).createPayment(any());
+    }
+
+    @Test
+    void liuhaoUnconfirmedSubmitKeepsStartedOrderUnboundAndDoesNotCreateAgain() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET, NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, true));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.createPayment(any())).thenThrow(new MembershipPaymentException(
+                MembershipPaymentErrorCode.LIUHAO_CREATE_OUTCOME_UNKNOWN,
+                "Liuhao wxpay submission could not be confirmed."));
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        assertThatThrownBy(() -> service.start(
+                        17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception -> {
+                    assertThat(exception.code()).isEqualTo(
+                            MembershipPaymentErrorCode.LIUHAO_CREATE_OUTCOME_UNKNOWN);
+                    assertThat(exception.providerTradeNo()).isNull();
+                });
+
+        verify(transactionService, never()).bindProviderTradeNo(anyLong(), any(), any());
+        verify(snapshotStore, never()).patchProviderTradeNo(any(), anyLong(), any());
+        verify(provider, never()).closePayment(any());
+        verify(provider).createPayment(any());
+    }
+
+    @Test
+    void replayWithStartedButUnboundTradeNeverCreatesAnotherProviderOrder() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        String publicOrderId = new HybridBase64UrlCodec().encode(ORDER_ID);
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                passthroughCoordinator(),
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.PAYMENT_CREATE_OUTCOME_UNKNOWN));
+        verify(provider, never()).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(provider, never()).queryPayment(any());
+    }
+
+    @Test
+    void liuhaoReplayQueriesExistingOrderAndRestoresCanonicalQrcodeWithoutCreatingAgain() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        MembershipOrder boundOrder = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        boundOrder.setPayType("wxpay");
+        boundOrder.setProviderTradeNo("LIUHAO:TRADE:202608201234567890");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.recoverPayment(any(), org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(new PaymentCreateResult(
+                        "LIUHAO:TRADE:202608201234567890",
+                        "qrcode",
+                        "https://liuhao.net/pay/qrcode/202608201234567890/",
+                        true));
+        when(transactionService.bindProviderTradeNo(anyLong(), any(), any()))
+                .thenReturn(boundOrder);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10");
 
         assertThat(result.started()).isFalse();
-        assertThat(result.checkoutSubmission().submitExpiresAt())
-                .isEqualTo(order.getExpiresAt())
-                .isBeforeOrEqualTo(result.snapshot().expiresAt());
-        assertThat(result.checkoutSubmission().fields())
-                .isSameAs(providerSubmission.fields());
-        assertThat(result.checkoutSubmission().fields().timestamp())
-                .isEqualTo(providerSubmission.fields().timestamp());
-        assertThat(result.checkoutSubmission().fields().sign())
-                .isEqualTo(providerSubmission.fields().sign());
+        assertThat(result.checkoutSubmission().checkoutMode())
+                .isEqualTo(PaymentCheckoutMode.REDIRECT_URL);
+        assertThat(result.checkoutSubmission().method()).isEqualTo("GET");
+        assertThat(result.checkoutSubmission().action())
+                .isEqualTo(URI.create("https://liuhao.net/pay/qrcode/202608201234567890/"));
+        verify(provider).recoverPayment(any(), org.mockito.ArgumentMatchers.isNull());
+        verify(provider, never()).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+    }
+
+    @Test
+    void liuhaoBoundReplayQueriesSameTradeAndRestoresCheckoutWithoutCreatingAgain() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        order.setProviderTradeNo("LIUHAO:TRADE:202608201234567890");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.recoverPayment(
+                        any(), eq("LIUHAO:TRADE:202608201234567890")))
+                .thenReturn(new PaymentCreateResult(
+                        "LIUHAO:TRADE:202608201234567890",
+                        "qrcode",
+                        "https://liuhao.net/pay/qrcode/202608201234567890/",
+                        true));
+        when(transactionService.bindProviderTradeNo(anyLong(), any(), any()))
+                .thenReturn(order);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        MembershipPaymentAttemptResult result = service.start(
+                17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10");
+
+        assertThat(result.started()).isFalse();
+        assertThat(result.checkoutSubmission().action())
+                .isEqualTo(URI.create("https://liuhao.net/pay/qrcode/202608201234567890/"));
+        verify(provider).recoverPayment(
+                any(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(provider, never()).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+    }
+
+    @Test
+    void liuhaoRecoveryBindsConfirmedClosedTradeBeforeReturningUnavailable() {
+        MembershipPaymentAttemptTransactionService transactionService =
+                mock(MembershipPaymentAttemptTransactionService.class);
+        MembershipOrderSnapshotStore snapshotStore = mock(MembershipOrderSnapshotStore.class);
+        MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
+        MembershipOrder order = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        order.setPayType("wxpay");
+        MembershipOrder boundOrder = order(NOW_OFFSET.minusSeconds(10), NOW_OFFSET.plusMinutes(10));
+        boundOrder.setPayType("wxpay");
+        boundOrder.setProviderTradeNo("LIUHAO:TRADE:202608201234567890");
+        when(transactionService.startOrGet(17L, ORDER_ID, NOW_OFFSET))
+                .thenReturn(new MembershipPaymentAttemptDatabaseResult(order, false));
+        stubRealtimeGuards(snapshotStore, realtimeGuard(order));
+        when(provider.recoverPayment(any(), org.mockito.ArgumentMatchers.isNull()))
+                .thenThrow(new MembershipPaymentException(
+                        MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE,
+                        "Liuhao wxpay transaction is no longer payable.",
+                        "202608201234567890"));
+        when(transactionService.bindProviderTradeNo(anyLong(), any(), any()))
+                .thenReturn(boundOrder);
+        MembershipPaymentAttemptServiceImpl service = attemptService(
+                transactionService,
+                snapshotStore,
+                PaymentProviderType.LIUHAO,
+                provider,
+                mock(PaymentFactReconciliationService.class));
+
+        assertThatThrownBy(() -> service.start(
+                        17L, ORDER_ID, PaymentProviderType.LIUHAO, "203.0.113.10"))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code())
+                                .isEqualTo(MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE));
+
+        verify(transactionService).bindProviderTradeNo(
+                anyLong(), any(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(snapshotStore).patchProviderTradeNo(
+                any(), anyLong(), eq("LIUHAO:TRADE:202608201234567890"));
+        verify(provider, never()).createPayment(any());
+        verify(provider, never()).createCheckout(any());
+        verify(provider, never()).closePayment(any());
     }
 
     @Test
@@ -359,10 +760,11 @@ final class MembershipPaymentAttemptServiceImplTest {
         when(snapshotStore.patchProviderTradeNo(any(), anyLong(), any()))
                 .thenReturn(MembershipProviderTradeNoPatchOutcome.CONFLICT);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code()).isEqualTo(
-                                MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT));
+                                MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT));
         verify(provider).closePayment(any());
     }
 
@@ -400,7 +802,8 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 reconciliationService);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception -> {
                     assertThat(exception.code()).isEqualTo(
                             MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT);
@@ -443,7 +846,8 @@ final class MembershipPaymentAttemptServiceImplTest {
                 mock(PaymentFactReconciliationService.class),
                 advancingClock);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception -> {
                     assertThat(exception.code()).isEqualTo(
                             MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT);
@@ -493,7 +897,8 @@ final class MembershipPaymentAttemptServiceImplTest {
                 provider,
                 reconciliationService);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code()).isEqualTo(
                                 MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT));
@@ -533,7 +938,8 @@ final class MembershipPaymentAttemptServiceImplTest {
         MembershipPaymentAttemptServiceImpl service = attemptService(
                 transactionService, snapshotStore, snapshotWriteCoordinator);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code()).isEqualTo(
                                 MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT));
@@ -555,7 +961,8 @@ final class MembershipPaymentAttemptServiceImplTest {
         MembershipPaymentAttemptServiceImpl service = attemptService(
                 transactionService, snapshotStore);
 
-        assertThatThrownBy(() -> service.start(17L, ORDER_ID))
+        assertThatThrownBy(() -> service.start(
+                17L, ORDER_ID, PaymentProviderType.BAR, "203.0.113.10"))
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code()).isEqualTo(
                                 MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT));
@@ -600,12 +1007,16 @@ final class MembershipPaymentAttemptServiceImplTest {
             MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator) {
         MembershipPaymentProvider provider = mock(MembershipPaymentProvider.class);
         when(provider.createCheckout(any())).thenReturn(
-                new PaymentCheckoutResult(null, null, false, null));
+                new PaymentCheckoutResult(
+                        "BAR:TRADE:1234567890123456789",
+                        NOW_OFFSET.plusMinutes(10),
+                        true,
+                        checkoutSubmission("1787241900", "a".repeat(64))));
         return attemptService(
                 transactionService,
                 snapshotStore,
                 snapshotWriteCoordinator,
-                PaymentProviderType.LOCAL_SIMULATOR,
+                PaymentProviderType.BAR,
                 provider,
                 mock(PaymentFactReconciliationService.class));
     }
@@ -673,6 +1084,13 @@ final class MembershipPaymentAttemptServiceImplTest {
         MembershipPaymentProperties properties = mock(MembershipPaymentProperties.class);
         when(properties.checkoutEnabled()).thenReturn(true);
         when(properties.defaultProvider()).thenReturn(providerType);
+        when(properties.publicProviders()).thenReturn(
+                java.util.List.of(PaymentProviderType.BAR, PaymentProviderType.LIUHAO));
+        when(properties.bar()).thenReturn(mock(MembershipPaymentProperties.Bar.class));
+        when(properties.liuhao()).thenReturn(mock(MembershipPaymentProperties.Liuhao.class));
+        when(properties.liuhao().baseUrl()).thenReturn(URI.create("https://liuhao.net"));
+        when(properties.bar().enabled()).thenReturn(providerType == PaymentProviderType.BAR);
+        when(properties.liuhao().enabled()).thenReturn(providerType == PaymentProviderType.LIUHAO);
         when(registry.getRequired(providerType)).thenReturn(provider);
         when(snapshotStore.patchProviderTradeNo(any(), anyLong(), any()))
                 .thenReturn(MembershipProviderTradeNoPatchOutcome.APPLIED);
@@ -735,6 +1153,7 @@ final class MembershipPaymentAttemptServiceImplTest {
             OffsetDateTime submitExpiresAt) {
         return new PaymentCheckoutSubmission(
                 PaymentProviderType.BAR,
+                PaymentCheckoutMode.FORM_POST,
                 URI.create("https://ihaveagoddamnplan.com/api/pay/submit"),
                 "POST",
                 "application/x-www-form-urlencoded",

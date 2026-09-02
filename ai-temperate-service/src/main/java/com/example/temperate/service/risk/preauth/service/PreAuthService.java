@@ -83,5 +83,15 @@ public interface PreAuthService {
             String rawSessionReference,
             Instant seenAt);
 
+    /**
+     * 只允许已经完成当前 WebRTC 校验的 OAuth H5 请求轮换为正式认证 PreAuth。
+     */
+    PreAuthIssue promoteAuthenticatedAfterWebRtcVerified(
+            PreAuthAccess access,
+            RiskSessionType sessionType,
+            String rawSessionReference,
+            String currentHttpIp,
+            Instant seenAt);
+
     void revoke(RiskScope scope, String rawToken);
 }

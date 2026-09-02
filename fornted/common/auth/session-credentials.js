@@ -19,6 +19,13 @@ export function hasCompleteSessionCredentials(credentials) {
 	)
 }
 
+/** Android OAuth 完成必须同时带回新 PreAuth，防止旧绑定与新 Refresh Session 混用。 */
+export function hasCompleteAndroidOAuthCredentials(credentials) {
+	return ['accessToken', 'refreshToken', 'csrfToken', 'preAuthToken'].every(name =>
+		typeof credentials?.[name] === 'string' && credentials[name].length > 0
+	)
+}
+
 export function containsSessionCredentialUpdate(value) {
 	return value != null && ['accessToken', 'refreshToken', 'csrfToken', 'preAuthToken']
 		.some(name => Object.prototype.hasOwnProperty.call(value, name))

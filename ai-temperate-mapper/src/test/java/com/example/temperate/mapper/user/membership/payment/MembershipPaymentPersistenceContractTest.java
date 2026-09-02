@@ -26,6 +26,8 @@ final class MembershipPaymentPersistenceContractTest {
         String terminalEntitlementMigration = read(
                 "sql/migrations/032_add_membership_order_not_granted_resolution.sql");
         String orphanChecks = read("sql/checks/membership_payment_orphans.sql");
+        String providerReferenceMigration = read(
+                "sql/migrations/035_remove_external_order_trade_placeholders.sql");
 
         assertThat(orderSchema)
                 .contains("payment_started_at TIMESTAMPTZ(6)")
@@ -48,6 +50,16 @@ final class MembershipPaymentPersistenceContractTest {
                 .contains("entitlement_resolution IS NULL")
                 .doesNotContain("FOREIGN KEY")
                 .doesNotContain("REFERENCES");
+        assertThat(orderSchema)
+                .contains("chk_membership_order_no_external_order_reference")
+                .contains("provider_trade_no NOT LIKE 'LIUHAO:ORDER:%'")
+                .contains("provider_trade_no NOT LIKE 'BAR:ORDER:%'");
+        assertThat(providerReferenceMigration)
+                .contains("payment_started_at IS NULL")
+                .contains("RAISE EXCEPTION")
+                .contains("VALIDATE CONSTRAINT chk_membership_order_no_external_order_reference")
+                .doesNotContain("provider_trade_no = 'LIUHAO:TRADE:'")
+                .doesNotContain("provider_trade_no = 'BAR:TRADE:'");
         assertThat(entitlementMigration)
                 .contains("LEGACY_NOT_GRANTED")
                 .contains("entitlement_resolution IS NULL")
@@ -110,11 +122,17 @@ final class MembershipPaymentPersistenceContractTest {
                 .contains("findByIdsJsonForUpdate")
                 .contains("batchResolveEntitlements")
                 .contains("provider_trade_no = CASE")
-                .contains("entitlements.resolution IN ('REFUND_REQUIRED', 'NOT_GRANTED')")
+                .contains("WHEN entitlements.resolution = 'REFUND_REQUIRED'")
+                .contains("THEN NULL")
+                .contains("ELSE COALESCE(")
+                .contains("membership_order.provider_trade_no,")
+                .contains("entitlements.provider_trade_no IS NULL")
                 .contains("membership_order.provider_trade_no = entitlements.provider_trade_no")
                 .contains("'NOT_GRANTED'")
                 .contains("entitlements.resolution = 'REFUND_REQUIRED'")
                 .contains("FROM userloginidentity")
+                .doesNotContain("BAR:ORDER:")
+                .doesNotContain("LIUHAO:ORDER:")
                 .doesNotContain("${");
         assertThat(callbackMapper)
                 .contains("jsonb_to_recordset")

@@ -1,10 +1,12 @@
 package com.example.temperate.service.user.membership.payment.provider;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.Objects;
 
 /**
- * 该值对象是来承载浏览器提交 BAR Checkout 所需的固定签名字段，不包含 API Key、Cookie 或可持久化令牌。
+ * 该值对象是来承载浏览器提交外部收银台所需的固定签名字段，不包含私钥、API Key、Cookie 或可持久化令牌。
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record PaymentCheckoutSubmissionFields(
         String pid,
         String outTradeNo,
@@ -27,7 +29,10 @@ public record PaymentCheckoutSubmissionFields(
         notifyUrl = Objects.requireNonNull(notifyUrl);
         returnUrl = Objects.requireNonNull(returnUrl);
         timestamp = Objects.requireNonNull(timestamp);
-        keyVersion = Objects.requireNonNull(keyVersion);
+        // RSA V2 不使用 BAR 的密钥版本字段；空值由 Web JSON 层省略，不能提交字符串 "null"。
+        if (keyVersion != null && (keyVersion.isBlank() || !keyVersion.equals(keyVersion.trim()))) {
+            throw new IllegalArgumentException("keyVersion must be absent or non-blank");
+        }
         signType = Objects.requireNonNull(signType);
         sign = Objects.requireNonNull(sign);
     }

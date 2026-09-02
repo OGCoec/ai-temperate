@@ -1,5 +1,6 @@
 package com.example.temperate.web.risk.webrtc;
 
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService;
 import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskScope;
@@ -36,11 +37,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 在网络风险已放行后解释 PreAuth WebRTC 异步状态，并在强制模式只阻止已失败或已超时的新请求。
+ * 在网络风险已放行后解释 PreAuth WebRTC 异步状态，并为 H5 OAuth 完成请求校验严格或乐观裁决边界。
  *
  * <p>该拦截器不创建 RTCPeerConnection，不请求 STUN，也不接受客户端匹配结论；Start/Report 路由由
- * 注册配置排除，以便客户端在同一 PreAuth 下完成闭环。同一 Servlet 请求的 ASYNC 二次分派只复用与
- * 原方法、路径和作用域完全一致的已放行结果，避免重复检查已轮换的 PreAuth。</p>
+ * 注册配置排除，以便客户端在同一 PreAuth 下完成闭环。普通请求仍允许 REQUIRED/PENDING 异步推进，
+ * 但 H5 OAuth complete 在强制模式只接受 VERIFIED，或服务端已验证为 RESUMED 的单次 attempt；后者
+ * 仍由十五秒 Session 截止线约束。同一 Servlet 请求的 ASYNC 二次分派只复用与原方法、路径和作用域
+ * 完全一致的已放行结果，避免重复检查已轮换的 PreAuth。</p>
  */
 @Component
 public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
@@ -60,6 +63,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
     private final WebRtcMetrics metrics;
     private final WebRtcVerificationTransport transport;
     private final MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy;
+    private final OAuthWebRtcAttemptService oauthAttemptService;
 
     public WebRtcVerificationInterceptor(
             NetworkRiskProperties properties,
@@ -75,7 +79,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
                 objectMapper,
                 metrics,
                 transport,
-                MembershipPaymentLoadtestRequestPolicy.disabled());
+                MembershipPaymentLoadtestRequestPolicy.disabled(),
+                null);
     }
 
     /**
@@ -92,7 +97,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             ObjectMapper objectMapper,
             WebRtcMetrics metrics,
             WebRtcVerificationTransport transport,
-            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy,
+            OAuthWebRtcAttemptService oauthAttemptService) {
         this.properties = Objects.requireNonNull(properties);
         this.verificationService = Objects.requireNonNull(verificationService);
         this.contextResolver = Objects.requireNonNull(contextResolver);
@@ -100,6 +106,19 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
         this.metrics = Objects.requireNonNull(metrics);
         this.transport = Objects.requireNonNull(transport);
         this.loadtestRequestPolicy = Objects.requireNonNull(loadtestRequestPolicy);
+        this.oauthAttemptService = oauthAttemptService;
+    }
+
+    public WebRtcVerificationInterceptor(
+            NetworkRiskProperties properties,
+            WebRtcVerificationService verificationService,
+            RiskRequestContextResolver contextResolver,
+            ObjectMapper objectMapper,
+            WebRtcMetrics metrics,
+            WebRtcVerificationTransport transport,
+            MembershipPaymentLoadtestRequestPolicy loadtestRequestPolicy) {
+        this(properties, verificationService, contextResolver, objectMapper,
+                metrics, transport, loadtestRequestPolicy, null);
     }
 
     @Override
@@ -166,9 +185,18 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
         String metricDecision = interceptorDecision(decision.outcome());
         metrics.interceptor(scope, metricDecision, platform, properties.mode());
         transport.write(response, decision);
+        boolean strictH5OAuthCompletion = isStrictH5OAuthCompletion(request, platform);
+        boolean pendingOAuthCompletionAllowed = strictH5OAuthCompletion
+                && isPendingOAuthCompletionAllowed(request, access, decision);
+        if (strictH5OAuthCompletion && properties.mode() == NetworkRiskMode.OBSERVE
+                && decision.outcome() != WebRtcVerificationOutcome.VERIFIED) {
+            logOAuthGateWouldBlock(request, decision);
+        }
         if (decision.outcome() == WebRtcVerificationOutcome.VERIFIED
-                || decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_PENDING
-                || decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_REQUIRED
+                || pendingOAuthCompletionAllowed
+                || (!strictH5OAuthCompletion
+                        && (decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_PENDING
+                                || decision.outcome() == WebRtcVerificationOutcome.VERIFICATION_REQUIRED))
                 || properties.mode() == NetworkRiskMode.OBSERVE) {
             return allow(request, scope, metricDecision);
         }
@@ -179,6 +207,54 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
                 scope,
                 decision,
                 observation.clientIp());
+    }
+
+    private boolean isPendingOAuthCompletionAllowed(
+            HttpServletRequest request,
+            PreAuthAccess access,
+            WebRtcVerificationDecision decision) {
+        if (oauthAttemptService == null
+                || decision.outcome() != WebRtcVerificationOutcome.VERIFICATION_PENDING) {
+            return false;
+        }
+        String attemptId = request.getHeader("X-AIT-OAuth-WebRTC-Attempt-Id");
+        String generation = request.getHeader("X-AIT-WebRTC-Probe-Generation");
+        if (attemptId == null || generation == null) {
+            return false;
+        }
+        try {
+            return oauthAttemptService.isPendingH5OAuthCompletionAllowed(
+                    access, attemptId, generation);
+        } catch (RuntimeException exception) {
+            // 非法或过期 attempt 必须退回原 VERIFIED 闸门，不能把解析异常变成放行。
+            return false;
+        }
+    }
+
+    private static boolean isStrictH5OAuthCompletion(
+            HttpServletRequest request,
+            String platform) {
+        // 只有 H5 OAuth 最终完成请求要求 VERIFIED；Start/Report 及 Android 原生入口保持原有边界。
+        return "h5".equals(platform)
+                && "POST".equalsIgnoreCase(request.getMethod())
+                && "/api/auth/oauth2/complete".equals(request.getRequestURI());
+    }
+
+    private static void logOAuthGateWouldBlock(
+            HttpServletRequest request,
+            WebRtcVerificationDecision decision) {
+        LOGGER.info(
+                "event=oauth_webrtc_gate_would_block traceId={} clientRequestId={} "
+                        + "pageInstanceId={} probeRunId={} path={} verificationState={} "
+                        + "generation={} outcome={}",
+                diagnosticAttribute(request, AuthRequestTraceFilter.TRACE_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.PAGE_INSTANCE_ATTRIBUTE),
+                diagnosticAttribute(request, AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE),
+                safePath(request.getRequestURI()),
+                safeDiagnosticValue(decision.verificationState()),
+                Math.max(0L, decision.probeGeneration()),
+                safeDiagnosticValue(decision.outcome().name()));
     }
 
     private boolean rejectPreAuth(
@@ -355,7 +431,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
     private static HttpStatus httpStatus(WebRtcVerificationOutcome outcome) {
         return switch (outcome) {
             case IP_MISMATCH -> HttpStatus.FORBIDDEN;
-            case NETWORK_CHANGED, STALE_REPORT -> HttpStatus.CONFLICT;
+            case NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT -> HttpStatus.CONFLICT;
             case VERIFICATION_REQUIRED, VERIFICATION_FAILED,
                     IP_FAMILY_INCOMPLETE,
                     VERIFICATION_TIMEOUT, VERIFICATION_PENDING ->
@@ -375,6 +452,7 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case IP_FAMILY_INCOMPLETE -> "WEBRTC_IP_FAMILY_INCOMPLETE";
             case IP_MISMATCH -> "WEBRTC_IP_MISMATCH";
             case NETWORK_CHANGED -> "WEBRTC_NETWORK_CHANGED";
+            case OAUTH_ATTEMPT_REQUIRED -> "WEBRTC_OAUTH_ATTEMPT_REQUIRED";
             case STALE_REPORT -> "WEBRTC_REPORT_STALE";
             case STATE_INVALID -> "WEBRTC_STATE_UNAVAILABLE";
         };
@@ -393,6 +471,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case IP_MISMATCH ->
                     "检测到 WebRTC IP 与当前 HTTP IP 不一致，当前会话已停止访问。";
             case NETWORK_CHANGED -> "检测期间网络环境发生变化，请读取最新探测状态。";
+            case OAUTH_ATTEMPT_REQUIRED ->
+                    "该 WebRTC generation 已绑定 OAuth 裁决，请使用原 OAuth attempt 上报。";
             case STALE_REPORT -> "该 WebRTC Report 已过期，请读取最新探测状态。";
             case STATE_INVALID -> "WebRTC 校验状态暂时不可用。";
         };
@@ -403,7 +483,8 @@ public final class WebRtcVerificationInterceptor implements HandlerInterceptor {
             case VERIFIED -> "allowed";
             case VERIFICATION_PENDING -> "pending_allowed";
             case VERIFICATION_REQUIRED -> "required_allowed";
-            case NETWORK_CHANGED, STALE_REPORT -> "required";
+            case NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT -> "required";
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
                     IP_FAMILY_INCOMPLETE -> "failed";
             case IP_MISMATCH -> "blocked";

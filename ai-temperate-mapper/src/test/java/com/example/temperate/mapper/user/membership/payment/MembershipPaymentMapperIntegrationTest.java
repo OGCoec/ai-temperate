@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
@@ -501,7 +502,7 @@ final class MembershipPaymentMapperIntegrationTest {
     void refundTerminalFactsReturnOnlyDatabaseAuthorityNeededForMissingSnapshotRecovery() {
         byte[] orderId = id((byte) 27);
         byte[] callbackId = id((byte) 28);
-        String providerTradeNo = "provider-refund-terminal-fact";
+        String providerTradeNo = "BAR:TRADE:provider-refund-terminal-fact";
         try (SqlSession session = sqlSessionFactory.openSession(true)) {
             MembershipOrderMapper orderMapper = session.getMapper(MembershipOrderMapper.class);
             MembershipPaymentCallbackMapper callbackMapper =
@@ -517,14 +518,18 @@ final class MembershipPaymentMapperIntegrationTest {
                       "resolvedAt":"2026-08-20T12:09:00Z"}]
                     """.formatted(hex(callbackId)))).isEqualTo(1);
             assertThat(orderMapper.batchAdvanceState("""
-                    [{"idHex":"%s","status":4,"providerTradeNo":null,
+                    [{"idHex":"%s","status":4,"providerTradeNo":"%s",
                       "closingDeadlineAt":null,"paidAt":null,"stateVersion":2,
                       "updatedAt":"2026-08-20T12:09:00Z"}]
+                    """.formatted(hex(orderId), providerTradeNo))).isEqualTo(1);
+            assertThat(orderMapper.batchResolveEntitlements("""
+                    [{"orderIdHex":"%s","resolution":"REFUND_REQUIRED",
+                      "providerTradeNo":null,"resolvedAt":"2026-08-20T12:09:00Z"}]
                     """.formatted(hex(orderId)))).isEqualTo(1);
             assertThat(orderMapper.batchResolveEntitlements("""
                     [{"orderIdHex":"%s","resolution":"REFUND_REQUIRED",
-                      "providerTradeNo":"%s","resolvedAt":"2026-08-20T12:09:00Z"}]
-                    """.formatted(hex(orderId), providerTradeNo))).isEqualTo(1);
+                      "providerTradeNo":null,"resolvedAt":"2026-08-20T12:09:00Z"}]
+                    """.formatted(hex(orderId)))).isEqualTo(1);
 
             assertThat(callbackMapper.findRefundTerminalFactsByIdsJson(
                     "[\"%s\"]".formatted(hex(callbackId))))
@@ -533,12 +538,90 @@ final class MembershipPaymentMapperIntegrationTest {
                         assertThat(fact.getCallbackId()).isEqualTo(callbackId);
                         assertThat(fact.getOrderId()).isEqualTo(orderId);
                         assertThat(fact.getProviderTradeNo()).isEqualTo(providerTradeNo);
+                        assertThat(fact.getPaidAmountYuan()).isEqualByComparingTo("20.00");
                         assertThat(fact.getCallbackResolution()).isEqualTo("REFUND_REQUIRED");
                         assertThat(fact.getOrderStatus()).isEqualTo(MembershipOrderStatus.CLOSED);
                         assertThat(fact.getOrderEntitlementResolution())
                                 .isEqualTo(MembershipOrderEntitlementResolution.REFUND_REQUIRED);
                         assertThat(fact.getOrderProviderTradeNo()).isNull();
                     });
+        }
+    }
+
+    @Test
+    void historicalRefundRequiredReplayClearsOnlyOrderTradeAndPreservesFirstResolutionTime()
+            throws SQLException {
+        byte[] orderId = id((byte) 29);
+        byte[] callbackId = id((byte) 30);
+        String providerTradeNo = "LIUHAO:TRADE:legacy-refund-recovery";
+        OffsetDateTime firstResolvedAt = OffsetDateTime.parse("2026-08-20T12:13:00Z");
+        OffsetDateTime replayedAt = firstResolvedAt.plusMinutes(1);
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            MembershipOrderMapper orderMapper = session.getMapper(MembershipOrderMapper.class);
+            MembershipPaymentCallbackMapper callbackMapper =
+                    session.getMapper(MembershipPaymentCallbackMapper.class);
+            try (PreparedStatement statement = session.getConnection().prepareStatement("""
+                    INSERT INTO userloginidentity (id)
+                    VALUES (?)
+                    ON CONFLICT DO NOTHING
+                    """)) {
+                statement.setLong(1, 900_077L);
+                statement.executeUpdate();
+            }
+            assertThat(orderMapper.insert(order(
+                    orderId, 900_077L, "fbdcb57d-3f8b-4621-9895-2103002a2092"))).isEqualTo(1);
+            assertThat(callbackMapper.batchInsertOrResolve(callbacksJson(
+                    callback(1, callbackId, orderId, providerTradeNo))))
+                    .extracting(MembershipPaymentCallbackWriteResult::getOutcome)
+                    .containsExactly("INSERTED");
+            assertThat(orderMapper.batchAdvanceState("""
+                    [{"idHex":"%s","status":4,"providerTradeNo":"%s",
+                      "closingDeadlineAt":null,"paidAt":null,"stateVersion":2,
+                      "updatedAt":"%s"}]
+                    """.formatted(hex(orderId), providerTradeNo, firstResolvedAt)))
+                    .isEqualTo(1);
+            assertThat(callbackMapper.batchResolve("""
+                    [{"callbackIdHex":"%s","resolution":"REFUND_REQUIRED",
+                      "resolvedAt":"%s"}]
+                    """.formatted(hex(callbackId), firstResolvedAt))).isEqualTo(1);
+
+            // 该直接写入仅构造旧版本遗留事实：权益已经裁决退款，但订单流水尚未清空。
+            try (PreparedStatement statement = session.getConnection().prepareStatement("""
+                    UPDATE membership_order
+                    SET entitlement_resolution = 'REFUND_REQUIRED',
+                        entitlement_resolved_at = ?
+                    WHERE id = ?
+                    """)) {
+                statement.setObject(1, firstResolvedAt);
+                statement.setBytes(2, orderId);
+                assertThat(statement.executeUpdate()).isEqualTo(1);
+            }
+            assertThat(orderMapper.findById(orderId).getProviderTradeNo())
+                    .isEqualTo(providerTradeNo);
+
+            String replay = """
+                    [{"orderIdHex":"%s","resolution":"REFUND_REQUIRED",
+                      "providerTradeNo":null,"resolvedAt":"%s"}]
+                    """.formatted(hex(orderId), replayedAt);
+            assertThat(orderMapper.batchResolveEntitlements(replay)).isEqualTo(1);
+            assertThat(callbackMapper.batchResolve("""
+                    [{"callbackIdHex":"%s","resolution":"REFUND_REQUIRED",
+                      "resolvedAt":"%s"}]
+                    """.formatted(hex(callbackId), replayedAt))).isEqualTo(1);
+            assertThat(orderMapper.batchResolveEntitlements(replay)).isEqualTo(1);
+
+            MembershipOrder repaired = orderMapper.findById(orderId);
+            MembershipPaymentCallback preserved = callbackMapper
+                    .findByIdsJsonForUpdate("[\"%s\"]".formatted(hex(callbackId)))
+                    .getFirst();
+            assertThat(repaired.getProviderTradeNo()).isNull();
+            assertThat(repaired.getEntitlementResolution())
+                    .isEqualTo(MembershipOrderEntitlementResolution.REFUND_REQUIRED);
+            assertThat(repaired.getEntitlementResolvedAt()).isEqualTo(firstResolvedAt);
+            assertThat(repaired.getUpdatedAt()).isEqualTo(firstResolvedAt);
+            assertThat(preserved.getProviderTradeNo()).isEqualTo(providerTradeNo);
+            assertThat(preserved.getResolution()).isEqualTo("REFUND_REQUIRED");
+            assertThat(preserved.getResolvedAt()).isEqualTo(firstResolvedAt);
         }
     }
 
@@ -687,7 +770,7 @@ final class MembershipPaymentMapperIntegrationTest {
                       "updatedAt":"2026-08-20T12:07:00Z"}]
                     """.formatted(hex(closedId)))).isEqualTo(1);
             MembershipOrder closed = mapper.findById(closedId);
-            assertThat(closed.getProviderTradeNo()).isNull();
+            assertThat(closed.getProviderTradeNo()).isEqualTo("provider-not-granted");
             assertThat(closed.getEntitlementResolution())
                     .isEqualTo(MembershipOrderEntitlementResolution.NOT_GRANTED);
             assertThat(closed.getEntitlementResolvedAt())
@@ -788,6 +871,71 @@ final class MembershipPaymentMapperIntegrationTest {
         }
     }
 
+    @Test
+    void forceReplacementPreservesOldTradeAndAllowsOneNewActiveOrder() {
+        byte[] oldId = id((byte) 59);
+        byte[] newId = id((byte) 60);
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            MembershipOrderMapper mapper = session.getMapper(MembershipOrderMapper.class);
+            MembershipOrder oldOrder = order(
+                    oldId, 74L, "42ba3731-e418-4671-a36f-49174257d97f");
+            oldOrder.setPaymentStartedAt(NOW.plusMinutes(1));
+            oldOrder.setProviderTradeNo("LIUHAO:TRADE:force-replaced");
+            oldOrder.setStateVersion(2L);
+            oldOrder.setUpdatedAt(NOW.plusMinutes(1));
+            assertThat(mapper.insert(oldOrder)).isEqualTo(1);
+
+            assertThat(mapper.supersedeActiveForReplacement(
+                            oldId,
+                            74L,
+                            MembershipOrderStatus.CLOSED,
+                            3L,
+                            NOW.plusMinutes(2)))
+                    .isEqualTo(1);
+            MembershipOrder replacement = order(
+                    newId, 74L, "4475c542-c4d5-4e02-99ae-5c4112d49cdf");
+            assertThat(mapper.insert(replacement)).isEqualTo(1);
+
+            MembershipOrder persistedOld = mapper.findById(oldId);
+            assertThat(persistedOld.getStatus()).isEqualTo(MembershipOrderStatus.CLOSED);
+            assertThat(persistedOld.getProviderTradeNo())
+                    .isEqualTo("LIUHAO:TRADE:force-replaced");
+            assertThat(persistedOld.getEntitlementResolution())
+                    .isEqualTo(MembershipOrderEntitlementResolution.NOT_GRANTED);
+            assertThat(mapper.findActiveByLoginIdentityId(74L).getId())
+                    .containsExactly(newId);
+        }
+    }
+
+    @Test
+    void forceReplacementCancelsAnUnstartedOrderBeforeCreatingTheNewActiveOrder() {
+        byte[] oldId = id((byte) 110);
+        byte[] newId = id((byte) 111);
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            MembershipOrderMapper mapper = session.getMapper(MembershipOrderMapper.class);
+            assertThat(mapper.insert(order(
+                    oldId, 82L, "ecf38dd6-aa54-4924-8111-9dca670e60f6"))).isEqualTo(1);
+
+            assertThat(mapper.supersedeActiveForReplacement(
+                            oldId,
+                            82L,
+                            MembershipOrderStatus.CANCELLED,
+                            2L,
+                            NOW.plusMinutes(1)))
+                    .isEqualTo(1);
+            assertThat(mapper.insert(order(
+                    newId, 82L, "fa877ca2-b3a7-455f-94d4-112bd243c4d7"))).isEqualTo(1);
+
+            MembershipOrder persistedOld = mapper.findById(oldId);
+            assertThat(persistedOld.getStatus()).isEqualTo(MembershipOrderStatus.CANCELLED);
+            assertThat(persistedOld.getProviderTradeNo()).isNull();
+            assertThat(persistedOld.getEntitlementResolution())
+                    .isEqualTo(MembershipOrderEntitlementResolution.NOT_GRANTED);
+            assertThat(mapper.findActiveByLoginIdentityId(82L).getId())
+                    .containsExactly(newId);
+        }
+    }
+
     private static MembershipOrder order(byte[] id, long userId, String idempotencyKey) {
         MembershipOrder order = new MembershipOrder();
         order.setId(id);
@@ -867,7 +1015,7 @@ final class MembershipPaymentMapperIntegrationTest {
                     VALUES
                         (17), (18), (19), (20),
                         (21), (22), (23), (24), (25),
-                        (70), (71), (72), (73), (74), (75), (76)
+                        (70), (71), (72), (73), (74), (75), (76), (82)
                     """);
             statement.execute(read("sql/018_create_membership_order.sql"));
             statement.execute(read("sql/019_create_membership_payment_callback.sql"));

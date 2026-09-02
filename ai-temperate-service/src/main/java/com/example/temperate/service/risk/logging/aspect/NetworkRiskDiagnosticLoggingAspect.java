@@ -113,7 +113,7 @@ public final class NetworkRiskDiagnosticLoggingAspect {
      */
     @Around(
             "execution(* com.example.temperate.service.risk.preauth.service."
-                    + "PreAuthService.promoteAuthenticated(..))")
+                    + "PreAuthService.promoteAuthenticated*(..))")
     public Object logPromotion(ProceedingJoinPoint joinPoint) throws Throwable {
         long startedAtNanos = System.nanoTime();
         PreAuthAccess access = argument(joinPoint, 0, PreAuthAccess.class);

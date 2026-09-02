@@ -151,7 +151,10 @@ public final class WebRtcVerificationDiagnosticLoggingAspect {
     public Object logReport(ProceedingJoinPoint joinPoint) throws Throwable {
         long startedAtNanos = System.nanoTime();
         PreAuthAccess access = argument(joinPoint, 0, PreAuthAccess.class);
-        int submittedCandidateCount = boundedCollectionSize(joinPoint, 3);
+        // report 存在普通四参数与 OAuth 五参数重载，候选集合始终是最后一个参数。
+        int submittedCandidateCount = boundedCollectionSize(
+                joinPoint,
+                joinPoint.getArgs().length - 1);
         Boolean previousReportScope = REPORT_SCOPE.get();
         PreAuthWebRtcWriteResult previousWriteResult = REPORT_WRITE_RESULT.get();
         REPORT_SCOPE.set(Boolean.TRUE);
@@ -371,7 +374,8 @@ public final class WebRtcVerificationDiagnosticLoggingAspect {
         return outcome != null && switch (outcome) {
             case VERIFIED, VERIFICATION_REQUIRED, VERIFICATION_PENDING -> false;
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT, IP_FAMILY_INCOMPLETE,
-                    IP_MISMATCH, NETWORK_CHANGED, STALE_REPORT, STATE_INVALID -> true;
+                    IP_MISMATCH, NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT, STATE_INVALID -> true;
         };
     }
 

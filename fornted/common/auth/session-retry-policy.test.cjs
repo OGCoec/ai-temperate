@@ -37,3 +37,16 @@ test('uses bootstrap only for H5 CSRF recovery', async () => {
 		SessionRenewalMode.NONE
 	)
 })
+
+test('Android network and PreAuth failures never trigger session bootstrap replay', async () => {
+	const { SessionRenewalMode, sessionRenewalMode } = await loadModule()
+
+	assert.equal(
+		sessionRenewalMode('ANDROID', 'NETWORK_ERROR', false),
+		SessionRenewalMode.NONE
+	)
+	assert.equal(
+		sessionRenewalMode('ANDROID', 'PREAUTH_REQUIRED', false),
+		SessionRenewalMode.NONE
+	)
+})

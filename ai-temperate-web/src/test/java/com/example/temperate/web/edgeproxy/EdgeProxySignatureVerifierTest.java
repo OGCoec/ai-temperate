@@ -42,6 +42,7 @@ class EdgeProxySignatureVerifierTest {
         EdgeProxyVerificationResult result = verifier.verify(request);
         assertThat(result.externalHost()).isEqualTo("admin.niko000o.site");
         assertThat(result.protocolVersion()).isEqualTo("v2");
+        assertThat(result.ray()).isEqualTo("test-ray-ord");
         assertThat(result.networkContext().clientIp()).isEqualTo("203.0.113.10");
         assertThat(result.networkContext().countryCode()).isEqualTo("US");
     }
@@ -89,6 +90,7 @@ class EdgeProxySignatureVerifierTest {
         EdgeProxyVerificationResult result = verifier.verify(request);
 
         assertThat(result.protocolVersion()).isEqualTo("v1");
+        assertThat(result.ray()).isEqualTo("test-ray-ord");
         assertThat(result.optionalNetworkContext()).isEmpty();
     }
 

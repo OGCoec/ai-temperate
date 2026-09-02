@@ -42,6 +42,7 @@
         <id property="callbackId" column="callback_id"/>
         <result property="orderId" column="order_id"/>
         <result property="providerTradeNo" column="provider_trade_no"/>
+        <result property="paidAmountYuan" column="paid_amount_yuan"/>
         <result property="callbackResolution" column="callback_resolution"/>
         <result property="orderStatus" column="order_status"
                 typeHandler="com.example.temperate.mapper.typehandler.MembershipOrderStatusTypeHandler"/>
@@ -235,8 +236,8 @@
             membership_payment_callback.id,
             membership_payment_callback.order_id,
             membership_payment_callback.provider_trade_no,
-            membership_payment_callback.trade_status,
             membership_payment_callback.paid_amount_yuan,
+            membership_payment_callback.trade_status,
             membership_payment_callback.paid_at,
             membership_payment_callback.received_at,
             membership_payment_callback.resolution,
@@ -260,6 +261,7 @@
             membership_payment_callback.id AS callback_id,
             membership_payment_callback.order_id,
             membership_payment_callback.provider_trade_no,
+            membership_payment_callback.paid_amount_yuan,
             membership_payment_callback.resolution AS callback_resolution,
             membership_order.status AS order_status,
             membership_order.entitlement_resolution AS order_entitlement_resolution,

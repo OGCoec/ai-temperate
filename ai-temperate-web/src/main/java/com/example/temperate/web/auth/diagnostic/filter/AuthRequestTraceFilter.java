@@ -3,6 +3,7 @@ package com.example.temperate.web.auth.diagnostic.filter;
 import com.example.temperate.common.net.ip.IpAddressIdentity;
 import com.example.temperate.web.auth.interceptor.UserSessionAuthenticationInterceptor;
 import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
+import com.example.temperate.web.edgeproxy.EdgeProxySignatureFilter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
@@ -31,7 +32,8 @@ import org.springframework.web.servlet.HandlerMapping;
  * 为全部业务 API 建立不读取凭据内容的端到端认证诊断关联边界。
  *
  * <p>过滤器为每个 API 请求生成追踪标识，并记录前端请求与页面 UUID、客户端排队时间、固定认证阶段耗时、
- * Cookie Header 字节数和地址解析是否分歧。它不记录 Cookie、Token、请求体、完整 IP 或转发头原文，也不改变认证结果。</p>
+ * 已验签 Worker Ray、源站 Ray、发布标识、Cookie Header 字节数和地址解析是否分歧。它不记录 Cookie、Token、
+ * 请求体、完整 IP 或未验签边缘头原文，也不改变认证结果。</p>
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
@@ -43,6 +45,8 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
     public static final String PAGE_INSTANCE_HEADER = "X-AIT-Page-Instance-Id";
     public static final String CLIENT_QUEUE_HEADER = "X-AIT-Client-Queue-Ms";
     public static final String WEBRTC_PROBE_RUN_HEADER = "X-AIT-WebRTC-Probe-Run-Id";
+    public static final String TRIGGER_REQUEST_HEADER = "X-AIT-Trigger-Request-Id";
+    public static final String BACKEND_RELEASE_HEADER = "X-AIT-Backend-Release";
     public static final String TRACE_ATTRIBUTE =
             AuthRequestTraceFilter.class.getName() + ".traceId";
     public static final String INBOUND_CF_RAY_ATTRIBUTE =
@@ -59,6 +63,8 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             AuthRequestTraceFilter.class.getName() + ".clientQueueMs";
     public static final String WEBRTC_PROBE_RUN_ATTRIBUTE =
             AuthRequestTraceFilter.class.getName() + ".webRtcProbeRunId";
+    public static final String TRIGGER_REQUEST_ATTRIBUTE =
+            AuthRequestTraceFilter.class.getName() + ".triggerClientRequestId";
     public static final String PAGE_INSTANCE_MDC_KEY = "pageInstanceId";
     public static final String WEBRTC_PROBE_RUN_MDC_KEY = "webRtcProbeRunId";
 
@@ -74,9 +80,10 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
     private final TrustedClientIpResolver clientIpResolver;
     private final boolean enabled;
     private final boolean serverTimingEnabled;
+    private final String backendRelease;
 
     public AuthRequestTraceFilter(TrustedClientIpResolver clientIpResolver) {
-        this(clientIpResolver, true, true);
+        this(clientIpResolver, true, true, "unknown");
     }
 
     @Autowired
@@ -84,10 +91,13 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             TrustedClientIpResolver clientIpResolver,
             @Value("${app.auth-request-diagnostics.enabled:true}") boolean enabled,
             @Value("${app.auth-request-diagnostics.server-timing-enabled:true}")
-                    boolean serverTimingEnabled) {
+                    boolean serverTimingEnabled,
+            @Value("${app.auth-request-diagnostics.release-id:unknown}")
+                    String backendRelease) {
         this.clientIpResolver = clientIpResolver;
         this.enabled = enabled;
         this.serverTimingEnabled = serverTimingEnabled;
+        this.backendRelease = safeReleaseId(backendRelease);
     }
 
     @Override
@@ -105,26 +115,30 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain) throws ServletException, IOException {
         String traceId = UUID.randomUUID().toString();
-        String inboundCfRay = safeBoundedIdentifier(request.getHeader(CF_RAY_HEADER), 128);
+        String originCfRay = safeBoundedIdentifier(request.getHeader(CF_RAY_HEADER), 128);
         String attemptId = safeAttemptId(request.getHeader(ATTEMPT_HEADER));
         String clientRequestId = safeUuid(request.getHeader(CLIENT_REQUEST_HEADER));
         String pageInstanceId = safeUuid(request.getHeader(PAGE_INSTANCE_HEADER));
         String webRtcProbeRunId = safeProbeRunId(
                 request.getHeader(WEBRTC_PROBE_RUN_HEADER));
+        String triggerClientRequestId = safeUuid(
+                request.getHeader(TRIGGER_REQUEST_HEADER));
         long clientQueueMillis = safeClientQueueMillis(
                 request.getHeader(CLIENT_QUEUE_HEADER));
         int cookieHeaderBytes = utf8Length(request.getHeader("Cookie"));
         ClientAddressDiagnostic addressDiagnostic = clientAddressDiagnostic(request);
         request.setAttribute(TRACE_ATTRIBUTE, traceId);
-        request.setAttribute(INBOUND_CF_RAY_ATTRIBUTE, inboundCfRay);
+        request.setAttribute(INBOUND_CF_RAY_ATTRIBUTE, originCfRay);
         request.setAttribute(ATTEMPT_ATTRIBUTE, attemptId);
         request.setAttribute(COOKIE_BYTES_ATTRIBUTE, cookieHeaderBytes);
         request.setAttribute(CLIENT_REQUEST_ATTRIBUTE, clientRequestId);
         request.setAttribute(PAGE_INSTANCE_ATTRIBUTE, pageInstanceId);
         request.setAttribute(CLIENT_QUEUE_ATTRIBUTE, clientQueueMillis);
         request.setAttribute(WEBRTC_PROBE_RUN_ATTRIBUTE, webRtcProbeRunId);
+        request.setAttribute(TRIGGER_REQUEST_ATTRIBUTE, triggerClientRequestId);
         AuthRequestTiming.initialize(request, serverTimingEnabled);
         response.setHeader(TRACE_HEADER, traceId);
+        response.setHeader(BACKEND_RELEASE_HEADER, backendRelease);
         if (!"absent".equals(webRtcProbeRunId)) {
             // 回显已经通过 UUID 校验的关联标识，便于浏览器把响应与本次探测尝试核对；非法客户端文本绝不回显。
             response.setHeader(WEBRTC_PROBE_RUN_HEADER, webRtcProbeRunId);
@@ -140,7 +154,7 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
         String previousClientPlatform = MDC.get(CLIENT_PLATFORM_MDC_KEY);
         MDC.put(TRACE_MDC_KEY, traceId);
         MDC.put(ATTEMPT_MDC_KEY, attemptId);
-        MDC.put(CF_RAY_MDC_KEY, inboundCfRay);
+        MDC.put(CF_RAY_MDC_KEY, originCfRay);
         MDC.put(CLIENT_REQUEST_MDC_KEY, clientRequestId);
         MDC.put(PAGE_INSTANCE_MDC_KEY, pageInstanceId);
         MDC.put(WEBRTC_PROBE_RUN_MDC_KEY, webRtcProbeRunId);
@@ -157,8 +171,10 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
                 clientRequestId,
                 pageInstanceId,
                 webRtcProbeRunId,
+                triggerClientRequestId,
                 clientQueueMillis,
-                inboundCfRay,
+                originCfRay,
+                backendRelease,
                 cookieHeaderBytes,
                 addressDiagnostic,
                 startedNanos);
@@ -172,6 +188,7 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
         } finally {
             AuthRequestTiming.writeServerTiming(request, response);
             response.setHeader(TRACE_HEADER, traceId);
+            response.setHeader(BACKEND_RELEASE_HEADER, backendRelease);
             if (!failed && !completionLogger.logged()) {
                 if (request.isAsyncStarted()) {
                     try {
@@ -252,6 +269,17 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
         String normalized = safeUuid(value);
         // Probe ID 来自诊断客户端；非法输入按缺失处理，禁止把攻击者文本或 invalid 标签用于跨层关联。
         return "invalid".equals(normalized) ? "absent" : normalized;
+    }
+
+    private static String safeReleaseId(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        String normalized = value.trim();
+        return value.equals(normalized)
+                        && normalized.matches("^[A-Za-z0-9._-]{1,64}$")
+                ? normalized
+                : "unknown";
     }
 
     private static long safeClientQueueMillis(String value) {
@@ -348,8 +376,10 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
         private final String clientRequestId;
         private final String pageInstanceId;
         private final String webRtcProbeRunId;
+        private final String triggerClientRequestId;
         private final long clientQueueMillis;
-        private final String inboundCfRay;
+        private final String originCfRay;
+        private final String backendRelease;
         private final int cookieHeaderBytes;
         private final ClientAddressDiagnostic addressDiagnostic;
         private final long startedNanos;
@@ -364,8 +394,10 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
                 String clientRequestId,
                 String pageInstanceId,
                 String webRtcProbeRunId,
+                String triggerClientRequestId,
                 long clientQueueMillis,
-                String inboundCfRay,
+                String originCfRay,
+                String backendRelease,
                 int cookieHeaderBytes,
                 ClientAddressDiagnostic addressDiagnostic,
                 long startedNanos) {
@@ -376,8 +408,10 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             this.clientRequestId = clientRequestId;
             this.pageInstanceId = pageInstanceId;
             this.webRtcProbeRunId = webRtcProbeRunId;
+            this.triggerClientRequestId = triggerClientRequestId;
             this.clientQueueMillis = clientQueueMillis;
-            this.inboundCfRay = inboundCfRay;
+            this.originCfRay = originCfRay;
+            this.backendRelease = backendRelease;
             this.cookieHeaderBytes = cookieHeaderBytes;
             this.addressDiagnostic = addressDiagnostic;
             this.startedNanos = startedNanos;
@@ -418,8 +452,9 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
             AuthRequestTiming.writeServerTiming(request, response);
             LOGGER.info(
                     "auth_request_completed traceId={} clientRequestId={} pageInstanceId={} "
-                            + "probeRunId={} "
-                            + "clientQueueMs={} turnstileAttemptId={} inboundCfRay={} "
+                            + "probeRunId={} triggerClientRequestId={} "
+                            + "clientQueueMs={} turnstileAttemptId={} workerRay={} "
+                            + "originCfRay={} edgeProxyOutcome={} backendRelease={} "
                             + "method={} path={} platform={} status={} errorCode={} clearCookies={} elapsedMs={} "
                             + "riskMs={} webrtcMs={} sessionMs={} preAuthBindingMs={} controllerMs={} "
                             + "cookieHeaderBytes={} accessCredentialPresent={} "
@@ -432,9 +467,13 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
                     clientRequestId,
                     pageInstanceId,
                     webRtcProbeRunId,
+                    triggerClientRequestId,
                     clientQueueMillis,
                     attemptId,
-                    inboundCfRay,
+                    trustedWorkerRay(request),
+                    originCfRay,
+                    edgeProxyOutcome(request),
+                    backendRelease,
                     safeMethod(request.getMethod()),
                     safeRoute(request),
                     safePlatform(request.getHeader("X-Client-Platform")),
@@ -475,6 +514,26 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
                     addressDiagnostic.remoteFamily(),
                     addressDiagnostic.resolvedFamily(),
                     addressDiagnostic.differs());
+        }
+
+        private static String trustedWorkerRay(HttpServletRequest request) {
+            Object value = request.getAttribute(
+                    EdgeProxySignatureFilter.VERIFIED_RAY_ATTRIBUTE);
+            return value instanceof String ray
+                    ? safeBoundedIdentifier(ray, 128)
+                    : "absent";
+        }
+
+        private static String edgeProxyOutcome(HttpServletRequest request) {
+            Object value = request.getAttribute(EdgeProxySignatureFilter.OUTCOME_ATTRIBUTE);
+            if (!(value instanceof String outcome)) {
+                return "unavailable";
+            }
+            return switch (outcome) {
+                case "VERIFIED", "MISSING_REQUIRED", "INVALID",
+                        "UNSIGNED_OPTIONAL", "DISABLED" -> outcome;
+                default -> "invalid";
+            };
         }
 
         private static long duration(

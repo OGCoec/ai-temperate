@@ -83,9 +83,20 @@ npx wrangler pages deploy ..\..\fornted\unpackage\dist\build\h5 --project-name=a
 
 禁止上传 `build\web`，也禁止把旧部署中的单个 JS 文件复制进新目录。
 
+上传完成后，必须使用命令输出中的不可变部署地址逐项检查当前清单内的资源；只有所有 JS、CSS、字体、
+图片和静态文件都返回 200，且静态资源没有错误回退成 HTML，才能修改 Worker：
+
+```powershell
+Set-Location ..\..\fornted
+npm run verify:h5-pages-deployment -- --origin https://<deployment>.ai-temperate-frontend.pages.dev
+```
+
+该命令拒绝可变的 `https://ai-temperate-frontend.pages.dev` 项目地址。任一哈希资源 404、重定向或返回
+HTML 都会以非零状态退出，此时禁止更新 `H5_PAGES_ORIGIN` 或部署 Worker。
+
 Pages 独立地址只验收静态原点：
 
-1. `/index.html` 返回生产 HTML，且不长期缓存。
+1. 规范入口 `/` 返回生产 HTML 且不长期缓存；Pages 将 `/index.html` 308 到 `/` 属于正常行为。
 2. 清单内 JS、CSS、字体和图片正常返回。
 3. 不存在文件自然返回 404，不回退到 HTML。
 4. 构建产物不请求 `.vue`、`/@vite/`、`/@fs/`、HMR 或源码模块。

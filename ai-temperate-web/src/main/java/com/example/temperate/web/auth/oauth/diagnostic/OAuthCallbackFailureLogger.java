@@ -88,7 +88,8 @@ public final class OAuthCallbackFailureLogger {
             return switch (flowFailure.code()) {
                 case FLOW_NOT_FOUND, FLOW_EXPIRED -> "FLOW_EXPIRED";
                 case FLOW_FORBIDDEN -> "HANDSHAKE_INVALID";
-                case STATE_REJECTED, NONCE_REJECTED, INVALID_TRANSITION -> "STATE_INVALID";
+				case STATE_REJECTED, NONCE_REJECTED, INVALID_TRANSITION,
+					COMPLETION_IN_PROGRESS, ALREADY_COMPLETED -> "STATE_INVALID";
                 case INFRASTRUCTURE_UNAVAILABLE -> "UNEXPECTED_CALLBACK_FAILURE";
             };
         }

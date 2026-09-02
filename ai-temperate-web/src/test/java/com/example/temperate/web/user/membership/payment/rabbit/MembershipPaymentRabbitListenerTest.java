@@ -22,6 +22,10 @@ import com.example.temperate.service.user.membership.payment.rabbit.MembershipPa
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipRefundRetryConsumerService;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipRefundRetryMessage;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipSupersededCloseConsumerService;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipSupersededCloseMessage;
 import com.rabbitmq.client.Channel;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -42,6 +46,7 @@ final class MembershipPaymentRabbitListenerTest {
     private MembershipPaymentCheckConsumerService paymentService;
     private Channel channel;
     private MembershipPaymentTimingRecorder timingRecorder;
+    private MembershipSupersededCloseConsumerService supersededCloseService;
     private MembershipPaymentTimingRecorder.Session timingSession;
     private MembershipPaymentRabbitListener listener;
     private MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope;
@@ -52,6 +57,7 @@ final class MembershipPaymentRabbitListenerTest {
         paymentService = mock(MembershipPaymentCheckConsumerService.class);
         channel = mock(Channel.class);
         timingRecorder = mock(MembershipPaymentTimingRecorder.class);
+        supersededCloseService = mock(MembershipSupersededCloseConsumerService.class);
         timingSession = mock(MembershipPaymentTimingRecorder.Session.class);
         when(timingRecorder.start(
                 eq(MembershipPaymentOperation.RABBIT_PENDING),
@@ -60,6 +66,7 @@ final class MembershipPaymentRabbitListenerTest {
         listener = new MembershipPaymentRabbitListener(
                 paymentService,
                 mock(MembershipClosingCheckConsumerService.class),
+                supersededCloseService,
                 mock(MembershipPaymentMetrics.class),
                 timingRecorder);
         envelope = new MembershipPaymentRabbitEnvelope<>(
@@ -159,10 +166,60 @@ final class MembershipPaymentRabbitListenerTest {
         verify(channel).basicNack(41L, false, true);
     }
 
+    @Test
+    void supersededCloseAcknowledgesOnlyAfterBackgroundCloseProcessing() throws Exception {
+        MembershipPaymentRabbitEnvelope<MembershipSupersededCloseMessage> closeEnvelope =
+                new MembershipPaymentRabbitEnvelope<>(
+                        id((byte) 5),
+                        MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_EVENT,
+                        1,
+                        OffsetDateTime.of(2026, 8, 20, 12, 0, 0, 0, ZoneOffset.UTC),
+                        "trace-superseded",
+                        new MembershipSupersededCloseMessage(id((byte) 2), 0));
+        when(timingRecorder.start(
+                eq(MembershipPaymentOperation.RABBIT_CLOSING),
+                any(Object[].class)))
+                .thenReturn(timingSession);
+
+        listener.consumeSupersededClose(closeEnvelope, message, channel);
+
+        verify(supersededCloseService).process(closeEnvelope);
+        verify(channel).basicAck(41L, false);
+    }
+
+    @Test
+    void refundRetryAcknowledgesOnlyAfterCoordinatorReturns() throws Exception {
+        MembershipRefundRetryConsumerService refundService =
+                mock(MembershipRefundRetryConsumerService.class);
+        listener = new MembershipPaymentRabbitListener(
+                paymentService,
+                mock(MembershipClosingCheckConsumerService.class),
+                supersededCloseService,
+                refundService,
+                mock(MembershipPaymentMetrics.class),
+                timingRecorder,
+                new MembershipPaymentLoadtestProperties(false, List.of()));
+        MembershipPaymentRabbitEnvelope<MembershipRefundRetryMessage> refundEnvelope =
+                new MembershipPaymentRabbitEnvelope<>(
+                        id((byte) 6),
+                        MembershipPaymentRabbitNames.REFUND_RETRY_EVENT,
+                        1,
+                        OffsetDateTime.of(2026, 8, 20, 12, 0, 0, 0, ZoneOffset.UTC),
+                        "trace-refund",
+                        new MembershipRefundRetryMessage(id((byte) 7), 2, 6));
+
+        listener.consumeRefundRetry(refundEnvelope, message, channel);
+
+        verify(refundService).process(refundEnvelope);
+        verify(channel).basicAck(41L, false);
+        verify(channel, never()).basicNack(41L, false, true);
+    }
+
     private MembershipPaymentRabbitListener loadtestListener() {
         return new MembershipPaymentRabbitListener(
                 paymentService,
                 mock(MembershipClosingCheckConsumerService.class),
+                supersededCloseService,
                 mock(MembershipPaymentMetrics.class),
                 timingRecorder,
                 new MembershipPaymentLoadtestProperties(true, List.of(1L)));

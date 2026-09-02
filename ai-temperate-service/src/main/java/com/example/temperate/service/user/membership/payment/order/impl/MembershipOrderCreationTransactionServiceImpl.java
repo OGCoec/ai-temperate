@@ -2,10 +2,12 @@ package com.example.temperate.service.user.membership.payment.order.impl;
 
 import com.example.temperate.mapper.user.membership.payment.MembershipOrderMapper;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
+import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderCreationResult;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderCreationTransactionService;
+import com.example.temperate.service.user.membership.payment.order.MembershipOrderReplacementCommand;
 import java.util.Arrays;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -68,6 +70,63 @@ public final class MembershipOrderCreationTransactionServiceImpl
                 "The login identity no longer exists or the order winner cannot be resolved.");
     }
 
+    /**
+     * Redis 先形成回调可见终态，本事务再锁定用户活动订单并完成旧单落库与新单插入；已有 REFUND_REQUIRED 必须原样保留。
+     */
+    @Override
+    @Transactional
+    public MembershipOrderCreationResult replaceActive(
+            MembershipOrderReplacementCommand command) {
+        MembershipOrderReplacementCommand valid = Objects.requireNonNull(command);
+        MembershipOrder candidate = valid.candidate();
+        long loginIdentityId = Objects.requireNonNull(candidate.getLoginIdentityId());
+        membershipOrderMapper.acquireCreationLock(loginIdentityId);
+
+        MembershipOrder idempotent = membershipOrderMapper.findByIdempotencyKey(
+                candidate.getIdempotencyKey());
+        if (idempotent != null) {
+            return existingResult(candidate, idempotent);
+        }
+
+        MembershipOrder active = membershipOrderMapper.findActiveByLoginIdentityId(
+                loginIdentityId);
+        if (active != null) {
+            if (!Arrays.equals(active.getId(), valid.replacedOrderId())) {
+                throw activeOrderConflict();
+            }
+            requireSafeTerminalStatus(active, valid.terminalStatus());
+            int updated = membershipOrderMapper.supersedeActiveForReplacement(
+                    valid.replacedOrderId(),
+                    loginIdentityId,
+                    valid.terminalStatus(),
+                    valid.terminalStateVersion(),
+                    valid.changedAt());
+            if (updated != 1) {
+                throw activeOrderConflict();
+            }
+        } else {
+            MembershipOrder replaced = membershipOrderMapper.findById(
+                    valid.replacedOrderId());
+            if (replaced == null
+                    || !Objects.equals(replaced.getLoginIdentityId(), loginIdentityId)
+                    || !replaced.getStatus().terminal()) {
+                throw activeOrderConflict();
+            }
+        }
+
+        if (membershipOrderMapper.insert(candidate) == 1) {
+            return new MembershipOrderCreationResult(candidate, true);
+        }
+        MembershipOrder winner = membershipOrderMapper.findByIdempotencyKey(
+                candidate.getIdempotencyKey());
+        if (winner != null) {
+            return existingResult(candidate, winner);
+        }
+        throw new MembershipPaymentException(
+                MembershipPaymentErrorCode.MEMBERSHIP_ORDER_STATE_CONFLICT,
+                "The replacement membership order could not be created.");
+    }
+
     private static MembershipOrderCreationResult existingResult(
             MembershipOrder requested,
             MembershipOrder existing) {
@@ -88,7 +147,23 @@ public final class MembershipOrderCreationTransactionServiceImpl
         if (Objects.equals(requested.getIdempotencyKey(), active.getIdempotencyKey())) {
             return existingResult(requested, active);
         }
-        throw activeOrderConflict();
+        return new MembershipOrderCreationResult(active, false, true);
+    }
+
+    private static void requireSafeTerminalStatus(
+            MembershipOrder active,
+            MembershipOrderStatus terminalStatus) {
+        if (active.getStatus() != MembershipOrderStatus.PENDING_PAYMENT
+                && active.getStatus() != MembershipOrderStatus.CLOSING) {
+            throw activeOrderConflict();
+        }
+        boolean externalPaymentStarted = active.getStatus() == MembershipOrderStatus.CLOSING
+                || active.getPaymentStartedAt() != null
+                || active.getProviderTradeNo() != null;
+        // Redis 的支付发起事实可能领先数据库刷盘，因此 CLOSED 是安全的保守裁决；数据库已有支付证据时则绝不能降为 CANCELLED。
+        if (externalPaymentStarted && terminalStatus != MembershipOrderStatus.CLOSED) {
+            throw activeOrderConflict();
+        }
     }
 
     private static MembershipPaymentException activeOrderConflict() {

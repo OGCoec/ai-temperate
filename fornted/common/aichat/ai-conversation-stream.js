@@ -36,6 +36,7 @@ import {
 	registerGeneration,
 	updateGeneration
 } from './ai-conversation-generation-manager.js'
+import { mergeAiConversationSources } from './ai-conversation-source-presentation.js'
 // #ifdef APP-PLUS
 import { openAiConversationSseApp } from './ai-conversation-sse-app.js'
 // #endif
@@ -120,6 +121,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 	let firstDeltaRecorded = false
 	let publicHandle = null
 	let generationPublicId = command.generationPublicId || ''
+	let researchSources = []
 	const wrapped = {
 		diagnostics,
 		lifecycleDiagnostics,
@@ -137,6 +139,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 				requestedImageAspect: String(command.body?.image?.aspect || 'SQUARE'),
 				imagePresentationOrder: [],
 				previewImages: [],
+				researchSources,
 				status: 'QUEUED'
 			})
 			if (publicHandle) bindGenerationObserver(value, publicHandle)
@@ -166,6 +169,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 						requestedImageAspect: String(command.body?.image?.aspect || 'SQUARE'),
 						imagePresentationOrder: [],
 						previewImages: [],
+						researchSources,
 						status: 'RUNNING'
 					})
 					if (publicHandle) {
@@ -228,6 +232,20 @@ export async function openAiConversationStream(command, handlers = {}) {
 					mediaUploadProgressByKey: mergeMediaUploadProgress(
 						current?.mediaUploadProgressByKey, event.data)
 				})
+			}
+			if (event.type === 'source') {
+				researchSources = mergeAiConversationSources(
+					researchSources, [event.data])
+				if (generationPublicId) {
+					const current = getGeneration(generationPublicId)
+					const merged = mergeAiConversationSources(
+						current?.researchSources, researchSources)
+					if (merged.length !== (current?.researchSources || []).length) {
+						updateGeneration(generationPublicId, {
+							researchSources: merged
+						})
+					}
+				}
 			}
 			if (event.type === 'video_generation_progress' && generationPublicId) {
 				updateGeneration(generationPublicId, {
@@ -421,6 +439,15 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		lifecycleDiagnostics,
 		onEvent(event) {
 			let terminalStatus = null
+			if (event.type === 'source') {
+				const current = getGeneration(generationPublicId)
+				const researchSources = mergeAiConversationSources(
+					current?.researchSources, [event.data])
+				if (researchSources.length
+						!== (current?.researchSources || []).length) {
+					updateGeneration(generationPublicId, { researchSources })
+				}
+			}
 			if (event.type === 'snapshot') {
 				updateGeneration(generationPublicId, {
 					revision: Number(event.data?.revision || 0),

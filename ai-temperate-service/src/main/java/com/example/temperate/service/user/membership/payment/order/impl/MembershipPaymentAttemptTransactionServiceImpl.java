@@ -7,6 +7,7 @@ import com.example.temperate.service.user.membership.payment.MembershipPaymentEr
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptDatabaseResult;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptTransactionService;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -84,13 +85,21 @@ public final class MembershipPaymentAttemptTransactionServiceImpl
                 || providerTradeNo.length() > 128) {
             throw new IllegalArgumentException("Provider trade number is invalid.");
         }
+        try {
+            PaymentProviderReference.resolveTrade(providerTradeNo);
+        } catch (IllegalArgumentException exception) {
+            throw new MembershipPaymentException(
+                    MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT,
+                    "Only a tagged external provider trade can be bound.",
+                    exception);
+        }
         MembershipOrder bound;
         try {
             bound = orderMapper.bindProviderTradeNoIfAbsent(
                     orderId, loginIdentityId, providerTradeNo);
         } catch (DataIntegrityViolationException exception) {
             throw new MembershipPaymentException(
-                    MembershipPaymentErrorCode.BAR_ORDER_CONFLICT,
+                    MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT,
                     "The provider trade number is already bound to another order.");
         }
         if (bound != null) {
@@ -104,7 +113,7 @@ public final class MembershipPaymentAttemptTransactionServiceImpl
         }
         if (!providerTradeNo.equals(existing.getProviderTradeNo())) {
             throw new MembershipPaymentException(
-                    MembershipPaymentErrorCode.BAR_ORDER_CONFLICT,
+                    MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_PROVIDER_TRADE_CONFLICT,
                     "The membership order is bound to another provider trade number.");
         }
         return existing;

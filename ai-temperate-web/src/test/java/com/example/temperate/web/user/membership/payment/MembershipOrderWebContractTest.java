@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,7 +24,9 @@ import com.example.temperate.service.user.membership.payment.order.MembershipPay
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptService;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmission;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutSubmissionFields;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutMode;
 import com.example.temperate.web.auth.api.ApiErrorResponse;
+import com.example.temperate.web.auth.phonecountry.component.TrustedClientIpResolver;
 import com.example.temperate.web.user.membership.payment.id.MembershipOrderPublicId;
 import com.example.temperate.web.user.membership.payment.id.MembershipOrderPublicIdConverter;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -37,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
@@ -114,6 +119,23 @@ final class MembershipOrderWebContractTest {
     }
 
     @Test
+    void createdButUnsupportedLiuhaoCheckoutMapsToConflictWithoutTradeEvidence() {
+        MembershipPaymentExceptionHandler handler = new MembershipPaymentExceptionHandler(
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        ResponseEntity<ApiErrorResponse> response = handler.handle(
+                new MembershipPaymentException(
+                        MembershipPaymentErrorCode.LIUHAO_CHECKOUT_UNAVAILABLE,
+                        "internal provider trade evidence",
+                        "202608201234567890"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().code()).isEqualTo("LIUHAO_CHECKOUT_UNAVAILABLE");
+        assertThat(response.getBody().message()).isEqualTo(
+                "六号易支付已创建订单，但返回的支付入口暂时无法安全打开，请勿重复下单。");
+        assertThat(response.getBody().message()).doesNotContain("202608201234567890");
+    }
+
+    @Test
     void currentUserGetUsesAuthenticatedOwnerAndReturnsRealtimeStatusWithoutCaching() {
         MembershipOrderService service = mock(MembershipOrderService.class);
         MembershipOrderSnapshot snapshot = snapshot();
@@ -170,21 +192,29 @@ final class MembershipOrderWebContractTest {
                 mock(MembershipPaymentAttemptService.class);
         OffsetDateTime startedAt = OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC);
         MembershipOrderSnapshot started = snapshot(startedAt);
-        when(attemptService.start(anyLong(), any())).thenReturn(
+        when(attemptService.start(
+                anyLong(), any(), eq(PaymentProviderType.BAR), nullable(String.class))).thenReturn(
                 new MembershipPaymentAttemptResult(
-                        started, true, PaymentProviderType.LOCAL_SIMULATOR, null),
+                        started, true, PaymentProviderType.BAR, null),
                 new MembershipPaymentAttemptResult(
-                        started, false, PaymentProviderType.LOCAL_SIMULATOR, null));
+                        started, false, PaymentProviderType.BAR, null));
         CurrentUserMembershipOrderController controller =
-                new CurrentUserMembershipOrderController(orderService, attemptService);
+                new CurrentUserMembershipOrderController(
+                        orderService, attemptService, mock(TrustedClientIpResolver.class));
         SessionPrincipal principal = new SessionPrincipal(17L, "public-user", "member");
         MembershipOrderPublicId publicId = new MembershipOrderPublicId(
                 started.orderId(), bytes((byte) 7));
 
         ResponseEntity<MembershipPaymentAttemptResponse> first = controller.startPayment(
-                principal, publicId);
+                principal,
+                publicId,
+                new CreateMembershipPaymentAttemptRequest(PaymentProviderType.BAR),
+                mock(HttpServletRequest.class));
         ResponseEntity<MembershipPaymentAttemptResponse> replay = controller.startPayment(
-                principal, publicId);
+                principal,
+                publicId,
+                new CreateMembershipPaymentAttemptRequest(PaymentProviderType.BAR),
+                mock(HttpServletRequest.class));
 
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(replay.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -208,31 +238,44 @@ final class MembershipOrderWebContractTest {
         MembershipOrderSnapshot started = snapshot(
                 OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
         PaymentCheckoutSubmission submission = checkoutSubmission(started);
-        when(attemptService.start(anyLong(), any())).thenReturn(
+        when(attemptService.start(
+                anyLong(), any(), eq(PaymentProviderType.BAR), nullable(String.class))).thenReturn(
                 new MembershipPaymentAttemptResult(
                         started,
                         true,
                         PaymentProviderType.BAR,
                         submission));
+        TrustedClientIpResolver clientIpResolver = mock(TrustedClientIpResolver.class);
+        HttpServletRequest servletRequest = mock(HttpServletRequest.class);
+        when(clientIpResolver.resolve(servletRequest))
+                .thenReturn(java.util.Optional.of("203.0.113.10"));
         CurrentUserMembershipOrderController controller =
-                new CurrentUserMembershipOrderController(orderService, attemptService);
+                new CurrentUserMembershipOrderController(
+                        orderService, attemptService, clientIpResolver);
         SessionPrincipal principal = new SessionPrincipal(17L, "public-user", "member");
         MembershipOrderPublicId publicId = new MembershipOrderPublicId(
                 started.orderId(), bytes((byte) 7));
 
         ResponseEntity<MembershipPaymentAttemptResponse> response = controller.startPayment(
-                principal, publicId);
+                principal,
+                publicId,
+                new CreateMembershipPaymentAttemptRequest(PaymentProviderType.BAR),
+                servletRequest);
 
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().order().orderId()).isEqualTo(started.orderId());
         assertThat(response.getBody().checkoutSubmission()).isNotNull();
         assertThat(response.getBody().checkoutSubmission().provider())
                 .isEqualTo(PaymentProviderType.BAR);
+        assertThat(response.getBody().checkoutSubmission().checkoutMode())
+                .isEqualTo(PaymentCheckoutMode.FORM_POST);
         assertThat(response.getBody().checkoutSubmission().action())
                 .isEqualTo(URI.create("https://ihaveagoddamnplan.com/api/pay/submit"));
         assertThat(response.getBody().checkoutSubmission().method()).isEqualTo("POST");
         assertThat(response.getBody().checkoutSubmission().contentType())
                 .isEqualTo("application/x-www-form-urlencoded");
+        verify(attemptService).start(
+                anyLong(), any(), eq(PaymentProviderType.BAR), eq("203.0.113.10"));
 
         String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(
                 response.getBody());
@@ -260,6 +303,32 @@ final class MembershipOrderWebContractTest {
                 "test-api-key",
                 "Cookie",
                 "checkout_token");
+    }
+
+    @Test
+    void liuhaoWxpayAttemptSerializesSignedPageSubmitWithoutKeyVersion() throws Exception {
+        MembershipOrderSnapshot started = snapshot(
+                OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC));
+        MembershipPaymentAttemptResponse response = MembershipPaymentAttemptResponse.from(
+                new MembershipPaymentAttemptResult(
+                        started,
+                        true,
+                        PaymentProviderType.LIUHAO,
+                        liuhaoCheckoutSubmission(started)));
+
+        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(response);
+        JsonNode submission = new ObjectMapper().readTree(json).path("checkoutSubmission");
+
+        assertThat(submission.path("provider").asText()).isEqualTo("LIUHAO");
+        assertThat(submission.path("checkoutMode").asText()).isEqualTo("FORM_POST");
+        assertThat(submission.path("action").asText())
+                .isEqualTo("https://liuhao.net/api/pay/submit");
+        assertThat(submission.path("method").asText()).isEqualTo("POST");
+        assertThat(submission.path("contentType").asText())
+                .isEqualTo("application/x-www-form-urlencoded; charset=UTF-8");
+        assertThat(submission.path("fields").path("type").asText()).isEqualTo("wxpay");
+        assertThat(submission.path("fields").path("sign_type").asText()).isEqualTo("RSA");
+        assertThat(submission.path("fields").has("key_version")).isFalse();
     }
 
     @Test
@@ -291,7 +360,9 @@ final class MembershipOrderWebContractTest {
     private static CurrentUserMembershipOrderController controller(
             MembershipOrderService service) {
         return new CurrentUserMembershipOrderController(
-                service, mock(MembershipPaymentAttemptService.class));
+                service,
+                mock(MembershipPaymentAttemptService.class),
+                mock(TrustedClientIpResolver.class));
     }
 
     private static MembershipOrderSnapshot snapshot() {
@@ -335,6 +406,7 @@ final class MembershipOrderWebContractTest {
         OffsetDateTime submitExpiresAt = OffsetDateTime.parse("2026-08-20T12:04:00Z");
         return new PaymentCheckoutSubmission(
                 PaymentProviderType.BAR,
+                PaymentCheckoutMode.FORM_POST,
                 URI.create("https://ihaveagoddamnplan.com/api/pay/submit"),
                 "POST",
                 "application/x-www-form-urlencoded",
@@ -351,6 +423,29 @@ final class MembershipOrderWebContractTest {
                         "1",
                         "HMAC-SHA256",
                         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
+    }
+
+    private static PaymentCheckoutSubmission liuhaoCheckoutSubmission(
+            MembershipOrderSnapshot snapshot) {
+        return new PaymentCheckoutSubmission(
+                PaymentProviderType.LIUHAO,
+                PaymentCheckoutMode.FORM_POST,
+                URI.create("https://liuhao.net/api/pay/submit"),
+                "POST",
+                "application/x-www-form-urlencoded; charset=UTF-8",
+                OffsetDateTime.parse("2026-08-20T12:04:00Z"),
+                new PaymentCheckoutSubmissionFields(
+                        "1001",
+                        snapshot.orderId(),
+                        "wxpay",
+                        "会员支付订单",
+                        snapshot.payAmountYuan().toPlainString(),
+                        "https://niko000o.site/api/payment/liuhao/notify",
+                        "https://niko000o.site/pages/account/payment-result",
+                        "1787227200",
+                        null,
+                        "RSA",
+                        "c2lnbmF0dXJl"));
     }
 
     private static byte[] bytes(byte value) {

@@ -24,6 +24,7 @@ public record RefreshSessionValidation(Status status, RefreshSessionSnapshot ses
         CSRF_MISMATCH,
         INDEX_MISSING,
         PREAUTH_MISMATCH,
-        TTL_INVARIANT_VIOLATION
+        TTL_INVARIANT_VIOLATION,
+        WEBRTC_VERDICT_REJECTED
     }
 }

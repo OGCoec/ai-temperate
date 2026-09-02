@@ -11,6 +11,10 @@ import com.example.temperate.service.user.membership.payment.rabbit.MembershipPa
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckMessage;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipRefundRetryConsumerService;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipRefundRetryMessage;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipSupersededCloseConsumerService;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipSupersededCloseMessage;
 import com.rabbitmq.client.Channel;
 import java.io.IOException;
 import java.util.Objects;
@@ -24,7 +28,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * 该监听器是来把两条会员支付Quorum队列交给业务服务、记录包含ACK/NACK的总耗时，并且只在业务及下一条消息Confirm成功后手动ACK。
+ * 该监听器是来把会员支付、关单和退款重试 Quorum 队列交给业务服务，并且只在业务及下一条消息 Confirm 成功后手动 ACK。
  *
  * <p>监听器是final且没有业务接口，不能使用项目固定的JDK AOP代理；它显式开启与AOP入口相同的计时会话，内部基础设施步骤仍由切面累计。</p>
  */
@@ -40,6 +44,8 @@ public final class MembershipPaymentRabbitListener {
 
     private final MembershipPaymentCheckConsumerService paymentService;
     private final MembershipClosingCheckConsumerService closingService;
+    private final MembershipSupersededCloseConsumerService supersededCloseService;
+    private final MembershipRefundRetryConsumerService refundRetryService;
     private final MembershipPaymentMetrics metrics;
     private final MembershipPaymentTimingRecorder timingRecorder;
     private final MembershipPaymentLoadtestProperties loadtestProperties;
@@ -47,25 +53,50 @@ public final class MembershipPaymentRabbitListener {
     public MembershipPaymentRabbitListener(
             MembershipPaymentCheckConsumerService paymentService,
             MembershipClosingCheckConsumerService closingService,
+            MembershipSupersededCloseConsumerService supersededCloseService,
             MembershipPaymentMetrics metrics,
             MembershipPaymentTimingRecorder timingRecorder) {
         this(
                 paymentService,
                 closingService,
+                supersededCloseService,
+                envelope -> { },
                 metrics,
                 timingRecorder,
                 new MembershipPaymentLoadtestProperties(false, java.util.List.of()));
+    }
+
+    /** 为不启用退款消费者的监听器单元测试保留构造入口，生产装配始终使用完整依赖。 */
+    public MembershipPaymentRabbitListener(
+            MembershipPaymentCheckConsumerService paymentService,
+            MembershipClosingCheckConsumerService closingService,
+            MembershipSupersededCloseConsumerService supersededCloseService,
+            MembershipPaymentMetrics metrics,
+            MembershipPaymentTimingRecorder timingRecorder,
+            MembershipPaymentLoadtestProperties loadtestProperties) {
+        this(
+                paymentService,
+                closingService,
+                supersededCloseService,
+                envelope -> { },
+                metrics,
+                timingRecorder,
+                loadtestProperties);
     }
 
     @Autowired
     public MembershipPaymentRabbitListener(
             MembershipPaymentCheckConsumerService paymentService,
             MembershipClosingCheckConsumerService closingService,
+            MembershipSupersededCloseConsumerService supersededCloseService,
+            MembershipRefundRetryConsumerService refundRetryService,
             MembershipPaymentMetrics metrics,
             MembershipPaymentTimingRecorder timingRecorder,
             MembershipPaymentLoadtestProperties loadtestProperties) {
         this.paymentService = Objects.requireNonNull(paymentService);
         this.closingService = Objects.requireNonNull(closingService);
+        this.supersededCloseService = Objects.requireNonNull(supersededCloseService);
+        this.refundRetryService = Objects.requireNonNull(refundRetryService);
         this.metrics = Objects.requireNonNull(metrics);
         this.timingRecorder = Objects.requireNonNull(timingRecorder);
         this.loadtestProperties = Objects.requireNonNull(loadtestProperties);
@@ -113,6 +144,48 @@ public final class MembershipPaymentRabbitListener {
         }
     }
 
+    @RabbitListener(
+            queues = MembershipPaymentRabbitNames.SUPERSEDED_CLOSE_QUEUE,
+            containerFactory = "membershipPaymentListenerContainerFactory")
+    public void consumeSupersededClose(
+            MembershipPaymentRabbitEnvelope<MembershipSupersededCloseMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
+        MembershipPaymentTimingRecorder.Session timingSession = timingRecorder.start(
+                MembershipPaymentOperation.RABBIT_CLOSING,
+                new Object[] {envelope, message});
+        Throwable timingFailure = null;
+        try {
+            consumeSupersededCloseWithAck(envelope, message, channel);
+        } catch (IOException | RuntimeException | Error throwable) {
+            timingFailure = throwable;
+            throw throwable;
+        } finally {
+            timingRecorder.finish(timingSession, null, timingFailure);
+        }
+    }
+
+    @RabbitListener(
+            queues = MembershipPaymentRabbitNames.REFUND_RETRY_QUEUE,
+            containerFactory = "membershipPaymentListenerContainerFactory")
+    public void consumeRefundRetry(
+            MembershipPaymentRabbitEnvelope<MembershipRefundRetryMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
+        MembershipPaymentTimingRecorder.Session timingSession = timingRecorder.start(
+                MembershipPaymentOperation.RABBIT_PENDING,
+                new Object[] {envelope, message});
+        Throwable timingFailure = null;
+        try {
+            consumeRefundRetryWithAck(envelope, message, channel);
+        } catch (IOException | RuntimeException | Error throwable) {
+            timingFailure = throwable;
+            throw throwable;
+        } finally {
+            timingRecorder.finish(timingSession, null, timingFailure);
+        }
+    }
+
     private void consumePaymentWithAck(
             MembershipPaymentRabbitEnvelope<MembershipPaymentCheckMessage> envelope,
             Message message,
@@ -141,6 +214,42 @@ public final class MembershipPaymentRabbitListener {
         Runnable restoreLoggingContext = installLoggingContext(envelope);
         try {
             closingService.process(envelope);
+            acknowledge(channel, deliveryTag);
+        } catch (RuntimeException exception) {
+            reject(channel, deliveryTag, envelope, message, exception);
+            return;
+        } finally {
+            restoreLoggingContext.run();
+        }
+        timingRecorder.markRabbitOutcome("ACK", deliveryCount(message));
+    }
+
+    private void consumeSupersededCloseWithAck(
+            MembershipPaymentRabbitEnvelope<MembershipSupersededCloseMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        Runnable restoreLoggingContext = installLoggingContext(envelope);
+        try {
+            supersededCloseService.process(envelope);
+            acknowledge(channel, deliveryTag);
+        } catch (RuntimeException exception) {
+            reject(channel, deliveryTag, envelope, message, exception);
+            return;
+        } finally {
+            restoreLoggingContext.run();
+        }
+        timingRecorder.markRabbitOutcome("ACK", deliveryCount(message));
+    }
+
+    private void consumeRefundRetryWithAck(
+            MembershipPaymentRabbitEnvelope<MembershipRefundRetryMessage> envelope,
+            Message message,
+            Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        Runnable restoreLoggingContext = installLoggingContext(envelope);
+        try {
+            refundRetryService.process(envelope);
             acknowledge(channel, deliveryTag);
         } catch (RuntimeException exception) {
             reject(channel, deliveryTag, envelope, message, exception);

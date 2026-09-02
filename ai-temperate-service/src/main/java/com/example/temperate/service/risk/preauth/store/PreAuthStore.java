@@ -132,5 +132,23 @@ public interface PreAuthStore {
             Duration startGrace,
             Duration ttl);
 
+    /**
+     * 仅在源 Token 的已验证 WebRTC generation、当前 IP 和决策上下文均未变化时原子完成认证轮换。
+     */
+    boolean rotateAuthenticatedAfterWebRtcVerified(
+            RiskScope scope,
+            HmacIdentifier oldTokenDigest,
+            HmacIdentifier newTokenDigest,
+            HmacIdentifier deviceDigest,
+            HmacIdentifier expectedCurrentIpDigest,
+            HmacIdentifier expectedDecisionContextDigest,
+            RiskSessionType sessionType,
+            HmacIdentifier sessionRefDigest,
+            HmacIdentifier newDecisionContextDigest,
+            long expectedWebRtcGeneration,
+            String encryptedWebRtcIps,
+            Instant seenAt,
+            Duration ttl);
+
     void delete(RiskScope scope, HmacIdentifier tokenDigest);
 }

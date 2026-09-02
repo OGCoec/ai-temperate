@@ -111,3 +111,59 @@ test('clears terminal Base64 previews while preserving canonical OSS attachments
 		'https://oss.example.test/image.png'
 	)
 })
+
+test('persists research sources and restores them for the completed message', async () => {
+	const values = new Map()
+	globalThis.sessionStorage = {
+		getItem: key => values.get(key) || null,
+		setItem: (key, value) => values.set(key, value)
+	}
+	const manager = await loadManager()
+	manager.clearGenerationManager()
+	manager.registerGeneration({
+		generationPublicId: 'generation-research',
+		conversationPublicId: 'conversation-research',
+		messagePublicId: 'message-research'
+	})
+	const notifications = []
+	const unsubscribe = manager.subscribeGeneration(
+		'generation-research',
+		task => notifications.push(task?.researchSources || [])
+	)
+	manager.updateGeneration('generation-research', {
+		researchSources: [{
+			sequence: 2,
+			title: 'Documentation',
+			url: 'https://example.com/docs',
+			role: 'CONSULTED'
+		}]
+	})
+	manager.markGenerationTerminal('generation-research', 'COMPLETED')
+	unsubscribe()
+
+	assert.equal(notifications.at(-1).length, 1)
+	const restoredManager = await loadManager()
+	assert.equal(
+		restoredManager.findGenerationResearchSources({
+			conversationPublicId: 'conversation-research',
+			messagePublicId: 'message-research'
+		}).length,
+		1
+	)
+	assert.deepEqual(
+		restoredManager.findGenerationResearchSources({
+			conversationPublicId: 'different-conversation',
+			messagePublicId: 'message-research'
+		}),
+		[]
+	)
+	restoredManager.clearGenerationManager()
+	assert.deepEqual(
+		restoredManager.findGenerationResearchSources({
+			conversationPublicId: 'conversation-research',
+			messagePublicId: 'message-research'
+		}),
+		[]
+	)
+	delete globalThis.sessionStorage
+})

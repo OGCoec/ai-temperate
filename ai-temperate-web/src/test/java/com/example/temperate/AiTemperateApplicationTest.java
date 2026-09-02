@@ -395,7 +395,8 @@ class AiTemperateApplicationTest {
     private void allowTrustedBrowserEdgeRequest() {
         when(edgeProxySignatureVerifier.hasAnyEdgeHeader(any())).thenReturn(true);
         when(edgeProxySignatureVerifier.verify(any())).thenReturn(
-                new EdgeProxyVerificationResult("v2", "niko000o.site", null));
+                new EdgeProxyVerificationResult(
+                        "v2", "niko000o.site", "test-ray-ord", null));
     }
 
     @Test

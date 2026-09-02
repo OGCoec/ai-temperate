@@ -31,6 +31,16 @@ const EDGE_ASN_HEADER = 'X-AIT-Edge-ASN'
 const EDGE_LATITUDE_HEADER = 'X-AIT-Edge-Latitude'
 const EDGE_LONGITUDE_HEADER = 'X-AIT-Edge-Longitude'
 const EDGE_RESET_HEADER = 'X-AIT-Cookie-Scope-Reset'
+const EDGE_OUTCOME_HEADER = 'X-AIT-Edge-Outcome'
+const EDGE_UPSTREAM_ATTEMPTED_HEADER = 'X-AIT-Edge-Upstream-Attempted'
+const COOKIE_SCOPE_STATE_HEADER = 'X-AIT-Cookie-Scope-State'
+const WORKER_VERSION_HEADER = 'X-AIT-Worker-Version'
+const PAGES_DEPLOYMENT_HEADER = 'X-AIT-Pages-Deployment'
+const BACKEND_RELEASE_HEADER = 'X-AIT-Backend-Release'
+const CLIENT_REQUEST_ID_HEADER = 'X-AIT-Client-Request-Id'
+const PAGE_INSTANCE_ID_HEADER = 'X-AIT-Page-Instance-Id'
+const TRIGGER_REQUEST_ID_HEADER = 'X-AIT-Trigger-Request-Id'
+const WEBRTC_PROBE_RUN_ID_HEADER = 'X-AIT-WebRTC-Probe-Run-Id'
 const CLIENT_PLATFORM_HEADER = 'X-Client-Platform'
 const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
 const ANDROID_WEBVIEW_TRANSPORT = 'ANDROID_WEBVIEW_DOCUMENT'
@@ -139,9 +149,17 @@ export async function handleRequest(request, env, runtime = {}) {
 	const now = runtime.now || Date.now
 	const url = new URL(request.url)
 	const route = classifyRoute(url)
+	const authEdgeDiagnostic = createAuthEdgeDiagnostic(
+		route, request, env, runtime, now, url)
 	if (!route.allowed) {
 		logRouteRejection(request, route, env, runtime)
-		return rejectedRouteResponse(url, route)
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			rejectedRouteResponse(url, route), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: route.category || 'EDGE_ROUTE_REJECTED',
+				upstreamAttempted: false
+			})
 	}
 	if (route.allowedMethods
 		&& !route.allowedMethods.includes(request.method)) {
@@ -151,7 +169,13 @@ export async function handleRequest(request, env, runtime = {}) {
 			category: 'METHOD_NOT_ALLOWED'
 		}
 		logRouteRejection(request, rejected, env, runtime)
-		return methodNotAllowedResponse(route)
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			methodNotAllowedResponse(route), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: 'METHOD_NOT_ALLOWED',
+				upstreamAttempted: false
+			})
 	}
 	if (route.h5Resource) {
 		return h5ResourceResponse(request, env, route, fetchImpl)
@@ -169,7 +193,19 @@ export async function handleRequest(request, env, runtime = {}) {
 		route, request, env, runtime, now, Boolean(sseDiagnostic))
 
 	if (route.migration) {
-		return migrationResponse(request)
+		const markerPresent = hasCookie(
+			request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')
+		const response = migrationResponse(request)
+		return completeAuthEdgeRequest(authEdgeDiagnostic, response, {
+			edgeOutcome: markerPresent
+				? 'COOKIE_SCOPE_ALREADY_CURRENT'
+				: 'COOKIE_SCOPE_RESET_ISSUED',
+			errorCode: 'NONE',
+			upstreamAttempted: false,
+			cookieScopeState: markerPresent ? 'CURRENT' : 'RESET_ISSUED',
+			cookieScopeReset: !markerPresent,
+			forceLog: true
+		})
 	}
 	if (route.webSocket) {
 		if (request.method !== 'GET') {
@@ -195,9 +231,15 @@ export async function handleRequest(request, env, runtime = {}) {
 			return jsonError(400, 'EDGE_WEBSOCKET_PROTOCOL_INVALID')
 		}
 	} else if (!API_METHODS.includes(request.method)) {
-		return jsonError(405, 'METHOD_NOT_ALLOWED', {
-			Allow: API_METHODS.join(', ')
-		})
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			jsonError(405, 'METHOD_NOT_ALLOWED', {
+				Allow: API_METHODS.join(', ')
+			}), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: 'METHOD_NOT_ALLOWED',
+				upstreamAttempted: false
+			})
 	}
 
 	const transport = classifyClientTransport(request, route, url)
@@ -214,19 +256,33 @@ export async function handleRequest(request, env, runtime = {}) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_CLIENT_TRANSPORT_REJECTED'
 		})
-		return routeError(route, transport.status, transport.code)
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			routeError(route, transport.status, transport.code), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: transport.code,
+				upstreamAttempted: false
+			})
 	}
 	if (transport.kind === H5_TRANSPORT
 		&& !route.oauthNavigation
 		&& !route.riskChallenge
 		&& !route.credentiallessVerificationAsset
-		// BAR 服务器回调没有浏览器 Cookie；精确 GET 入口仍由 Origin 侧 HMAC 与权威主动查询认证。
+		// 支付服务器回调没有浏览器 Cookie；精确 GET 入口仍由 Origin 侧签名与权威主动查询认证。
 		&& !route.providerCallback
 		&& !hasCookie(request.headers.get('Cookie'), COOKIE_SCOPE_MARKER_NAME, '1')) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_WEBSOCKET_AUTHORIZATION_FAILED'
 		})
-		return jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED')
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			jsonError(428, 'EDGE_COOKIE_SCOPE_RESET_REQUIRED'), {
+				edgeOutcome: 'COOKIE_SCOPE_MARKER_MISSING',
+				errorCode: 'EDGE_COOKIE_SCOPE_RESET_REQUIRED',
+				upstreamAttempted: false,
+				cookieScopeState: 'MISSING',
+				forceLog: true
+			})
 	}
 	if (env.API_UPSTREAM_ORIGIN !== UPSTREAM_ORIGIN) {
 		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
@@ -237,7 +293,13 @@ export async function handleRequest(request, env, runtime = {}) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_UPSTREAM_CONFIGURATION_INVALID'
 		})
-		return routeError(route, 503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID')
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			routeError(route, 503, 'EDGE_UPSTREAM_CONFIGURATION_INVALID'), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: 'EDGE_UPSTREAM_CONFIGURATION_INVALID',
+				upstreamAttempted: false
+			})
 	}
 	if (!request.headers.get('CF-Ray')) {
 		finishApiKeySdkDiagnostic(apiKeyDiagnostic, {
@@ -248,7 +310,13 @@ export async function handleRequest(request, env, runtime = {}) {
 		finishVoiceWebSocketDiagnostic(voiceDiagnostic, {
 			edgeOutcome: 'EDGE_RAY_UNAVAILABLE'
 		})
-		return routeError(route, 503, 'EDGE_RAY_UNAVAILABLE')
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			routeError(route, 503, 'EDGE_RAY_UNAVAILABLE'), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: 'EDGE_RAY_UNAVAILABLE',
+				upstreamAttempted: false
+			})
 	}
 
 	let upstreamResponse
@@ -275,8 +343,14 @@ export async function handleRequest(request, env, runtime = {}) {
 			edgeOutcome: 'EDGE_UPSTREAM_UNAVAILABLE',
 			exceptionType: safeVoiceExceptionType(error)
 		})
-		return routeError(route, route.apiKeySdk ? 503 : 502,
-			'EDGE_UPSTREAM_UNAVAILABLE')
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			routeError(route, route.apiKeySdk ? 503 : 502,
+				'EDGE_UPSTREAM_UNAVAILABLE'), {
+				edgeOutcome: 'UPSTREAM_FETCH_FAILED',
+				errorCode: 'EDGE_UPSTREAM_UNAVAILABLE',
+				upstreamAttempted
+			})
 	}
 
 	if ((route.apiKeySdk && upstreamResponse.status >= 300
@@ -294,7 +368,14 @@ export async function handleRequest(request, env, runtime = {}) {
 			...voiceUpstreamDiagnostic(upstreamResponse),
 			edgeOutcome: 'EDGE_UPSTREAM_REDIRECT_REJECTED'
 		})
-		return routeError(route, 502, 'EDGE_UPSTREAM_REDIRECT_REJECTED')
+		return completeAuthEdgeRequest(
+			authEdgeDiagnostic,
+			routeError(route, 502, 'EDGE_UPSTREAM_REDIRECT_REJECTED'), {
+				edgeOutcome: 'EDGE_POLICY_REJECTED',
+				errorCode: 'EDGE_UPSTREAM_REDIRECT_REJECTED',
+				upstreamAttempted: true,
+				upstreamStatus: upstreamResponse.status
+			})
 	}
 	if (route.webSocket) {
 		return guardedWebSocketResponse(
@@ -314,10 +395,16 @@ export async function handleRequest(request, env, runtime = {}) {
 		requiresApiKeyStrongEtag(request.method, url.pathname),
 		apiKeyDiagnostic,
 		route.credentiallessVerificationAsset === true)
-	return instrumentSseResponse(
+	const instrumented = instrumentSseResponse(
 		response,
 		actualStreaming ? sseDiagnostic : null,
 		runtime)
+	return completeAuthEdgeRequest(authEdgeDiagnostic, instrumented, {
+		edgeOutcome: 'UPSTREAM_RESPONSE',
+		errorCode: instrumented.status >= 400 ? 'UPSTREAM_HTTP_ERROR' : 'NONE',
+		upstreamAttempted: true,
+		upstreamStatus: upstreamResponse.status
+	})
 }
 
 function classifyRoute(url) {
@@ -603,6 +690,224 @@ function validatedPagesOrigin(value) {
 		return url
 	} catch {
 		return null
+	}
+}
+
+/**
+ * 为公网认证与 WebRTC API 建立只包含脱敏元数据的边缘诊断上下文。
+ */
+function createAuthEdgeDiagnostic(route, request, env, runtime, now, url) {
+	if (url.hostname !== ROOT_HOST || !isAuthEdgeDiagnosticPath(url.pathname)) {
+		return null
+	}
+	const random = runtime.random || Math.random
+	const configuredRate = Number(env.AUTH_EDGE_SUCCESS_LOG_SAMPLE_RATE)
+	const successRate = Number.isFinite(configuredRate)
+		? Math.max(0, Math.min(1, configuredRate)) : 0.01
+	const cookieHeader = request.headers.get('Cookie') || ''
+	const markerPresent = hasCookie(
+		cookieHeader, COOKIE_SCOPE_MARKER_NAME, '1')
+	const platform = authEdgePlatform(request)
+	return {
+		logger: runtime.log || console,
+		now,
+		startedAt: safeAuthEdgeNow(now),
+		enabled: env.AUTH_EDGE_DIAGNOSTICS_ENABLED === 'true',
+		successSampled: successRate > 0 && random() < successRate,
+		workerVersion: safeAuthEdgeIdentifier(env.CF_VERSION_METADATA?.id),
+		pagesDeployment: pagesDeploymentId(env.H5_PAGES_ORIGIN),
+		cfRay: safeAuthEdgeIdentifier(headerValue(request.headers, 'CF-Ray')),
+		clientRequestId: safeAuthEdgeUuid(
+			headerValue(request.headers, CLIENT_REQUEST_ID_HEADER)),
+		pageInstanceId: safeAuthEdgeUuid(
+			headerValue(request.headers, PAGE_INSTANCE_ID_HEADER)),
+		triggerRequestId: safeAuthEdgeUuid(
+			headerValue(request.headers, TRIGGER_REQUEST_ID_HEADER)),
+		probeRunId: safeAuthEdgeUuid(
+			headerValue(request.headers, WEBRTC_PROBE_RUN_ID_HEADER)),
+		route: authEdgeRouteTemplate(route, url.pathname),
+		method: safeAuthEdgeMethod(request.method),
+		platform,
+		cookieHeaderPresent: cookieHeader.length > 0,
+		cookieHeaderBytes: new TextEncoder().encode(cookieHeader).byteLength,
+		cookieScopeMarkerPresent: markerPresent,
+		cookieScopeState: platform === 'H5'
+			? (markerPresent ? 'CURRENT' : 'MISSING') : 'NOT_APPLICABLE',
+		logged: false
+	}
+}
+
+function isAuthEdgeDiagnosticPath(pathname) {
+	return pathWithin(pathname, '/api/auth')
+		|| pathWithin(pathname, '/api/_edge')
+}
+
+function authEdgeRouteTemplate(route, pathname) {
+	if (route.routeTemplate) return route.routeTemplate
+	if (/^\/api\/auth\/oauth2\/authorization\/[^/]+$/.test(pathname)) {
+		return '/api/auth/oauth2/authorization/{provider}'
+	}
+	if (/^\/api\/auth\/oauth2\/code\/[^/]+$/.test(pathname)) {
+		return '/api/auth/oauth2/code/{provider}'
+	}
+	return route.allowed && route.path === pathname
+		? route.path : '/api/{auth-diagnostic-route}'
+}
+
+function authEdgePlatform(request) {
+	const value = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
+		.trim().toUpperCase()
+	if (value === 'ANDROID') return 'ANDROID'
+	if (value === '' || value === 'H5') return 'H5'
+	return 'INVALID'
+}
+
+/**
+ * 在不读取响应正文的前提下补充安全响应头并恰好完成一次边缘诊断。
+ */
+function completeAuthEdgeRequest(diagnostic, response, values) {
+	if (!diagnostic) return response
+	const edgeOutcome = safeAuthEdgeCode(values.edgeOutcome, 'EDGE_OUTCOME_UNKNOWN')
+	const upstreamAttempted = values.upstreamAttempted === true
+	const cookieScopeState = safeCookieScopeState(
+		values.cookieScopeState || diagnostic.cookieScopeState)
+	const headers = new Headers(response.headers)
+	headers.set(EDGE_OUTCOME_HEADER, edgeOutcome)
+	headers.set(EDGE_UPSTREAM_ATTEMPTED_HEADER, upstreamAttempted ? '1' : '0')
+	headers.set(COOKIE_SCOPE_STATE_HEADER, cookieScopeState)
+	headers.set(WORKER_VERSION_HEADER, diagnostic.workerVersion)
+	headers.set(PAGES_DEPLOYMENT_HEADER, diagnostic.pagesDeployment)
+	if (!headers.has(BACKEND_RELEASE_HEADER)) {
+		headers.set(BACKEND_RELEASE_HEADER, 'unknown')
+	}
+	appendAuthDiagnosticExposeHeaders(headers)
+	const completed = new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers
+	})
+	finishAuthEdgeDiagnostic(diagnostic, completed, {
+		...values,
+		edgeOutcome,
+		upstreamAttempted,
+		cookieScopeState
+	})
+	return completed
+}
+
+function finishAuthEdgeDiagnostic(diagnostic, response, values) {
+	if (diagnostic.logged) return
+	diagnostic.logged = true
+	if (!diagnostic.enabled) return
+	const failure = response.status >= 400
+	const critical = values.forceLog === true
+		|| values.edgeOutcome === 'UPSTREAM_FETCH_FAILED'
+	if (!failure && !critical && !diagnostic.successSampled) return
+	const entry = {
+		event: 'auth_edge_request_completed',
+		diagnosticSchema: 'auth-edge-diag-v1',
+		occurredAt: new Date(safeAuthEdgeNow(diagnostic.now)).toISOString(),
+		workerVersion: diagnostic.workerVersion,
+		pagesDeployment: diagnostic.pagesDeployment,
+		backendRelease: safeAuthEdgeIdentifier(
+			headerValue(response.headers, BACKEND_RELEASE_HEADER)),
+		cfRay: diagnostic.cfRay,
+		clientRequestId: diagnostic.clientRequestId,
+		pageInstanceId: diagnostic.pageInstanceId,
+		triggerRequestId: diagnostic.triggerRequestId,
+		probeRunId: diagnostic.probeRunId,
+		route: diagnostic.route,
+		method: diagnostic.method,
+		platform: diagnostic.platform,
+		returnedStatus: response.status,
+		errorCode: safeAuthEdgeCode(values.errorCode, 'NONE'),
+		edgeOutcome: values.edgeOutcome,
+		upstreamAttempted: values.upstreamAttempted,
+		upstreamStatus: Number.isInteger(values.upstreamStatus)
+			? values.upstreamStatus : -1,
+		cookieHeaderPresent: diagnostic.cookieHeaderPresent,
+		cookieHeaderBytes: diagnostic.cookieHeaderBytes,
+		cookieScopeMarkerPresent: diagnostic.cookieScopeMarkerPresent,
+		cookieScopeState: values.cookieScopeState,
+		cookieScopeReset: values.cookieScopeReset === true,
+		elapsedMs: Math.max(
+			0, safeAuthEdgeNow(diagnostic.now) - diagnostic.startedAt)
+	}
+	try {
+		const log = failure ? diagnostic.logger.warn : diagnostic.logger.info
+		if (typeof log === 'function') {
+			log.call(diagnostic.logger, JSON.stringify(entry))
+		}
+	} catch (_) {
+		// 诊断日志是旁路能力，日志后端异常不能改变认证、Cookie 或 WebRTC 结果。
+	}
+}
+
+function appendAuthDiagnosticExposeHeaders(headers) {
+	const required = [
+		EDGE_OUTCOME_HEADER,
+		EDGE_UPSTREAM_ATTEMPTED_HEADER,
+		COOKIE_SCOPE_STATE_HEADER,
+		EDGE_RESET_HEADER,
+		WORKER_VERSION_HEADER,
+		PAGES_DEPLOYMENT_HEADER,
+		BACKEND_RELEASE_HEADER,
+		'CF-Ray'
+	]
+	const values = String(headers.get('Access-Control-Expose-Headers') || '')
+		.split(',')
+		.map(value => value.trim())
+		.filter(Boolean)
+	const existing = new Set(values.map(value => value.toLowerCase()))
+	for (const name of required) {
+		if (!existing.has(name.toLowerCase())) values.push(name)
+	}
+	if (values.length > 0) {
+		headers.set('Access-Control-Expose-Headers', values.join(', '))
+	}
+}
+
+function pagesDeploymentId(value) {
+	const origin = validatedPagesOrigin(value)
+	if (!origin) return 'INVALID'
+	return safeAuthEdgeIdentifier(origin.hostname.split('.', 1)[0])
+}
+
+function safeAuthEdgeUuid(value) {
+	const normalized = String(value || '').trim().toLowerCase()
+	if (!normalized) return 'ABSENT'
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
+		? normalized : 'INVALID'
+}
+
+function safeAuthEdgeIdentifier(value) {
+	const normalized = String(value || '').trim()
+	if (!normalized) return 'ABSENT'
+	return /^[A-Za-z0-9._-]{1,128}$/.test(normalized)
+		? normalized : 'INVALID'
+}
+
+function safeAuthEdgeMethod(value) {
+	const normalized = String(value || '').trim().toUpperCase()
+	return /^[A-Z]{1,12}$/.test(normalized) ? normalized : 'INVALID'
+}
+
+function safeAuthEdgeCode(value, fallback) {
+	const normalized = String(value || '').trim().toUpperCase()
+	return /^[A-Z0-9_]{1,80}$/.test(normalized) ? normalized : fallback
+}
+
+function safeCookieScopeState(value) {
+	return new Set(['MISSING', 'RESET_ISSUED', 'CURRENT', 'NOT_APPLICABLE'])
+		.has(value) ? value : 'NOT_APPLICABLE'
+}
+
+function safeAuthEdgeNow(now) {
+	try {
+		const value = Number(now())
+		return Number.isFinite(value) ? value : 0
+	} catch (_) {
+		return 0
 	}
 }
 

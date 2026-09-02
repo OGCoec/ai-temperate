@@ -19,7 +19,9 @@ import {
 } from './webrtc-verification-android.js'
 // #endif
 import { AUTH_API_BASE_URL, clientPlatform } from './config.js'
+import { isBlockingWebRtc as isAndroidOAuthBlockingWebRtc } from './android-oauth-coordinator.js'
 import { getDeviceInstallationId } from './device-installation.js'
+import { ownsH5WebRtcScheduling } from './h5-oauth-webrtc-gate.js'
 import { currentPreAuthToken, isPreAuthReady } from './pre-auth.js'
 import { presentRiskBlock } from './risk-block-navigation.js'
 import {
@@ -34,6 +36,7 @@ import {
 } from './auth-diagnostics.js'
 
 const START_PATH = '/api/_edge/webrtc/start'
+const VERDICT_STATUS_PATH = '/api/_edge/webrtc/verdict-status'
 const FAILURE_PAGE = '/pages/risk/webrtc-failed'
 const DEFAULT_CANCEL_REASON = 'EPOCH_INVALIDATED'
 const WEBRTC_ATTEMPT_ABORTED = 'WEBRTC_ATTEMPT_ABORTED'
@@ -46,9 +49,37 @@ let preAuthEpoch = 0
 let latestGeneration = ''
 let verifiedInMemory = false
 const verificationTasks = new Map()
+const oauthAttemptTasks = new Map()
 let latestFailure = null
 let failureNavigationInFlight = false
 let activeDiagnosticAttempt = null
+let oauthPrepareTask = null
+let suspendedOAuthAttempt = null
+
+function createStartHandshake() {
+	let resolvePromise
+	let rejectPromise
+	const handshake = {
+		settled: false,
+		promise: new Promise((resolve, reject) => {
+			resolvePromise = resolve
+			rejectPromise = reject
+		}),
+		resolve(value) {
+			if (handshake.settled) return
+			handshake.settled = true
+			resolvePromise(value)
+		},
+		reject(error) {
+			if (handshake.settled) return
+			handshake.settled = true
+			rejectPromise(error)
+		}
+	}
+	// 普通后台探测可能无人等待 start 握手；预挂拒绝处理避免取消时产生未处理 Promise。
+	void handshake.promise.catch(() => {})
+	return handshake
+}
 
 export function invalidateWebRtcVerification(reason = DEFAULT_CANCEL_REASON) {
 	const attempt = activeDiagnosticAttempt
@@ -61,6 +92,7 @@ export function invalidateWebRtcVerification(reason = DEFAULT_CANCEL_REASON) {
 	verificationTasks.clear()
 	latestFailure = null
 	activeDiagnosticAttempt = null
+	suspendedOAuthAttempt = null
 	setCurrentAuthDiagnosticWebRtcProbeRunId('')
 	recordAuthDiagnosticEvent('WEBRTC_INVALIDATED', {
 		source: 'invalidate_webrtc_verification',
@@ -96,11 +128,18 @@ export function installH5WebRtcDiagnosticLifecycle() {
 			persisted: event?.persisted === true,
 			source: 'window_pagehide'
 		})
-		invalidateWebRtcVerification('DOCUMENT_UNLOADED')
+		if (suspendedOAuthAttempt) {
+			cancelWebRtcAttempt(activeDiagnosticAttempt, 'OAUTH_SUSPENDED', true)
+			activeDiagnosticAttempt = null
+		} else {
+			invalidateWebRtcVerification('DOCUMENT_UNLOADED')
+		}
 		flushAuthDiagnostics()
 	})
 	target.addEventListener('pageshow', event => {
-		if (event?.persisted !== true || !isPreAuthReady()) return
+		if (event?.persisted !== true
+			|| !isPreAuthReady()
+			|| ownsH5WebRtcScheduling()) return
 		scheduleH5WebRtcVerification({
 			path: currentRoute() || START_PATH,
 			source: 'bfcache_pageshow'
@@ -204,6 +243,13 @@ export function scheduleH5WebRtcVerification(context = {}) {
 		context,
 		expectedGeneration,
 		requestEpoch)
+	if (ownsH5WebRtcScheduling()) {
+		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
+			...diagnosticFields,
+			outcome: 'oauth_attempt_owned'
+		})
+		return
+	}
 	if (requestEpoch !== epoch) {
 		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
 			...diagnosticFields,
@@ -251,9 +297,9 @@ export function currentWebRtcFailure() {
 	return latestFailure ? { ...latestFailure, webRtcIps: [...latestFailure.webRtcIps] } : null
 }
 
-export function ensureH5WebRtcVerified() {
+export function ensureH5WebRtcVerified(context = {}) {
 	// #ifdef H5
-	return startPlatformWebRtcVerification()
+	return startPlatformWebRtcVerification('', context)
 	// #endif
 	// #ifndef H5
 	return Promise.resolve(ignoredResult())
@@ -262,6 +308,13 @@ export function ensureH5WebRtcVerified() {
 
 export function startAndroidWebRtcVerificationInBackground(expectedGeneration = '') {
 	// #ifdef APP-PLUS
+	if (clientPlatform() === 'ANDROID' && isAndroidOAuthBlockingWebRtc()) {
+		recordAuthDiagnosticEvent('ANDROID_WEBRTC_SKIPPED_DURING_OAUTH', {
+			phase: 'oauth_active',
+			outcome: 'suppressed'
+		})
+		return Promise.resolve({ verificationState: 'PENDING', webRtcStatus: null })
+	}
 	return startPlatformWebRtcVerification(expectedGeneration)
 	// #endif
 	// #ifndef APP-PLUS
@@ -270,6 +323,18 @@ export function startAndroidWebRtcVerificationInBackground(expectedGeneration = 
 }
 
 function startPlatformWebRtcVerification(expectedGeneration = '', context = {}) {
+	if (clientPlatform() === 'H5' && ownsH5WebRtcScheduling()) {
+		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
+			...singleFlightDiagnosticFields(context, expectedGeneration),
+			preAuthEpoch,
+			outcome: 'oauth_attempt_owned'
+		})
+		return Promise.resolve({
+			verificationState: 'PENDING',
+			webRtcStatus: null,
+			oauthAttemptOwned: true
+		})
+	}
 	if (verifiedInMemory && !expectedGeneration) {
 		recordAuthDiagnosticEvent('WEBRTC_SINGLE_FLIGHT', {
 			...singleFlightDiagnosticFields(context, expectedGeneration),
@@ -310,7 +375,8 @@ function startPlatformWebRtcVerification(expectedGeneration = '', context = {}) 
 	}
 	const key = `${epoch}:${normalized || 'discover'}`
 	if (!verificationTasks.has(key)) {
-		const requestProbeRunId = nextProbeRunId()
+		const requestProbeRunId = normalizedDiagnosticId(context?.probeRunId)
+			|| nextProbeRunId()
 		setCurrentAuthDiagnosticWebRtcProbeRunId(requestProbeRunId)
 		const diagnosticContext = { ...context, probeRunId: requestProbeRunId }
 		traceAndroidVerification('verification_requested', {
@@ -344,7 +410,8 @@ function startPlatformWebRtcVerification(expectedGeneration = '', context = {}) 
 				path: context?.path,
 				requestEpoch: normalizedEpoch(context?.requestEpoch, epoch),
 				source: context?.source
-			}
+			},
+			startHandshake: createStartHandshake()
 		}
 		activeDiagnosticAttempt = attempt
 		recordAuthDiagnosticEvent('WEBRTC_ATTEMPT_CREATED', {
@@ -376,6 +443,13 @@ function startPlatformWebRtcVerification(expectedGeneration = '', context = {}) 
 }
 
 export async function refreshWebRtcFailure() {
+	if (clientPlatform() === 'H5' && ownsH5WebRtcScheduling()) {
+		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
+			source: 'refresh_webrtc_failure',
+			outcome: 'oauth_attempt_owned'
+		})
+		return null
+	}
 	const start = await requestEdge(START_PATH, 'GET')
 	const state = verificationState(start)
 	if (start?.mode === 'OBSERVE' || start?.mode === 'DISABLED' || state === 'VERIFIED') {
@@ -465,6 +539,13 @@ async function verify(attempt, allowGenerationRefresh) {
 			outcome: 'received'
 		})
 		if (start?.mode === 'DISABLED' || state === 'VERIFIED') {
+			attempt.startHandshake.resolve({
+				...start,
+				generation,
+				probeGeneration: generation,
+				probeRunId: attempt.probeRunId,
+				phase: state
+			})
 			trace('verification_short_circuited', {
 				reason: start?.mode === 'DISABLED' ? 'disabled' : 'verified',
 				mode: diagnosticCode(start?.mode, 'UNKNOWN'),
@@ -481,6 +562,14 @@ async function verify(attempt, allowGenerationRefresh) {
 			return start
 		}
 		if (start?.mode === 'OBSERVE' && state === 'FAILED') {
+			// OBSERVE 只保留失败证据，不得让 OAuth 点击因为诊断结果而停止跳转。
+			attempt.startHandshake.resolve({
+				...start,
+				generation,
+				probeGeneration: generation,
+				probeRunId: attempt.probeRunId,
+				phase: state
+			})
 			trace('verification_short_circuited', {
 				reason: 'observe_failed',
 				mode: 'OBSERVE',
@@ -493,6 +582,7 @@ async function verify(attempt, allowGenerationRefresh) {
 			return start
 		}
 		if (state === 'FAILED') {
+			attempt.startHandshake.reject(failureError(start))
 			trace('verification_short_circuited', {
 				reason: 'failed',
 				state: 'FAILED'
@@ -500,9 +590,17 @@ async function verify(attempt, allowGenerationRefresh) {
 			throw failureError(start)
 		}
 		if (state !== 'PENDING' || !/^[1-9][0-9]{0,18}$/.test(generation)) {
+			attempt.startHandshake.reject(failureError(start))
 			throw failureError(start)
 		}
 		attempt.resolvedGeneration = generation
+		attempt.startHandshake.resolve({
+			...start,
+			generation,
+			probeGeneration: generation,
+			probeRunId: attempt.probeRunId,
+			phase: state
+		})
 		const activeAttempt = { epoch: attempt.epoch, generation }
 		if (compareGeneration(generation, latestGeneration) > 0) {
 			latestGeneration = generation
@@ -631,6 +729,7 @@ async function verify(attempt, allowGenerationRefresh) {
 		}
 		throw failureError(report)
 	} catch (error) {
+		attempt.startHandshake?.reject(error)
 		if (isWebRtcAttemptCancellation(error)
 			|| attempt.cancelled
 			|| attempt.epoch !== preAuthEpoch) {
@@ -685,14 +784,230 @@ async function verify(attempt, allowGenerationRefresh) {
 	}
 }
 
-function cancelWebRtcAttempt(attempt, reason = DEFAULT_CANCEL_REASON) {
+/**
+ * 只取得当前 PreAuth 的 start 握手与 generation，不执行候选采集或 report。
+ */
+export function prepareWebRtcAttempt(context = {}) {
+	// #ifdef H5
+	if (oauthPrepareTask) return oauthPrepareTask
+	if (verifiedInMemory) {
+		return Promise.resolve({
+			verificationState: 'VERIFIED',
+			webRtcStatus: true,
+			phase: 'VERIFIED',
+			generation: latestGeneration,
+			probeGeneration: latestGeneration,
+			probeRunId: nextProbeRunId()
+		})
+	}
+	if (activeDiagnosticAttempt?.epoch !== preAuthEpoch) {
+		void startPlatformWebRtcVerification('', {
+			...context,
+			probeRunId: normalizedDiagnosticId(context?.probeRunId) || nextProbeRunId(),
+			source: context?.source || 'oauth_prepare'
+		}).catch(() => {})
+	}
+	const owner = activeDiagnosticAttempt?.epoch === preAuthEpoch
+		? activeDiagnosticAttempt : null
+	if (!owner?.startHandshake?.promise) {
+		return Promise.reject(failureError({ code: 'WEBRTC_VERIFICATION_FAILED' }))
+	}
+	// OAuth 点击加入页面启动时已经存在的 start 握手，不再发送第二个 start 请求。
+	oauthPrepareTask = owner.startHandshake.promise
+		.finally(() => { oauthPrepareTask = null })
+	return oauthPrepareTask
+	// #endif
+	// #ifndef H5
+	return Promise.resolve(ignoredResult())
+	// #endif
+}
+
+/**
+ * OAuth 外跳只停止当前文档的本地资源，不提升 PreAuth epoch，也不废弃服务端 generation。
+ */
+export function suspendH5WebRtcForOAuth(prepared) {
+	// #ifdef H5
+	const generation = normalizedGeneration(
+		prepared?.generation || prepared?.probeGeneration || latestGeneration)
+	suspendedOAuthAttempt = {
+		generation,
+		probeRunId: normalizedDiagnosticId(prepared?.probeRunId),
+		phase: 'OAUTH_SUSPENDED'
+	}
+	if (activeDiagnosticAttempt) {
+		cancelWebRtcAttempt(activeDiagnosticAttempt, 'OAUTH_SUSPENDED', true)
+		activeDiagnosticAttempt = null
+	}
+	verificationTasks.clear()
+	return { ...suspendedOAuthAttempt }
+	// #endif
+	// #ifndef H5
+	return null
+	// #endif
+}
+
+/** 恢复回调页返回的同一 attempt 配置，不触发第二次 start。 */
+export function resumeOAuthWebRtcAttempt(resumed) {
+	const generation = normalizedGeneration(
+		resumed?.probeGeneration || resumed?.generation)
+	if (!generation) throw failureError(resumed)
+	latestGeneration = generation
+	suspendedOAuthAttempt = null
+	return { ...resumed, generation, probeGeneration: generation }
+}
+
+/**
+ * 在首页后台为已恢复的 OAuth attempt 重新创建 RTCPeerConnection，并且只上报一次原 generation。
+ */
+export function collectAndReportAttempt(configuration = {}) {
+	const generation = normalizedGeneration(
+		configuration?.generation || configuration?.probeGeneration)
+	const attemptId = String(configuration?.attemptId || '')
+	if (!generation || !h5AttemptId(attemptId)) {
+		return Promise.reject(failureError(configuration))
+	}
+	const taskKey = `${attemptId}:${generation}`
+	const existing = oauthAttemptTasks.get(taskKey)
+	if (existing) return existing
+	const task = runCollectAndReportAttempt({ ...configuration, attemptId, generation })
+		.finally(() => {
+			if (oauthAttemptTasks.get(taskKey) === task) oauthAttemptTasks.delete(taskKey)
+		})
+	oauthAttemptTasks.set(taskKey, task)
+	return task
+}
+
+async function runCollectAndReportAttempt(configuration) {
+	const generation = configuration.generation
+	const attemptId = configuration.attemptId
+	const probeRunId = normalizedDiagnosticId(configuration?.probeRunId) || nextProbeRunId()
+	latestGeneration = generation
+	const explicitDeadlineAt = configuration?.verdictDeadlineAt
+		? Date.parse(configuration.verdictDeadlineAt)
+		: Number.NaN
+	const deadlineAt = Number.isFinite(explicitDeadlineAt)
+		? explicitDeadlineAt
+		: Date.now() + boundedTimeout(configuration?.timeoutMillis)
+	// 回调页和页面刷新都只能继承服务端截止时间，绝不能在客户端重新获得十五秒窗口。
+	if (deadlineAt <= Date.now()) {
+		throw failureError({
+			code: 'WEBRTC_VERIFICATION_TIMEOUT',
+			message: 'WebRTC 异步裁决窗口已结束，请重新登录。'
+		})
+	}
+	const attempt = {
+		epoch: preAuthEpoch,
+		expectedGeneration: generation,
+		resolvedGeneration: generation,
+		probeRunId,
+		phase: 'COLLECTING',
+		deadlineAt,
+		startedAt: diagnosticNow(),
+		abortController: createAttemptAbortController(),
+		requestTasks: new Set(),
+		cancelled: false,
+		cancelReason: '',
+		settled: false,
+		triggerContext: { source: 'oauth_async_verdict', probeRunId }
+	}
+	activeDiagnosticAttempt = attempt
+	try {
+		const webRtcIps = await collectPlatformVerificationIps({
+			attemptId: `${attemptId}:${generation}`,
+			probeRunId,
+			stunUrls: configuration?.stunUrls,
+			timeoutMillis: Math.max(1, Math.min(
+				boundedTimeout(configuration?.timeoutMillis),
+				deadlineAt - Date.now())),
+			signal: attempt.abortController.signal
+		})
+		assertAttemptActive(attempt)
+		attempt.phase = 'REPORTING'
+		const payload = { attemptId, probeGeneration: generation, webRtcIps }
+		try {
+			const report = await requestEdge(
+				configuration?.reportPath || '/api/_edge/webrtc/report',
+				'POST',
+				payload,
+				reportRequestTimeout(deadlineAt),
+				{ attempt, probeRunId, source: 'oauth_async_verdict' })
+			if (report?.webRtcStatus !== true) throw failureError(report)
+			verifiedInMemory = true
+			return report
+		} catch (error) {
+			if (error?.code !== 'NETWORK_ERROR' && !isWebRtcRetryCode(error?.code)) throw error
+			// 响应丢失时只能轮询只读终态，禁止重发 report、延长截止时间或调用 start。
+			return queryOAuthVerdictUntilFinal({
+				attempt,
+				attemptId,
+				generation,
+				probeRunId,
+				deadlineAt
+			})
+		}
+	} finally {
+		attempt.settled = true
+		if (activeDiagnosticAttempt === attempt) activeDiagnosticAttempt = null
+	}
+}
+
+async function queryOAuthVerdictUntilFinal({
+	attempt,
+	attemptId,
+	generation,
+	probeRunId,
+	deadlineAt
+}) {
+	let lastNetworkError = null
+	while (Date.now() < deadlineAt) {
+		assertAttemptActive(attempt)
+		try {
+			const verdict = await requestEdge(
+				VERDICT_STATUS_PATH,
+				'POST',
+				{ attemptId, probeGeneration: generation },
+				Math.max(1, Math.min(3000, deadlineAt - Date.now())),
+				{ attempt, probeRunId, source: 'oauth_verdict_status' })
+			if (verdict?.state === 'VERIFIED') return verdict
+			if (verdict?.state === 'FAILED' || verdict?.state === 'EXPIRED') {
+				throw failureError({
+					...verdict,
+					code: verdict.state === 'EXPIRED'
+						? 'WEBRTC_VERIFICATION_TIMEOUT'
+						: 'WEBRTC_VERIFICATION_FAILED'
+				})
+			}
+		} catch (error) {
+			if (error?.code !== 'NETWORK_ERROR') throw error
+			lastNetworkError = error
+		}
+		const remaining = deadlineAt - Date.now()
+		if (remaining <= 0) break
+		await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)))
+	}
+	const timeout = failureError({
+		code: 'WEBRTC_VERIFICATION_TIMEOUT',
+		message: 'WebRTC 异步裁决未在安全窗口内完成。'
+	})
+	if (lastNetworkError) timeout.cause = lastNetworkError
+	throw timeout
+}
+
+function cancelWebRtcAttempt(
+	attempt,
+	reason = DEFAULT_CANCEL_REASON,
+	preserveServerAttempt = false
+) {
 	if (!attempt || attempt.cancelled || attempt.settled) return false
 	attempt.cancelled = true
 	attempt.cancelReason = diagnosticCode(reason, DEFAULT_CANCEL_REASON)
-	recordAuthDiagnosticEvent('WEBRTC_ATTEMPT_CANCEL_REQUESTED', {
+	recordAuthDiagnosticEvent(
+		preserveServerAttempt
+			? 'OAUTH_WEBRTC_LOCAL_RESOURCES_RELEASED'
+			: 'WEBRTC_ATTEMPT_CANCEL_REQUESTED', {
 		...activeAttemptDiagnosticFields(attempt),
 		cancelReason: attempt.cancelReason,
-		outcome: 'cancel_requested'
+		outcome: preserveServerAttempt ? 'suspended' : 'cancel_requested'
 	})
 	if (attempt.phase === 'COLLECTING') {
 		recordAuthDiagnosticEvent('WEBRTC_PROBE_ABORTED', {
@@ -721,12 +1036,14 @@ function cancelWebRtcAttempt(attempt, reason = DEFAULT_CANCEL_REASON) {
 		}
 	}
 	attempt.requestTasks.clear()
-	recordReportSkipped(attempt, attempt.cancelReason)
-	recordAuthDiagnosticEvent('WEBRTC_ATTEMPT_ABANDONED', {
-		...activeAttemptDiagnosticFields(attempt),
-		reason: attempt.cancelReason,
-		outcome: 'abandoned'
-	})
+	if (!preserveServerAttempt) {
+		recordReportSkipped(attempt, attempt.cancelReason)
+		recordAuthDiagnosticEvent('WEBRTC_ATTEMPT_ABANDONED', {
+			...activeAttemptDiagnosticFields(attempt),
+			reason: attempt.cancelReason,
+			outcome: 'abandoned'
+		})
+	}
 	return true
 }
 
@@ -873,6 +1190,17 @@ function normalizedGeneration(value) {
 	return /^[1-9][0-9]{0,18}$/.test(String(value || ''))
 		? String(value)
 		: ''
+}
+
+function normalizedDiagnosticId(value) {
+	const normalized = String(value || '').trim().toLowerCase()
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
+		? normalized : ''
+}
+
+function h5AttemptId(value) {
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+		String(value || '').trim().toLowerCase())
 }
 
 function normalizedEpoch(value, fallback) {

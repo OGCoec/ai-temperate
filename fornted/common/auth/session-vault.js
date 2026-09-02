@@ -8,6 +8,7 @@ import {
 import {
 	containsSessionCredentialUpdate,
 	emptySessionCredentials,
+	hasCompleteAndroidOAuthCredentials,
 	hasPersistableAndroidCredentials,
 	mergeSessionCredentials
 } from './session-credentials.js'
@@ -41,6 +42,21 @@ export function currentSession() {
 
 export function saveSession(response) {
 	if (!response) return
+	updatePrincipal(response)
+	if (clientPlatform() === 'H5') {
+		clearBrowserLegacyOnce()
+		return
+	}
+	if (!containsSessionCredentialUpdate(response)) return
+	const credentials = mergeSessionCredentials(loadAndroidSessionCredentials(), response)
+	if (hasPersistableAndroidCredentials(credentials)) {
+		saveAndroidSessionCredentials(credentials)
+	} else {
+		clearAndroidSessionCredentials()
+	}
+}
+
+function updatePrincipal(response) {
 	if (response.publicUserId || response.displayName) {
 		if (principal?.publicUserId && response.publicUserId &&
 			principal.publicUserId !== response.publicUserId) {
@@ -57,17 +73,27 @@ export function saveSession(response) {
 			displayName: response.displayName || principal?.displayName || ''
 		}
 	}
-	if (clientPlatform() === 'H5') {
-		clearBrowserLegacyOnce()
-		return
+}
+
+/**
+ * 原生 OAuth 完成的凭据提交边界；校验通过后一次写入四个字段，任何缺失都不会覆盖旧会话。
+ */
+export function commitAndroidOAuthSession(response) {
+	if (clientPlatform() !== 'ANDROID'
+		|| !hasCompleteAndroidOAuthCredentials(response)) {
+		const error = new Error('OAuth 登录响应缺少完整会话凭据。')
+		error.code = 'SESSION_RESPONSE_INVALID'
+		throw error
 	}
-	if (!containsSessionCredentialUpdate(response)) return
-	const credentials = mergeSessionCredentials(loadAndroidSessionCredentials(), response)
-	if (hasPersistableAndroidCredentials(credentials)) {
-		saveAndroidSessionCredentials(credentials)
-	} else {
-		clearAndroidSessionCredentials()
+	const credentials = {
+		accessToken: response.accessToken,
+		refreshToken: response.refreshToken,
+		csrfToken: response.csrfToken,
+		preAuthToken: response.preAuthToken
 	}
+	saveAndroidSessionCredentials(credentials)
+	updatePrincipal(response)
+	return credentials
 }
 
 export function loadAccessToken() {

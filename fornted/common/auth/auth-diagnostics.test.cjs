@@ -12,6 +12,14 @@ function memoryStorage() {
 	}
 }
 
+function restoreProperty(target, name, descriptor) {
+	if (descriptor) {
+		Object.defineProperty(target, name, descriptor)
+		return
+	}
+	delete target[name]
+}
+
 async function loadModule() {
 	const source = fs.readFileSync(
 		path.resolve(__dirname, 'auth-diagnostics.js'),
@@ -95,6 +103,108 @@ test('request diagnostics expose only UUID correlation and bounded queue timing 
 	assert.match(headers['X-AIT-Page-Instance-Id'], /^[0-9a-f-]{36}$/)
 	assert.match(headers['X-AIT-Client-Queue-Ms'], /^\d+$/)
 	assert.equal(Object.keys(headers).length, 3)
+})
+
+test('retry diagnostics propagate only the validated trigger request UUID', async () => {
+	globalThis.sessionStorage = memoryStorage()
+	const diagnostics = await loadModule()
+	const triggerClientRequestId = '11111111-1111-4111-8111-111111111111'
+	const request = diagnostics.createAuthRequestDiagnostic(
+		'/api/_edge/cookie-scope',
+		'cookie_scope_migration',
+		{ triggerClientRequestId })
+	const headers = diagnostics.authDiagnosticRequestHeaders(request)
+
+	assert.equal(headers['X-AIT-Trigger-Request-Id'], triggerClientRequestId)
+	assert.equal(
+		diagnostics.authDiagnosticRequestHeaders(
+			diagnostics.createAuthRequestDiagnostic(
+				'/api/_edge/cookie-scope',
+				'cookie_scope_migration',
+				{ triggerClientRequestId: 'not-a-uuid' }))['X-AIT-Trigger-Request-Id'],
+		undefined)
+	assert.equal(
+		diagnostics.exportAuthDiagnostics().records.some(record =>
+			record.triggerClientRequestId === 'not-a-uuid'),
+		false)
+})
+
+test('response diagnostics retain only bounded edge outcomes and deployment identities', async () => {
+	const originalNavigator = Object.getOwnPropertyDescriptor(
+		globalThis,
+		'navigator')
+	const originalSecureContext = Object.getOwnPropertyDescriptor(
+		globalThis,
+		'isSecureContext')
+	const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+	globalThis.sessionStorage = memoryStorage()
+	globalThis.window = {
+		location: {
+			hostname: 'niko000o.site',
+			origin: 'https://niko000o.site',
+			search: ''
+		}
+	}
+	Object.defineProperty(globalThis, 'navigator', {
+		configurable: true,
+		value: {
+			cookieEnabled: true,
+			platform: 'Win32',
+			userAgent: 'Mozilla/5.0 Chrome/126.0.0.0 secret-device-detail'
+		}
+	})
+	Object.defineProperty(globalThis, 'isSecureContext', {
+		configurable: true,
+		value: true
+	})
+	try {
+		const diagnostics = await loadModule()
+		const request = diagnostics.createAuthRequestDiagnostic(
+			'/api/auth/csrf',
+			'csrf')
+		diagnostics.authDiagnosticRequestHeaders(request)
+		diagnostics.recordAuthDiagnosticResponse(request, {
+			statusCode: 428,
+			data: { code: 'EDGE_COOKIE_SCOPE_RESET_REQUIRED' },
+			header: {
+				'CF-Ray': 'test-ray-ord',
+				'X-AIT-Edge-Outcome': 'COOKIE_SCOPE_MARKER_MISSING',
+				'X-AIT-Edge-Upstream-Attempted': '0',
+				'X-AIT-Cookie-Scope-State': 'MISSING',
+				'X-AIT-Cookie-Scope-Reset': '0',
+				'X-AIT-Worker-Version': 'worker-version-test',
+				'X-AIT-Pages-Deployment': 'e1444b89',
+				'X-AIT-Backend-Release': 'backend-release-test',
+				'Set-Cookie': 'must-not-be-exported'
+			}
+		})
+
+		const exported = diagnostics.exportAuthDiagnostics()
+		const response = exported.records.find(record =>
+			record.event === 'NETWORK_RESPONSE_RECEIVED')
+		assert.equal(response.cfRay, 'test-ray-ord')
+		assert.equal(response.edgeOutcome, 'COOKIE_SCOPE_MARKER_MISSING')
+		assert.equal(response.upstreamAttempted, false)
+		assert.equal(response.cookieScopeState, 'MISSING')
+		assert.equal(response.cookieScopeReset, false)
+		assert.equal(response.workerVersion, 'worker-version-test')
+		assert.equal(response.pagesDeployment, 'e1444b89')
+		assert.equal(response.backendRelease, 'backend-release-test')
+		assert.deepEqual(exported.runtime, {
+			browserFamily: 'CHROME',
+			browserMajor: 126,
+			osFamily: 'WINDOWS',
+			secureContext: true,
+			cookieEnabled: true,
+			originHost: 'niko000o.site'
+		})
+		assert.equal(JSON.stringify(exported).includes('secret-device-detail'), false)
+		assert.equal(JSON.stringify(exported).includes('must-not-be-exported'), false)
+	} finally {
+		restoreProperty(globalThis, 'navigator', originalNavigator)
+		restoreProperty(globalThis, 'isSecureContext', originalSecureContext)
+		restoreProperty(globalThis, 'window', originalWindow)
+	}
 })
 
 test('WebRTC request diagnostics add one validated probe correlation header', async () => {
@@ -189,9 +299,12 @@ test('production-safe console mirroring is opt-in and exposes only the redacted 
 		assert.match(String(entries[0][0]), /AIT_WEBRTC/)
 		assert.equal(entries[0].join(' ').includes('must-not-be-recorded'), false)
 		assert.equal(typeof globalThis.window.__AIT_AUTH_DIAGNOSTICS__.export, 'function')
+		assert.equal(typeof globalThis.window.__AIT_AUTH_DIAGNOSTICS__.exportJson, 'function')
 		assert.equal(
 			globalThis.window.__AIT_AUTH_DIAGNOSTICS__.export().records.length > 0,
 			true)
+		assert.doesNotThrow(() => JSON.parse(
+			globalThis.window.__AIT_AUTH_DIAGNOSTICS__.exportJson()))
 	} finally {
 		globalThis.console = originalConsole
 		delete globalThis.window

@@ -3,7 +3,7 @@ setlocal
 
 title Whisper Medium WSS - Port 7896
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\whisper-wss-server\start-whisper-wss.ps1" %*
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\whisper-wss-server\start-whisper-wss.ps1" %*
 set "WHISPER_EXIT_CODE=%ERRORLEVEL%"
 
 if not "%WHISPER_EXIT_CODE%"=="0" (

@@ -25,7 +25,7 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentCal
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackFingerprintService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackPersistenceService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentCallbackReceiveService;
-import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRefundService;
+import com.example.temperate.service.user.membership.payment.refund.MembershipRefundAttemptCoordinator;
 import com.example.temperate.service.user.membership.payment.callback.MembershipPaymentRejectedCallbackResumeService;
 import com.example.temperate.service.user.membership.payment.callback.PaymentFactReconciliationService;
 import com.example.temperate.service.user.membership.payment.callback.SimulatedLiuhaoCallbackCommand;
@@ -42,6 +42,7 @@ import com.example.temperate.service.user.membership.payment.loadtest.Membership
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentMetrics;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipPaymentOrderLookupService;
+import com.example.temperate.service.user.membership.payment.order.MembershipPaymentAttemptTransactionService;
 import com.example.temperate.service.user.membership.payment.order.impl.MembershipPaymentOrderLookupServiceImpl;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderBatchPersistenceService;
 import com.example.temperate.service.user.membership.payment.persistence.MembershipOrderPersistenceService;
@@ -220,6 +221,8 @@ final class MembershipPaymentPipelineIntegrationTest {
                 orderStore,
                 providerRegistry,
                 reconciliationService,
+                mock(MembershipPaymentAttemptTransactionService.class),
+                Base64URL,
                 mock(MembershipPaymentCheckPublisher.class),
                 closingPublisher,
                 finalCheckScheduler,
@@ -265,7 +268,8 @@ final class MembershipPaymentPipelineIntegrationTest {
                 .satisfies(value -> {
                     assertThat(value.status()).isEqualTo(MembershipOrderStatus.PAID);
                     assertThat(value.stateVersion()).isEqualTo(2L);
-                    assertThat(value.providerTradeNo()).isEqualTo("provider-trade-1");
+                    assertThat(value.providerTradeNo())
+                            .isEqualTo("LIUHAO:TRADE:provider-trade-1");
                 });
         assertThat(orderPersistenceQueue.dirtySize()).isEqualTo(1L);
         assertThat(callbackQueue.processingSize()).isZero();
@@ -295,7 +299,8 @@ final class MembershipPaymentPipelineIntegrationTest {
         MembershipOrder persisted = orderMapper.findById(ORDER_BYTES);
         assertThat(persisted.getStatus()).isEqualTo(MembershipOrderStatus.PAID);
         assertThat(persisted.getStateVersion()).isEqualTo(2L);
-        assertThat(persisted.getProviderTradeNo()).isEqualTo("provider-trade-1");
+        assertThat(persisted.getProviderTradeNo())
+                .isEqualTo("LIUHAO:TRADE:provider-trade-1");
         assertThat(orderPersistenceQueue.dirtySize()).isZero();
         assertThat(orderPersistenceQueue.processingSize()).isZero();
         assertThat(orderStore.find(ORDER_ID)).isEmpty();
@@ -328,7 +333,7 @@ final class MembershipPaymentPipelineIntegrationTest {
                 realCallbackPersistenceService(),
                 realEntitlementSettlementService(),
                 new MembershipPaymentCallbackDecisionServiceImpl(properties),
-                mock(MembershipPaymentRefundService.class),
+                mock(MembershipRefundAttemptCoordinator.class),
                 mock(MembershipPaymentRejectedCallbackResumeService.class),
                 mock(MembershipPaymentLoadtestFaultGate.class),
                 Base64URL,
@@ -450,7 +455,7 @@ final class MembershipPaymentPipelineIntegrationTest {
     private static SimulatedLiuhaoCallbackCommand callbackCommand() {
         return new SimulatedLiuhaoCallbackCommand(
                 "merchant-test",
-                "provider-trade-1",
+                "LIUHAO:TRADE:provider-trade-1",
                 ORDER_ID,
                 "channel-trade-1",
                 "alipay",

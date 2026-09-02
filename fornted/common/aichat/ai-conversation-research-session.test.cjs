@@ -66,6 +66,83 @@ test('research session persists ordered safe events and rejects unsafe sources',
 	delete globalThis.sessionStorage
 })
 
+test('research event sequence high-water marks are isolated by event type', () => {
+	globalThis.sessionStorage = {
+		getItem() { return null }, setItem() {}, removeItem() {}
+	}
+	const module = loadModule()
+	const session = module.createAiConversationResearchSession({
+		localId: 'local-independent-sequences',
+		idempotencyKey: '123e4567-e89b-42d3-a456-426614174004',
+		webSearchMode: 'REQUIRED'
+	})
+
+	assert.equal(session.appendActivity({
+		sequence: 100, activityId: 'search-1', phase: 'WEB_SEARCH',
+		status: 'IN_PROGRESS', query: 'safe', occurredAt: 'now'
+	}), true)
+	assert.equal(session.appendSource({
+		sequence: 1, activityId: 'search-1', sourceId: 'source-1',
+		title: 'Source', url: 'https://example.com/source',
+		domain: 'example.com', role: 'CONSULTED', occurredAt: 'now'
+	}), true)
+	assert.equal(session.appendReasoningSummary({
+		sequence: 1, activityId: 'search-1', textDelta: 'summary',
+		occurredAt: 'now'
+	}), true)
+	assert.equal(session.snapshot().sources.length, 1)
+	assert.equal(session.snapshot().reasoningSummaries.length, 1)
+	session.close()
+	module.clearAiConversationResearchSessions()
+	delete globalThis.sessionStorage
+})
+
+test('research sources require HTTP URLs and deduplicate normalized URL per role', () => {
+	const values = new Map()
+	globalThis.sessionStorage = {
+		getItem(key) { return values.get(key) || null },
+		setItem(key, value) { values.set(key, value) },
+		removeItem(key) { values.delete(key) }
+	}
+	const module = loadModule()
+	const idempotencyKey = '123e4567-e89b-42d3-a456-426614174005'
+	const session = module.createAiConversationResearchSession({
+		localId: 'local-source-rules', idempotencyKey,
+		webSearchMode: 'REQUIRED'
+	})
+
+	assert.equal(session.appendSource({
+		sequence: 1, sourceId: 'unsafe', title: 'Unsafe',
+		url: 'file:///etc/passwd', role: 'CONSULTED'
+	}), false)
+	assert.equal(session.appendSource({
+		sequence: 2, sourceId: 'source-1', title: 'First',
+		url: 'https://EXAMPLE.com:443/docs', role: 'CONSULTED'
+	}), true)
+	assert.equal(session.appendSource({
+		sequence: 3, sourceId: 'source-2', title: 'Duplicate',
+		url: 'https://example.com/docs', role: 'CONSULTED'
+	}), false)
+	assert.equal(session.appendSource({
+		sequence: 4, sourceId: 'source-fragment', title: 'Duplicate fragment',
+		url: 'https://example.com/docs#section', role: 'CONSULTED'
+	}), false)
+	assert.equal(session.appendSource({
+		sequence: 5, sourceId: 'source-3', title: 'Different role',
+		url: 'https://example.com/docs', role: 'CITED'
+	}), true)
+	assert.equal(session.snapshot().sources.length, 2)
+	session.close()
+
+	const restored = module.findAiConversationResearchSession({ idempotencyKey })
+	assert.deepEqual(restored.sources.map(item => [item.role, item.url]), [
+		['CONSULTED', 'https://example.com/docs'],
+		['CITED', 'https://example.com/docs']
+	])
+	module.clearAiConversationResearchSessions()
+	delete globalThis.sessionStorage
+})
+
 test('corrupt storage is ignored without breaking a new session', () => {
 	globalThis.sessionStorage = {
 		getItem() { return '{broken' }, setItem() {}, removeItem() {}

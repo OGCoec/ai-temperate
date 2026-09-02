@@ -12,8 +12,10 @@ import com.example.temperate.service.user.membership.payment.callback.PaymentFac
 import com.example.temperate.service.user.membership.payment.config.MembershipPaymentProperties;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderStatus;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
 import com.example.temperate.service.user.membership.payment.provider.PaymentQueryResult;
 import com.example.temperate.service.user.membership.payment.provider.bar.BarPaymentSignatureService;
+import com.example.temperate.service.user.membership.payment.provider.liuhao.LiuhaoPaymentSignatureService;
 import com.example.temperate.service.user.membership.payment.store.PaymentCallbackQueue;
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -26,7 +28,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 该实现是来恢复本地模拟器已有 callbackId，或把 BAR 查询的签名支付事实转换为同一回调快照并幂等入队。
+ * 该实现是来恢复本地模拟器已有 callbackId，或把 BAR/六号主动查询的已验签支付事实转换为同一回调快照并幂等入队。
  */
 @Service
 @ConditionalOnProperty(
@@ -40,6 +42,7 @@ public final class PaymentFactReconciliationServiceImpl
 
     private final PaymentCallbackQueue callbackQueue;
     private final ObjectProvider<BarPaymentSignatureService> barSignatures;
+    private final ObjectProvider<LiuhaoPaymentSignatureService> liuhaoSignatures;
     private final HybridSemaphoreIdWorker idWorker;
     private final HybridBase64UrlCodec base64UrlCodec;
     private final MembershipPaymentProperties properties;
@@ -48,12 +51,14 @@ public final class PaymentFactReconciliationServiceImpl
     public PaymentFactReconciliationServiceImpl(
             PaymentCallbackQueue callbackQueue,
             ObjectProvider<BarPaymentSignatureService> barSignatures,
+            ObjectProvider<LiuhaoPaymentSignatureService> liuhaoSignatures,
             HybridSemaphoreIdWorker idWorker,
             HybridBase64UrlCodec base64UrlCodec,
             MembershipPaymentProperties properties,
             Clock clock) {
         this.callbackQueue = Objects.requireNonNull(callbackQueue);
         this.barSignatures = Objects.requireNonNull(barSignatures);
+        this.liuhaoSignatures = Objects.requireNonNull(liuhaoSignatures);
         this.idWorker = Objects.requireNonNull(idWorker);
         this.base64UrlCodec = Objects.requireNonNull(base64UrlCodec);
         this.properties = Objects.requireNonNull(properties);
@@ -72,43 +77,55 @@ public final class PaymentFactReconciliationServiceImpl
         if (fact.callbackId() != null) {
             return callbackQueue.ensureReady(fact.callbackId(), clock.millis());
         }
-        if (properties.defaultProvider() != PaymentProviderType.BAR
+        PaymentProviderType providerType;
+        try {
+            providerType = PaymentProviderReference.resolveTrade(fact.providerTradeNo());
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+        if ((providerType != PaymentProviderType.BAR
+                        && providerType != PaymentProviderType.LIUHAO)
                 || !Objects.equals(localOrder.orderId(), fact.orderId())
                 || fact.providerTradeNo() == null
-                || fact.channelTradeNo() == null
+                || (localOrder.providerTradeNo() != null
+                        && !Objects.equals(
+                                localOrder.providerTradeNo(), fact.providerTradeNo()))
                 || fact.amountYuan() == null
                 || fact.finishedAt() == null
                 || localOrder.payAmountYuan().compareTo(fact.amountYuan()) != 0) {
             return false;
         }
-        BarPaymentSignatureService signatures = barSignatures.getIfAvailable();
-        if (signatures == null) {
-            throw new IllegalStateException("BAR payment signature service is unavailable.");
-        }
-        int keyVersion = properties.bar().activeKeyVersion();
         OffsetDateTime receivedAt = MembershipPaymentTime.now(clock);
         Map<String, Object> canonicalFact = new LinkedHashMap<>();
-        canonicalFact.put("pid", properties.bar().pid());
+        canonicalFact.put("provider", providerType.name());
+        canonicalFact.put("pid", providerPid(providerType));
         canonicalFact.put("out_trade_no", fact.orderId());
         canonicalFact.put("trade_no", fact.providerTradeNo());
-        canonicalFact.put("api_trade_no", fact.channelTradeNo());
+        canonicalFact.put(
+                "api_trade_no",
+                fact.channelTradeNo() == null
+                        ? PaymentProviderReference.rawTradeNo(fact.providerTradeNo())
+                        : fact.channelTradeNo());
         canonicalFact.put("money", fact.amountYuan().toPlainString());
         canonicalFact.put("finished_at", fact.finishedAt().toString());
-        HmacIdentifier fingerprint = signatures.identify(
-                keyVersion,
-                "BAR_QUERY_PAYMENT_FACT",
-                signatures.canonicalize(canonicalFact));
-        HmacIdentifier providerTradeFingerprint = signatures.identify(
-                keyVersion,
-                "BAR_PROVIDER_TRADE",
-                properties.bar().pid() + "\n" + fact.providerTradeNo());
+        HmacIdentifier fingerprint = identify(
+                providerType,
+                providerType.name() + "_QUERY_PAYMENT_FACT",
+                canonicalize(providerType, canonicalFact));
+        HmacIdentifier providerTradeFingerprint = identify(
+                providerType,
+                providerType.name() + "_PROVIDER_TRADE",
+                providerPid(providerType) + "\n"
+                        + PaymentProviderReference.rawTradeNo(fact.providerTradeNo()));
         PaymentCallbackSnapshot snapshot = new PaymentCallbackSnapshot(
                 PaymentCallbackSnapshot.CURRENT_SCHEMA_VERSION,
                 base64UrlCodec.encode(idWorker.nextId()),
                 localOrder.orderId(),
-                properties.bar().pid(),
+                providerPid(providerType),
                 fact.providerTradeNo(),
-                fact.channelTradeNo(),
+                fact.channelTradeNo() == null
+                        ? PaymentProviderReference.rawTradeNo(fact.providerTradeNo())
+                        : fact.channelTradeNo(),
                 localOrder.payType(),
                 SUCCESS,
                 fact.amountYuan(),
@@ -116,9 +133,59 @@ public final class PaymentFactReconciliationServiceImpl
                 receivedAt,
                 receivedAt.toEpochSecond(),
                 fingerprint.value(),
-                signatures.payloadDigest(canonicalFact));
+                payloadDigest(providerType, canonicalFact));
         PaymentCallbackEnqueueResult result = callbackQueue.enqueue(
                 snapshot, fingerprint, providerTradeFingerprint);
         return result.enqueued() || result.callbackId() != null;
+    }
+
+    private String providerPid(PaymentProviderType providerType) {
+        return providerType == PaymentProviderType.BAR
+                ? properties.bar().pid()
+                : properties.liuhao().pid();
+    }
+
+    private String canonicalize(
+            PaymentProviderType providerType,
+            Map<String, Object> fields) {
+        if (providerType == PaymentProviderType.BAR) {
+            return requireBarSignatures().canonicalize(fields);
+        }
+        return requireLiuhaoSignatures().canonicalize(fields);
+    }
+
+    private HmacIdentifier identify(
+            PaymentProviderType providerType,
+            String purpose,
+            String canonicalValue) {
+        if (providerType == PaymentProviderType.BAR) {
+            return requireBarSignatures().identify(
+                    properties.bar().activeKeyVersion(), purpose, canonicalValue);
+        }
+        return requireLiuhaoSignatures().identify(purpose, canonicalValue);
+    }
+
+    private String payloadDigest(
+            PaymentProviderType providerType,
+            Map<String, Object> fields) {
+        return providerType == PaymentProviderType.BAR
+                ? requireBarSignatures().payloadDigest(fields)
+                : requireLiuhaoSignatures().payloadDigest(fields);
+    }
+
+    private BarPaymentSignatureService requireBarSignatures() {
+        BarPaymentSignatureService signatures = barSignatures.getIfAvailable();
+        if (signatures == null) {
+            throw new IllegalStateException("BAR payment signature service is unavailable.");
+        }
+        return signatures;
+    }
+
+    private LiuhaoPaymentSignatureService requireLiuhaoSignatures() {
+        LiuhaoPaymentSignatureService signatures = liuhaoSignatures.getIfAvailable();
+        if (signatures == null) {
+            throw new IllegalStateException("Liuhao payment signature service is unavailable.");
+        }
+        return signatures;
     }
 }

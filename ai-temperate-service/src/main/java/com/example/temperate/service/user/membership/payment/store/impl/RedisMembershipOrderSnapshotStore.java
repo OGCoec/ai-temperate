@@ -6,6 +6,7 @@ import com.example.temperate.common.redis.key.RedisKeyFactory;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
 import com.example.temperate.service.user.membership.payment.exception.MembershipPaymentInfrastructureException;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderPaidCommand;
+import com.example.temperate.service.user.membership.payment.order.MembershipClosingFinalizationSource;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderRealtimeGuard;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderSnapshot;
 import com.example.temperate.service.user.membership.payment.order.MembershipOrderTransitionOutcome;
@@ -70,6 +71,8 @@ public final class RedisMembershipOrderSnapshotStore
             "patch_provider_trade_no.lua");
     private static final RedisScript<String> MARK_PAID = stringScript("mark_paid.lua");
     private static final RedisScript<String> CANCEL = stringScript("cancel_order.lua");
+    private static final RedisScript<String> SUPERSEDE_FOR_REPLACEMENT =
+            stringScript("supersede_for_replacement.lua");
     private static final RedisScript<String> START_CLOSING =
             stringScript("start_closing.lua");
     private static final RedisScript<String> FINALIZE_CLOSING =
@@ -665,14 +668,51 @@ public final class RedisMembershipOrderSnapshotStore
                 validOrderId.value());
     }
 
+    /**
+     * Lua 同时读取实时支付发起事实与数据库兜底标志；任一侧确认已发起支付时都只能进入 CLOSED，不能误降级为普通取消。
+     */
+    @Override
+    public MembershipOrderTransitionResult supersedeForReplacement(
+            String orderId,
+            boolean paymentStartedInDatabase,
+            OffsetDateTime changedAt) {
+        MembershipOrderRedisId validOrderId = orderId(orderId);
+        return transition(
+                SUPERSEDE_FOR_REPLACEMENT,
+                List.of(
+                        keyFactory.membershipOrderSnapshotKey(validOrderId),
+                        keyFactory.membershipOrderCallbackMarkerKey(validOrderId),
+                        keyFactory.orderPersistenceDirtyKey()),
+                paymentStartedInDatabase ? "1" : "0",
+                Long.toString(epochMicros(changedAt, "changedAt")),
+                Long.toString(epochMillis(changedAt, "changedAt")),
+                Long.toString(SNAPSHOT_TTL_MILLIS),
+                validOrderId.value());
+    }
+
     @Override
     public MembershipOrderTransitionResult startClosing(
             String orderId,
             OffsetDateTime closingDeadlineAt,
             OffsetDateTime changedAt) {
+        return startClosing(orderId, closingDeadlineAt, changedAt, closingDeadlineAt);
+    }
+
+    /**
+     * 把原订单的最小关单边界作为 Lua 参数保存并复核，避免调用方再次把取消时刻误当作宽限期起点。
+     */
+    @Override
+    public MembershipOrderTransitionResult startClosing(
+            String orderId,
+            OffsetDateTime closingDeadlineAt,
+            OffsetDateTime changedAt,
+            OffsetDateTime minimumClosingDeadlineAt) {
         MembershipOrderRedisId validOrderId = orderId(orderId);
         long deadlineMicros = epochMicros(closingDeadlineAt, "closingDeadlineAt");
         long changedMicros = epochMicros(changedAt, "changedAt");
+        long minimumDeadlineMicros = epochMicros(
+                Objects.requireNonNull(minimumClosingDeadlineAt),
+                "minimumClosingDeadlineAt");
         long dirtyScoreMillis = epochMillis(changedAt, "changedAt");
         return transition(
                 START_CLOSING,
@@ -683,7 +723,8 @@ public final class RedisMembershipOrderSnapshotStore
                 Long.toString(changedMicros),
                 Long.toString(dirtyScoreMillis),
                 Long.toString(SNAPSHOT_TTL_MILLIS),
-                validOrderId.value());
+                validOrderId.value(),
+                Long.toString(minimumDeadlineMicros));
     }
 
     @Override
@@ -704,11 +745,12 @@ public final class RedisMembershipOrderSnapshotStore
                 validOrderId.value());
     }
 
-    /** 外部 Provider 没有本地模拟结果 Hash，因此把已核验的安全终态作为 Lua 参数参与原子关单裁决。 */
+    /** 外部 Provider 没有本地模拟结果 Hash，因此把观测状态及其事实来源同时交给 Lua 执行原子关单裁决。 */
     @Override
     public MembershipOrderTransitionResult finalizeClosing(
             String orderId,
             PaymentProviderStatus providerStatus,
+            MembershipClosingFinalizationSource source,
             OffsetDateTime changedAt) {
         MembershipOrderRedisId validOrderId = orderId(orderId);
         return transition(
@@ -722,7 +764,8 @@ public final class RedisMembershipOrderSnapshotStore
                 Long.toString(epochMillis(changedAt, "changedAt")),
                 Long.toString(SNAPSHOT_TTL_MILLIS),
                 validOrderId.value(),
-                Objects.requireNonNull(providerStatus).name());
+                Objects.requireNonNull(providerStatus).name(),
+                Objects.requireNonNull(source).name());
     }
 
     private MembershipOrderTransitionResult transition(

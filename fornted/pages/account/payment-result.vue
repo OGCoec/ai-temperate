@@ -1,7 +1,7 @@
 <template>
 	<view class="payment-result-page">
 		<view class="payment-result-shell" :aria-busy="querying">
-			<view class="result-brand"><text class="brand-mark">B</text><text>BAR SANDBOX RETURN</text></view>
+			<view class="result-brand"><text class="brand-mark">P</text><text>PAYMENT STATUS</text></view>
 			<view class="result-card" :class="`is-${viewState.toLowerCase()}`">
 				<view class="result-symbol" aria-hidden="true">
 					<text v-if="viewState === 'PAID'">✓</text>
@@ -48,7 +48,7 @@
 		CLOSED: '本地订单已经关闭，没有确认支付成功。',
 		EXPIRED: '支付订单已经过期。',
 		FAILED: '支付订单处理失败。',
-		REFUNDED: '模拟订单已经标记为退款。'
+		REFUNDED: '支付订单已经标记为退款。'
 	})
 
 	export default {
@@ -95,7 +95,7 @@
 				this.context = readPaymentReturnContext(sessionStorage)
 				if (!this.context) {
 					this.viewState = 'ERROR'
-					this.message = '无法定位本次订单。请返回账户后重新发起模拟支付。'
+					this.message = '无法定位本次订单。请返回账户后重新发起支付。'
 					return
 				}
 				this.beginPolling()
@@ -114,7 +114,7 @@
 					const order = await membershipPaymentApi.order(this.context.orderId)
 					this.orderStatus = order.status
 					if (order.status === 'PAID') {
-						this.finish('PAID', '模拟支付已确认，会员权益未发放')
+						this.finish('PAID', '支付已由本项目后端确认')
 						return
 					}
 					if (TERMINAL_MESSAGES[order.status]) {
@@ -128,7 +128,7 @@
 					this.viewState = 'LOCATING'
 					this.message = order.status === 'CLOSING'
 						? '订单正在完成最终核对，请稍候…'
-						: 'BAR 回调或主动查询尚未完成，请稍候…'
+						: '支付回调或主动查询尚未完成，请稍候…'
 				} catch (error) {
 					this.viewState = 'LOCATING'
 					this.message = error?.message || '状态查询暂时失败，正在继续尝试…'

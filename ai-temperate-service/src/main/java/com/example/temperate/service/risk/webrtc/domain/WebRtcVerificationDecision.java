@@ -29,7 +29,8 @@ public record WebRtcVerificationDecision(
             case VERIFIED, VERIFICATION_PENDING, VERIFICATION_REQUIRED,
                     VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
                     IP_FAMILY_INCOMPLETE, IP_MISMATCH -> true;
-            case NETWORK_CHANGED, STALE_REPORT, STATE_INVALID -> false;
+            case NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT, STATE_INVALID -> false;
         };
         if (stateful && probeGeneration <= 0) {
             throw new IllegalArgumentException("WebRTC generation is required.");
@@ -59,7 +60,8 @@ public record WebRtcVerificationDecision(
                     && pendingRemainingMillis == 0
                     && failureReason == PreAuthWebRtcFailureReason.IP_FAMILY_INCOMPLETE
                     && !webRtcIps.isEmpty();
-            case NETWORK_CHANGED, STALE_REPORT, STATE_INVALID -> probeGeneration == 0
+            case NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT, STATE_INVALID -> probeGeneration == 0
                     && pendingUntil == null && pendingRemainingMillis == 0
                     && failureReason == null && webRtcIps.isEmpty();
         };
@@ -72,7 +74,7 @@ public record WebRtcVerificationDecision(
         return switch (outcome) {
             case VERIFIED -> Boolean.TRUE;
             case VERIFICATION_PENDING, VERIFICATION_REQUIRED, NETWORK_CHANGED,
-                    STALE_REPORT, STATE_INVALID -> null;
+                    OAUTH_ATTEMPT_REQUIRED, STALE_REPORT, STATE_INVALID -> null;
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
                     IP_FAMILY_INCOMPLETE, IP_MISMATCH -> Boolean.FALSE;
         };
@@ -86,6 +88,7 @@ public record WebRtcVerificationDecision(
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
                     IP_FAMILY_INCOMPLETE, IP_MISMATCH -> "FAILED";
             case NETWORK_CHANGED -> "NETWORK_CHANGED";
+            case OAUTH_ATTEMPT_REQUIRED -> "OAUTH_ATTEMPT_REQUIRED";
             case STALE_REPORT -> "STALE";
             case STATE_INVALID -> "INVALID";
         };
@@ -185,6 +188,10 @@ public record WebRtcVerificationDecision(
 
     public static WebRtcVerificationDecision stale() {
         return stateless(WebRtcVerificationOutcome.STALE_REPORT);
+    }
+
+    public static WebRtcVerificationDecision oauthAttemptRequired() {
+        return stateless(WebRtcVerificationOutcome.OAUTH_ATTEMPT_REQUIRED);
     }
 
     public static WebRtcVerificationDecision stateInvalid() {

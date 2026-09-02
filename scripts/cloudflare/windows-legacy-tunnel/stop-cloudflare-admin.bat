@@ -2,11 +2,12 @@
 setlocal EnableExtensions
 
 set "SCRIPT_DIR=%~dp0"
-set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "PWSH_EXE=pwsh.exe"
 set "SCRIPT_PATH=%SCRIPT_DIR%stop-cloudflare.ps1"
 
-if not exist "%POWERSHELL_EXE%" (
-  echo ERROR: powershell.exe not found: %POWERSHELL_EXE%
+where "%PWSH_EXE%" >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: pwsh.exe not found in PATH. Install PowerShell 7 first.
   pause
   exit /b 1
 )
@@ -17,7 +18,7 @@ if not exist "%SCRIPT_PATH%" (
   exit /b 1
 )
 
-"%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PATH%" -Profile admin %*
+"%PWSH_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_PATH%" -Profile admin %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

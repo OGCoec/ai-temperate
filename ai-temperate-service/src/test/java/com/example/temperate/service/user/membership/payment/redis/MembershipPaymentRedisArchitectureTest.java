@@ -107,11 +107,13 @@ final class MembershipPaymentRedisArchitectureTest {
                 .contains("'ZADD', dirty_key, dirty_score_millis");
         assertThat(startClosing)
                 .contains("local closing_deadline_at_micros")
+                .contains("local minimum_closing_deadline_at_micros")
                 .contains("local changed_at_micros")
                 .contains("local dirty_score_millis")
                 .contains("redis.call('HMGET', snapshot_key, 'status', 'stateVersion')")
                 .doesNotContain("redis.call('EXISTS', snapshot_key)")
                 .contains("'closingDeadlineAt', closing_deadline_at_micros")
+                .contains("'closingMinimumDeadlineAt', minimum_closing_deadline_at_micros or ''")
                 .contains("'updatedAt', changed_at_micros")
                 .contains("'ZADD', dirty_key, dirty_score_millis");
         assertThat(finalizeClosing)
@@ -119,7 +121,15 @@ final class MembershipPaymentRedisArchitectureTest {
                 .contains("local dirty_score_millis")
                 .contains("local snapshot = redis.call('HMGET', snapshot_key")
                 .doesNotContain("redis.call('EXISTS', snapshot_key)")
+                .contains("status ~= 'CLOSING'")
                 .contains("deadline > tonumber(changed_at_micros)")
+                .contains("local minimum_deadline = tonumber(snapshot[4])")
+                .contains("redis.call('EXISTS', marker_key)")
+                .contains("PROVIDER_CONFIRMED")
+                .contains("TIMEOUT_UNCONFIRMED")
+                .contains("provider_status == 'PENDING'")
+                .contains("provider_status == 'UNKNOWN'")
+                .contains("PROVIDER_STATUS_UNSAFE")
                 .contains("'updatedAt', changed_at_micros")
                 .contains("'ZADD', dirty_key, dirty_score_millis");
     }

@@ -4,6 +4,8 @@ import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCheckoutResult;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateCommand;
+import com.example.temperate.service.user.membership.payment.provider.PaymentCreateResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseCommand;
 import com.example.temperate.service.user.membership.payment.provider.PaymentCloseResult;
 import com.example.temperate.service.user.membership.payment.provider.PaymentProviderInitializeCommand;
@@ -57,6 +59,12 @@ public final class LocalSimulatedMembershipPaymentProviderImpl
     public PaymentCheckoutResult createCheckout(PaymentCheckoutCommand command) {
         Objects.requireNonNull(command);
         return new PaymentCheckoutResult(null, null, false, null);
+    }
+
+    @Override
+    public PaymentCreateResult createPayment(PaymentCreateCommand command) {
+        Objects.requireNonNull(command);
+        return new PaymentCreateResult(null, command.payType(), null, false);
     }
 
     @Override

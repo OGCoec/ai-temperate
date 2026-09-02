@@ -22,4 +22,11 @@ public interface WebRtcVerificationService {
             String currentHttpIp,
             String probeGeneration,
             List<String> reportedWebRtcIps);
+
+    WebRtcVerificationDecision report(
+            PreAuthAccess access,
+            String currentHttpIp,
+            String probeGeneration,
+            String oauthAttemptId,
+            List<String> reportedWebRtcIps);
 }

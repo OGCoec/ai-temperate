@@ -65,4 +65,37 @@ class OAuthControllerContractTest {
         assertThat(source).doesNotContain(
                 "request.interactionMode() != OAuthInteractionMode.BROWSER");
     }
+
+    @Test
+    void h5OAuthWritesSessionOnlyAfterStrictVerifiedPreAuthPromotion()
+            throws Exception {
+        String source = Files.readString(Path.of(
+                "src", "main", "java", "com", "example", "temperate", "web",
+                "auth", "oauth", "transport", "OAuthLoginResultTransport.java"),
+                StandardCharsets.UTF_8);
+
+        int promotion = source.indexOf("PreAuthIssue preAuth = promotePreAuth(");
+        int sessionCookie = source.indexOf("cookieWriter.writeSession(");
+        assertThat(promotion).isGreaterThanOrEqualTo(0);
+        assertThat(sessionCookie).isGreaterThan(promotion);
+        assertThat(source).contains(
+                "promoteAuthenticatedAfterWebRtcVerified(",
+                "platform == AuthClientPlatform.H5",
+                "networkRiskProperties.mode() == NetworkRiskMode.ENFORCE",
+                "SessionAuthenticationErrorCode.PREAUTH_REQUIRED");
+    }
+
+    @Test
+    void completionEndpointDelegatesExactlyOnceAndDoesNotRetrySessionIssuance()
+            throws Exception {
+        String source = Files.readString(Path.of(
+                "src", "main", "java", "com", "example", "temperate", "web",
+                "auth", "oauth", "controller", "OAuthController.java"),
+                StandardCharsets.UTF_8);
+        String invocation = "loginCompletionService.complete(access)";
+
+        assertThat(source.indexOf(invocation)).isGreaterThanOrEqualTo(0);
+        assertThat(source.indexOf(invocation, source.indexOf(invocation) + 1)).isEqualTo(-1);
+        assertThat(source).contains("loginResultTransport.write(");
+    }
 }

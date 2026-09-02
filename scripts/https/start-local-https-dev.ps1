@@ -309,6 +309,17 @@ function Merge-HostnameList {
 }
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+$backendReleaseModulePath = Join-Path $PSScriptRoot "backend-release-id.psm1"
+Import-Module -Name $backendReleaseModulePath -Force -ErrorAction Stop
+$configuredBackendReleaseId = Get-OptionalConfiguredValue -Name "APP_RELEASE_ID"
+if (-not [string]::IsNullOrWhiteSpace($configuredBackendReleaseId) -and
+    -not (Test-BackendReleaseId -Value $configuredBackendReleaseId)) {
+  Write-Warning "显式 APP_RELEASE_ID 不符合安全白名单，已改用自动生成的本地发布标识。"
+}
+$backendReleaseId = Resolve-BackendReleaseId `
+  -ProjectRoot $projectRoot `
+  -ExplicitReleaseId $configuredBackendReleaseId
+Write-Host "后端发布标识：$backendReleaseId" -ForegroundColor Cyan
 $certificateDirectory = Join-Path $env:USERPROFILE ".ai-temperate\certs"
 $p12Path = Resolve-RequiredPath -Description "本地 PKCS12 证书" -Candidates @(
   (Join-Path $certificateDirectory "local-https.p12"))
@@ -374,6 +385,7 @@ try {
   Assert-DevelopmentIdesStopped -ProcessNames $requiredStoppedProcesses
 
   $localHttpsEnvironment = @{
+    "APP_RELEASE_ID" = $backendReleaseId
     "SPRING_PROFILES_ACTIVE" = (Merge-ProfileList)
     "SERVER_SSL_KEY_STORE" = "file:" + $p12Path.Replace("\", "/")
     "SERVER_SSL_KEY_STORE_TYPE" = "PKCS12"

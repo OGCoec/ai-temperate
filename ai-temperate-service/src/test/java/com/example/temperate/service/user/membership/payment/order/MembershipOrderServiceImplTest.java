@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -19,6 +21,7 @@ import com.example.temperate.model.auth.enums.MembershipTier;
 import com.example.temperate.model.user.entity.UserMembershipQuota;
 import com.example.temperate.model.user.membership.payment.MembershipOrder;
 import com.example.temperate.model.user.membership.payment.MembershipOrderStatus;
+import com.example.temperate.model.user.membership.payment.PaymentProviderType;
 import com.example.temperate.service.user.membership.MembershipExpirationService;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentErrorCode;
 import com.example.temperate.service.user.membership.payment.MembershipPaymentException;
@@ -27,8 +30,10 @@ import com.example.temperate.service.user.membership.payment.exception.Membershi
 import com.example.temperate.service.user.membership.payment.order.impl.MembershipOrderServiceImpl;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProvider;
 import com.example.temperate.service.user.membership.payment.provider.MembershipPaymentProviderRegistry;
-import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentCheckPublisher;
+import com.example.temperate.service.user.membership.payment.provider.PaymentProviderReference;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipClosingCheckPublisher;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentFinalCheckScheduler;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipSupersededClosePublisher;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotStore;
 import com.example.temperate.service.user.membership.payment.store.MembershipOrderSnapshotWriteCoordinator;
 import com.example.temperate.service.user.membership.purchase.MembershipPlanPriceService;
@@ -66,12 +71,15 @@ final class MembershipOrderServiceImplTest {
     private MembershipUpgradeQuoteService quoteService;
     private MembershipOrderMapper orderMapper;
     private MembershipOrderCreationTransactionService creationTransactionService;
+    private MembershipOrderCreationLockService creationLockService;
     private HybridSemaphoreIdWorker idWorker;
     private MembershipOrderSnapshotStore snapshotStore;
     private MembershipOrderSnapshotWriteCoordinator snapshotWriteCoordinator;
     private MembershipPaymentProviderRegistry providerRegistry;
     private MembershipPaymentProvider provider;
+    private MembershipClosingCheckPublisher closingPublisher;
     private MembershipPaymentFinalCheckScheduler finalCheckScheduler;
+    private MembershipSupersededClosePublisher supersededClosePublisher;
     private MembershipOrderServiceImpl service;
 
     @BeforeEach
@@ -83,6 +91,10 @@ final class MembershipOrderServiceImplTest {
         quoteService = mock(MembershipUpgradeQuoteService.class);
         orderMapper = mock(MembershipOrderMapper.class);
         creationTransactionService = mock(MembershipOrderCreationTransactionService.class);
+        creationLockService = mock(MembershipOrderCreationLockService.class);
+        when(creationLockService.execute(anyLong(), any()))
+                .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1)
+                        .get());
         idWorker = mock(HybridSemaphoreIdWorker.class);
         snapshotStore = mock(MembershipOrderSnapshotStore.class);
         snapshotWriteCoordinator = mock(MembershipOrderSnapshotWriteCoordinator.class);
@@ -91,7 +103,9 @@ final class MembershipOrderServiceImplTest {
         providerRegistry = mock(MembershipPaymentProviderRegistry.class);
         provider = mock(MembershipPaymentProvider.class);
         when(providerRegistry.getRequired(any())).thenReturn(provider);
+        closingPublisher = mock(MembershipClosingCheckPublisher.class);
         finalCheckScheduler = mock(MembershipPaymentFinalCheckScheduler.class);
+        supersededClosePublisher = mock(MembershipSupersededClosePublisher.class);
         service = new MembershipOrderServiceImpl(
                 expirationService,
                 quotaMapper,
@@ -100,18 +114,21 @@ final class MembershipOrderServiceImplTest {
                 quoteService,
                 orderMapper,
                 creationTransactionService,
+                creationLockService,
                 idWorker,
                 new HybridBase64UrlCodec(),
                 snapshotStore,
                 snapshotWriteCoordinator,
                 providerRegistry,
+                closingPublisher,
+                supersededClosePublisher,
                 finalCheckScheduler,
                 properties(),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
-    void freeUserCreatesPendingOrderThenInitializesRedisAndSchedulesFinalCheck() {
+    void freeUserCreatesProviderNeutralPendingOrderAndSchedulesFinalCheck() {
         UserMembershipQuota quota = quota(MembershipTier.FREE);
         when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota);
         when(transitionPolicy.evaluate(any())).thenReturn(new MembershipTransitionDecision(
@@ -135,9 +152,10 @@ final class MembershipOrderServiceImplTest {
         assertThat(result.created()).isTrue();
         assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
         assertThat(result.snapshot().payAmountYuan()).isEqualByComparingTo("20.00");
+        assertThat(result.snapshot().providerTradeNo()).isNull();
         verify(expirationService).expireIfDue(17L);
         verify(snapshotWriteCoordinator).putAndGet(result.snapshot());
-        verify(provider).initializeOrder(any());
+        verify(provider, never()).initializeOrder(any());
         verify(finalCheckScheduler).schedulePending(
                 result.snapshot().orderId(), result.snapshot().expiresAt());
     }
@@ -201,11 +219,14 @@ final class MembershipOrderServiceImplTest {
                 quoteService,
                 orderMapper,
                 creationTransactionService,
+                creationLockService,
                 idWorker,
                 new HybridBase64UrlCodec(),
                 snapshotStore,
                 snapshotWriteCoordinator,
                 providerRegistry,
+                closingPublisher,
+                supersededClosePublisher,
                 finalCheckScheduler,
                 properties(),
                 Clock.fixed(preciseNow, ZoneOffset.UTC));
@@ -302,6 +323,93 @@ final class MembershipOrderServiceImplTest {
     }
 
     @Test
+    void differentIdempotencyKeyCreatesReplacementEvenWhenOldClosePublishFails() {
+        when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota(MembershipTier.FREE));
+        when(transitionPolicy.evaluate(any())).thenReturn(new MembershipTransitionDecision(
+                MembershipTier.FREE,
+                MembershipTier.PLUS,
+                MembershipTransitionType.NEW_PURCHASE,
+                MembershipTransitionRejectionReason.NONE));
+        when(priceService.getRequiredPrice(MembershipTier.PLUS))
+                .thenReturn(new BigDecimal("20.00"));
+        when(idWorker.nextId()).thenReturn(ORDER_ID);
+        MembershipOrder active = activeOrder(
+                id((byte) 6),
+                MembershipOrderStatus.PENDING_PAYMENT,
+                NOW.atOffset(ZoneOffset.UTC).minusSeconds(5),
+                "LIUHAO:TRADE:old-provider-trade");
+        when(creationTransactionService.createOrGet(any()))
+                .thenReturn(new MembershipOrderCreationResult(active, false, true));
+        when(snapshotStore.supersedeForReplacement(
+                        new HybridBase64UrlCodec().encode(active.getId()),
+                        true,
+                        NOW.atOffset(ZoneOffset.UTC)))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.APPLIED,
+                        MembershipOrderStatus.CLOSED,
+                        3L));
+        when(creationTransactionService.replaceActive(any()))
+                .thenAnswer(invocation -> new MembershipOrderCreationResult(
+                        invocation.<MembershipOrderReplacementCommand>getArgument(0).candidate(),
+                        true));
+        doThrow(new IllegalStateException("confirm unavailable"))
+                .when(supersededClosePublisher)
+                .publish(anyString(), anyInt(), any());
+
+        MembershipOrderResult result = service.create(
+                17L,
+                new MembershipOrderCreateCommand(
+                        MembershipTier.PLUS,
+                        "wxpay",
+                        UUID.fromString("4b6a6142-6b43-44d8-a53d-df2fe483b95e")));
+
+        assertThat(result.created()).isTrue();
+        assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.PENDING_PAYMENT);
+        verify(creationTransactionService).replaceActive(any());
+        verify(supersededClosePublisher).publish(
+                new HybridBase64UrlCodec().encode(active.getId()), 0, Duration.ZERO);
+        verify(finalCheckScheduler).schedulePending(
+                result.snapshot().orderId(), result.snapshot().expiresAt());
+    }
+
+    @Test
+    void replacementStopsForTheShortWindowWhileCallbackMarkerIsActive() {
+        when(quotaMapper.findByLoginIdentityId(17L)).thenReturn(quota(MembershipTier.FREE));
+        when(transitionPolicy.evaluate(any())).thenReturn(new MembershipTransitionDecision(
+                MembershipTier.FREE,
+                MembershipTier.PLUS,
+                MembershipTransitionType.NEW_PURCHASE,
+                MembershipTransitionRejectionReason.NONE));
+        when(priceService.getRequiredPrice(MembershipTier.PLUS))
+                .thenReturn(new BigDecimal("20.00"));
+        when(idWorker.nextId()).thenReturn(ORDER_ID);
+        MembershipOrder active = activeOrder(
+                id((byte) 6),
+                MembershipOrderStatus.PENDING_PAYMENT,
+                NOW.atOffset(ZoneOffset.UTC).minusSeconds(5),
+                "LIUHAO:TRADE:old-provider-trade");
+        when(creationTransactionService.createOrGet(any()))
+                .thenReturn(new MembershipOrderCreationResult(active, false, true));
+        when(snapshotStore.supersedeForReplacement(anyString(), anyBoolean(), any()))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS,
+                        MembershipOrderStatus.PENDING_PAYMENT,
+                        2L));
+
+        assertThatThrownBy(() -> service.create(
+                        17L,
+                        new MembershipOrderCreateCommand(
+                                MembershipTier.PLUS,
+                                "alipay",
+                                UUID.fromString("4b6a6142-6b43-44d8-a53d-df2fe483b95e"))))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_CALLBACK_IN_PROGRESS));
+        verify(creationTransactionService, never()).replaceActive(any());
+        verify(supersededClosePublisher, never()).publish(anyString(), anyInt(), any());
+    }
+
+    @Test
     void cancelRejectsOrderWhileCallbackMarkerIsInProgress() {
         MembershipOrderSnapshot snapshot = snapshot(17L, MembershipOrderStatus.PENDING_PAYMENT);
         when(snapshotStore.find(snapshot.orderId())).thenReturn(Optional.of(snapshot));
@@ -315,6 +423,89 @@ final class MembershipOrderServiceImplTest {
                 .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
                         assertThat(exception.code()).isEqualTo(
                                 MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_CALLBACK_IN_PROGRESS));
+    }
+
+    @Test
+    void startedExternalPaymentCancelEntersClosingAndPublishesImmediateClose() {
+        MembershipOrderSnapshot snapshot = externalSnapshot(
+                MembershipOrderStatus.PENDING_PAYMENT,
+                NOW.atOffset(ZoneOffset.UTC));
+        when(snapshotStore.find(snapshot.orderId())).thenReturn(Optional.of(snapshot));
+        when(snapshotStore.startClosing(
+                snapshot.orderId(),
+                NOW.atOffset(ZoneOffset.UTC).plusMinutes(10),
+                NOW.atOffset(ZoneOffset.UTC),
+                NOW.atOffset(ZoneOffset.UTC).plusMinutes(10)))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.APPLIED,
+                        MembershipOrderStatus.CLOSING,
+                        2L));
+
+        MembershipOrderResult result = service.cancel(17L, ORDER_ID);
+
+        assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.CLOSING);
+        assertThat(result.snapshot().closingDeadlineAt())
+                .isEqualTo(NOW.atOffset(ZoneOffset.UTC).plusMinutes(10));
+        verify(closingPublisher).publishNext(
+                snapshot.orderId(), 0, 0, Duration.ZERO);
+        verify(snapshotStore, never()).cancel(anyString(), any());
+    }
+
+    @Test
+    void externalPaymentNotStartedYetStillCancelsLocallyWithoutProviderClose() {
+        MembershipOrderSnapshot snapshot = externalSnapshot(
+                MembershipOrderStatus.PENDING_PAYMENT,
+                null);
+        when(snapshotStore.find(snapshot.orderId())).thenReturn(Optional.of(snapshot));
+        when(snapshotStore.cancel(snapshot.orderId(), NOW.atOffset(ZoneOffset.UTC)))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.APPLIED,
+                        MembershipOrderStatus.CANCELLED,
+                        2L));
+
+        MembershipOrderResult result = service.cancel(17L, ORDER_ID);
+
+        assertThat(result.snapshot().status()).isEqualTo(MembershipOrderStatus.CANCELLED);
+        verify(closingPublisher, never()).publishNext(
+                anyString(), anyInt(), anyInt(), any());
+        verify(snapshotStore, never()).startClosing(anyString(), any(), any());
+    }
+
+    @Test
+    void startedExternalPaymentCancelStopsWhenCallbackMarkerWins() {
+        MembershipOrderSnapshot snapshot = externalSnapshot(
+                MembershipOrderStatus.PENDING_PAYMENT,
+                NOW.atOffset(ZoneOffset.UTC));
+        when(snapshotStore.find(snapshot.orderId())).thenReturn(Optional.of(snapshot));
+        when(snapshotStore.startClosing(anyString(), any(), any(), any()))
+                .thenReturn(new MembershipOrderTransitionResult(
+                        MembershipOrderTransitionOutcome.CALLBACK_IN_PROGRESS,
+                        MembershipOrderStatus.PENDING_PAYMENT,
+                        1L));
+
+        assertThatThrownBy(() -> service.cancel(17L, ORDER_ID))
+                .isInstanceOfSatisfying(MembershipPaymentException.class, exception ->
+                        assertThat(exception.code()).isEqualTo(
+                                MembershipPaymentErrorCode.MEMBERSHIP_PAYMENT_CALLBACK_IN_PROGRESS));
+
+        verify(closingPublisher, never()).publishNext(
+                anyString(), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void repeatedClosingCancelRepublishesIdempotentStageZero() {
+        MembershipOrderSnapshot snapshot = externalSnapshot(
+                MembershipOrderStatus.CLOSING,
+                NOW.atOffset(ZoneOffset.UTC));
+        when(snapshotStore.find(snapshot.orderId())).thenReturn(Optional.of(snapshot));
+        when(snapshotStore.callbackInProgress(snapshot.orderId())).thenReturn(false);
+
+        MembershipOrderResult result = service.cancel(17L, ORDER_ID);
+
+        assertThat(result.snapshot()).isSameAs(snapshot);
+        verify(closingPublisher).publishNext(snapshot.orderId(), 0, 0, Duration.ZERO);
+        verify(snapshotStore, never()).startClosing(anyString(), any(), any());
+        verify(snapshotStore, never()).cancel(anyString(), any());
     }
 
     @Test
@@ -444,6 +635,54 @@ final class MembershipOrderServiceImplTest {
                 1L,
                 NOW.atOffset(ZoneOffset.UTC),
                 NOW.atOffset(ZoneOffset.UTC));
+    }
+
+    private static MembershipOrderSnapshot externalSnapshot(
+            MembershipOrderStatus status,
+            OffsetDateTime paymentStartedAt) {
+        String orderId = new HybridBase64UrlCodec().encode(ORDER_ID);
+        OffsetDateTime now = NOW.atOffset(ZoneOffset.UTC);
+        return new MembershipOrderSnapshot(
+                MembershipOrderSnapshot.CURRENT_SCHEMA_VERSION,
+                orderId,
+                17L,
+                MembershipTier.PLUS,
+                new BigDecimal("20.00"),
+                "alipay",
+                status,
+                UUID.fromString("b8fd3d92-012c-4fd9-bdab-23f1e6f08fa9"),
+                null,
+                paymentStartedAt,
+                now.plusMinutes(5),
+                status == MembershipOrderStatus.CLOSING ? now.plusMinutes(5) : null,
+                null,
+                status == MembershipOrderStatus.CLOSING ? 2L : 1L,
+                now,
+                now);
+    }
+
+    private static MembershipOrder activeOrder(
+            byte[] orderId,
+            MembershipOrderStatus status,
+            OffsetDateTime paymentStartedAt,
+            String providerTradeNo) {
+        OffsetDateTime now = NOW.atOffset(ZoneOffset.UTC);
+        MembershipOrder order = new MembershipOrder();
+        order.setId(orderId);
+        order.setLoginIdentityId(17L);
+        order.setMembershipTier(MembershipTier.PLUS);
+        order.setPayAmountYuan(new BigDecimal("20.00"));
+        order.setPayType("alipay");
+        order.setStatus(status);
+        order.setIdempotencyKey(
+                UUID.fromString("b8fd3d92-012c-4fd9-bdab-23f1e6f08fa9"));
+        order.setProviderTradeNo(providerTradeNo);
+        order.setPaymentStartedAt(paymentStartedAt);
+        order.setExpiresAt(now.plusMinutes(5));
+        order.setStateVersion(status == MembershipOrderStatus.CLOSING ? 3L : 2L);
+        order.setCreatedAt(now.minusMinutes(1));
+        order.setUpdatedAt(now.minusSeconds(5));
+        return order;
     }
 
     private static byte[] id(byte value) {

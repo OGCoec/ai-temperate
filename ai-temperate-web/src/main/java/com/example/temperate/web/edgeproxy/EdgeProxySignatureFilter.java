@@ -23,6 +23,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
 
+    public static final String OUTCOME_ATTRIBUTE =
+            EdgeProxySignatureFilter.class.getName() + ".outcome";
+    public static final String VERIFIED_RAY_ATTRIBUTE =
+            EdgeProxySignatureFilter.class.getName() + ".verifiedRay";
+
     private static final Logger LOGGER =
             LoggerFactory.getLogger(EdgeProxySignatureFilter.class);
     private static final String ERROR_BODY =
@@ -90,6 +95,7 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         boolean voiceRequest = "/ws/voice".equals(request.getRequestURI());
         if (properties.mode() == EdgeProxyMode.DISABLED) {
+            publishOutcome(request, "DISABLED");
             logVoiceDecision(
                     request,
                     voiceRequest,
@@ -104,11 +110,13 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
         if (!hasEdgeHeader) {
             // REQUIRED 不再把“无 Origin”视为原生客户端可信证明，否则攻击者可直接删除 Origin 绕过 Worker。
             if (properties.mode() == EdgeProxyMode.REQUIRED) {
+                publishOutcome(request, "MISSING_REQUIRED");
                 logVoiceDecision(
                         request, voiceRequest, false, false, "MISSING_REQUIRED");
                 reject(request, response);
                 return;
             }
+            publishOutcome(request, "UNSIGNED_OPTIONAL");
             logVoiceDecision(
                     request, voiceRequest, false, false, "UNSIGNED_OPTIONAL");
             filterChain.doFilter(request, response);
@@ -120,15 +128,23 @@ public final class EdgeProxySignatureFilter extends OncePerRequestFilter {
             request.setAttribute(
                     TrustedExternalHostResolver.VERIFIED_EXTERNAL_HOST_ATTRIBUTE,
                     result.externalHost());
+            // Ray 与签名使用同一规范串完成校验后才能发布，禁止信任客户端直接提交的同名请求头。
+            request.setAttribute(VERIFIED_RAY_ATTRIBUTE, result.ray());
+            publishOutcome(request, "VERIFIED");
             result.optionalNetworkContext().ifPresent(context -> request.setAttribute(
                     TrustedEdgeNetworkContextResolver.VERIFIED_NETWORK_CONTEXT_ATTRIBUTE,
                     context));
             logVoiceDecision(request, voiceRequest, true, true, "VERIFIED");
             filterChain.doFilter(request, response);
         } catch (EdgeProxyVerificationException exception) {
+            publishOutcome(request, "INVALID");
             logVoiceDecision(request, voiceRequest, true, false, "INVALID");
             reject(request, response);
         }
+    }
+
+    private static void publishOutcome(HttpServletRequest request, String outcome) {
+        request.setAttribute(OUTCOME_ATTRIBUTE, outcome);
     }
 
     private void logVoiceDecision(

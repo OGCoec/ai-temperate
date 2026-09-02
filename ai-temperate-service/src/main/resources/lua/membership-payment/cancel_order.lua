@@ -29,6 +29,7 @@ local next_version = current_version + 1
 redis.call('HSET', snapshot_key,
         'status', 'CANCELLED',
         'closingDeadlineAt', '',
+        'closingMinimumDeadlineAt', '',
         'stateVersion', tostring(next_version),
         'updatedAt', changed_at_micros)
 redis.call('PEXPIRE', snapshot_key, ttl_millis)

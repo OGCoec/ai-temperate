@@ -160,9 +160,18 @@ class PersistenceSqlContractTest {
 
         assertFalse(identityMapper.contains("$" + "{"));
         assertFalse(profileMapper.contains("$" + "{"));
-        assertFalse(profileMapper.contains("<foreach"));
         assertFalse(membershipQuotaMapper.contains("$" + "{"));
         assertFalse(identityMapper.contains("select *"));
+
+        // 用户资料边界夹具与批量查询允许 foreach 生成有界占位符，但所有实际值必须继续使用预编译参数绑定。
+        assertTrue(profileMapper.contains("id=\"batchinsertboundaryfixtures\""));
+        assertTrue(profileMapper.contains(
+                "<foreach collection=\"profiles\" item=\"profile\" separator=\",\">"));
+        assertTrue(profileMapper.contains("#{profile.loginidentityid"));
+        assertTrue(profileMapper.contains("id=\"findbyloginidentityids\""));
+        assertTrue(profileMapper.contains(
+                "<foreach collection=\"loginidentityids\" item=\"loginidentityid\""));
+        assertTrue(profileMapper.contains("#{loginidentityid,jdbctype=bigint}"));
 
         // 压测账号预检必须以一次有界批量查询完成；foreach 只生成占位符，禁止退化为逐条数据库 I/O 或字符串拼接。
         assertTrue(identityMapper.contains("id=\"findauthenticationbyids\""));

@@ -122,7 +122,21 @@ final class MembershipPaymentLoadtestProfileGuardTest {
                                 30_000L, 30_000L, 60_000L, 120_000L),
                         List.of(30_000L, 30_000L, 60_000L, 60_000L, 120_000L),
                         Duration.ofSeconds(30),
-                        3));
+                        3),
+                new MembershipPaymentProperties.Liuhao(
+                        false,
+                        URI.create("https://liuhao.net"),
+                        "",
+                        "",
+                        "",
+                        "",
+                        null,
+                        null,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        65_536,
+                        Duration.ofMinutes(5)),
+                List.of(PaymentProviderType.BAR));
     }
 
     private static MembershipPaymentProperties properties(

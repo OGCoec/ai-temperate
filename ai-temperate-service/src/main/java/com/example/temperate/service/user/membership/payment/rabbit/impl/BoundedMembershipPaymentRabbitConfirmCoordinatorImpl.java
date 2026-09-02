@@ -6,6 +6,7 @@ import com.example.temperate.service.user.membership.payment.observability.Membe
 import com.example.temperate.service.user.membership.payment.observability.MembershipPaymentRabbitPublishBreakdown;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitConfirmCoordinator;
 import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitEnvelope;
+import com.example.temperate.service.user.membership.payment.rabbit.MembershipPaymentRabbitNames;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -194,8 +195,13 @@ public final class BoundedMembershipPaymentRabbitConfirmCoordinatorImpl
                                 task.envelope().messageId());
                         message.getMessageProperties().setType(
                                 task.envelope().eventType());
-                        message.getMessageProperties().setHeader(
-                                "x-delay", task.delayMillis());
+                        // 延迟交换机即使立即投递也保留 x-delay=0 的既有契约；退款人工终态走普通直连交换机，
+                        // 必须省略该头以启用 RabbitTemplate mandatory 检查，及时识别未路由消息。
+                        if (!MembershipPaymentRabbitNames.REFUND_TERMINAL_EXCHANGE
+                                .equals(task.exchange())) {
+                            message.getMessageProperties().setHeader(
+                                    "x-delay", task.delayMillis());
+                        }
                         return message;
                     },
                     correlation);

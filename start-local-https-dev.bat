@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 chcp 65001 >nul
 title ai-temperate local HTTPS dev launcher
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\https\start-local-https-dev.ps1" %*
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\https\start-local-https-dev.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

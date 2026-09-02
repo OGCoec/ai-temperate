@@ -1,6 +1,8 @@
 package com.example.temperate.web.risk.webrtc;
 
 import com.example.temperate.service.admin.config.properties.AdminProperties;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService;
+import com.example.temperate.service.auth.oauth.webrtc.OAuthWebRtcAttemptService.VerdictStatus;
 import com.example.temperate.service.risk.config.NetworkRiskMode;
 import com.example.temperate.service.risk.config.NetworkRiskProperties;
 import com.example.temperate.service.risk.domain.RiskScope;
@@ -15,8 +17,11 @@ import com.example.temperate.service.risk.webrtc.service.WebRtcVerificationServi
 import com.example.temperate.service.risk.webrtc.validation.WebRtcInvalidReportException;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
 import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTiming;
+import com.example.temperate.web.auth.diagnostic.filter.AuthRequestTraceFilter;
 import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
+import com.example.temperate.web.auth.session.transport.AuthCookieWriter;
 import com.example.temperate.web.risk.NetworkRiskInterceptor;
+import com.example.temperate.web.risk.PreAuthTransport;
 import com.example.temperate.web.risk.RiskRequestContextResolver;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -25,6 +30,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -33,10 +39,13 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -56,6 +65,7 @@ import org.springframework.web.server.ResponseStatusException;
         description = "为普通 H5、管理员 H5 与 Android 下发固定 STUN 探测参数并校验上报的公网候选集合；接口依赖已通过网络风险的 PreAuth，不负责登录认证，也不会由服务端发起 STUN。")
 public final class WebRtcEdgeController {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(WebRtcEdgeController.class);
     private static final String DEVICE_HEADER = "X-Device-Installation-Id";
     private static final String PLATFORM_HEADER = "X-Client-Platform";
 
@@ -65,6 +75,9 @@ public final class WebRtcEdgeController {
     private final WebRtcVerificationService verificationService;
     private final RiskRequestContextResolver contextResolver;
     private final WebRtcMetrics metrics;
+    private final OAuthWebRtcAttemptService oauthAttemptService;
+    private final AuthCookieWriter authCookieWriter;
+    private final PreAuthTransport preAuthTransport;
 
     public WebRtcEdgeController(
             NetworkRiskProperties properties,
@@ -73,12 +86,31 @@ public final class WebRtcEdgeController {
             WebRtcVerificationService verificationService,
             RiskRequestContextResolver contextResolver,
             WebRtcMetrics metrics) {
+        this(properties, authSecurityProperties, adminProperties, verificationService,
+                contextResolver, metrics, null, null, null);
+    }
+
+    @Autowired
+    public WebRtcEdgeController(
+            NetworkRiskProperties properties,
+            AuthSecurityProperties authSecurityProperties,
+            AdminProperties adminProperties,
+            WebRtcVerificationService verificationService,
+            RiskRequestContextResolver contextResolver,
+            WebRtcMetrics metrics,
+            OAuthWebRtcAttemptService oauthAttemptService,
+            AuthCookieWriter authCookieWriter,
+            PreAuthTransport preAuthTransport) {
         this.properties = Objects.requireNonNull(properties);
         this.authSecurityProperties = Objects.requireNonNull(authSecurityProperties);
         this.adminProperties = Objects.requireNonNull(adminProperties);
         this.verificationService = Objects.requireNonNull(verificationService);
         this.contextResolver = Objects.requireNonNull(contextResolver);
         this.metrics = Objects.requireNonNull(metrics);
+        // 六参数构造器只为既有 start/report 单元测试保留；生产 Spring 使用完整构造器注入 OAuth 依赖。
+        this.oauthAttemptService = oauthAttemptService;
+        this.authCookieWriter = authCookieWriter;
+        this.preAuthTransport = preAuthTransport;
     }
 
     @GetMapping("/api/_edge/webrtc/start")
@@ -105,8 +137,9 @@ public final class WebRtcEdgeController {
             @NotBlank @RequestHeader(DEVICE_HEADER) String device,
             @NotBlank @RequestHeader(PLATFORM_HEADER) String platform,
             @Valid @RequestBody WebRtcReportRequest body,
-            HttpServletRequest request) {
-        return report(RiskScope.USER, platform, body, request);
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return report(RiskScope.USER, platform, body, request, response);
     }
 
     @PostMapping("/api/admin/_edge/webrtc/report")
@@ -115,8 +148,36 @@ public final class WebRtcEdgeController {
             @NotBlank @RequestHeader(DEVICE_HEADER) String device,
             @NotBlank @RequestHeader(PLATFORM_HEADER) String platform,
             @Valid @RequestBody WebRtcReportRequest body,
-            HttpServletRequest request) {
-        return report(RiskScope.ADMIN, platform, body, request);
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return report(RiskScope.ADMIN, platform, body, request, response);
+    }
+
+    @PostMapping("/api/_edge/webrtc/verdict-status")
+    @Operation(summary = "只读查询 OAuth WebRTC 异步裁决结果")
+    public ResponseEntity<WebRtcVerdictStatusResponse> verdictStatus(
+            @NotBlank @RequestHeader(DEVICE_HEADER) String device,
+            @NotBlank @RequestHeader(PLATFORM_HEADER) String platform,
+            @Valid @RequestBody WebRtcVerdictStatusRequest body,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        requireTransport(RiskScope.USER, platform, request);
+        if (AuthClientPlatform.fromHeader(platform) != AuthClientPlatform.H5
+                || oauthAttemptService == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "OAuth WebRTC verdict status is only available to H5.");
+        }
+        VerdictStatus status = oauthAttemptService.verdictStatus(
+                requireAccess(request), body.attemptId(), body.probeGeneration());
+        if (status.state() == OAuthWebRtcAttemptService.State.FAILED
+                || status.state() == OAuthWebRtcAttemptService.State.EXPIRED) {
+            authCookieWriter.clearSession(response);
+            preAuthTransport.clearCookie(response, RiskScope.USER);
+        }
+        return noStore(ResponseEntity.ok(new WebRtcVerdictStatusResponse(
+                status.state().name(), status.probeGeneration(),
+                status.verdictDeadlineAt())));
     }
 
     private ResponseEntity<WebRtcStartResponse> start(
@@ -190,8 +251,15 @@ public final class WebRtcEdgeController {
             RiskScope scope,
             String platformHeader,
             WebRtcReportRequest body,
-            HttpServletRequest request) {
+            HttpServletRequest request,
+            HttpServletResponse response) {
         AuthClientPlatform platform = requireTransport(scope, platformHeader, request);
+        if (body.attemptId() != null
+                && (scope != RiskScope.USER || platform != AuthClientPlatform.H5)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "OAuth WebRTC attempt is only available to user H5 reports.");
+        }
         if (properties.mode() == NetworkRiskMode.DISABLED) {
             return noStore(ResponseEntity.ok(new WebRtcVerificationResponse(
                     "WEBRTC_DISABLED",
@@ -211,6 +279,7 @@ public final class WebRtcEdgeController {
                     access,
                     observation.clientIp(),
                     body.probeGeneration(),
+                    body.attemptId(),
                     body.webRtcIps());
         } catch (WebRtcInvalidReportException exception) {
             AuthRequestTiming.recordErrorCode(request, "WEBRTC_REPORT_INVALID");
@@ -230,6 +299,16 @@ public final class WebRtcEdgeController {
                             false,
                             Instant.now())));
         }
+        if (decision.outcome() == WebRtcVerificationOutcome.OAUTH_ATTEMPT_REQUIRED) {
+            LOGGER.warn(
+                    "event=oauth_webrtc_generic_report_blocked clientRequestId={} "
+                            + "probeRunId={} generation={} oauthOwnerPresent=true",
+                    diagnosticAttribute(
+                            request, AuthRequestTraceFilter.CLIENT_REQUEST_ATTRIBUTE),
+                    diagnosticAttribute(
+                            request, AuthRequestTraceFilter.WEBRTC_PROBE_RUN_ATTRIBUTE),
+                    body.probeGeneration());
+        }
         metrics.verification(
                 scope,
                 verificationOutcome(decision.outcome()),
@@ -239,6 +318,14 @@ public final class WebRtcEdgeController {
         HttpStatus status = reportStatus(decision.outcome(), properties.mode());
         if (!status.is2xxSuccessful()) {
             AuthRequestTiming.recordErrorCode(request, code(decision.outcome()));
+            if (scope == RiskScope.USER
+                    && body.attemptId() != null
+                    && authCookieWriter != null
+                    && preAuthTransport != null) {
+                // OAuth 乐观窗口一旦裁决失败，浏览器凭据必须与 Redis 会话在同一响应中失效。
+                authCookieWriter.clearSession(response);
+                preAuthTransport.clearCookie(response, RiskScope.USER);
+            }
         }
         String httpIp = switch (decision.outcome()) {
             case VERIFICATION_FAILED, VERIFICATION_TIMEOUT,
@@ -336,7 +423,8 @@ public final class WebRtcEdgeController {
                     IP_FAMILY_INCOMPLETE,
                     VERIFICATION_REQUIRED, VERIFICATION_PENDING ->
                     HttpStatus.PRECONDITION_REQUIRED;
-            case NETWORK_CHANGED, STALE_REPORT -> HttpStatus.CONFLICT;
+            case NETWORK_CHANGED, OAUTH_ATTEMPT_REQUIRED,
+                    STALE_REPORT -> HttpStatus.CONFLICT;
             case STATE_INVALID -> HttpStatus.SERVICE_UNAVAILABLE;
         };
     }
@@ -350,6 +438,7 @@ public final class WebRtcEdgeController {
             case VERIFICATION_FAILED, VERIFICATION_REQUIRED -> "empty";
             case VERIFICATION_TIMEOUT -> "timeout";
             case NETWORK_CHANGED -> "network_changed";
+            case OAUTH_ATTEMPT_REQUIRED -> "oauth_attempt_required";
             case STALE_REPORT -> "stale";
             case STATE_INVALID -> "invalid";
         };
@@ -436,6 +525,7 @@ public final class WebRtcEdgeController {
             case IP_FAMILY_INCOMPLETE -> "WEBRTC_IP_FAMILY_INCOMPLETE";
             case IP_MISMATCH -> "WEBRTC_IP_MISMATCH";
             case NETWORK_CHANGED -> "WEBRTC_NETWORK_CHANGED";
+            case OAUTH_ATTEMPT_REQUIRED -> "WEBRTC_OAUTH_ATTEMPT_REQUIRED";
             case STALE_REPORT -> "WEBRTC_REPORT_STALE";
             case STATE_INVALID -> "WEBRTC_STATE_UNAVAILABLE";
         };
@@ -454,6 +544,8 @@ public final class WebRtcEdgeController {
             case IP_MISMATCH ->
                     "检测到 WebRTC IP 与当前 HTTP IP 不一致，当前会话已停止访问。";
             case NETWORK_CHANGED -> "检测期间网络环境发生变化，请读取最新探测状态。";
+            case OAUTH_ATTEMPT_REQUIRED ->
+                    "该 WebRTC generation 已绑定 OAuth 裁决，请使用原 OAuth attempt 上报。";
             case STALE_REPORT -> "该 WebRTC Report 已过期，请读取最新探测状态。";
             case STATE_INVALID -> "WebRTC 校验状态暂时不可用。";
         };
@@ -486,14 +578,23 @@ public final class WebRtcEdgeController {
         @Size(max = 8)
         private final List<@NotBlank @Size(max = 64) String> webRtcIps;
 
+        @Pattern(regexp = "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        private final String attemptId;
+
         @JsonCreator
         public WebRtcReportRequest(
                 @JsonProperty("probeGeneration") String probeGeneration,
-                @JsonProperty("webRtcIps") List<String> webRtcIps) {
+                @JsonProperty("webRtcIps") List<String> webRtcIps,
+                @JsonProperty("attemptId") String attemptId) {
             this.probeGeneration = probeGeneration;
             this.webRtcIps = webRtcIps == null
                     ? null
                     : List.copyOf(webRtcIps);
+            this.attemptId = attemptId;
+        }
+
+        public WebRtcReportRequest(String probeGeneration, List<String> webRtcIps) {
+            this(probeGeneration, webRtcIps, null);
         }
 
         public List<String> webRtcIps() {
@@ -504,12 +605,43 @@ public final class WebRtcEdgeController {
             return probeGeneration;
         }
 
+        public String attemptId() {
+            return attemptId;
+        }
+
         @JsonAnySetter
         public void rejectUnknownField(String name, Object value) {
             // HTTP IP 与匹配状态只能由可信服务端计算，任何额外字段都拒绝而不是静默忽略。
             throw new IllegalArgumentException(
                     "WebRTC report contains an unsupported field.");
         }
+    }
+
+    private static String diagnosticAttribute(
+            HttpServletRequest request,
+            String attributeName) {
+        Object value = request.getAttribute(attributeName);
+        if (!(value instanceof String text)
+                || text.length() > 128
+                || !text.matches("^[A-Za-z0-9._:-]{1,128}$")) {
+            return "absent";
+        }
+        return text;
+    }
+
+    /** 表示 report 响应不确定时的只读查询参数，不允许携带候选地址。 */
+    public record WebRtcVerdictStatusRequest(
+            @NotBlank
+            @Pattern(regexp = "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+                    String attemptId,
+            @NotBlank @Pattern(regexp = "^[1-9][0-9]{0,18}$") String probeGeneration) {
+    }
+
+    /** 返回服务端 attempt 的最终或仍在等待中的状态，不改变任何状态机截止时间。 */
+    public record WebRtcVerdictStatusResponse(
+            String state,
+            String probeGeneration,
+            Instant verdictDeadlineAt) {
     }
 
     /**

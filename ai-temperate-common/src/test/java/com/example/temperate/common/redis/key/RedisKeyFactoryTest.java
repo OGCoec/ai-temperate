@@ -462,6 +462,9 @@ final class RedisKeyFactoryTest {
                 "ait:test:payment:membership-order:v2:snapshot:" + orderId.value(),
                 factory.membershipOrderSnapshotKey(orderId));
         assertEquals(
+                "ait:test:payment:membership-order:v2:create-lock:17",
+                factory.membershipOrderCreationLockKey(17L));
+        assertEquals(
                 "ait:test:payment:callback:v2:data:" + callbackId.value(),
                 factory.paymentCallbackDataKey(callbackId));
         assertEquals(
@@ -479,6 +482,9 @@ final class RedisKeyFactoryTest {
         assertEquals(
                 "ait:test:payment:callback:v2:provider-idem:" + fingerprint.value(),
                 factory.paymentCallbackProviderTradeIdempotencyKey(fingerprint));
+        assertEquals(
+                "ait:test:payment:refund:v1:coordination:" + callbackId.value(),
+                factory.paymentRefundCoordinationKey(callbackId));
         assertEquals(
                 "ait:test:payment:membership-order:v2:callback:" + orderId.value(),
                 factory.membershipOrderCallbackMarkerKey(orderId));

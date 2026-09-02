@@ -113,6 +113,90 @@ class WebRtcVerificationInterceptorTest {
     }
 
     @Test
+    void h5OAuthCompletionRejectsPendingUntilReportIsVerified() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.pending(
+                        7L,
+                        Instant.parse("2026-07-25T12:00:20Z")));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST",
+                "/api/auth/oauth2/complete");
+        request.addHeader("X-Client-Platform", "H5");
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isFalse();
+        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getContentAsString())
+                .contains("WEBRTC_VERIFICATION_PENDING");
+    }
+
+    @Test
+    void h5OAuthCompletionAllowsOnlyVerifiedState() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.verified(List.of("8.8.8.8")));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST",
+                "/api/auth/oauth2/complete");
+        request.addHeader("X-Client-Platform", "H5");
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isTrue();
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void h5OAuthCompletionRejectsFailedReportState() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.failed());
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST",
+                "/api/auth/oauth2/complete");
+        request.addHeader("X-Client-Platform", "H5");
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isFalse();
+        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getContentAsString())
+                .contains("WEBRTC_VERIFICATION_FAILED");
+    }
+
+    @Test
+    void androidNativeOAuthCompletionKeepsExistingPendingBehavior() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        when(fixture.service().inspect(any(), eq("8.8.8.8")))
+                .thenReturn(WebRtcVerificationDecision.pending(
+                        7L,
+                        Instant.parse("2026-07-25T12:00:20Z")));
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST",
+                "/api/auth/oauth2/google/native/complete");
+        request.addHeader("X-Client-Platform", "ANDROID");
+        request.setAttribute(
+                NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE,
+                mock(PreAuthAccess.class));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.interceptor().preHandle(request, response, new Object()))
+                .isTrue();
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
     void recordsGenerationChangeFromTheAtomicNetworkAssessment() throws Exception {
         Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
         when(fixture.service().inspect(any(), eq("8.8.8.8")))
@@ -309,6 +393,7 @@ class WebRtcVerificationInterceptorTest {
                 Duration.ofSeconds(8),
                 Duration.ofSeconds(12),
                 Duration.ofSeconds(3),
+                Duration.ofSeconds(15),
                 List.of(
                         URI.create("stun:stun.l.google.com:19302"),
                         URI.create("stun:stun.cloudflare.com:3478"),

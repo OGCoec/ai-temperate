@@ -74,6 +74,7 @@ export function registerGeneration(value) {
 		observerAttached: true,
 		revision: 0,
 		responseText: '',
+		researchSources: [],
 		...existing,
 		...value
 	}
@@ -110,6 +111,18 @@ export function updateGeneration(generationPublicId, patch) {
 export function getGeneration(generationPublicId) {
 	hydrate()
 	return copy(tasks.get(generationPublicId))
+}
+
+export function findGenerationResearchSources({
+	conversationPublicId = '', messagePublicId = ''
+} = {}) {
+	hydrate()
+	if (!conversationPublicId || !messagePublicId) return []
+	const task = [...tasks.values()].reverse().find(item =>
+		item.conversationPublicId === conversationPublicId
+		&& item.messagePublicId === messagePublicId)
+	return Array.isArray(task?.researchSources)
+		? task.researchSources.map(source => ({ ...source })) : []
 }
 
 export function listActiveGenerations() {
