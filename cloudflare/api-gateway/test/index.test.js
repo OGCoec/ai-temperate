@@ -2860,7 +2860,7 @@ test('Android voice WebSocket accepts App-Plus browser metadata and strips unsaf
 				'Sec-Fetch-Site': 'same-origin',
 				'Sec-Fetch-Mode': 'websocket',
 				'Sec-Fetch-Dest': 'empty',
-				Authorization: 'Bearer test-bearer-fixture',
+				Authorization: 'Bearer must-not-pass-to-websocket',
 				Cookie: 'captured_proxy_cookie=must-not-pass'
 			}
 		}),
