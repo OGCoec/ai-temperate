@@ -40,4 +40,3 @@ NOT_GRANTED → REFUND_REQUIRED
 - NOT_GRANTED 不能变成 APPLIED。
 - PAID 未决订单和活动订单仍允许暂时为空。
 - 正式浸泡最终扫描中，终态空裁决数量必须为零。
-

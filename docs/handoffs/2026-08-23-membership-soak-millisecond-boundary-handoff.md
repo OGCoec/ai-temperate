@@ -297,7 +297,6 @@ JMeter 即使有失败采样仍可能返回进程退出码 0，因此 Runner 漏
 ```text
 loadtest/sql/verify-membership-millisecond-boundary-wave.sql
 ```
-
 错误点：
 
 1. 使用数据库 `membership_order.closing_deadline_at` 判断 `receivedAt` 应为 APPLIED 还是 REFUND_REQUIRED。
@@ -457,4 +456,3 @@ loadtest/scripts/Invoke-MembershipMillisecondBoundaryWave.ps1
 # 当前需要修复的 SQL 校验器
 loadtest/sql/verify-membership-millisecond-boundary-wave.sql
 ```
-

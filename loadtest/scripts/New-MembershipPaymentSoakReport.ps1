@@ -107,4 +107,3 @@ $markdown = @"
 $markdown | Set-Content -LiteralPath `
     (Join-Path $OutputDirectory '24-hour-report.md') -Encoding UTF8
 Write-Output $jsonPath
-

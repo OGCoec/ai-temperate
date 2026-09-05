@@ -24,7 +24,6 @@ if ([string]$after.capture -ne 'AFTER') { $failures.Add('invalid-after-capture')
 if ([int]$after.orderCount -ne $ExpectedOrderCount) {
     $failures.Add("order-count:$($after.orderCount)/$ExpectedOrderCount")
 }
-
 foreach ($name in @(
     'callbackReadySize',
     'callbackProcessingSize',
@@ -94,4 +93,3 @@ $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $OutputFile -Encod
 if ($failures.Count -gt 0) {
     throw "Final membership payment infrastructure verification failed: $($failures -join ', ')"
 }
-

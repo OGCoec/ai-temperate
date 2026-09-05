@@ -278,4 +278,3 @@ cd C:/Users/damn/Downloads/5.24/Android-SDK/@5.24.82669_20260813/HBuilder-HelloU
 - 不替换 DCloud 核心 Activity。
 - 不用 GIF 冒充系统 Splash；DCloud 官方只支持静态 PNG。
 - 不再让 `session-gate.onReady` 决定最终覆盖层关闭时机。
-

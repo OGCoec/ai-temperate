@@ -68,4 +68,3 @@
 - [ ] 用受控 fixture 再次验证 16/16 FREE。
 - [ ] 保留旧 FAIL 证据，精确清理旧测试订单、callback、Redis 和 RabbitMQ 残留。
 - [ ] 创建新 SoakId，从 W01 开始正式 24 小时浸泡，禁止合并旧构建结果。
-
