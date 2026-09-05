@@ -209,15 +209,16 @@
 				this.scheduleRecentScrollbarMeasurement()
 			},
 			conversations: {
-				handler(conversations, previousConversations = []) {
-					if (conversations.length <= previousConversations.length) {
-						this.recentBottomZoneEntered = false
-					}
+				handler() {
+					this.recentBottomZoneEntered = false
 					this.scheduleRecentScrollbarMeasurement()
 				},
 				deep: true
 			},
-			loading() {
+			loading(loading) {
+				if (!loading) {
+					this.recentBottomZoneEntered = false
+				}
 				this.scheduleRecentScrollbarMeasurement()
 			},
 			error() {
@@ -539,6 +540,10 @@
 		min-height: 40px;
 		padding: 6px;
 		font-size: 12px;
+	}
+
+	.recent-conversations.is-compact .recent-toggle :deep(uni-icons) {
+		display: none;
 	}
 
 	.recent-conversations.is-compact .conversation-row {

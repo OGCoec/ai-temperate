@@ -170,8 +170,8 @@ public final class NetworkRiskEdgeController {
                             null));
         }
         String existing = transport.read(request, scope);
-        boolean h5 = AuthClientPlatform.fromHeader(platformHeader)
-                == AuthClientPlatform.H5;
+        AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
+        boolean explicit = platform.usesExplicitTokenTransport();
         final PreAuthBootstrapOutcome outcome;
         try {
             outcome = bootstrapService.bootstrap(
@@ -203,14 +203,17 @@ public final class NetworkRiskEdgeController {
         }
         webRtcTransport.write(response, outcome.issue());
         if (outcome.issue().webRtcPhase() == PreAuthWebRtcPhase.REQUIRED) {
+            String platformMetric = explicit
+                    ? (platform == AuthClientPlatform.WECHAT_MINI_PROGRAM ? "wechat" : "android")
+                    : "h5";
             webRtcMetrics.transition(
                     scope,
                     "required_created",
-                    h5 ? "h5" : "android",
+                    platformMetric,
                     "none",
                     properties.mode());
         }
-        if (h5) {
+        if (!explicit) {
             if (outcome.reauthenticationRequired()) {
                 // v1 Cookie 或显式重置必须清除不可由前端读取的旧登录 Cookie，确保迁移后统一重新登录。
                 clearAuthenticationCookies(scope, response);
@@ -225,7 +228,7 @@ public final class NetworkRiskEdgeController {
             return ResponseEntity.ok(new BootstrapResponse(
                     "READY",
                     null,
-                    h5 ? null : outcome.issue().rawToken(),
+                    explicit ? outcome.issue().rawToken() : null,
                     outcome.issue().expiresAt(),
                     outcome.reauthenticationRequired(),
                     null,
@@ -236,7 +239,7 @@ public final class NetworkRiskEdgeController {
                     .body(new BootstrapResponse(
                             "BLOCKED",
                             "RISK_BLOCKED",
-                            h5 ? null : outcome.issue().rawToken(),
+                            explicit ? outcome.issue().rawToken() : null,
                             outcome.issue().expiresAt(),
                             outcome.reauthenticationRequired(),
                             null,
@@ -247,7 +250,7 @@ public final class NetworkRiskEdgeController {
                     .body(new BootstrapResponse(
                             "CHALLENGE_UNAVAILABLE",
                             "RISK_CHALLENGE_UNAVAILABLE",
-                            h5 ? null : outcome.issue().rawToken(),
+                            explicit ? outcome.issue().rawToken() : null,
                             outcome.issue().expiresAt(),
                             outcome.reauthenticationRequired(),
                             null,
@@ -260,7 +263,7 @@ public final class NetworkRiskEdgeController {
                 .body(new BootstrapResponse(
                         "CHALLENGE_REQUIRED",
                         "RISK_CHALLENGE_REQUIRED",
-                        h5 ? null : outcome.issue().rawToken(),
+                        explicit ? outcome.issue().rawToken() : null,
                         outcome.challenge().expiresAt(),
                         outcome.reauthenticationRequired(),
                         outcome.challenge().reference(),

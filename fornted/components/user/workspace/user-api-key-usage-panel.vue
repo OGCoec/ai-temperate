@@ -1,6 +1,6 @@
 <template>
 	<view class="api-key-usage-page" :class="{ 'is-android-client': androidClient }">
-		<scroll-view class="api-key-usage-scroll" scroll-y>
+		<scroll-view class="api-key-usage-scroll" scroll-y :lower-threshold="100" @scrolltolower="handleScrollToLower">
 			<view class="api-key-usage-shell" :aria-busy="loading || appendLoading">
 				<view class="api-key-usage-toolbar">
 					<button class="api-key-usage-back" type="button" aria-label="返回 API Key 列表" @click="$emit('back')">
@@ -149,7 +149,13 @@
 						<text>{{ appendError }}</text>
 						<button type="button" @click="loadMore">重试加载</button>
 					</view>
-					<button v-if="nextCursor" class="api-key-usage-load-more" type="button" :disabled="appendLoading" @click="loadMore">{{ appendLoading ? '正在加载…' : '加载更多' }}</button>
+					<view v-else-if="appendLoading" class="api-key-usage-append-status" role="status">
+						<uni-icons type="spinner-cycle" size="18" color="#37d39a" />
+						<text>正在加载更多记录…</text>
+					</view>
+					<view v-else-if="!nextCursor && items.length > 0" class="api-key-usage-finished" role="status">
+						<text>已经到底了</text>
+					</view>
 				</template>
 			</view>
 		</scroll-view>
@@ -157,6 +163,7 @@
 </template>
 
 <script>
+	import UniDatetimePicker from '@/uni_modules/uni-datetime-picker/components/uni-datetime-picker/uni-datetime-picker.vue'
 	import { formatLocalDateTimeZhCn } from '@/common/platform/date-time.js'
 	import { apiKeyUsageApi, formatQuotaMinor } from '@/common/user/api-key-usage-api.js'
 
@@ -173,6 +180,9 @@
 	}
 
 	export default {
+		components: {
+			UniDatetimePicker
+		},
 		props: {
 			selectedKey: { type: Object, default: () => ({}) },
 			androidClient: { type: Boolean, default: false }
@@ -338,6 +348,12 @@
 				this.loadError = ''
 				this.appendError = ''
 			},
+			handleScrollToLower() {
+				// 触底自动触发下一页加载，并在正在加载或已无分页游标时静默拦截。
+				if (this.nextCursor && !this.appendLoading && !this.loading) {
+					this.loadMore()
+				}
+			},
 			async loadMore() {
 				if (!this.nextCursor || !this.period || this.appendLoading) return
 				const generation = this.requestGeneration
@@ -451,12 +467,13 @@
 	.api-key-usage-audit-header, .api-key-usage-audit-main { display: grid; grid-template-columns: minmax(132px, 1.15fr) minmax(175px, 1.45fr) minmax(76px, .72fr) minmax(86px, .78fr) minmax(76px, .72fr) minmax(98px, .82fr) minmax(98px, .82fr) minmax(92px, .7fr); align-items: center; }
 	.api-key-usage-audit-header { min-height: 42px; padding: 0 13px; border-bottom: 1px solid rgba(151, 170, 160, .15); background: rgba(255, 255, 255, .025); color: #76827c; font-size: 10px; font-weight: 700; }
 	.api-key-usage-audit-header text:nth-child(n+3):not(:last-child) { text-align: right; }
+	.api-key-usage-audit-header text:last-child { text-align: center; }
 	.api-key-usage-audit-row { border-bottom: 1px solid rgba(151, 170, 160, .11); }
 	.api-key-usage-audit-row:last-child { border-bottom: 0; }
 	.api-key-usage-audit-main { min-height: 70px; padding: 0 13px; }
 	.audit-cell { min-width: 0; padding: 10px 7px 10px 0; color: #aeb9b3; font-size: 11px; overflow-wrap: anywhere; }
 	.audit-cell.is-number, .audit-cell.is-charge { color: #cdd6d1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; text-align: right; }
-	.audit-cell.is-charge { color: #75dfb7; }
+	.audit-cell.is-charge { color: #75dfb7; padding-right: 6px; }
 	.audit-cell.is-time { color: #8c9892; font-variant-numeric: tabular-nums; }
 	.audit-model-name, .audit-model-meta { display: block; }
 	.audit-model-name { color: #e1e8e4; font-size: 12px; font-weight: 700; }
@@ -465,15 +482,17 @@
 	.api-key-usage-status.is-reserved { border-color: rgba(222, 157, 80, .28); color: #efc18a; }
 	.api-key-usage-status.is-failed_refunded, .api-key-usage-status.is-refunded { border-color: rgba(126, 166, 215, .28); color: #a9c9ef; }
 	.api-key-usage-status.is-reconcile_required { border-color: rgba(222, 112, 95, .34); color: #ef9e92; }
-	.audit-cell.is-action { padding-right: 0; text-align: right; }
-	.audit-cell.is-action button { min-height: 38px; margin: 0; padding: 0 9px; border: 1px solid rgba(151, 170, 160, .18); border-radius: 9px; background: #171b18; color: #b9c4be; font-size: 10px; }
+	.audit-cell.is-action { padding-right: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
+	.audit-cell.is-action button { min-height: 38px; margin: 0; padding: 0 14px; border: 1px solid rgba(151, 170, 160, .18); border-radius: 9px; background: #171b18; color: #b9c4be; font-size: 10px; }
 	.api-key-usage-details { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; padding: 1px 13px 13px; background: rgba(55, 211, 154, .025); }
 	.api-key-usage-details > view { min-width: 0; padding: 11px; background: rgba(255, 255, 255, .022); }
 	.api-key-usage-details > view.is-wide { grid-column: span 5; }
 	.api-key-usage-details text { display: block; overflow-wrap: anywhere; }
 	.api-key-usage-details text:first-child { color: #75817b; font-size: 9px; }
 	.api-key-usage-details text:last-child { margin-top: 5px; color: #c5cec9; font-size: 11px; }
-	.api-key-usage-load-more { width: 100%; margin-top: 12px; border-color: rgba(55, 211, 154, .32); color: #75dfb7; }
+	.api-key-usage-append-status,
+	.api-key-usage-finished { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 24px 0 16px; color: #75817b; font-size: 12px; }
+	.api-key-usage-finished text { color: #75817b; }
 	.api-key-usage-page button:focus-visible { outline: 2px solid rgba(55, 211, 154, .76); outline-offset: 2px; }
 	@media screen and (max-width: 1050px) { .api-key-usage-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 	@media screen and (max-width: 760px) {
@@ -494,7 +513,7 @@
 		.audit-cell.is-time, .audit-cell.is-model { grid-column: span 2; }
 		.audit-cell.is-number, .audit-cell.is-charge { text-align: left; }
 		.audit-cell.is-status { display: flex; flex-direction: column; align-items: flex-start; }
-		.audit-cell.is-action { grid-column: span 2; padding-top: 10px; text-align: left; }
+		.audit-cell.is-action { grid-column: span 2; padding-top: 10px; text-align: left; display: block; }
 		.audit-cell.is-action::before { display: none; }
 		.audit-cell.is-action button { width: 100%; min-height: 48px; }
 		.api-key-usage-details { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 1px 12px 12px; }
@@ -512,10 +531,30 @@
 	.api-key-usage-page.is-android-client .audit-cell.is-time, .api-key-usage-page.is-android-client .audit-cell.is-model { grid-column: span 2; }
 	.api-key-usage-page.is-android-client .audit-cell.is-number, .api-key-usage-page.is-android-client .audit-cell.is-charge { text-align: left; }
 	.api-key-usage-page.is-android-client .audit-cell.is-status { display: flex; flex-direction: column; align-items: flex-start; }
-	.api-key-usage-page.is-android-client .audit-cell.is-action { grid-column: span 2; padding-top: 10px; text-align: left; }
+	.api-key-usage-page.is-android-client .audit-cell.is-action { grid-column: span 2; padding-top: 10px; text-align: left; display: block; }
 	.api-key-usage-page.is-android-client .audit-cell.is-action::before { display: none; }
 	.api-key-usage-page.is-android-client .audit-cell.is-action button { width: 100%; }
 	.api-key-usage-page.is-android-client .api-key-usage-details { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 1px 12px 12px; }
 	.api-key-usage-page.is-android-client .api-key-usage-details > view.is-wide { grid-column: span 2; }
+	:deep(.uni-date) { width: 100%; }
+	:deep(.uni-date-editor--x) { background: #151916; border: 1px solid rgba(151, 170, 160, .18); border-radius: 11px; color: #e4ebe7; }
+	:deep(.uni-date-editor--x:hover) { border-color: rgba(55, 211, 154, .48); }
+	:deep(.uni-date__x-input) { color: #e4ebe7; font-size: 12px; }
+	:deep(.range-separator) { color: #87938d; }
+	:deep(.icon-calendar) { color: #75dfb7 !important; }
+	:deep(.uni-date-range--x), :deep(.uni-date-single--x) { background: #151916; border: 1px solid rgba(151, 170, 160, .25); box-shadow: 0 12px 32px rgba(0, 0, 0, .7); border-radius: 12px; color: #e4ebe7; }
+	:deep(.popup-x-header) { border-bottom-color: rgba(151, 170, 160, .15); }
+	:deep(.uni-date-changed) { background: #181d1a; border-color: rgba(151, 170, 160, .15); }
+	:deep(.uni-date__input) { background: #101311; border: 1px solid rgba(151, 170, 160, .2); border-radius: 6px; color: #e4ebe7; }
+	:deep(.popup-x-footer) { background: #181d1a; border-top-color: rgba(151, 170, 160, .15); color: #9ca8a2; }
+	:deep(.popup-x-footer .confirm-text) { color: #75dfb7; }
+	:deep(.uni-calendar__content) { background: #151916 !important; color: #e4ebe7 !important; }
+	:deep(.uni-calendar__header) { background: #181d1a !important; border-bottom-color: rgba(151, 170, 160, .15) !important; }
+	:deep(.uni-calendar__header-text) { color: #e4ebe7 !important; }
+	:deep(.uni-calendar__weeks-day-text) { color: #87938d !important; }
+	:deep(.uni-calendar-item__weeks-box-text) { color: #c5cec9 !important; }
+	:deep(.uni-calendar-item--disable .uni-calendar-item__weeks-box-text) { color: #4a544f !important; }
+	:deep(.uni-calendar-item--checked) { background-color: #37d39a !important; color: #0b0d0c !important; }
+	:deep(.uni-calendar-item--multiple) { background-color: rgba(55, 211, 154, .2) !important; }
 	@media (prefers-reduced-motion: reduce) { .api-key-usage-page button { transition: none; } }
 </style>

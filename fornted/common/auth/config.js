@@ -11,6 +11,12 @@ if (h5Hostname === 'localhost' || h5Hostname === '127.0.0.1') {
 
 export const AUTH_API_BASE_URL = authApiBaseUrl
 
+export const ClientPlatform = Object.freeze({
+	H5: 'H5',
+	ANDROID: 'ANDROID',
+	WECHAT_MINI_PROGRAM: 'WECHAT_MINI_PROGRAM'
+})
+
 export const AUTH_ROUTES = Object.freeze({
 	sessionGate: '/pages/launch/session-gate',
 	login: '/pages/auth/login',
@@ -31,15 +37,28 @@ export const AUTH_ROUTES = Object.freeze({
 
 export function resolveClientPlatform(platform) {
 	const normalized = String(platform || '').trim().toLowerCase()
-	return normalized === 'android' ? 'ANDROID' : 'H5'
+	return normalized === 'android' ? ClientPlatform.ANDROID : ClientPlatform.H5
 }
 
 export function clientPlatform() {
+	// #ifdef MP-WEIXIN
+	return ClientPlatform.WECHAT_MINI_PROGRAM
+	// #endif
+
 	// #ifdef APP-PLUS
 	return resolveClientPlatform(uni.getSystemInfoSync()?.platform)
 	// #endif
 
-	// #ifndef APP-PLUS
-	return 'H5'
+	// #ifdef H5
+	return ClientPlatform.H5
 	// #endif
+}
+
+export function usesBrowserCookieTransport(platform = clientPlatform()) {
+	return platform === ClientPlatform.H5
+}
+
+export function usesExplicitTokenTransport(platform = clientPlatform()) {
+	return platform === ClientPlatform.ANDROID
+		|| platform === ClientPlatform.WECHAT_MINI_PROGRAM
 }

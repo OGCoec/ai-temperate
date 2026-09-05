@@ -11,7 +11,8 @@ async function loadTransport() {
 		/import \{ createAiConversationSseParser \} from '.\/ai-conversation-sse-parser\.js'/,
 		'const createAiConversationSseParser = () => ({ push() {}, finish() {} })'
 	)
-	const url = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+	const isolated = source.replace(/import \{[^\n]+\} from '\.\.\/auth\/http-client\.js'/, 'const assertAuthorizedSessionCurrent = () => 0; const handleAuthorizedStreamingFailure = error => error')
+	const url = `data:text/javascript;base64,${Buffer.from(isolated).toString('base64')}`
 	return import(`${url}#${Date.now()}-${Math.random()}`)
 }
 

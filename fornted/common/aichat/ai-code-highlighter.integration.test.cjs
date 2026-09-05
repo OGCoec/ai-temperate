@@ -10,8 +10,34 @@ function appPlusSource(source) {
 		.replace(/\/\/ #ifdef APP-PLUS\s*([\s\S]*?)\/\/ #endif/g, '$1')
 }
 
+test('WeChat Mini Program highlighter selects the existing plain-text fallback', async () => {
+	const miniProgramHighlighter = await loadEsmModule(
+		path.join(__dirname, 'ai-code-highlighter-mp-weixin.js')
+	)
+	const language = miniProgramHighlighter.resolveAiCodeLanguage({
+		id: 'java',
+		label: 'Java'
+	})
+
+	assert.deepEqual(language, {
+		requestedId: 'java',
+		canonicalId: 'text',
+		label: 'Java',
+		supported: false
+	})
+	assert.deepEqual(await miniProgramHighlighter.prewarmAiCodeHighlighter(), {
+		ready: false,
+		reason: 'MP_WEIXIN_PLAIN_TEXT'
+	})
+	await assert.rejects(
+		() => miniProgramHighlighter.createAiCodeTokenizer('java'),
+		error => error.code === 'AI_CODE_LANGUAGE_UNSUPPORTED'
+			&& error.stage === 'MP_WEIXIN_PLAIN_TEXT'
+	)
+})
+
 test('uses the complete generated Shiki registry for App and the full H5 registry', async () => {
-	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	const appRegistrySource = fs.readFileSync(path.join(__dirname, 'ai-code-languages-app.js'), 'utf8')
 	const generatedRegistrySource = fs.readFileSync(path.join(__dirname,
 		'ai-code-languages-app.generated.js'), 'utf8')
@@ -43,7 +69,7 @@ test('uses the complete generated Shiki registry for App and the full H5 registr
 })
 
 test('keeps the unsupported JavaScript regex fallback out of the App bundle', () => {
-	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	const androidSource = appPlusSource(source)
 
 	assert.doesNotMatch(androidSource, /shiki\/engine\/javascript/)
@@ -54,7 +80,7 @@ test('keeps the unsupported JavaScript regex fallback out of the App bundle', ()
 })
 
 test('marks every App highlighter initialization boundary with bounded diagnostics', () => {
-	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	const androidSource = appPlusSource(source)
 
 	for (const stage of [
@@ -70,7 +96,7 @@ test('marks every App highlighter initialization boundary with bounded diagnosti
 })
 
 test('keeps browser TransformStream code out of App while preserving the H5 Shiki stream path', () => {
-	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const highlighterSource = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	const appTokenizerSource = fs.readFileSync(path.join(__dirname, 'ai-code-stream-tokenizer-app.js'), 'utf8')
 	const androidSource = appPlusSource(highlighterSource)
 
@@ -172,7 +198,7 @@ test('recognizes every language id in the fixed Shiki bundled registry', async (
 })
 
 test('clears failed shared engine promises so later code blocks can retry', () => {
-	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	assert.match(source, /onigurumaHighlighterPromise = operation\.catch\(error => \{[\s\S]*?onigurumaHighlighterPromise = null/)
 	assert.match(source, /javascriptHighlighterPromise = operation\.catch\(error => \{[\s\S]*?javascriptHighlighterPromise = null/)
 })

@@ -223,7 +223,7 @@ public final class LoginController {
             HttpServletRequest request,
             HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
-        String rawFlowToken = platform == AuthClientPlatform.ANDROID
+        String rawFlowToken = platform.usesExplicitTokenTransport()
                 ? androidFlowToken
                 : flowCookieWriter.totpLoginFlowToken(request);
         LoginResult result = totpLoginService.verify(
@@ -240,7 +240,7 @@ public final class LoginController {
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store, private");
         if (!result.isAuthenticated()) {
             // 第一因子成功但 TOTP 未完成时，只以会话 Cookie交付短期挑战，禁止创建或提升任何正式会话材料。
-            if (platform == AuthClientPlatform.H5) {
+            if (!platform.usesExplicitTokenTransport()) {
                 flowCookieWriter.writeTotpLoginFlow(
                         response,
                         result.getTotpFlowToken());
@@ -252,7 +252,7 @@ public final class LoginController {
                 response,
                 platform,
                 result.getRefreshToken());
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             // 必须先完成 PreAuth 旋转再写认证 Cookie，避免旋转失败时提前交付未绑定风险状态的新会话。
             cookieWriter.writeSession(
                     response,
@@ -309,7 +309,7 @@ public final class LoginController {
                 refreshToken,
                 observation.observedAt());
         webRtcTransport.write(response, issue);
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             preAuthTransport.writeCookie(
                     response,
                     RiskScope.USER,
@@ -327,18 +327,18 @@ public final class LoginController {
             LoginResult result,
             AuthClientPlatform platform,
             PreAuthIssue preAuthIssue) {
-        boolean android = platform == AuthClientPlatform.ANDROID;
-        // 只有 Android 响应体保留 Token 字段；H5 的 null 字段由 JsonInclude 省略。
+        boolean explicit = platform.usesExplicitTokenTransport();
+        // 只有显式传输端响应体保留 Token 字段；H5 的 null 字段由 JsonInclude 省略。
         return new LoginResponse(
                 result.getStatus(),
                 result.getPublicId(),
                 result.getDisplayName(),
-                android ? result.getAccessToken() : null,
-                android ? result.getRefreshToken() : null,
-                android ? result.getCsrfToken() : null,
-                android && preAuthIssue != null ? preAuthIssue.rawToken() : null,
+                explicit ? result.getAccessToken() : null,
+                explicit ? result.getRefreshToken() : null,
+                explicit ? result.getCsrfToken() : null,
+                explicit && preAuthIssue != null ? preAuthIssue.rawToken() : null,
                 result.getRefreshExpiresAt(),
-                android ? result.getTotpFlowToken() : null,
+                explicit ? result.getTotpFlowToken() : null,
                 result.getTotpExpiresAt(),
                 result.getAttemptsRemaining());
     }

@@ -3,6 +3,7 @@ package com.example.temperate.web.auth.interceptor;
 import com.example.temperate.service.auth.session.authentication.enums.SessionAuthenticationErrorCode;
 import com.example.temperate.service.auth.session.authentication.exception.SessionAuthenticationException;
 import com.example.temperate.web.auth.config.properties.AuthSecurityProperties;
+import com.example.temperate.web.auth.session.transport.AuthClientPlatform;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Set;
@@ -32,9 +33,16 @@ public final class BrowserSessionSecurityInterceptor implements HandlerIntercept
             HttpServletRequest request,
             HttpServletResponse response,
             Object handler) {
-        // Android 会话不依赖浏览器 Cookie，交由其 Authorization/请求体与服务层会话校验处理。
-        if ("ANDROID".equalsIgnoreCase(request.getHeader(PLATFORM_HEADER))) {
-            return true;
+        // 原生与小程序等显式传输端不依赖浏览器 Cookie，交由其 Authorization/请求体与服务层会话校验处理。
+        String platformHeader = request.getHeader(PLATFORM_HEADER);
+        if (platformHeader != null && !platformHeader.isBlank()) {
+            try {
+                if (AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
+                    return true;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 非法平台退化交由后续处理链路统一返回错误
+            }
         }
         String origin = request.getHeader("Origin");
         String fetchSite = request.getHeader("Sec-Fetch-Site");

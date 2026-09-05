@@ -77,7 +77,7 @@ public final class PasswordResetController {
                 deviceId,
                 request.getRemoteAddr()));
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             // H5 找回密码流程令牌只写入 HttpOnly 会话 Cookie，避免响应 JSON 暴露 resetFlowToken。
             flowCookieWriter.writePasswordResetFlow(
                     response, result.resetFlowToken());
@@ -134,7 +134,7 @@ public final class PasswordResetController {
         ForgetTokenResult result = passwordResetService.verifyCode(
                 access(flowToken, challenge, deviceId, platformHeader, request), body.code());
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             // forgetToken 是一次性完成凭证，H5 仅通过专用 HttpOnly 会话 Cookie 携带到 complete 端点。
             flowCookieWriter.writeForgetToken(
                     response, result.forgetToken());
@@ -154,11 +154,11 @@ public final class PasswordResetController {
             @RequestHeader(value = PLATFORM_HEADER, required = false) String platformHeader,
             HttpServletRequest request,
             HttpServletResponse response) {
-        String resolvedForgetToken = AuthClientPlatform.fromHeader(platformHeader)
-                == AuthClientPlatform.H5 ? flowCookieWriter.forgetToken(request) : forgetToken;
+        String resolvedForgetToken = AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()
+                ? forgetToken : flowCookieWriter.forgetToken(request);
         passwordResetService.complete(
                 resolvedForgetToken, deviceId, body.password(), body.passwordConfirmation());
-        if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
+        if (!AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
             flowCookieWriter.clearPasswordReset(response);
         }
         return new CompleteResponse(true, "LOGIN");
@@ -170,7 +170,7 @@ public final class PasswordResetController {
             String deviceId,
             String platformHeader,
             HttpServletRequest request) {
-        if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
+        if (!AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
             return new PasswordResetAccess(
                     flowCookieWriter.resetFlowToken(request),
                     challenge,
@@ -185,7 +185,7 @@ public final class PasswordResetController {
             PasswordResetStartResult result,
             AuthClientPlatform platform) {
         return new PasswordResetStartResponse(
-                platform == AuthClientPlatform.ANDROID ? result.resetFlowToken() : null,
+                platform.usesExplicitTokenTransport() ? result.resetFlowToken() : null,
                 result.challengeHandle(),
                 result.expiresAt());
     }
@@ -194,7 +194,7 @@ public final class PasswordResetController {
             ForgetTokenResult result,
             AuthClientPlatform platform) {
         return new ForgetTokenResponse(
-                platform == AuthClientPlatform.ANDROID ? result.forgetToken() : null,
+                platform.usesExplicitTokenTransport() ? result.forgetToken() : null,
                 result.expiresAt());
     }
 

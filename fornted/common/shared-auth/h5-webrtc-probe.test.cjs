@@ -13,10 +13,10 @@ const sourceText = fs.readFileSync(sourcePath, 'utf8')
 	.concat('\nglobalThis.__collectH5WebRtcIps = collectH5WebRtcIps\n')
 const ordinaryAndroidProbePath = path.resolve(
 	__dirname,
-	'../../fornted/hybrid/html/webrtc-probe.js')
+	'../../hybrid/html/webrtc-probe.js')
 const adminAndroidProbePath = path.resolve(
 	__dirname,
-	'../../myuniappadmin/hybrid/html/webrtc-probe.js')
+	'../../../myuniappadmin/hybrid/html/webrtc-probe.js')
 
 function createCollector(candidates) {
 	class FakePeerConnection {

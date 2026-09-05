@@ -137,7 +137,7 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
                                 + "refreshCredentialPresent={} csrfHeaderPresent={} "
                                 + "preAuthAccessPresent={} bindingAttempted={} bindingResult={}",
                         traceId(request),
-                        AuthClientPlatform.fromHeader(request.getHeader(PLATFORM_HEADER)),
+                        safePlatform(request.getHeader(PLATFORM_HEADER)),
                         request.getAttribute(PRINCIPAL_ATTRIBUTE) instanceof SessionPrincipal,
                         AuthRequestTiming.errorCode(request),
                         durationMillis,
@@ -176,10 +176,11 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
 
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(
                 request.getHeader(PLATFORM_HEADER));
-        String accessCredential = platform == AuthClientPlatform.ANDROID
+        boolean explicit = platform.usesExplicitTokenTransport();
+        String accessCredential = explicit
                 ? bearerToken(request)
                 : cookieToken(request, AuthCookieWriter.ACCESS_COOKIE);
-        String refreshCredential = platform == AuthClientPlatform.ANDROID
+        String refreshCredential = explicit
                 ? request.getHeader(REFRESH_HEADER)
                 : cookieToken(request, AuthCookieWriter.REFRESH_COOKIE);
         String csrfCredential = request.getHeader(CSRF_HEADER);
@@ -212,10 +213,10 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
         establishSecurityContext(request, result.principal());
         if (result.renewed()) {
             // 续签只改变 AT；原 RT 和 CSRF 均保持不变，业务响应体也不做包装。
-            if (platform == AuthClientPlatform.H5) {
-                cookieWriter.writeAccessToken(response, result.renewedAccessToken());
-            } else {
+            if (explicit) {
                 response.setHeader(NEW_ACCESS_HEADER, result.renewedAccessToken());
+            } else {
+                cookieWriter.writeAccessToken(response, result.renewedAccessToken());
             }
             // renewed 必须最后写入，避免客户端看到成功标记时平台专属的新 AT 尚未写完。
             response.setHeader(RENEWED_HEADER, "true");
@@ -277,10 +278,11 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
                 return null;
             }
             request.setAttribute(BINDING_RESULT_ATTRIBUTE, "preauth_required");
+            // 已登录会话绑定的 PreAuth 凭据失效或解绑属于不可恢复的认证失败，必须返回 401 并彻底清理会话 Cookie。
             throw new SessionAuthenticationException(
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is no longer bound to this session.",
-                    false,
+                    true,
                     exception);
         } finally {
             AuthRequestTiming.complete(request, AuthRequestTiming.Stage.PREAUTH_BINDING);
@@ -329,5 +331,13 @@ public final class UserSessionAuthenticationInterceptor implements HandlerInterc
             }
         }
         return null;
+    }
+
+    private static String safePlatform(String platformHeader) {
+        try {
+            return AuthClientPlatform.fromHeader(platformHeader).name();
+        } catch (IllegalArgumentException exception) {
+            return "UNSUPPORTED";
+        }
     }
 }

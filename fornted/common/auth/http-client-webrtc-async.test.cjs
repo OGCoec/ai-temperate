@@ -45,13 +45,12 @@ test('only explicit WebRTC rejection recovery waits and retries once', () => {
 	assert.equal((source.match(/await ensureH5WebRtcVerified\(\)/g) || []).length, 1)
 	assert.match(recovery, /invalidateWebRtcVerification\(\)[\s\S]*await ensureH5WebRtcVerified\(\)/)
 	assert.match(authorized, /!retryState\.webRtc\s*&&\s*isWebRtcRetryCode/)
-	assert.match(authorized, /\{ \.\.\.retryState, webRtc: true \}/)
+	assert.match(authorized, /nextRetryState\(\{ webRtc: true \}\)/)
 })
 
 test('PreAuth recovery stays recoverable while terminal 401 clears every old security task', () => {
-	const terminalCodes = section(
-		'const TERMINAL_SESSION_ERRORS',
-		'const TERMINAL_SESSION_CLEARED')
+	const policy = fs.readFileSync(path.join(__dirname, 'session-retry-policy.js'), 'utf8')
+	const terminalCodes = policy.slice(policy.indexOf('export const SESSION_TERMINAL_ERROR_CODES'), policy.indexOf('const TERMINAL_ERROR_CODE_SET'))
 	const publicRequest = section(
 		'export async function publicRequest',
 		'async function bootstrapBrowserSession')
@@ -75,7 +74,7 @@ test('PreAuth recovery stays recoverable while terminal 401 clears every old sec
 	)
 	assert.match(terminalCodes, /REFRESH_TOKEN_REQUIRED/)
 	assert.doesNotMatch(terminalCodes, /PREAUTH_REQUIRED/)
-	assert.match(bootstrap, /catch \(error\)[\s\S]*clearTerminalSessionState\(error, authDiagnostic\)/)
+	assert.match(bootstrap, /catch \(error\)[\s\S]*clearTerminalSessionState\(\s*error,\s*authDiagnostic,\s*sessionGeneration,/)
 	assert.match(
 		terminalCleanup,
 		/clearSession\(\)[\s\S]*invalidatePreAuth\(\)[\s\S]*invalidateWebRtcVerification\(\)/
@@ -122,7 +121,7 @@ test('authentication boundaries suppress both WebRTC scheduling hooks', () => {
 	assert.match(source, /WebRtcSchedulingPolicy/)
 	assert.match(source, /NORMAL/)
 	assert.match(source, /SUPPRESS/)
-	assert.match(rawRequest, /webRtcSchedulingPolicy/)
+	assert.match(rawRequest, /effectiveWebRtcSchedulingPolicy\(options\)/)
 	assert.match(rawRequest, /observeWebRtcVerificationHeaders/)
 	assert.match(publicRequest, /webRtcSchedulingPolicy/)
 	assert.match(publicRequest, /scheduleH5WebRtcForRequest/)
@@ -172,7 +171,7 @@ test('Android PreAuth mismatch clears an authenticated session without replaying
 	assert.match(androidTermination, /clearSession\(\)/)
 	assert.match(androidTermination, /clearAndroidOAuthFlow\(\)/)
 	assert.match(androidTermination, /invalidatePreAuth\(\)/)
-	assert.match(androidTermination, /uni\.reLaunch\(\{ url: AUTH_ROUTES\.login \}\)/)
+	assert.match(androidTermination, /redirectTerminalSessionToLogin\(error, authDiagnostic\)/)
 	assert.match(diagnostics, /networkFailureDiagnostics\(cause,/)
 	assert.match(diagnostics, /currentAndroidOAuthPhase\(\)/)
 	assert.match(diagnostics, /preAuthReady/)

@@ -16,7 +16,7 @@ public final class WebRtcMetrics {
 
     private static final Set<String> VERIFICATION_OUTCOMES = Set.of(
             "matched", "mismatch", "empty", "pending", "timeout", "stale",
-            "invalid", "network_changed", "family_incomplete");
+            "invalid", "network_changed", "family_incomplete", "oauth_attempt_required");
     private static final Set<String> INTERCEPTOR_DECISIONS = Set.of(
             "allowed", "pending_allowed", "required_allowed", "required",
             "failed", "blocked", "invalid");
@@ -27,7 +27,7 @@ public final class WebRtcMetrics {
     private static final Set<String> TRANSITION_REASONS = Set.of(
             "none", "start_timeout", "report_timeout", "no_public_candidate",
             "ip_family_incomplete", "ip_mismatch", "stale", "network_changed");
-    private static final Set<String> PLATFORMS = Set.of("h5", "android");
+    private static final Set<String> PLATFORMS = Set.of("h5", "android", "wechat");
 
     private final MeterRegistry meterRegistry;
 

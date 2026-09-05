@@ -185,10 +185,7 @@ public final class PreAuthServiceImpl implements PreAuthService {
                 rawSessionReference == null || rawSessionReference.isBlank()
                         ? null
                         : identifier.identifySession(rawSessionReference);
-        boolean anonymousRecovery = access != null
-                && "ANONYMOUS".equals(access.state().authState())
-                && access.state().sessionType() == RiskSessionType.NONE
-                && access.state().sessionRefDigest() == null;
+        // 会话恢复与受保护会话校验必须要求当前 PreAuth 已经与该会话绑定，禁止使用未绑定的匿名 PreAuth 强行恢复。
         boolean alreadyBound = access != null
                 && access.state().sessionType() == expectedSessionType
                 && access.state().sessionRefDigest() != null
@@ -198,7 +195,7 @@ public final class PreAuthServiceImpl implements PreAuthService {
                 || expectedSessionType == null
                 || access.state().scope() != expectedScope
                 || expectedSessionDigest == null
-                || (!anonymousRecovery && !alreadyBound)) {
+                || !alreadyBound) {
             throw new IllegalArgumentException(
                     "Authenticated PreAuth binding is invalid.");
         }
@@ -209,7 +206,7 @@ public final class PreAuthServiceImpl implements PreAuthService {
                 expectedSessionType,
                 expectedSessionDigest,
                 properties.authenticatedPreAuthTtl(),
-                anonymousRecovery);
+                false);
     }
 
     @Override

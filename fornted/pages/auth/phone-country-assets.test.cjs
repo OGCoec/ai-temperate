@@ -5,7 +5,7 @@ const path = require('node:path')
 
 const frontendRoot = path.resolve(__dirname, '../..')
 const countriesSource = fs.readFileSync(
-	path.resolve(frontendRoot, '../shared-frontend/auth/phone-countries.js'),
+	path.resolve(frontendRoot, 'common/shared-auth/phone-countries.js'),
 	'utf8'
 )
 

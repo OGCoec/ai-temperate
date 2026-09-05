@@ -102,6 +102,24 @@ class RegistrationControllerTokenTransportTest {
     }
 
     @Test
+    void wechatMiniProgramStartKeepsResponseTokensAndDoesNotWriteBrowserCookies() {
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        RegistrationController.StartResponse response = controller.start(
+                startRequest(),
+                "device-1",
+                "WECHAT_MINI_PROGRAM",
+                new MockHttpServletRequest(),
+                servletResponse);
+
+        verify(flowCookieWriter, never()).writeRegistration(any(), any(), any(), any());
+        assertThat(response.registerToken()).isEqualTo("register-token");
+        assertThat(response.flowCsrf()).isEqualTo("register-csrf");
+        assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(EXPIRES_AT);
+    }
+
+    @Test
     void statusOmitsContactsBeforeHumanVerificationAndDisablesCaching() throws Exception {
         when(service.status(any())).thenReturn(statusResult(false));
         MockHttpServletResponse servletResponse = new MockHttpServletResponse();

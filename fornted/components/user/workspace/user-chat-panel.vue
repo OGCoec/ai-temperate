@@ -1347,7 +1347,8 @@
 			this.releaseAllVideoDownloadObjectUrls()
 		},
 		computed: {
-			androidClient() { return clientPlatform() === 'ANDROID' },
+			wechatClient() { return clientPlatform() === 'WECHAT_MINI_PROGRAM' },
+			androidClient() { return clientPlatform() === 'ANDROID' || this.wechatClient },
 			selectedModel() { return this.models.find(model => model.publicId === this.selectedModelPublicId) || null },
 			selectedModelIndex() { return Math.max(0, this.models.findIndex(model => model.publicId === this.selectedModelPublicId)) },
 			imageGenerationAvailable() {

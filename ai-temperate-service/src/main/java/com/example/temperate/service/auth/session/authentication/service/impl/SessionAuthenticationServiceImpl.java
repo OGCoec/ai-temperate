@@ -72,7 +72,7 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
             SessionBootstrapCommand command,
             PreAuthSessionBinding preAuthBinding) {
         requireRefreshCommand(command == null ? null : command.getRefreshToken());
-        VerifiedAccessToken optionalAccess = verifyOptionalAccess(command.getAccessToken());
+        VerifiedAccessToken optionalAccess = verifyRequiredAccess(command == null ? null : command.getAccessToken());
         // 原始 CSRF 仅在本次响应中返回；Redis 只保存其受保护标识，避免长期存放可直接重放的值。
         String newCsrfToken = authTokenService.newCsrfToken();
         RefreshSessionSnapshot session;
@@ -195,10 +195,11 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
             case CSRF_MISMATCH -> throw error(
                     SessionAuthenticationErrorCode.CSRF_INVALID,
                     "CSRF token is invalid.", false);
+            // 登录后绑定的 PreAuth 失效属于终态认证失败，必须清理客户端 Cookie 促使用户重新登录。
             case PREAUTH_MISMATCH -> throw error(
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is missing or no longer bound to this session.",
-                    false);
+                    true);
             case TTL_INVARIANT_VIOLATION -> throw error(
                     SessionAuthenticationErrorCode.REFRESH_TOKEN_INVALID,
                     "Refresh session is invalid.", true);
@@ -227,9 +228,10 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
         return context;
     }
 
-    private VerifiedAccessToken verifyOptionalAccess(String rawAccessToken) {
+    private VerifiedAccessToken verifyRequiredAccess(String rawAccessToken) {
         if (isBlank(rawAccessToken)) {
-            return null;
+            throw error(SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED,
+                    "Access token is required.", true);
         }
         try {
             return authTokenService.verifyAccessToken(rawAccessToken);
@@ -242,7 +244,8 @@ public final class SessionAuthenticationServiceImpl implements SessionAuthentica
     private void requireAccessMatchesSession(
             VerifiedAccessToken access, RefreshSessionSnapshot session) {
         if (access == null) {
-            return;
+            throw error(SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED,
+                    "Access token is required.", true);
         }
         // 使用规范公共 ID 的常量时间比较，避免把其他用户的 AT 与当前 RT 会话组合使用。
         if (!MessageDigest.isEqual(

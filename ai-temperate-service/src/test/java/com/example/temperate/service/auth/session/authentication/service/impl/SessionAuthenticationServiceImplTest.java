@@ -22,6 +22,7 @@ import com.example.temperate.service.auth.session.authentication.exception.Sessi
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionSnapshot;
 import com.example.temperate.service.auth.session.refresh.dto.result.RefreshSessionValidation;
 import com.example.temperate.service.auth.session.refresh.store.RefreshSessionStore;
+import com.example.temperate.service.auth.session.token.dto.result.VerifiedAccessToken;
 import com.example.temperate.service.auth.session.token.service.AuthTokenService;
 import com.example.temperate.service.risk.preauth.domain.PreAuthSessionBinding;
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.Test;
 class SessionAuthenticationServiceImplTest {
 
     private static final long USER_ID = 10001L;
+    private static final String AT = "eyJhbGciOiJIUzI1NiJ9.test-at";
     private static final String RT = "A2345678901234567890123456789012345678";
     private static final String DEVICE = "550e8400-e29b-41d4-a716-446655440000";
     private static final String NEW_CSRF = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
@@ -108,13 +110,35 @@ class SessionAuthenticationServiceImplTest {
         when(sessionStore.bootstrapAndRenew(refreshHash, deviceHash, newCsrfHash))
                 .thenReturn(new RefreshSessionValidation(
                         RefreshSessionValidation.Status.VALID, snapshot(newCsrfHash)));
+        when(tokenService.verifyAccessToken(AT))
+                .thenReturn(new VerifiedAccessToken(
+                        publicId,
+                        "0123456789abcdefghijklmnopqrstuvwxyzAB",
+                        2,
+                        Instant.now(),
+                        Instant.now().plusSeconds(300),
+                        false));
 
         SessionAuthenticationResult result = service.bootstrap(
-                new SessionBootstrapCommand(null, RT, DEVICE));
+                new SessionBootstrapCommand(AT, RT, DEVICE));
 
         assertThat(result.getCsrfToken()).isEqualTo(NEW_CSRF);
         verify(sessionStore).bootstrapAndRenew(refreshHash, deviceHash, newCsrfHash);
         verify(tokenService).issueAccessToken(USER_ID);
+    }
+
+    @Test
+    void bootstrapRejectsMissingAccessToken() {
+        // 恢复会话必须携带原访问令牌以证明客户端会话完整性，缺少 AT 时禁止恢复并清理客户端 Cookie。
+        assertThatThrownBy(() -> service.bootstrap(
+                new SessionBootstrapCommand(null, RT, DEVICE)))
+                .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
+                    assertThat(exception.code())
+                            .isEqualTo(SessionAuthenticationErrorCode.ACCESS_TOKEN_REQUIRED);
+                    assertThat(exception.clearCookies()).isTrue();
+                });
+
+        verifyNoInteractions(sessionStore, identityMapper);
     }
 
     @Test

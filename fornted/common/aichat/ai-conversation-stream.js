@@ -1,4 +1,6 @@
 import {
+	assertAuthorizedSessionCurrent,
+	isAuthorizedSessionTermination,
 	prepareAuthorizedStreamingRequest,
 	recoverAuthorizedStreamingSession
 } from '../auth/http-client.js'
@@ -51,21 +53,25 @@ function wait(milliseconds) {
 	return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
-async function recoverGenerationEdgeChallenge(error, recoveryState) {
+async function recoverGenerationEdgeChallenge(error, recoveryState, sessionGeneration) {
+	if (isAuthorizedSessionTermination(error)) throw error
+	assertAuthorizedSessionCurrent(sessionGeneration)
 	if (!isAndroidEdgeChallenge(error)) return false
 	if (recoveryState.edgeChallengeRetried) {
 		throw repeatedAndroidEdgeChallengeError(error)
 	}
-	const recovered = await recoverAuthorizedStreamingSession(error)
+	const recovered = await recoverAuthorizedStreamingSession(error, { sessionGeneration })
 	if (!recovered) return false
 	recoveryState.edgeChallengeRetried = true
 	return true
 }
 
-async function openOnce(command, handlers, lifecycleDiagnostics) {
+async function openOnce(command, handlers, lifecycleDiagnostics, sessionGeneration, allowCsrfRecovery) {
 	const prepared = await prepareAuthorizedStreamingRequest(
 		responsePath(command.conversationPublicId),
 		{
+			sessionGeneration,
+			allowCsrfRecovery,
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -87,10 +93,10 @@ async function openOnce(command, handlers, lifecycleDiagnostics) {
 	return openAiConversationSseH5(request, handlers)
 }
 
-async function openGenerationOnce(generationPublicId, handlers, lifecycleDiagnostics) {
+async function openGenerationOnce(generationPublicId, handlers, lifecycleDiagnostics, sessionGeneration) {
 	const prepared = await prepareAuthorizedStreamingRequest(
 		`/api/ai/conversations/generations/${encodeURIComponent(generationPublicId)}/events`,
-		{ method: 'GET', headers: { Accept: 'text/event-stream' } }
+		{ method: 'GET', headers: { Accept: 'text/event-stream' }, sessionGeneration }
 	)
 	const request = { ...prepared }
 	if (clientPlatform() === 'ANDROID') {
@@ -105,6 +111,7 @@ async function openGenerationOnce(generationPublicId, handlers, lifecycleDiagnos
  * 打开一次 POST SSE；只有 accepted 尚未到达时才允许用同一个幂等键恢复认证并重试一次。
  */
 export async function openAiConversationStream(command, handlers = {}) {
+	const sessionGeneration = assertAuthorizedSessionCurrent()
 	let accepted = false
 	let active = null
 	let closed = false
@@ -126,6 +133,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 		diagnostics,
 		lifecycleDiagnostics,
 		onGenerationId(value) {
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			diagnostics.bindGenerationPublicId?.(value)
 			if (!asyncGenerationEnabled() || !value) return
 			generationPublicId = value
@@ -146,6 +154,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 			handlers.onGenerationId?.(value)
 		},
 		onEvent(event) {
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			let terminalStatus = null
 			if (event.type === 'accepted') {
 				accepted = true
@@ -351,7 +360,7 @@ export async function openAiConversationStream(command, handlers = {}) {
 	}
 
 	async function connect(retried) {
-		active = await openOnce(command, wrapped, lifecycleDiagnostics)
+		active = await openOnce(command, wrapped, lifecycleDiagnostics, sessionGeneration, !retried && !accepted)
 		// 停止动作可能早于认证准备或原生传输句柄创建；句柄一旦到达必须立即关闭，不能让请求在后台继续计费。
 		if (closed) {
 			active.close?.(closeReason, closeDetails)
@@ -361,9 +370,11 @@ export async function openAiConversationStream(command, handlers = {}) {
 			await active.completed
 		} catch (error) {
 			if (!closed && !accepted && !retried
-				&& await recoverAuthorizedStreamingSession(error)) {
+				&& await recoverAuthorizedStreamingSession(error, { sessionGeneration })) {
 				return connect(true)
 			}
+			if (isAuthorizedSessionTermination(error)) throw error
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			if (!closed && !accepted && retried && isAndroidEdgeChallenge(error)) {
 				throw repeatedAndroidEdgeChallengeError(error)
 			}
@@ -375,25 +386,31 @@ export async function openAiConversationStream(command, handlers = {}) {
 	}
 
 	async function reconnectGeneration(initialFailure) {
+		if (isAuthorizedSessionTermination(initialFailure)) throw initialFailure
+		assertAuthorizedSessionCurrent(sessionGeneration)
 		const deadline = Date.now() + 25_000
 		let lastFailure = initialFailure
 		let delay = 250
 		const recoveryState = { edgeChallengeRetried: false }
-		if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState)) {
+		if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState, sessionGeneration)) {
 			delay = 0
 		}
 		while (!closed && Date.now() < deadline) {
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			updateGeneration(generationPublicId, { observerAttached: false })
 			await wait(delay)
 			if (closed) return
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			try {
 				active = await openGenerationOnce(
-					generationPublicId, wrapped, lifecycleDiagnostics)
+					generationPublicId, wrapped, lifecycleDiagnostics, sessionGeneration)
+				if (closed) { active.close?.(closeReason, closeDetails); return }
+				assertAuthorizedSessionCurrent(sessionGeneration)
 				bindGenerationObserver(generationPublicId, publicHandle)
 				await active.completed
 				return
 			} catch (failure) {
-				if (await recoverGenerationEdgeChallenge(failure, recoveryState)) {
+				if (await recoverGenerationEdgeChallenge(failure, recoveryState, sessionGeneration)) {
 					delay = 0
 					continue
 				}
@@ -425,6 +442,7 @@ export async function openAiConversationStream(command, handlers = {}) {
  * 在刷新、路由返回或 SSE 传输恢复时重新观察既有 Generation；关闭句柄只表示 DETACHED。
  */
 export async function openAiConversationGenerationStream(generationPublicId, handlers = {}) {
+	const sessionGeneration = assertAuthorizedSessionCurrent()
 	const diagnostics = handlers.diagnostics
 		|| createAiConversationStreamDiagnostics({
 			enabled: clientPlatform() === 'ANDROID' ? true : undefined,
@@ -438,6 +456,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		diagnostics,
 		lifecycleDiagnostics,
 		onEvent(event) {
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			let terminalStatus = null
 			if (event.type === 'source') {
 				const current = getGeneration(generationPublicId)
@@ -590,7 +609,7 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 			}
 		}
 	}
-	let active = await openGenerationOnce(generationPublicId, wrapped, lifecycleDiagnostics)
+	let active = await openGenerationOnce(generationPublicId, wrapped, lifecycleDiagnostics, sessionGeneration)
 	let closed = false
 	let handle = null
 	const completed = (async () => {
@@ -603,23 +622,27 @@ export async function openAiConversationGenerationStream(generationPublicId, han
 		} catch (initialFailure) {
 			let lastFailure = initialFailure
 			let delay = 250
-			if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState)) {
+			if (await recoverGenerationEdgeChallenge(initialFailure, recoveryState, sessionGeneration)) {
 				delay = 0
 			}
 			const deadline = Date.now() + 25_000
 			while (!closed && Date.now() < deadline) {
+				assertAuthorizedSessionCurrent(sessionGeneration)
 				updateGeneration(generationPublicId, { observerAttached: false })
 				await wait(delay)
 				if (closed) return
+				assertAuthorizedSessionCurrent(sessionGeneration)
 				try {
 					active = await openGenerationOnce(
-						generationPublicId, wrapped, lifecycleDiagnostics)
+						generationPublicId, wrapped, lifecycleDiagnostics, sessionGeneration)
+					if (closed) { active.close?.('CLIENT_DETACHED'); return }
+					assertAuthorizedSessionCurrent(sessionGeneration)
 					bindGenerationObserver(generationPublicId, handle)
 					await active.completed
 					outcome = 'COMPLETE'
 					return
 				} catch (failure) {
-					if (await recoverGenerationEdgeChallenge(failure, recoveryState)) {
+					if (await recoverGenerationEdgeChallenge(failure, recoveryState, sessionGeneration)) {
 						delay = 0
 						continue
 					}

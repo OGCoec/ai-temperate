@@ -5,7 +5,7 @@ const test = require('node:test')
 const { loadEsmModule } = require('./ai-code-test-loader.cjs')
 
 test('loads only the fixed Dark Plus theme instead of the complete theme registry', () => {
-	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 
 	assert.match(source, /from ['"]@shikijs\/themes\/dark-plus['"]/)
 	assert.match(source, /from ['"]shiki\/core['"]/)

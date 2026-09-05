@@ -1,5 +1,5 @@
 import { createAiConversationSseParser } from './ai-conversation-sse-parser.js'
-import { applySessionRenewalHeaders } from '../auth/http-client.js'
+import { applySessionRenewalHeaders, assertAuthorizedSessionCurrent, handleAuthorizedStreamingFailure, isAuthorizedSessionTermination } from '../auth/http-client.js'
 // #ifdef APP-PLUS
 import { openSseRequest } from '@/uni_modules/ait-sse'
 // #endif
@@ -37,6 +37,7 @@ function callbackFailure() {
 }
 
 function protocolFailure(value) {
+	if (isAuthorizedSessionTermination(value)) return value
 	if (value?.code === 'AI_CONVERSATION_SSE_ANDROID_CALLBACK') return value
 	const error = new Error('模型流事件协议无效。')
 	error.code = 'AI_CONVERSATION_SSE_PROTOCOL_INVALID'
@@ -63,6 +64,7 @@ function nativeFailure(failure) {
 
 export function openAiConversationSseApp(request, handlers = {}) {
 	// #ifdef APP-PLUS
+	assertAuthorizedSessionCurrent(request.sessionGeneration)
 	let callerClosed = false
 	let settled = false
 	let terminalReceived = false
@@ -83,11 +85,13 @@ export function openAiConversationSseApp(request, handlers = {}) {
 	function rejectOnce(error, closeNative = false) {
 		if (settled || callerClosed) return
 		settled = true
-		rejectCompleted(error)
+		// 先占用 settled，再清理会话；清理可能同步关闭观察器，不能把 401 改成成功。
+		rejectCompleted(handleAuthorizedStreamingFailure(error, request))
 		if (closeNative) nativeConnection?.close?.(false)
 	}
 
 	const parser = createAiConversationSseParser(event => {
+		assertAuthorizedSessionCurrent(request.sessionGeneration)
 		try {
 			const terminal = typeof handlers.isTerminalEvent === 'function'
 				? handlers.isTerminalEvent(event)
@@ -107,10 +111,19 @@ export function openAiConversationSseApp(request, handlers = {}) {
 		body: request.body == null ? '' : JSON.stringify(request.body),
 		onOpen(renewal) {
 			if (callerClosed || settled) return
-			applySessionRenewalHeaders({
-				'X-Session-Renewed': renewal?.sessionRenewed || '',
-				'X-New-Access-Token': renewal?.newAccessToken || ''
-			})
+			try {
+				assertAuthorizedSessionCurrent(request.sessionGeneration, null, Number(renewal?.statusCode) === 401)
+				// 非认证业务错误也可能携带有效续签；401 与边缘挑战不能提交续签凭据。
+				if (Number(renewal?.statusCode) !== 401 && renewal?.cfMitigated !== 'challenge') {
+					applySessionRenewalHeaders({
+						'X-Session-Renewed': renewal?.sessionRenewed || '',
+						'X-New-Access-Token': renewal?.newAccessToken || ''
+					}, request.sessionGeneration)
+				}
+			} catch (error) {
+				rejectOnce(error, true)
+				return
+			}
 			handlers.lifecycleDiagnostics?.bindServerTraceId?.(
 				renewal?.traceId)
 			handlers.diagnostics?.bindTraceId?.(renewal?.traceId)
@@ -132,6 +145,10 @@ export function openAiConversationSseApp(request, handlers = {}) {
 		},
 		onChunk(value) {
 			if (callerClosed || settled) return
+			try { assertAuthorizedSessionCurrent(request.sessionGeneration) } catch (error) {
+				rejectOnce(error, true)
+				return
+			}
 			const chunk = String(value || '')
 			if (!chunk) return
 			handlers.diagnostics?.record?.('BROWSER_READ', {
@@ -158,6 +175,7 @@ export function openAiConversationSseApp(request, handlers = {}) {
 		onClosed() {
 			if (callerClosed || settled) return
 			try {
+				assertAuthorizedSessionCurrent(request.sessionGeneration)
 				parser.finish()
 				if (!terminalReceived) {
 					const error = new Error('模型流在终态事件前关闭。')

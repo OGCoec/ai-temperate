@@ -104,7 +104,7 @@ public final class SessionController {
             HttpServletRequest request,
             HttpServletResponse response) {
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
-        if (platform != AuthClientPlatform.H5) {
+        if (platform.usesExplicitTokenTransport()) {
             throw new WebInvalidInputException();
         }
         // bootstrap 只允许 H5：它依赖浏览器携带 SameSite RT Cookie，并由安全拦截器校验来源。
@@ -163,7 +163,7 @@ public final class SessionController {
         preAuthService.revoke(
                 RiskScope.USER,
                 preAuthTransport.read(request, RiskScope.USER));
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             cookieWriter.clearSession(response);
             preAuthTransport.clearCookie(response, RiskScope.USER);
         }
@@ -188,7 +188,7 @@ public final class SessionController {
         preAuthService.revoke(
                 RiskScope.USER,
                 preAuthTransport.read(request, RiskScope.USER));
-        if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
+        if (!AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
             cookieWriter.clearSession(response);
             preAuthTransport.clearCookie(response, RiskScope.USER);
         }
@@ -197,20 +197,24 @@ public final class SessionController {
 
     private static SessionResponse response(
             SessionAuthenticationResult result, AuthClientPlatform platform) {
-        boolean android = platform == AuthClientPlatform.ANDROID;
+        boolean explicit = platform.usesExplicitTokenTransport();
         return new SessionResponse(
                 result.getPrincipal().publicId(),
                 result.getPrincipal().displayName(),
-                android ? result.getAccessToken() : null,
-                android ? result.getCsrfToken() : null,
+                explicit ? result.getAccessToken() : null,
+                explicit ? result.getCsrfToken() : null,
                 result.getRefreshExpiresAt());
     }
 
     private static String refreshToken(
             AuthClientPlatform platform, SessionRequest body, HttpServletRequest request) {
-        if (platform == AuthClientPlatform.ANDROID) {
-            // Android 不应依赖 Cookie，RT 由客户端安全存储后明确写入请求体。
-            return body == null ? null : body.refreshToken();
+        if (platform.usesExplicitTokenTransport()) {
+            // 原生与小程序等显式传输端不应依赖 Cookie，RT 由客户端安全存储后明确写入请求体或请求头。
+            String fromBody = body == null ? null : body.refreshToken();
+            if (fromBody != null && !fromBody.isBlank()) {
+                return fromBody.trim();
+            }
+            return request.getHeader(UserSessionAuthenticationInterceptor.REFRESH_HEADER);
         }
         // H5 不接受请求体 RT，避免 JavaScript 接触 HttpOnly 刷新凭据。
         Cookie[] cookies = request.getCookies();
@@ -300,10 +304,11 @@ public final class SessionController {
             request.setAttribute(
                     UserSessionAuthenticationInterceptor.BINDING_RESULT_ATTRIBUTE,
                     "preauth_required");
+            // 已登录会话绑定的 PreAuth 凭据失效或被替换为匿名凭据属于不可恢复的认证失败，必须返回 401 并彻底清理会话 Cookie。
             throw new SessionAuthenticationException(
                     SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
                     "Authenticated PreAuth is no longer bound to this session.",
-                    false,
+                    true,
                     exception);
         } finally {
             AuthRequestTiming.complete(request, AuthRequestTiming.Stage.PREAUTH_BINDING);

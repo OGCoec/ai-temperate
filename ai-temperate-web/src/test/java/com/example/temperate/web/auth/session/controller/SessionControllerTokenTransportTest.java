@@ -204,7 +204,7 @@ class SessionControllerTokenTransportTest {
                 .isInstanceOfSatisfying(SessionAuthenticationException.class, exception -> {
                     assertThat(exception.code())
                             .isEqualTo(SessionAuthenticationErrorCode.PREAUTH_REQUIRED);
-                    assertThat(exception.clearCookies()).isFalse();
+                    assertThat(exception.clearCookies()).isTrue();
                 });
 
         assertThat(request.getAttribute(
@@ -225,6 +225,19 @@ class SessionControllerTokenTransportTest {
                 new SessionController.SessionRequest("android-rt"),
                 "device-1",
                 "ANDROID",
+                new MockHttpServletRequest(),
+                new MockHttpServletResponse()))
+                .isInstanceOf(WebInvalidInputException.class);
+
+        verify(service, never()).bootstrap(any());
+    }
+
+    @Test
+    void wechatMiniProgramCannotUseTheBrowserBootstrapEndpoint() {
+        assertThatThrownBy(() -> controller.bootstrap(
+                new SessionController.SessionRequest("wechat-rt"),
+                "device-1",
+                "WECHAT_MINI_PROGRAM",
                 new MockHttpServletRequest(),
                 new MockHttpServletResponse()))
                 .isInstanceOf(WebInvalidInputException.class);
@@ -302,6 +315,27 @@ class SessionControllerTokenTransportTest {
     }
 
     @Test
+    void wechatMiniProgramLogoutUsesTheRequestBodyAndNeverWritesBrowserCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setCookies(new Cookie(AuthCookieWriter.REFRESH_COOKIE, "ignored-browser-rt"));
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        controller.logout(
+                new SessionController.SessionRequest("wechat-rt"),
+                "device-1",
+                "csrf-value",
+                "WECHAT_MINI_PROGRAM",
+                request,
+                servletResponse);
+
+        ArgumentCaptor<LogoutCommand> command = ArgumentCaptor.forClass(LogoutCommand.class);
+        verify(service).logout(command.capture());
+        assertThat(command.getValue().getRefreshToken()).isEqualTo("wechat-rt");
+        verify(cookieWriter, never()).clearSession(servletResponse);
+        verify(preAuthTransport, never()).clearCookie(servletResponse, RiskScope.USER);
+    }
+
+    @Test
     void h5LogoutAllUsesAuthenticatedPrincipalAndClearsBrowserCookies() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(
@@ -332,6 +366,24 @@ class SessionControllerTokenTransportTest {
 
         SessionController.LogoutResponse response = controller.logoutAll(
                 "ANDROID", request, servletResponse);
+
+        assertThat(response.loggedOut()).isTrue();
+        verify(service).logoutAllForUser(10001L);
+        verify(cookieWriter, never()).clearSession(servletResponse);
+        verify(preAuthTransport, never()).clearCookie(servletResponse, RiskScope.USER);
+    }
+
+    @Test
+    void wechatMiniProgramLogoutAllUsesAuthenticatedPrincipalWithoutWritingBrowserCookies() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer wechat-at");
+        request.setAttribute(
+                UserSessionAuthenticationInterceptor.PRINCIPAL_ATTRIBUTE,
+                new SessionPrincipal(10001L, "AAAAAAAAAAE", "User"));
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        SessionController.LogoutResponse response = controller.logoutAll(
+                "WECHAT_MINI_PROGRAM", request, servletResponse);
 
         assertThat(response.loggedOut()).isTrue();
         verify(service).logoutAllForUser(10001L);

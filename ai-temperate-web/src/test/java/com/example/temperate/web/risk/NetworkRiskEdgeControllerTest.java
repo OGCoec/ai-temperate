@@ -99,6 +99,45 @@ class NetworkRiskEdgeControllerTest {
     }
 
     @Test
+    void wechatMiniProgramBootstrapReturnsTokenWithoutCookies() {
+        Fixture fixture = fixture();
+        PreAuthAccess access = mock(PreAuthAccess.class);
+        RiskAssessment assessment = new RiskAssessment(
+                RiskDecision.ALLOW,
+                0,
+                false,
+                0L,
+                HmacIdentifier.fromProtectedValue("C".repeat(43)),
+                HmacIdentifier.fromProtectedValue("D".repeat(43)));
+        PreAuthBootstrapOutcome outcome = new PreAuthBootstrapOutcome(
+                new PreAuthIssue(PREAUTH_TOKEN, NOW.plus(Duration.ofMinutes(30))),
+                access,
+                assessment,
+                null,
+                false);
+        when(fixture.bootstrapService().bootstrap(
+                        eq(RiskScope.USER),
+                        any(),
+                        eq("device-wechat"),
+                        any(),
+                        eq(false)))
+                .thenReturn(Mono.just(outcome));
+
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        ResponseEntity<NetworkRiskEdgeController.BootstrapResponse> wechat =
+                fixture.controller().bootstrapUser(
+                        "device-wechat",
+                        "WECHAT_MINI_PROGRAM",
+                        new MockHttpServletRequest(),
+                        servletResponse);
+
+        assertThat(wechat.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(wechat.getBody()).isNotNull();
+        assertThat(wechat.getBody().preAuthToken()).isEqualTo(PREAUTH_TOKEN);
+        assertThat(servletResponse.getHeaderNames()).doesNotContain("Set-Cookie");
+    }
+
+    @Test
     void completionReturnsStable403503And303Outcomes() {
         Fixture invalidFixture = fixture();
         when(invalidFixture.preAuthService().resolveChallengeNavigation(

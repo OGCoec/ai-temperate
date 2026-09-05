@@ -8,7 +8,7 @@ function sourceUrl(source) {
 }
 
 async function loadPhonePresentationModule() {
-	const authDirectory = path.resolve(__dirname, '../../../../shared-frontend/auth')
+	const authDirectory = path.resolve(__dirname, '../../../common/shared-auth')
 	const countriesSource = fs.readFileSync(path.join(authDirectory, 'phone-countries.js'), 'utf8')
 	const countriesUrl = sourceUrl(countriesSource)
 	const countrySearchSource = fs.readFileSync(path.join(authDirectory, 'phone-country-search.js'), 'utf8')

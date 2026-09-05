@@ -45,6 +45,7 @@ const CLIENT_PLATFORM_HEADER = 'X-Client-Platform'
 const ANDROID_TRANSPORT = 'ANDROID_NATIVE'
 const ANDROID_WEBVIEW_TRANSPORT = 'ANDROID_WEBVIEW_DOCUMENT'
 const H5_TRANSPORT = 'H5_BROWSER'
+const WECHAT_MINI_PROGRAM_TRANSPORT = 'WECHAT_MINI_PROGRAM'
 const API_KEY_SDK_TRANSPORT = 'API_KEY_SDK'
 const H5_CSRF_COOKIE = 'XSRF-TOKEN'
 const TURNSTILE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{38}$/
@@ -242,7 +243,7 @@ export async function handleRequest(request, env, runtime = {}) {
 			})
 	}
 
-	const transport = classifyClientTransport(request, route, url)
+	const transport = classifyClientTransport(request, route, url, env)
 	if (voiceDiagnostic) {
 		voiceDiagnostic.transport = transport.allowed
 			? transport.kind : 'INVALID'
@@ -758,6 +759,7 @@ function authEdgePlatform(request) {
 	const value = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim().toUpperCase()
 	if (value === 'ANDROID') return 'ANDROID'
+	if (value === 'WECHAT_MINI_PROGRAM') return 'WECHAT_MINI_PROGRAM'
 	if (value === '' || value === 'H5') return 'H5'
 	return 'INVALID'
 }
@@ -1062,7 +1064,7 @@ function safeApiKeyDiagnosticNow(now) {
 	}
 }
 
-function classifyClientTransport(request, route, url) {
+function classifyClientTransport(request, route, url, env) {
 	if (route.apiKeySdk) {
 		return classifyApiKeySdkTransport(request, route)
 	}
@@ -1073,10 +1075,7 @@ function classifyClientTransport(request, route, url) {
 	const platform = headerValue(request.headers, CLIENT_PLATFORM_HEADER)
 		.trim()
 		.toUpperCase()
-	if (platform !== 'ANDROID') {
-		// 缺少或未知平台不能降级成原生运输，只能继续接受 H5 的 Cookie Scope 约束。
-		return { allowed: true, kind: H5_TRANSPORT }
-	}
+	if (platform === 'ANDROID') {
 	if (validAndroidVoiceWebSocketTransport(request, route, url)) {
 		// App-Plus 的 Socket 实现可能附带浏览器 Origin/Fetch Metadata；仅精确语音路由可忽略这些非授权元数据，且回源前仍会统一删除。
 		return { allowed: true, kind: ANDROID_TRANSPORT }
@@ -1095,6 +1094,12 @@ function classifyClientTransport(request, route, url) {
 		return invalidAndroidTransport()
 	}
 	return { allowed: true, kind: ANDROID_TRANSPORT }
+	}
+	if (platform === 'WECHAT_MINI_PROGRAM') {
+		return classifyWechatMiniProgramTransport(request, route, url, env)
+	}
+	// 缺少或未知平台不能降级成原生运输，只能继续接受 H5 的 Cookie Scope 约束。
+	return { allowed: true, kind: H5_TRANSPORT }
 }
 
 function classifyApiKeySdkTransport(request, route) {
@@ -1194,6 +1199,36 @@ function invalidAndroidTransport() {
 	}
 }
 
+function classifyWechatMiniProgramTransport(request, route, url, env) {
+	if (route.surface !== 'root' || url.hostname !== ROOT_HOST) {
+		return invalidWechatMiniProgramTransport()
+	}
+	const referer = headerValue(request.headers, 'Referer').trim()
+	const match = referer.match(
+		/^https:\/\/servicewechat\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/page-frame\.html$/
+	)
+	if (!match) {
+		return invalidWechatMiniProgramTransport()
+	}
+	const appId = match[1]
+	const allowedAppIds = String(env?.WECHAT_MINI_PROGRAM_APP_ID || 'wx2f435e781c126339')
+		.split(',')
+		.map(item => item.trim())
+		.filter(Boolean)
+	if (!allowedAppIds.includes(appId)) {
+		return invalidWechatMiniProgramTransport()
+	}
+	return { allowed: true, kind: WECHAT_MINI_PROGRAM_TRANSPORT }
+}
+
+function invalidWechatMiniProgramTransport() {
+	return {
+		allowed: false,
+		status: 403,
+		code: 'EDGE_CLIENT_TRANSPORT_INVALID'
+	}
+}
+
 function isAndroidUpstreamTransport(transport) {
 	return transport?.kind === ANDROID_TRANSPORT
 		|| transport?.kind === ANDROID_WEBVIEW_TRANSPORT
@@ -1240,6 +1275,15 @@ async function signedUpstreamRequest(
 			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
 		}
 		headers.set(CLIENT_PLATFORM_HEADER, 'ANDROID')
+	} else if (transport.kind === WECHAT_MINI_PROGRAM_TRANSPORT) {
+		// 微信小程序使用显式Token与设备凭据；必须清除浏览器Cookie、Origin及Referer，确保不可作为浏览器状态回源。
+		headers.delete('Cookie')
+		headers.delete('Origin')
+		headers.delete('Referer')
+		for (const name of [...headers.keys()]) {
+			if (name.toLowerCase().startsWith('sec-fetch-')) headers.delete(name)
+		}
+		headers.set(CLIENT_PLATFORM_HEADER, 'WECHAT_MINI_PROGRAM')
 	} else if (transport.kind === API_KEY_SDK_TRANSPORT) {
 		// 长期 API Key 只允许服务端 SDK 运输；保留 Authorization，移除所有浏览器、Cookie 与平台伪装元数据。
 		headers.delete('Cookie')
@@ -1597,6 +1641,10 @@ function guardedResponse(
 	if (isAndroidUpstreamTransport(transport) && responseCookies.length > 0) {
 		// Android 使用显式 Token 协议；拒绝源站 Cookie，避免与 H5 会话模型发生隐式混用。
 		return jsonError(502, 'EDGE_ANDROID_COOKIE_POLICY_VIOLATION')
+	}
+	if (transport?.kind === WECHAT_MINI_PROGRAM_TRANSPORT && responseCookies.length > 0) {
+		// 微信小程序使用显式凭据；拒绝源站下发 Cookie，避免与 H5 会话模型发生混用。
+		return jsonError(502, 'EDGE_WECHAT_COOKIE_POLICY_VIOLATION')
 	}
 	const allowedNames = surface === 'admin' ? ADMIN_COOKIE_NAMES : ROOT_COOKIE_NAMES
 	for (const cookie of responseCookies) {

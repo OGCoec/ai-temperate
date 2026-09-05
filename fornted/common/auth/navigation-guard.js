@@ -1,6 +1,6 @@
 import { requireAuthenticatedPage } from './page-guard.js'
 import { isProtectedRoute, normalizeRoutePath } from './protected-routes.js'
-import { isRuntimeSessionAuthenticated } from './authenticated-session-state.js'
+import { isRuntimeSessionAuthenticated, isRuntimeTerminalSessionActive, runtimeSessionRequestGeneration } from './authenticated-session-state.js'
 
 const guardedMethods = ['navigateTo', 'redirectTo', 'reLaunch']
 
@@ -26,9 +26,12 @@ function installMethodGuard(method) {
 			if (bypassMethod === method) return true
 			const route = normalizeRoutePath(options?.url)
 			if (!isProtectedRoute(route)) return true
-			if (isRuntimeSessionAuthenticated()) return true
+			if (!isRuntimeTerminalSessionActive() && isRuntimeSessionAuthenticated()) return true
+			const generation = runtimeSessionRequestGeneration()
 			requireAuthenticatedPage(route).then((allowed) => {
-				if (allowed) invokeWithoutGuard(method, options)
+				if (allowed && generation === runtimeSessionRequestGeneration() && !isRuntimeTerminalSessionActive()) {
+					invokeWithoutGuard(method, options)
+				}
 			})
 			return false
 		}

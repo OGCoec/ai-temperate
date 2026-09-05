@@ -103,7 +103,7 @@ test('administrator page implements all required UI states without password reco
 test('ordinary and administrator frontends resolve the same shared validation source', () => {
 	const ordinaryVite = source('../fornted/vite.config.js')
 	const adminVite = source('vite.config.js')
-	assert.match(ordinaryVite, /shared-frontend\/auth/)
-	assert.match(adminVite, /shared-frontend\/auth/)
-	assert.equal(fs.existsSync(path.resolve(projectRoot, '../shared-frontend/auth/password-policy.js')), true)
+	assert.match(ordinaryVite, /\.\/common\/shared-auth/)
+	assert.match(adminVite, /\.\.\/fornted\/common\/shared-auth/)
+	assert.equal(fs.existsSync(path.resolve(projectRoot, '../fornted/common/shared-auth/password-policy.js')), true)
 })

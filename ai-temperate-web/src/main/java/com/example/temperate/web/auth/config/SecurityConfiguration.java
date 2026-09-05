@@ -72,6 +72,7 @@ public class SecurityConfiguration {
 
     private static final String PLATFORM_HEADER = "X-Client-Platform";
     private static final String ANDROID = "ANDROID";
+    private static final String WECHAT_MINI_PROGRAM = "WECHAT_MINI_PROGRAM";
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String BOOTSTRAP_PATH = "/api/auth/session/bootstrap";
     private static final String WEBRTC_REPORT_PATH = "/api/_edge/webrtc/report";
@@ -437,10 +438,10 @@ public class SecurityConfiguration {
             @Qualifier("corsConfigurationSource")
                     CorsConfigurationSource corsConfigurationSource,
             EdgeProxySignatureFilter edgeProxySignatureFilter) throws Exception {
-        // Android 不自动携带浏览器 Cookie，因此不适用 Spring 的双提交 Cookie CSRF 机制。
+        // Android 与微信小程序等显式传输端不自动携带浏览器 Cookie，因此不适用 Spring 的双提交 Cookie CSRF 机制。
         configureCommon(http, corsConfigurationSource);
         return http
-                .securityMatcher(SecurityConfiguration::isAndroidRequest)
+                .securityMatcher(SecurityConfiguration::isExplicitTokenRequest)
                 .csrf(AbstractHttpConfigurer::disable)
                 .addFilterBefore(edgeProxySignatureFilter, CorsFilter.class)
                 .build();
@@ -591,12 +592,16 @@ public class SecurityConfiguration {
                                 .equals(request.getRequestURI()));
     }
 
-    private static boolean isAndroidRequest(
+    private static boolean isExplicitTokenRequest(
             jakarta.servlet.http.HttpServletRequest request) {
         String origin = request.getHeader("Origin");
-        // 浏览器不能通过伪造 Android 平台头进入关闭 CSRF 的原生链；带 Origin 的请求始终归入 H5。
-        return ANDROID.equalsIgnoreCase(request.getHeader(PLATFORM_HEADER))
-                && (origin == null || origin.isBlank());
+        // 浏览器不能通过伪造原生平台头进入关闭 CSRF 的显式链；带 Origin 的请求始终归入 H5。
+        if (origin != null && !origin.isBlank()) {
+            return false;
+        }
+        String platform = request.getHeader(PLATFORM_HEADER);
+        return ANDROID.equalsIgnoreCase(platform)
+                || WECHAT_MINI_PROGRAM.equalsIgnoreCase(platform);
     }
 
     private static String sameSite(AuthSecurityProperties.SameSite sameSite) {

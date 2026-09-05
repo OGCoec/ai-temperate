@@ -102,7 +102,7 @@ final class UserAiModelCatalogServiceImplTest {
         page.add(model);
         when(modelMapper.findPage(
                 "[\"mini\"]",
-                "[\"mini\"]",
+                null,
                 "mini",
                 true)).thenReturn(page);
         when(capabilityMapper.findByAiModelIds(List.of(41L)))
@@ -131,11 +131,94 @@ final class UserAiModelCatalogServiceImplTest {
         assertThat(result.total()).isEqualTo(1);
         verify(modelMapper).findPage(
                 "[\"mini\"]",
-                "[\"mini\"]",
+                null,
                 "mini",
                 true);
         verify(capabilityMapper).findByAiModelIds(List.of(41L));
         verifyNoInteractions(cacheService);
+        assertThat(PageHelper.getLocalPage()).isNull();
+    }
+
+    @Test
+    void fallsBackToDescriptionSearchWhenPrimarySearchHasNoMatches() {
+        AiModelSearchCriteria criteria = new AiModelSearchCriteria(
+                "reasoning",
+                List.of("reasoning"),
+                "[\"reasoning\"]",
+                List.of("reasoning"),
+                "[\"reasoning\"]");
+        when(searchService.prepare("reasoning")).thenReturn(criteria);
+        Page<AiModel> emptyPrimary = new Page<>(1, 20, true);
+        emptyPrimary.setTotal(0);
+        when(modelMapper.findPage(
+                "[\"reasoning\"]",
+                null,
+                "reasoning",
+                true)).thenReturn(emptyPrimary);
+
+        Page<AiModel> fallbackPage = new Page<>(1, 20, true);
+        fallbackPage.setTotal(1);
+        AiModel model = databaseModel(42L, "gpt-5.6-luna");
+        fallbackPage.add(model);
+        when(modelMapper.findPage(
+                null,
+                "[\"reasoning\"]",
+                null,
+                true)).thenReturn(fallbackPage);
+        when(capabilityMapper.findByAiModelIds(List.of(42L)))
+                .thenReturn(List.of(capability(42L, AiModelCapabilityCode.RESPONSES)));
+        when(searchService.matchedDescriptionTokens(
+                "[\"gpt\",\"mini\"]",
+                criteria)).thenReturn(List.of("reasoning"));
+        when(searchService.matchedModelNameTokens(
+                "[\"gpt\",\"5.4\",\"mini\"]",
+                criteria)).thenReturn(List.of());
+        UserAiModelCatalogServiceImpl service = service();
+
+        var result = service.list(1, 20, "reasoning");
+
+        assertThat(result.models()).singleElement().satisfies(item -> {
+            assertThat(item.modelName()).isEqualTo("gpt-5.6-luna");
+            assertThat(item.modelNameMatchedTokens()).isEmpty();
+            assertThat(item.descriptionMatchedTokens()).containsExactly("reasoning");
+        });
+        assertThat(result.total()).isEqualTo(1);
+        verify(modelMapper).findPage("[\"reasoning\"]", null, "reasoning", true);
+        verify(modelMapper).findPage(null, "[\"reasoning\"]", null, true);
+        assertThat(PageHelper.getLocalPage()).isNull();
+    }
+
+    @Test
+    void returnsEmptyResultWhenBothPrimaryAndFallbackSearchHaveNoMatches() {
+        AiModelSearchCriteria criteria = new AiModelSearchCriteria(
+                "unknown",
+                List.of("unknown"),
+                "[\"unknown\"]",
+                List.of("unknown"),
+                "[\"unknown\"]");
+        when(searchService.prepare("unknown")).thenReturn(criteria);
+        Page<AiModel> emptyPrimary = new Page<>(1, 20, true);
+        emptyPrimary.setTotal(0);
+        when(modelMapper.findPage(
+                "[\"unknown\"]",
+                null,
+                "unknown",
+                true)).thenReturn(emptyPrimary);
+
+        Page<AiModel> emptyFallback = new Page<>(1, 20, true);
+        emptyFallback.setTotal(0);
+        when(modelMapper.findPage(
+                null,
+                "[\"unknown\"]",
+                null,
+                true)).thenReturn(emptyFallback);
+        UserAiModelCatalogServiceImpl service = service();
+
+        var result = service.list(1, 20, "unknown");
+
+        assertThat(result.models()).isEmpty();
+        assertThat(result.total()).isEqualTo(0);
+        verifyNoInteractions(capabilityMapper);
         assertThat(PageHelper.getLocalPage()).isNull();
     }
 

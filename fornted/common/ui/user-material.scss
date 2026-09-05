@@ -99,11 +99,6 @@ $user-frosted-nav: rgba(14, 18, 16, .92);
 		border: 0;
 	}
 
-	& > * {
-		position: relative;
-		z-index: 1;
-	}
-
 	&:active:not([disabled])::before {
 		transform: scale(.96);
 	}

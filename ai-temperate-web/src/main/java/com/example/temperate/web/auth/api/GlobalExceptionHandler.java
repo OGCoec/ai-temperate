@@ -142,7 +142,8 @@ public final class GlobalExceptionHandler implements AuthExceptionHandler {
 
     private static HttpStatus sessionStatus(SessionAuthenticationErrorCode code) {
         return switch (code) {
-            case PREAUTH_REQUIRED, WEBRTC_VERIFICATION_TIMEOUT ->
+            // WebRTC 验证超时属于可重试的前置条件；会话已绑定的 PreAuth 缺失或失效属于认证凭据失效，统一返回 401。
+            case WEBRTC_VERIFICATION_TIMEOUT ->
                     HttpStatus.PRECONDITION_REQUIRED;
             case INFRASTRUCTURE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.UNAUTHORIZED;

@@ -1,8 +1,10 @@
 import { currentUserApi } from './current-user-api.js'
+import { assertAuthorizedSessionCurrent } from '../auth/http-client.js'
 import { clearProfileVault, readProfileVault, writeProfileVault } from './profile-vault.js'
 import { recordAiConversationProfileRefresh } from '../aichat/ai-conversation-lifecycle-diagnostics.js'
 
 let profileRequest = null
+let profileRequestGeneration = null
 
 function normalizeNullableText(value) {
 	if (value == null) return null
@@ -33,12 +35,16 @@ export function getCurrentUserProfile() {
 }
 
 export function loadCurrentUserProfile({ force = false } = {}) {
+	let sessionGeneration
+	try { sessionGeneration = assertAuthorizedSessionCurrent() } catch (error) { return Promise.reject(error) }
 	const cached = readProfileVault()
 	if (!force && cached) return Promise.resolve(cached)
-	if (profileRequest) return profileRequest
+	if (profileRequest && profileRequestGeneration === sessionGeneration) return profileRequest
 	recordAiConversationProfileRefresh('PROFILE_REFRESH_STARTED')
-	profileRequest = currentUserApi.me()
+	const task = currentUserApi.me()
 		.then(profile => {
+			// 请求完成和缓存落盘之间仍可能切换账号；旧回调不得回填新会话的资料。
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			const normalized = normalizeProfile(profile)
 			const quotaChanged = Boolean(cached)
 				&& (cached.quotaBalanceMinor !== normalized.quotaBalanceMinor
@@ -58,7 +64,9 @@ export function loadCurrentUserProfile({ force = false } = {}) {
 			recordAiConversationProfileRefresh('PROFILE_REFRESH_FAILED')
 			throw error
 		})
-		.finally(() => { profileRequest = null })
+		.finally(() => { if (profileRequest === task) profileRequest = null })
+	profileRequest = task
+	profileRequestGeneration = sessionGeneration
 	return profileRequest
 }
 

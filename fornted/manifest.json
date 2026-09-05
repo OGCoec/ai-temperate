@@ -37,6 +37,10 @@
             "enable" : true
         }
     },
+    "mp-weixin" : {
+        "appid" : "wx2f435e781c126339",
+        "usingComponents" : true
+    },
     "h5" : {
         "template" : "template.h5.html",
         "router" : {

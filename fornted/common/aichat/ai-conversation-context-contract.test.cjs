@@ -10,6 +10,8 @@ function sourceUrl(source) {
 async function loadContextStream() {
 	const nonce = `${Date.now()}-${Math.random()}`
 	const httpClient = sourceUrl(`
+		export const assertAuthorizedSessionCurrent = () => 0
+		export const isAuthorizedSessionTermination = () => false
 		export async function prepareAuthorizedStreamingRequest(url, options) {
 			globalThis.__contextPreparedRequests.push([url, options])
 			return { url, options }

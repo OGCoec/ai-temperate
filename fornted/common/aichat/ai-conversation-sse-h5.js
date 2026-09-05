@@ -1,4 +1,5 @@
 import { createAiConversationSseParser } from './ai-conversation-sse-parser.js'
+import { assertAuthorizedSessionCurrent, handleAuthorizedStreamingFailure } from '../auth/http-client.js'
 
 const MAX_ERROR_BYTES = 16 * 1024
 
@@ -46,6 +47,8 @@ async function responseError(response) {
 	const error = new Error(payload?.message || '无法建立模型流式响应。')
 	error.code = payload?.code || `HTTP_${response.status}`
 	error.statusCode = response.status
+	error.cfMitigated = response.headers?.get?.('cf-mitigated') || ''
+	if (error.cfMitigated.toLowerCase() === 'challenge') error.code = 'EDGE_CHALLENGE'
 	return error
 }
 
@@ -54,6 +57,7 @@ export function openAiConversationSseH5(request, handlers = {}) {
 	let closed = false
 	let terminalReceived = false
 	const completed = (async () => {
+		assertAuthorizedSessionCurrent(request.sessionGeneration)
 		const response = await fetch(request.url, {
 			method: request.method || 'POST',
 			headers: request.headers,
@@ -62,6 +66,9 @@ export function openAiConversationSseH5(request, handlers = {}) {
 			cache: 'no-store',
 			signal: controller.signal
 		})
+		// 先读取错误响应，保留终止性 401；成功响应在回调触碰页面状态前检查代次。
+		if (!response.ok) throw await responseError(response)
+		assertAuthorizedSessionCurrent(request.sessionGeneration)
 		const responseContentType = response.headers?.get?.('content-type') || ''
 		handlers.lifecycleDiagnostics?.bindServerTraceId?.(
 			response.headers?.get?.('x-trace-id'))
@@ -80,7 +87,6 @@ export function openAiConversationSseH5(request, handlers = {}) {
 			statusCode: response.status,
 			contentType: diagnosticContentType(responseContentType)
 		})
-		if (!response.ok) throw await responseError(response)
 		if (!responseContentType.toLowerCase().includes('text/event-stream')) {
 			const error = new Error('服务端未返回事件流。')
 			error.code = 'AI_CONVERSATION_SSE_CONTENT_TYPE_INVALID'
@@ -96,6 +102,7 @@ export function openAiConversationSseH5(request, handlers = {}) {
 		handlers.onOpen?.()
 		const decoder = new TextDecoder('utf-8', { fatal: true })
 		const parser = createAiConversationSseParser(event => {
+			assertAuthorizedSessionCurrent(request.sessionGeneration)
 			const terminal = typeof handlers.isTerminalEvent === 'function'
 				? handlers.isTerminalEvent(event)
 				: ['completed', 'error', 'video_ready', 'video_failed']
@@ -106,6 +113,8 @@ export function openAiConversationSseH5(request, handlers = {}) {
 		try {
 			while (!closed) {
 				const next = await reader.read()
+				if (closed) break
+				assertAuthorizedSessionCurrent(request.sessionGeneration)
 				if (next.done) break
 				handlers.diagnostics?.record?.('BROWSER_READ', {
 					eventType: 'BYTES',
@@ -113,8 +122,11 @@ export function openAiConversationSseH5(request, handlers = {}) {
 				})
 				parser.push(decoder.decode(next.value, { stream: true }))
 			}
-			parser.push(decoder.decode())
-			parser.finish()
+			if (!closed) {
+				assertAuthorizedSessionCurrent(request.sessionGeneration)
+				parser.push(decoder.decode())
+				parser.finish()
+			}
 		} finally {
 			reader.releaseLock()
 		}
@@ -123,7 +135,10 @@ export function openAiConversationSseH5(request, handlers = {}) {
 			error.code = 'AI_CONVERSATION_SSE_CLOSED'
 			throw error
 		}
-	})()
+	})().catch(error => {
+		controller.abort()
+		throw handleAuthorizedStreamingFailure(error, request)
+	})
 	return Object.freeze({
 		completed,
 		close(reason = 'USER_STOP', details = {}) {

@@ -1,4 +1,4 @@
-import { prepareAuthorizedStreamingRequest } from '../auth/http-client.js'
+import { assertAuthorizedSessionCurrent, isAuthorizedSessionTermination, prepareAuthorizedStreamingRequest } from '../auth/http-client.js'
 import { clientPlatform } from '../auth/config.js'
 import { buildQueryString } from '../platform/query-string.js'
 import { openAiConversationSseH5 } from './ai-conversation-sse-h5.js'
@@ -15,14 +15,14 @@ function wait(milliseconds) {
 	return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
-async function openOnce(command, handlers) {
+async function openOnce(command, handlers, sessionGeneration) {
 	const query = buildQueryString([
 		['modelPublicId', command.modelPublicId],
 		['afterRevision', command.afterRevision || 0]
 	])
 	const prepared = await prepareAuthorizedStreamingRequest(
 		`/api/ai/conversations/${encodeURIComponent(command.conversationPublicId)}/context/events?${query}`,
-		{ method: 'GET', headers: { Accept: 'text/event-stream' } }
+		{ method: 'GET', headers: { Accept: 'text/event-stream' }, sessionGeneration }
 	)
 	let resolveReady
 	let rejectReady
@@ -65,6 +65,7 @@ async function openOnce(command, handlers) {
  * 关闭句柄不会触发模型取消，也不会影响发送能力。
  */
 export async function openAiConversationContextStream(command, handlers = {}) {
+	const sessionGeneration = assertAuthorizedSessionCurrent()
 	let closed = false
 	let active = null
 	let lastRevision = Math.max(0, Number(command.afterRevision || 0))
@@ -72,6 +73,7 @@ export async function openAiConversationContextStream(command, handlers = {}) {
 		...handlers,
 		isTerminalEvent: event => TERMINAL_EVENTS.has(event.type),
 		onEvent(event) {
+			assertAuthorizedSessionCurrent(sessionGeneration)
 			const eventRevision = Number(event.data?.eventRevision || event.id || 0)
 			if (Number.isSafeInteger(eventRevision) && eventRevision > lastRevision) {
 				lastRevision = eventRevision
@@ -79,7 +81,7 @@ export async function openAiConversationContextStream(command, handlers = {}) {
 			handlers.onEvent?.(event)
 		}
 	}
-	active = await openOnce({ ...command, afterRevision: lastRevision }, wrapped)
+	active = await openOnce({ ...command, afterRevision: lastRevision }, wrapped, sessionGeneration)
 	const completed = (async () => {
 		let lastFailure = null
 		for (let attempt = 0; attempt <= RECONNECT_DELAYS.length; attempt++) {
@@ -87,14 +89,18 @@ export async function openAiConversationContextStream(command, handlers = {}) {
 				await active.completed
 				return
 			} catch (failure) {
+				if (isAuthorizedSessionTermination(failure)) throw failure
+				assertAuthorizedSessionCurrent(sessionGeneration)
 				lastFailure = failure
 				if (closed || attempt === RECONNECT_DELAYS.length) break
 				await wait(RECONNECT_DELAYS[attempt])
 				if (closed) return
+				assertAuthorizedSessionCurrent(sessionGeneration)
 				active = await openOnce({
 					...command,
 					afterRevision: lastRevision
-				}, wrapped)
+				}, wrapped, sessionGeneration)
+				if (closed) { active.close?.('CONTEXT_OBSERVER_CLOSED'); return }
 			}
 		}
 		if (!closed) throw lastFailure

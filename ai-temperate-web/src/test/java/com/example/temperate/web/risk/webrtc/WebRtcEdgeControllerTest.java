@@ -171,6 +171,7 @@ class WebRtcEdgeControllerTest {
         assertThat(servletResponse.getHeaders("Set-Cookie")).isEmpty();
     }
 
+
     @Test
     void sourceContainsNoBackendStunClientOrEmbeddedFrontend() throws Exception {
         String source = java.nio.file.Files.readString(java.nio.file.Path.of(
@@ -180,6 +181,22 @@ class WebRtcEdgeControllerTest {
         assertThat(source)
                 .doesNotContain("WebClient", "Mono<", "Flux<", "<html", "<script", "<style")
                 .contains("/api/_edge/webrtc/start", "/api/admin/_edge/webrtc/report");
+    }
+
+    @Test
+    void startReturnsVerifiedAndProbeNotRequiredForWeChatMiniProgram() {
+        Fixture fixture = fixture();
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/_edge/webrtc/start");
+
+        var response = fixture.controller().startUser(
+                "device-installation-0001",
+                "WECHAT_MINI_PROGRAM",
+                request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var body = Objects.requireNonNull(response.getBody());
+        assertThat(body.probeRequired()).isFalse();
+        assertThat(body.verificationState()).isEqualTo("VERIFIED");
     }
 
     private static Fixture fixture() {

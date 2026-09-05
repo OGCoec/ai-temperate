@@ -335,7 +335,7 @@ if (-not $HBuilderXOnly) {
 }
 $hbuilderXPath = Resolve-RequiredPath -Description "HBuilderX" -Candidates @(
   $env:HBUILDERX_PATH,
-  (Join-Path $env:USERPROFILE "Desktop\HBuilderX\HBuilderX.exe"))
+  "D:\HBuilderX\HBuilderX.exe")
 $frontendProjectName = if ($FrontendProfile -eq "admin") { "myuniappadmin" } else { "fornted" }
 $frontendPath = Resolve-RequiredPath -Description "uni-app 前端工程" -Candidates @(
   (Join-Path $projectRoot $frontendProjectName))

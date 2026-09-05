@@ -18,7 +18,7 @@ import {
 	collectAndroidVerificationIps
 } from './webrtc-verification-android.js'
 // #endif
-import { AUTH_API_BASE_URL, clientPlatform } from './config.js'
+import { AUTH_API_BASE_URL, clientPlatform, usesExplicitTokenTransport } from './config.js'
 import { isBlockingWebRtc as isAndroidOAuthBlockingWebRtc } from './android-oauth-coordinator.js'
 import { getDeviceInstallationId } from './device-installation.js'
 import { ownsH5WebRtcScheduling } from './h5-oauth-webrtc-gate.js'
@@ -443,6 +443,9 @@ function startPlatformWebRtcVerification(expectedGeneration = '', context = {}) 
 }
 
 export async function refreshWebRtcFailure() {
+	if (clientPlatform() === 'WECHAT_MINI_PROGRAM') {
+		return null
+	}
 	if (clientPlatform() === 'H5' && ownsH5WebRtcScheduling()) {
 		recordAuthDiagnosticEvent('WEBRTC_BACKGROUND_SKIPPED', {
 			source: 'refresh_webrtc_failure',
@@ -1368,7 +1371,7 @@ function requestEdge(path, method, data, timeout = 10000, context = {}) {
 			'X-Device-Installation-Id': getDeviceInstallationId()
 		}
 		const preAuthToken = currentPreAuthToken()
-		if (platform === 'ANDROID' && preAuthToken) headers['X-AIT-PreAuth'] = preAuthToken
+		if (usesExplicitTokenTransport(platform) && preAuthToken) headers['X-AIT-PreAuth'] = preAuthToken
 		Object.assign(headers, authDiagnosticRequestHeaders(authDiagnostic, {
 			probeRunId: context?.probeRunId
 		}))

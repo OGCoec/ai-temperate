@@ -254,13 +254,29 @@
 							>
 								<view class="profile-panel-heading">
 									<text class="profile-panel-title">开发者工具</text>
-									<text class="profile-panel-description">管理用于兼容客户端和开发工具的访问凭证。</text>
+									<text class="profile-panel-description">管理用于兼容客户端和开发工具的访问凭证，并查看可用模型规格与定价。</text>
 								</view>
 								<button class="profile-api-key-card" type="button" :disabled="logoutBusy" aria-label="进入管理我的 API Key 页面" @click="openApiKeys">
 									<view class="profile-api-key-icon" aria-hidden="true"><uni-icons type="locked-filled" size="21" color="#75dfb7" /></view>
 									<view class="profile-api-key-copy">
 										<text class="profile-api-key-title">管理我的 API Key</text>
 										<text class="profile-api-key-detail">为 Codex、Claude Code、Apifox 和 OpenAI 兼容客户端创建访问凭证</text>
+									</view>
+									<text class="profile-api-key-chevron" aria-hidden="true">›</text>
+								</button>
+								<button
+									class="profile-api-key-card profile-developer-models-card"
+									type="button"
+									:disabled="logoutBusy"
+									aria-label="进入模型广场"
+									@click="$emit('open-models')"
+								>
+									<view class="profile-api-key-icon" aria-hidden="true">
+										<uni-icons type="list" size="21" color="#75dfb7" />
+									</view>
+									<view class="profile-api-key-copy">
+										<text class="profile-api-key-title">模型广场</text>
+										<text class="profile-api-key-detail">浏览全部可用 AI 模型规格、上下文窗口与定价政策</text>
 									</view>
 									<text class="profile-api-key-chevron" aria-hidden="true">›</text>
 								</button>
@@ -355,9 +371,9 @@
 			profileSections() {
 				return [
 					{ key: 'account', label: '账户资料', detail: '身份与联系方式', icon: 'person' },
-					{ key: 'quota', label: '订阅额度', detail: '套餐与使用情况', icon: 'list' },
+					{ key: 'quota', label: '订阅额度', detail: '套餐与使用情况', icon: 'wallet' },
 					{ key: 'security', label: '安全设置', detail: '二次认证', icon: 'locked' },
-					{ key: 'developer', label: '开发者工具', detail: 'API Key', icon: 'locked-filled' },
+					{ key: 'developer', label: '开发者工具', detail: 'API Key 与模型', icon: 'locked-filled' },
 					{ key: 'sessions', label: '登录与设备', detail: '会话管理', icon: 'refreshempty' }
 				]
 			},
@@ -824,6 +840,7 @@
 	.profile-api-key-card:active { transform: scale(.988); }
 	.profile-api-key-card:disabled { opacity: .55; }
 	.profile-api-key-card:focus-visible { outline: 3px solid rgba(55, 211, 154, .28); outline-offset: 3px; }
+	.profile-developer-models-card { margin-top: 12px; }
 
 	.profile-logout {
 		width: 100%;

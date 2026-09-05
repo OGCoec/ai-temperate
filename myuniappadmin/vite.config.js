@@ -18,7 +18,7 @@ export default defineConfig(() => {
 	const plugins = [uni()]
 	const resolve = {
 		alias: {
-			'@shared-auth': fileURLToPath(new URL('../shared-frontend/auth', import.meta.url)),
+			'@shared-auth': fileURLToPath(new URL('../fornted/common/shared-auth', import.meta.url)),
 			'validator': fileURLToPath(new URL('node_modules/validator', import.meta.url)),
 			'libphonenumber-js': fileURLToPath(new URL('node_modules/libphonenumber-js', import.meta.url))
 		}

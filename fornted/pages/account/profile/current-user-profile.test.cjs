@@ -22,6 +22,7 @@ async function loadProfileModule(requestProfile) {
 			return true
 		}`)}#lifecycle-${nonce}`
 	const profileSource = fs.readFileSync(path.join(userDirectory, 'current-user-profile.js'), 'utf8')
+		.replace("import { assertAuthorizedSessionCurrent } from '../auth/http-client.js'", 'const assertAuthorizedSessionCurrent = () => 0')
 		.replace("from './current-user-api.js'", `from '${apiUrl}'`)
 		.replace("from './profile-vault.js'", `from '${vaultUrl}'`)
 		.replace(

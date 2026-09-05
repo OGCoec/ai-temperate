@@ -8,7 +8,7 @@ let phoneValidationModulePromise
 async function loadPhoneValidationModule() {
 	if (phoneValidationModulePromise) return phoneValidationModulePromise
 	const source = fs.readFileSync(
-		path.resolve(__dirname, '../../../shared-frontend/auth/phone-validation.js'),
+		path.resolve(__dirname, '../../common/shared-auth/phone-validation.js'),
 		'utf8'
 	).replace(
 		"import { AsYouType, getCountryCallingCode, parsePhoneNumberFromString } from 'libphonenumber-js/max'",

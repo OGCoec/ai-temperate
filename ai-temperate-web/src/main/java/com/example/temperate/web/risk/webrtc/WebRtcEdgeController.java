@@ -185,6 +185,26 @@ public final class WebRtcEdgeController {
             String platformHeader,
             HttpServletRequest request) {
         AuthClientPlatform platform = requireTransport(scope, platformHeader, request);
+        if (platform == AuthClientPlatform.WECHAT_MINI_PROGRAM) {
+            // 安全保证原理：微信小程序无浏览器 WebRTC P2P 探测能力，直接下发免探测状态，避免客户端异常
+            return noStore(ResponseEntity.ok(new WebRtcStartResponse(
+                    properties.mode().name(),
+                    "VERIFIED",
+                    false,
+                    true,
+                    null,
+                    null,
+                    0L,
+                    properties.webRtc().probeTimeout().toMillis(),
+                    properties.webRtc().reportGrace().toMillis(),
+                    List.of(),
+                    reportPath(scope),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null)));
+        }
         if (properties.mode() == NetworkRiskMode.DISABLED) {
             return noStore(ResponseEntity.ok(new WebRtcStartResponse(
                     properties.mode().name(),
@@ -254,6 +274,17 @@ public final class WebRtcEdgeController {
             HttpServletRequest request,
             HttpServletResponse response) {
         AuthClientPlatform platform = requireTransport(scope, platformHeader, request);
+        if (platform == AuthClientPlatform.WECHAT_MINI_PROGRAM) {
+            return noStore(ResponseEntity.ok(new WebRtcVerificationResponse(
+                    "WEBRTC_VERIFIED",
+                    null,
+                    true,
+                    "VERIFIED",
+                    null,
+                    null,
+                    false,
+                    Instant.now())));
+        }
         if (body.attemptId() != null
                 && (scope != RiskScope.USER || platform != AuthClientPlatform.H5)) {
             throw new ResponseStatusException(
@@ -359,12 +390,17 @@ public final class WebRtcEdgeController {
             String platformHeader,
             HttpServletRequest request) {
         if (!"H5".equalsIgnoreCase(platformHeader)
-                && !"ANDROID".equalsIgnoreCase(platformHeader)) {
+                && !"ANDROID".equalsIgnoreCase(platformHeader)
+                && !"WECHAT_MINI_PROGRAM".equalsIgnoreCase(platformHeader)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "WebRTC client platform is invalid.");
         }
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
+        if (platform == AuthClientPlatform.WECHAT_MINI_PROGRAM) {
+            // 微信小程序运行在双线程沙箱中，不携带浏览器 Origin 头，亦不依赖 CORS。
+            return platform;
+        }
         String origin = request.getHeader("Origin");
         if (platform == AuthClientPlatform.ANDROID) {
             if (origin != null && !origin.isBlank()) {
@@ -445,6 +481,9 @@ public final class WebRtcEdgeController {
     }
 
     private static String metricPlatform(AuthClientPlatform platform) {
+        if (platform == AuthClientPlatform.WECHAT_MINI_PROGRAM) {
+            return "wechat";
+        }
         return platform == AuthClientPlatform.ANDROID ? "android" : "h5";
     }
 

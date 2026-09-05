@@ -3,11 +3,11 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const root = path.resolve(__dirname, '..', '..')
+const root = __dirname
 const source = file => fs.readFileSync(path.join(root, file), 'utf8')
 
 async function loadPolicy() {
-	const policy = source('shared-frontend/auth/android-risk-challenge.js')
+	const policy = source('android-risk-challenge.js')
 	const sourceUrl = `data:text/javascript;base64,${Buffer.from(policy).toString('base64')}`
 	return import(sourceUrl)
 }
@@ -114,7 +114,7 @@ test('retries an Android risk rejection once and fails closed when it repeats', 
 })
 
 test('coordinator uses one WebView and never clears the whole Android cookie jar', () => {
-	const coordinator = source('shared-frontend/auth/android-risk-challenge.js')
+	const coordinator = source('android-risk-challenge.js')
 
 	assert.match(coordinator, /android\.webkit\.CookieManager/)
 	assert.match(coordinator, /setCookie/)

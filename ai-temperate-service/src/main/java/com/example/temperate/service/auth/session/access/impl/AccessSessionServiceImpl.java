@@ -208,10 +208,11 @@ public final class AccessSessionServiceImpl implements AccessSessionService {
                 throw error(SessionAuthenticationErrorCode.CSRF_INVALID,
                         "CSRF token is invalid.", false);
             }
+            // 登录后绑定的 PreAuth 失效属于终态认证失败，必须清理客户端 Cookie 促使用户重新登录。
             case PREAUTH_MISMATCH -> {
                 metrics.refreshInvalid();
                 throw error(SessionAuthenticationErrorCode.PREAUTH_REQUIRED,
-                        "Authenticated PreAuth is missing or no longer bound to this session.", false);
+                        "Authenticated PreAuth is missing or no longer bound to this session.", true);
             }
             case TTL_INVARIANT_VIOLATION -> {
                 metrics.ttlInvariantViolation();

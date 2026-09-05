@@ -1,4 +1,4 @@
-import { AUTH_API_BASE_URL, clientPlatform } from './config.js'
+import { AUTH_API_BASE_URL, ClientPlatform, clientPlatform, usesExplicitTokenTransport } from './config.js'
 import {
 	androidEdgeRequestHeaders,
 	runAndroidRequestWithEdgeRecovery
@@ -8,7 +8,7 @@ import {
 	repeatedAndroidRiskChallengeError
 } from './android-risk-challenge.js'
 import { ensureCookieScopeMigration } from './cookie-scope-migration.js'
-import { getDeviceInstallationId } from './device-installation.js'
+import { ensureDeviceInstallationId, getDeviceInstallationId } from './device-installation.js'
 import {
 	authDiagnosticRequestHeaders,
 	createAuthRequestDiagnostic,
@@ -20,6 +20,11 @@ import {
 	loadAndroidSessionCredentials,
 	saveAndroidSessionCredentials
 } from './android-keystore.js'
+import {
+	clearWechatSessionCredentials,
+	loadWechatSessionCredentials,
+	saveWechatSessionCredentials
+} from './wechat-session-storage.js'
 import { presentRiskBlock } from './risk-block-navigation.js'
 import {
 	beginRiskChallenge,
@@ -40,8 +45,14 @@ let resetRequested = false
 let preAuthLifecycleEpoch = 0
 
 export function currentPreAuthToken() {
-	if (clientPlatform() !== 'ANDROID') return ''
-	return loadAndroidSessionCredentials().preAuthToken || ''
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.ANDROID) {
+		return loadAndroidSessionCredentials().preAuthToken || ''
+	}
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+		return loadWechatSessionCredentials().preAuthToken || ''
+	}
+	return ''
 }
 
 export function isPreAuthReady() {
@@ -74,9 +85,14 @@ export function invalidatePreAuth() {
 		source: 'invalidate_pre_auth',
 		outcome: 'invalidated'
 	})
-	if (clientPlatform() !== 'ANDROID') return
-	const current = loadAndroidSessionCredentials()
-	saveAndroidSessionCredentials({ ...current, preAuthToken: '' })
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.ANDROID) {
+		const current = loadAndroidSessionCredentials()
+		saveAndroidSessionCredentials({ ...current, preAuthToken: '' })
+	} else if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+		const current = loadWechatSessionCredentials()
+		saveWechatSessionCredentials({ ...current, preAuthToken: '' })
+	}
 }
 
 export async function ensurePreAuth() {
@@ -116,6 +132,7 @@ function createBootstrapEntry(riskChallengeRetried) {
 }
 
 async function bootstrapPreAuth(riskChallengeRetried = false, attemptEpoch = preAuthLifecycleEpoch) {
+	await ensureDeviceInstallationId()
 	await ensureCookieScopeMigration()
 	assertCurrentPreAuthAttempt(attemptEpoch)
 	// Challenge 返回后的同步抢占只允许当前调用方执行一次 PreAuth 复查。
@@ -127,7 +144,7 @@ async function bootstrapPreAuth(riskChallengeRetried = false, attemptEpoch = pre
 		'X-Device-Installation-Id': getDeviceInstallationId()
 	}
 	const existing = currentPreAuthToken()
-	if (platform === 'ANDROID' && existing) {
+	if (usesExplicitTokenTransport(platform) && existing) {
 		headers['X-AIT-PreAuth'] = existing
 	}
 	if (resetRequested) headers['X-AIT-PreAuth-Reset'] = '1'
@@ -158,9 +175,14 @@ async function bootstrapPreAuth(riskChallengeRetried = false, attemptEpoch = pre
 	}
 	assertCurrentPreAuthAttempt(attemptEpoch)
 	if (response?.status === 'DISABLED') {
-		if (platform === 'ANDROID') {
+		if (platform === ClientPlatform.ANDROID) {
 			saveAndroidSessionCredentials({
 				...loadAndroidSessionCredentials(),
+				preAuthToken: ''
+			})
+		} else if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+			saveWechatSessionCredentials({
+				...loadWechatSessionCredentials(),
 				preAuthToken: ''
 			})
 		}
@@ -178,15 +200,22 @@ async function bootstrapPreAuth(riskChallengeRetried = false, attemptEpoch = pre
 			'预登录安全状态无效。')
 	}
 	if (response?.reauthenticationRequired) clearSession()
-	if (platform === 'ANDROID') {
+	if (usesExplicitTokenTransport(platform)) {
 		if (!response?.preAuthToken) {
 			if (challengeRecheck) failRiskChallengeRecheck()
 			throw preAuthError('PREAUTH_BOOTSTRAP_INVALID', '预登录安全凭证初始化失败。')
 		}
-		saveAndroidSessionCredentials({
-			...loadAndroidSessionCredentials(),
-			preAuthToken: response.preAuthToken
-		})
+		if (platform === ClientPlatform.ANDROID) {
+			saveAndroidSessionCredentials({
+				...loadAndroidSessionCredentials(),
+				preAuthToken: response.preAuthToken
+			})
+		} else if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+			saveWechatSessionCredentials({
+				...loadWechatSessionCredentials(),
+				preAuthToken: response.preAuthToken
+			})
+		}
 	}
 	resetRequested = false
 	ready = true

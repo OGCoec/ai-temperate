@@ -302,6 +302,7 @@ class WebRtcVerificationInterceptorTest {
                 .doesNotContain("泄漏", "WEBRTC_IP_MISMATCH");
     }
 
+
     @Test
     void reusesVerifiedResultOnAsyncDispatchWithoutDuplicateInspectionOrMetric()
             throws Exception {
@@ -384,6 +385,42 @@ class WebRtcVerificationInterceptorTest {
 
         assertThat(response.getStatus()).isEqualTo(200);
         verify(fixture.service(), times(2)).inspect(access, "8.8.8.8");
+    }
+
+    @Test
+    void wechatRequestWithValidPreAuthIsAllowedEvenIfWebRtcTimedOut() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        PreAuthAccess access = mock(PreAuthAccess.class);
+        when(fixture.service().inspect(access, "8.8.8.8"))
+                .thenReturn(WebRtcVerificationDecision.failed(
+                        1L,
+                        PreAuthWebRtcFailureReason.START_TIMEOUT,
+                        List.of()));
+
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/auth/phone-country");
+        request.addHeader("X-Client-Platform", "WECHAT_MINI_PROGRAM");
+        request.setAttribute(NetworkRiskInterceptor.PREAUTH_ACCESS_ATTRIBUTE, access);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean allowed = fixture.interceptor().preHandle(request, response, new Object());
+
+        assertThat(allowed).isTrue();
+        assertThat(response.getStatus()).isEqualTo(200);
+        verify(fixture.service(), times(1)).inspect(access, "8.8.8.8");
+    }
+
+    @Test
+    void wechatRequestWithoutPreAuthIsRejectedToPreventHeaderSpoofing() throws Exception {
+        Fixture fixture = fixture(NetworkRiskMode.ENFORCE);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login/password");
+        request.addHeader("X-Client-Platform", "WECHAT_MINI_PROGRAM");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean allowed = fixture.interceptor().preHandle(request, response, new Object());
+
+        assertThat(allowed).isFalse();
+        assertThat(response.getStatus()).isEqualTo(428);
+        assertThat(response.getContentAsString()).contains("PREAUTH_REQUIRED");
     }
 
     private static Fixture fixture(NetworkRiskMode mode) {

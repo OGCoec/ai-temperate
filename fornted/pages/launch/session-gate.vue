@@ -21,14 +21,16 @@
 
 <script>
 	import { AUTH_ROUTES } from '@/common/auth/config.js'
-	import { restorePersistedSession } from '@/common/auth/http-client.js'
+	import { ensureDeviceInstallationId } from '@/common/auth/device-installation.js'
+	import { assertAuthorizedSessionCurrent, clearTerminalSessionState, redirectTerminalSessionToLogin, restorePersistedSession } from '@/common/auth/http-client.js'
+	import { isTerminalSessionError, SessionRequestPurpose } from '@/common/auth/session-retry-policy.js'
 	import { clearSession } from '@/common/auth/session-vault.js'
 	import {
 		beginRuntimeTerminalSessionTransition,
-		claimRuntimeTerminalSessionRedirect,
-		markRuntimeSessionAuthenticated
+		isRuntimeTerminalSessionActive,
+		markRuntimeSessionAuthenticated,
+		runtimeSessionRequestGeneration
 	} from '@/common/auth/authenticated-session-state.js'
-	import { recordAuthDiagnosticEvent } from '@/common/auth/auth-diagnostics.js'
 	import {
 		dismissNativeSplashAfterPaint,
 		getNativeSplashCycleOffsetMillis
@@ -38,24 +40,13 @@
 		loadCurrentUserProfile
 	} from '@/common/user/current-user-profile.js'
 
-	const TERMINAL_SESSION_ERRORS = new Set([
-		'SESSION_NOT_FOUND',
-		'AT_REQUIRED',
-		'AT_INVALID',
-		'REFRESH_TOKEN_REQUIRED',
-		'REFRESH_TOKEN_INVALID',
-		'SESSION_MISMATCH',
-		'DEVICE_MISMATCH',
-		'CSRF_INVALID',
-		'ACCOUNT_UNAVAILABLE'
-	])
-
 	export default {
 		data() {
 			return {
 				routing: false,
 				unavailable: false,
 				restoring: false,
+				restoringGeneration: null,
 				shimmerDelay: '0ms',
 				shimmerPlayState: 'paused',
 				frontendShimmerStarted: false,
@@ -88,39 +79,48 @@
 				})
 			},
 			async restoreSession() {
-				if (this.restoring || this.routing) return
+				const sessionGeneration = runtimeSessionRequestGeneration()
+				if ((this.restoring || this.routing) && this.restoringGeneration === sessionGeneration) return
+				this.restoringGeneration = sessionGeneration
+				this.routing = false
 				this.restoring = true
 				this.unavailable = false
 				try {
-					const restored = await restorePersistedSession()
+					assertAuthorizedSessionCurrent(sessionGeneration)
+					await ensureDeviceInstallationId()
+					assertAuthorizedSessionCurrent(sessionGeneration)
+					const restored = await restorePersistedSession(null, sessionGeneration)
+					assertAuthorizedSessionCurrent(sessionGeneration)
 					if (!restored) {
 						const error = new Error('SESSION_NOT_FOUND')
 						error.code = 'SESSION_NOT_FOUND'
 						throw error
 					}
 					await loadCurrentUserProfile({ force: true })
+					assertAuthorizedSessionCurrent(sessionGeneration)
 					markRuntimeSessionAuthenticated()
 					this.go(AUTH_ROUTES.home)
 				} catch (error) {
-					if (TERMINAL_SESSION_ERRORS.has(error?.code)) {
+					if (sessionGeneration !== runtimeSessionRequestGeneration()) return
+					if (isTerminalSessionError(error, SessionRequestPurpose.SESSION_RECOVERY) || error?.code === 'SESSION_NOT_FOUND' || isRuntimeTerminalSessionActive()) {
+						clearTerminalSessionState(error, { source: 'session_gate' }, sessionGeneration, SessionRequestPurpose.SESSION_RECOVERY)
 						if (beginRuntimeTerminalSessionTransition()) {
 							clearCurrentUserProfile()
 							clearSession()
 						}
-						if (claimRuntimeTerminalSessionRedirect()) {
-							recordAuthDiagnosticEvent('LOGIN_REDIRECT_TRIGGERED', {
-								source: 'session_gate',
-								errorCode: error?.code,
-								route: AUTH_ROUTES.login
-							})
-							this.go(AUTH_ROUTES.login)
-						}
+						this.routing = true
+						const redirected = redirectTerminalSessionToLogin(error, { source: 'session_gate' }, sessionGeneration, () => {
+							this.routing = false
+							this.unavailable = true
+							this.revealSessionGate('route-failed')
+						})
+						if (!redirected) this.routing = false
 					} else {
 						this.unavailable = true
 						this.revealSessionGate('session-error')
 					}
 				} finally {
-					this.restoring = false
+					if (this.restoringGeneration === sessionGeneration) this.restoring = false
 				}
 			},
 			go(url) {

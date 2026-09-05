@@ -24,16 +24,6 @@
 			</button>
 			<button
 				class="user-primary-navigation-item"
-				:class="{ 'is-active': activeDestination === 'models' }"
-				type="button"
-				:aria-current="activeDestination === 'models' ? 'page' : undefined"
-				@click="navigate('models')"
-			>
-				<uni-icons type="list" :size="variant === 'drawer' ? 18 : 22" :color="iconColor('models')" aria-hidden="true" />
-				<text>模型</text>
-			</button>
-			<button
-				class="user-primary-navigation-item"
 				:class="{ 'is-active': activeDestination === 'profile' }"
 				type="button"
 				:aria-current="activeDestination === 'profile' ? 'page' : undefined"

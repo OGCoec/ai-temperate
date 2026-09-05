@@ -22,8 +22,8 @@ async function loadTransport(openSseRequest) {
 		/import \{ createAiConversationSseParser \} from '.\/ai-conversation-sse-parser\.js'/,
 		'const createAiConversationSseParser = globalThis.__aitCreateSseParser'
 	).replace(
-		/import \{ applySessionRenewalHeaders \} from '\.\.\/auth\/http-client\.js'/,
-		'const applySessionRenewalHeaders = globalThis.__aitApplySessionRenewal'
+		/import \{[^\n]+\} from '\.\.\/auth\/http-client\.js'/,
+		'const applySessionRenewalHeaders = globalThis.__aitApplySessionRenewal; const assertAuthorizedSessionCurrent = () => 0; const handleAuthorizedStreamingFailure = error => error; const isAuthorizedSessionTermination = () => false'
 	).replace(
 		/import \{ openSseRequest \} from '@\/uni_modules\/ait-sse'/,
 		'const openSseRequest = globalThis.__aitOpenSseRequest'

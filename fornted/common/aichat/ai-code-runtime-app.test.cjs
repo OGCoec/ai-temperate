@@ -74,7 +74,7 @@ test('restores real Java tokenization when the App runtime starts without flatMa
 })
 
 test('initializes the App compatibility layer before creating the Oniguruma engine', () => {
-	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter.js'), 'utf8')
+	const source = fs.readFileSync(path.join(__dirname, 'ai-code-highlighter-shiki.js'), 'utf8')
 	const androidSource = appPlusSource(source)
 	const compatibilityCall = androidSource.indexOf('ensureAppAiCodeRuntimeCompatibility()')
 	const engineCall = androidSource.indexOf('createOnigurumaEngine(instantiateAppOniguruma)')

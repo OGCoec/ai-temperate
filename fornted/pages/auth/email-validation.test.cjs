@@ -9,7 +9,7 @@ let emailValidationModulePromise
 async function loadEmailValidationModule() {
 	if (emailValidationModulePromise) return emailValidationModulePromise
 	const source = fs.readFileSync(
-		path.resolve(__dirname, '../../../shared-frontend/auth/email-validation.js'),
+		path.resolve(__dirname, '../../common/shared-auth/email-validation.js'),
 		'utf8'
 	).replace(
 		"import isEmail from 'validator/es/lib/isEmail'",

@@ -30,12 +30,12 @@ test('authenticated login publishes runtime state only after the session is save
 	assert.ok(totpRequiredStart >= 0)
 	assert.ok(authenticatedStart > totpRequiredStart)
 	assert.ok(authenticatedEnd > authenticatedStart)
-	assert.doesNotMatch(totpRequiredBranch, /markRuntimeSessionAuthenticated\(\)/)
+	assert.doesNotMatch(totpRequiredBranch, /markRuntimeSessionAuthenticated\(/)
 	assert.match(authenticatedBranch, /saveSession\(response\)/)
-	assert.match(authenticatedBranch, /markRuntimeSessionAuthenticated\(\)/)
+	assert.match(authenticatedBranch, /markRuntimeSessionAuthenticated\(/)
 	assert.ok(
 		authenticatedBranch.indexOf('saveSession(response)')
-			< authenticatedBranch.indexOf('markRuntimeSessionAuthenticated()')
+			< authenticatedBranch.indexOf('markRuntimeSessionAuthenticated({ newSession: true })')
 	)
 })
 

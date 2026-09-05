@@ -44,9 +44,10 @@ import org.springframework.stereotype.Service;
 /**
  * 从已启用模型快照提供普通浏览和图片档位能力，并通过 PostgreSQL 词元索引提供普通用户搜索分页。
  *
- * <p>空关键词只在最多五百条的稳定快照上切片；非空关键词固定查询已启用模型，并一次批量加载
- * 当前页能力，禁止逐模型访问数据库或把禁用模型暴露给普通用户。名称与描述高亮词分别由对应的
- * 词元索引计算，保证名称命中不会伪装成描述命中，反之亦然。</p>
+ * <p>空关键词只在最多五百条的稳定快照上切片；非空关键词采用名称与厂商优先匹配、描述全文降级兜底
+ * 的两阶段分层检索策略，防止描述中的交叉引用造成假阳性误匹配。当前页模型一次批量加载能力，禁止逐模型
+ * 访问数据库或把禁用模型暴露给普通用户。名称与描述高亮词分别由对应的词元索引计算，保证名称命中
+ * 不会伪装成描述命中，反之亦然。</p>
  */
 @Service
 public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogService {
@@ -136,21 +137,58 @@ public final class UserAiModelCatalogServiceImpl implements UserAiModelCatalogSe
             int pageNum,
             int pageSize,
             AiModelSearchCriteria criteria) {
-        PageInfo<AiModel> pageInfo;
-        List<AiModel> pageModels;
-        Page<AiModel> page = PageHelper.startPage(pageNum, pageSize, true);
-        try {
-            // 普通用户搜索只允许固定主键顺序，禁止把客户端输入拼接为排序表达式。
-            page.setOrderBy("model.id ASC");
-            pageInfo = PageInfo.of(modelMapper.findPage(
-                    criteria.modelNameTokensJson(),
-                    criteria.descriptionTokensJson(),
-                    criteria.vendorExact(),
-                    true));
-            pageModels = List.copyOf(pageInfo.getList());
-        } finally {
-            // 搜索后的能力批量查询不能继承 PageHelper ThreadLocal，否则会被误分页。
-            PageHelper.clearPage();
+        PageInfo<AiModel> pageInfo = null;
+        List<AiModel> pageModels = List.of();
+        boolean matchedByPrimary = false;
+
+        // 第一阶段（主匹配）：优先根据模型名称横杠词元与厂商精确匹配，避免长文本描述中的交叉推荐词造成假阳性。
+        if (criteria.modelNameTokensJson() != null || criteria.vendorExact() != null) {
+            Page<AiModel> page = PageHelper.startPage(pageNum, pageSize, true);
+            try {
+                // 普通用户搜索只允许固定主键顺序，禁止把客户端输入拼接为排序表达式。
+                page.setOrderBy("model.id ASC");
+                pageInfo = PageInfo.of(modelMapper.findPage(
+                        criteria.modelNameTokensJson(),
+                        null,
+                        criteria.vendorExact(),
+                        true));
+                pageModels = List.copyOf(pageInfo.getList());
+                if (pageInfo.getTotal() > 0) {
+                    matchedByPrimary = true;
+                }
+            } finally {
+                // 每次数据库查询后立即清空 PageHelper ThreadLocal，防止污染后续查询。
+                PageHelper.clearPage();
+            }
+        }
+
+        // 第二阶段（兜底降级）：仅当第一阶段 0 命中且存在描述分词时，自动降级执行描述全文分词检索。
+        if (!matchedByPrimary && criteria.descriptionTokensJson() != null) {
+            Page<AiModel> page = PageHelper.startPage(pageNum, pageSize, true);
+            try {
+                // 普通用户搜索只允许固定主键顺序，禁止把客户端输入拼接为排序表达式。
+                page.setOrderBy("model.id ASC");
+                pageInfo = PageInfo.of(modelMapper.findPage(
+                        null,
+                        criteria.descriptionTokensJson(),
+                        null,
+                        true));
+                pageModels = List.copyOf(pageInfo.getList());
+            } finally {
+                // 每次数据库查询后立即清空 PageHelper ThreadLocal，防止污染后续查询。
+                PageHelper.clearPage();
+            }
+        }
+
+        if (pageInfo == null || pageInfo.getTotal() == 0) {
+            return new UserAiModelPageResult(
+                    List.of(),
+                    pageNum,
+                    pageSize,
+                    0,
+                    0,
+                    false,
+                    false);
         }
 
         Map<Long, List<AiModelCapabilityCode>> capabilities = loadCapabilities(pageModels);

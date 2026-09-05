@@ -1,6 +1,6 @@
 import { requireAuthenticatedPage } from './page-guard.js'
 import { isProtectedRoute, normalizeRoutePath } from './protected-routes.js'
-import { runtimeAuthenticationVersion } from './authenticated-session-state.js'
+import { isRuntimeTerminalSessionActive, runtimeAuthenticationVersion, runtimeSessionRequestGeneration } from './authenticated-session-state.js'
 
 function currentRouteFromPages() {
 	if (typeof getCurrentPages !== 'function') return ''
@@ -27,6 +27,7 @@ export default {
 		return {
 			authReady: false,
 			__aitAuthenticationInFlight: null,
+			__aitAuthenticationGeneration: null,
 			__aitAuthenticationVersion: -1
 		}
 	},
@@ -44,11 +45,14 @@ export default {
 				return true
 			}
 			const version = runtimeAuthenticationVersion()
-			if (this.authReady && this.__aitAuthenticationVersion === version) return true
-			if (this.__aitAuthenticationInFlight) return this.__aitAuthenticationInFlight
+			const generation = runtimeSessionRequestGeneration()
+			if (!isRuntimeTerminalSessionActive() && this.authReady && this.__aitAuthenticationVersion === version) return true
+			if (this.__aitAuthenticationInFlight && this.__aitAuthenticationGeneration === generation) return this.__aitAuthenticationInFlight
 
 			const authentication = requireAuthenticatedPage(route)
 				.then((allowed) => {
+					if (generation !== runtimeSessionRequestGeneration()) return false
+					allowed = allowed && !isRuntimeTerminalSessionActive()
 					this.authReady = allowed
 					this.__aitAuthenticationVersion = runtimeAuthenticationVersion()
 					if (allowed && typeof this.onAuthenticatedPageReady === 'function') {
@@ -56,9 +60,12 @@ export default {
 					}
 					return allowed
 				})
-				.finally(() => { this.__aitAuthenticationInFlight = null })
+				.finally(() => {
+					if (this.__aitAuthenticationInFlight === authentication) this.__aitAuthenticationInFlight = null
+				})
 
 			this.__aitAuthenticationInFlight = authentication
+			this.__aitAuthenticationGeneration = generation
 			return authentication
 		}
 	}

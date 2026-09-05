@@ -40,11 +40,13 @@ test('maps only Android runtime information to the native edge transport', async
 	assert.equal(resolveClientPlatform('harmony'), 'H5')
 })
 
-test('uses APP-PLUS runtime detection and keeps H5 as the compile-time fallback', () => {
+test('uses explicit compile-time branches for H5, Android and WeChat Mini Program', () => {
 	const source = readProjectFile('common/auth/config.js')
 
+	assert.match(source, /#ifdef MP-WEIXIN[\s\S]*return ClientPlatform\.WECHAT_MINI_PROGRAM[\s\S]*#endif/)
 	assert.match(source, /#ifdef APP-PLUS[\s\S]*uni\.getSystemInfoSync\(\)\?\.platform[\s\S]*#endif/)
-	assert.match(source, /#ifndef APP-PLUS[\s\S]*return 'H5'[\s\S]*#endif/)
+	assert.match(source, /#ifdef H5[\s\S]*return ClientPlatform\.H5[\s\S]*#endif/)
+	assert.doesNotMatch(source, /#ifndef APP-PLUS[\s\S]*return ['"]H5['"]/)
 	assert.doesNotMatch(source, /#ifdef APP-(?:ANDROID|IOS)/)
 })
 

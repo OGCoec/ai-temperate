@@ -134,6 +134,23 @@ class LoginControllerTokenTransportTest {
     }
 
     @Test
+    void wechatMiniProgramReturnsAllCredentialsWithoutWritingAuthenticationCookies() {
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        LoginController.LoginResponse response = controller.password(
+                passwordRequest(),
+                "device-1",
+                "WECHAT_MINI_PROGRAM",
+                new MockHttpServletRequest(),
+                servletResponse);
+
+        verify(cookieWriter, never()).writeSession(any(), any(), any(), any());
+        assertThat(response.accessToken()).isEqualTo("access-value");
+        assertThat(response.refreshToken()).isEqualTo("refresh-value");
+        assertThat(response.csrfToken()).isEqualTo("csrf-value");
+    }
+
+    @Test
     void totpRequiredWritesOnlyH5FlowCookieAndDoesNotPromoteOrIssueSessionCookie() {
         Instant expiresAt = Instant.parse("2026-07-15T00:05:00Z");
         when(strategies.login(eq(LoginStrategyType.PASSWORD), any()))

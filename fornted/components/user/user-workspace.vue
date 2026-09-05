@@ -85,6 +85,7 @@
 				:authenticated="authenticated"
 				@open-conversation-drawer="openConversationDrawer"
 				@open-api-keys="selectDestination('apiKeys')"
+				@open-models="selectDestination('models')"
 			/>
 			<user-api-key-panel
 				ref="apiKeyPanel"
@@ -200,7 +201,7 @@
 			},
 			sidebarPresentation() {
 				return this.sidebarMode === 'push'
-					&& ['profile', 'apiKeys', 'apiKeyUsage'].includes(this.activeDestination)
+					&& (['profile', 'apiKeys'].includes(this.activeDestination) || this.activeDestination === 'apiKeyUsage')
 					? 'rail'
 					: 'full'
 			},

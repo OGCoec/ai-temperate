@@ -34,7 +34,7 @@
 		<view
 			v-if="drawerOpen"
 			class="workspace-drawer-backdrop"
-			:class="{ 'is-android-drawer': androidClient }"
+			:class="{ 'is-android-drawer': androidClient, 'is-wechat-drawer': wechatClient }"
 			aria-hidden="true"
 			@click="$emit('close-drawer')"
 		></view>
@@ -42,7 +42,7 @@
 			v-if="drawerOpen"
 			ref="mobileDrawer"
 			class="workspace-history-drawer is-open"
-			:class="{ 'is-android-drawer': androidClient }"
+			:class="{ 'is-android-drawer': androidClient, 'is-wechat-drawer': wechatClient }"
 			role="complementary"
 			aria-label="聊天会话"
 			tabindex="-1"
@@ -167,8 +167,11 @@
 			}
 		},
 		computed: {
+			wechatClient() {
+				return clientPlatform() === 'WECHAT_MINI_PROGRAM'
+			},
 			androidClient() {
-				return clientPlatform() === 'ANDROID'
+				return clientPlatform() === 'ANDROID' || this.wechatClient
 			},
 			drawerDisplayName() {
 				return String(this.drawerProfile?.displayName || '当前用户').trim()
@@ -297,6 +300,10 @@
 
 	.workspace-history-drawer.is-android-drawer {
 		width: min(70vw, 288px);
+		padding: max(8px, env(safe-area-inset-top)) 8px calc(12px + env(safe-area-inset-bottom));
+	}
+	.workspace-history-drawer.is-wechat-drawer {
+		width: min(58vw, 240px);
 		padding: max(8px, env(safe-area-inset-top)) 8px calc(12px + env(safe-area-inset-bottom));
 	}
 	.is-android-drawer :deep(.recent-conversations) {

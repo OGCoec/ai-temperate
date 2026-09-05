@@ -95,6 +95,23 @@ class PasswordResetControllerTokenTransportTest {
     }
 
     @Test
+    void wechatMiniProgramStartReturnsResetFlowTokenWithoutWritingCookie() {
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        PasswordResetController.PasswordResetStartResponse response = controller.start(
+                startRequest(),
+                "device-1",
+                "WECHAT_MINI_PROGRAM",
+                new MockHttpServletRequest(),
+                servletResponse);
+
+        verify(flowCookieWriter, never()).writePasswordResetFlow(any(), any());
+        assertThat(response.resetFlowToken()).isEqualTo("reset-flow-token");
+        assertThat(response.challengeHandle()).isEqualTo("challenge-handle");
+        assertThat(response.expiresAt()).isEqualTo(START_EXPIRES_AT);
+    }
+
+    @Test
     void h5VerifyWritesForgetTokenCookieAndOmitsTokenFromJson() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
         when(flowCookieWriter.resetFlowToken(request)).thenReturn("reset-cookie-token");
@@ -130,6 +147,24 @@ class PasswordResetControllerTokenTransportTest {
                 "challenge-handle",
                 "device-1",
                 "ANDROID",
+                new MockHttpServletRequest(),
+                servletResponse);
+
+        verify(flowCookieWriter, never()).writeForgetToken(any(), any());
+        assertThat(response.forgetToken()).isEqualTo("forget-token");
+        assertThat(response.expiresAt()).isEqualTo(FORGET_EXPIRES_AT);
+    }
+
+    @Test
+    void wechatMiniProgramVerifyReturnsForgetTokenWithoutWritingCookie() {
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        PasswordResetController.ForgetTokenResponse response = controller.verify(
+                new PasswordResetController.VerifyRequest("123456"),
+                "wechat-reset-token",
+                "challenge-handle",
+                "device-1",
+                "WECHAT_MINI_PROGRAM",
                 new MockHttpServletRequest(),
                 servletResponse);
 

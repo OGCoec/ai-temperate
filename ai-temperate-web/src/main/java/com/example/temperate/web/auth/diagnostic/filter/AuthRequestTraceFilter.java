@@ -309,6 +309,7 @@ public final class AuthRequestTraceFilter extends OncePerRequestFilter {
         return switch (value.trim().toUpperCase(java.util.Locale.ROOT)) {
             case "H5" -> "H5";
             case "ANDROID" -> "ANDROID";
+            case "WECHAT_MINI_PROGRAM" -> "WECHAT_MINI_PROGRAM";
             default -> "unavailable";
         };
     }

@@ -120,21 +120,21 @@ class GlobalExceptionHandlerCookieTest {
     }
 
     @Test
-    void recoverablePreAuthFailureReturnsPreconditionRequiredWithoutClearingCookies() {
+    void preAuthFailureReturnsUnauthorizedAndClearsCookies() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Client-Platform", "H5");
         MockHttpServletResponse responseTarget = new MockHttpServletResponse();
 
         var response = handler.handleSession(
-                exception(SessionAuthenticationErrorCode.PREAUTH_REQUIRED, false),
+                exception(SessionAuthenticationErrorCode.PREAUTH_REQUIRED, true),
                 request,
                 responseTarget);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PRECONDITION_REQUIRED);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("PREAUTH_REQUIRED");
-        verify(cookieWriter, never()).clearSession(responseTarget);
-        verify(preAuthTransport, never()).clearCookie(responseTarget, RiskScope.USER);
+        verify(cookieWriter).clearSession(responseTarget);
+        verify(preAuthTransport).clearCookie(responseTarget, RiskScope.USER);
     }
 
     @Test

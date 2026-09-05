@@ -137,4 +137,31 @@ final class PreAuthServiceImplTest {
         verify(store).find(RiskScope.USER, token);
         verifyNoMoreInteractions(store);
     }
+
+    @Test
+    void requireSessionBindingRejectsAnonymousOrUnboundPreAuth() {
+        // 会话恢复必须要求 PreAuth 已经完成会话绑定，匿名凭证（无 sessionRefDigest）直接抛出异常拒绝放行。
+        PreAuthStore store = mock(PreAuthStore.class);
+        PreAuthState anonymousState = mock(PreAuthState.class);
+        HmacIdentifier token = HMAC.identify("preauth-token");
+        NetworkRiskIdentifier identifier = new NetworkRiskIdentifier(HMAC);
+        when(anonymousState.scope()).thenReturn(RiskScope.USER);
+        when(anonymousState.authState()).thenReturn("ANONYMOUS");
+        when(anonymousState.sessionType()).thenReturn(RiskSessionType.NONE);
+        when(anonymousState.sessionRefDigest()).thenReturn(null);
+
+        PreAuthServiceImpl service = new PreAuthServiceImpl(
+                store,
+                identifier,
+                mock(NetworkRiskProperties.class),
+                mock(WebRtcIpProtector.class));
+
+        assertThatThrownBy(() -> service.requireSessionBinding(
+                new PreAuthAccess(token, anonymousState),
+                RiskScope.USER,
+                RiskSessionType.USER_REFRESH,
+                "refresh-token"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Authenticated PreAuth binding is invalid.");
+    }
 }

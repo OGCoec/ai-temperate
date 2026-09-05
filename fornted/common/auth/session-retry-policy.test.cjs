@@ -50,3 +50,42 @@ test('Android network and PreAuth failures never trigger session bootstrap repla
 		SessionRenewalMode.NONE
 	)
 })
+
+test('protected and recovery 401 failures terminate even without a known business code', async () => {
+	const { isTerminalSessionError, SessionRequestPurpose } = await loadModule()
+	for (const purpose of [SessionRequestPurpose.PROTECTED, SessionRequestPurpose.SESSION_RECOVERY]) {
+		for (const code of [undefined, 'HTTP_401', 'UNRECOGNIZED_AUTH_FAILURE', 'REFRESH_TOKEN_REQUIRED']) {
+			assert.equal(isTerminalSessionError({ statusCode: 401, code }, purpose), true)
+		}
+	}
+})
+
+test('public auth, recoverable preconditions, edge challenges and network failures do not log out', async () => {
+	const { isTerminalSessionError, SessionRequestPurpose } = await loadModule()
+	assert.equal(isTerminalSessionError({ statusCode: 401, code: 'CSRF_INVALID' }, SessionRequestPurpose.PUBLIC_AUTH), false)
+	for (const error of [
+		{ statusCode: 428, code: 'PREAUTH_REQUIRED' },
+		{ statusCode: 428, code: 'EDGE_COOKIE_SCOPE_RESET_REQUIRED' },
+		{ statusCode: 401, code: 'EDGE_CHALLENGE' },
+		{ statusCode: 401, cfMitigated: 'challenge' },
+		{ statusCode: 401, responseClassification: 'EDGE_CHALLENGE' },
+		{ statusCode: 503, code: 'SERVICE_UNAVAILABLE' },
+		{ code: 'NETWORK_ERROR' }
+	]) assert.equal(isTerminalSessionError(error), false)
+})
+
+test('PREAUTH_REQUIRED terminates in session recovery or when session binding is lost', async () => {
+	const { isTerminalSessionError, SessionRequestPurpose } = await loadModule()
+	assert.equal(isTerminalSessionError(
+		{ statusCode: 428, code: 'PREAUTH_REQUIRED' },
+		SessionRequestPurpose.SESSION_RECOVERY
+	), true)
+	assert.equal(isTerminalSessionError(
+		{ statusCode: 401, code: 'PREAUTH_REQUIRED' },
+		SessionRequestPurpose.SESSION_RECOVERY
+	), true)
+	assert.equal(isTerminalSessionError(
+		{ statusCode: 428, code: 'PREAUTH_REQUIRED', message: 'Authenticated PreAuth is no longer bound to this session.' },
+		SessionRequestPurpose.PROTECTED
+	), true)
+})

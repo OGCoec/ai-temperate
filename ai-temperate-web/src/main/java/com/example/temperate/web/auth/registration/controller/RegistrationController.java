@@ -89,7 +89,7 @@ public final class RegistrationController {
                 deviceInstallationId,
                 request.getRemoteAddr()));
         AuthClientPlatform platform = AuthClientPlatform.fromHeader(platformHeader);
-        if (platform == AuthClientPlatform.H5) {
+        if (!platform.usesExplicitTokenTransport()) {
             // H5 流程凭据只写入 HttpOnly 会话 Cookie，响应 JSON 不再暴露 registerToken 和 flowCsrf。
             flowCookieWriter.writeRegistration(
                     response,
@@ -225,7 +225,7 @@ public final class RegistrationController {
                 access,
                 body.password(),
                 body.passwordConfirmation()));
-        if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
+        if (!AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
             flowCookieWriter.clearRegistration(response);
         }
         return new RegistrationCompleteResponse(true, "LOGIN");
@@ -253,7 +253,7 @@ public final class RegistrationController {
             String device,
             String platformHeader,
             HttpServletRequest request) {
-        if (AuthClientPlatform.fromHeader(platformHeader) == AuthClientPlatform.H5) {
+        if (!AuthClientPlatform.fromHeader(platformHeader).usesExplicitTokenTransport()) {
             AuthFlowCookieWriter.RegistrationFlowCookies cookies =
                     flowCookieWriter.registration(request);
             return new RegistrationAccess(
@@ -270,10 +270,10 @@ public final class RegistrationController {
     private static StartResponse startResponse(
             RegistrationStartResult result,
             AuthClientPlatform platform) {
-        boolean android = platform == AuthClientPlatform.ANDROID;
+        boolean explicit = platform.usesExplicitTokenTransport();
         return new StartResponse(
-                android ? result.registerToken() : null,
-                android ? result.flowCsrf() : null,
+                explicit ? result.registerToken() : null,
+                explicit ? result.flowCsrf() : null,
                 result.challengeHandle(),
                 result.expiresAt());
     }

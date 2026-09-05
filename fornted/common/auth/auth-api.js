@@ -155,7 +155,7 @@ function handleLoginResponse(
 		clearTotpLoginFlow()
 		if (commitAndroidCredentials) commitAndroidOAuthSession(response)
 		else saveSession(response)
-		markRuntimeSessionAuthenticated()
+		markRuntimeSessionAuthenticated({ newSession: true })
 		// 普通完成请求已在发送前切换 epoch；严格 OAuth 闸门则等 complete 成功后再切换。
 		if (!boundaryEstablished) {
 			invalidateWebRtcVerification('AUTHENTICATED_EPOCH_ROTATED')

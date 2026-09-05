@@ -28,6 +28,8 @@ const SAFE_FIELD_NAMES = new Set([
 	'failureReason',
 	'finishReason',
 	'generation',
+	'sessionGeneration',
+	'currentSessionGeneration',
 	'hostCount',
 	'ignoredRelayCount',
 	'ipv4Count',

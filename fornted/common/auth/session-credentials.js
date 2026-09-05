@@ -37,6 +37,10 @@ export function hasPersistableAndroidCredentials(credentials) {
 			&& credentials.preAuthToken.length > 0)
 }
 
+export function hasPersistableSessionCredentials(credentials) {
+	return hasPersistableAndroidCredentials(credentials)
+}
+
 function credentialValue(current, update, name) {
 	if (Object.prototype.hasOwnProperty.call(update, name)) {
 		return typeof update[name] === 'string' ? update[name] : ''

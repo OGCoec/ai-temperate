@@ -1,15 +1,21 @@
 import { browserCsrfToken, clearLegacyBrowserSession } from './browser-cookies.js'
-import { clientPlatform } from './config.js'
+import { ClientPlatform, clientPlatform } from './config.js'
 import {
 	clearAndroidSessionCredentials,
 	loadAndroidSessionCredentials,
 	saveAndroidSessionCredentials
 } from './android-keystore.js'
 import {
+	clearWechatSessionCredentials,
+	loadWechatSessionCredentials,
+	saveWechatSessionCredentials
+} from './wechat-session-storage.js'
+import {
 	containsSessionCredentialUpdate,
 	emptySessionCredentials,
 	hasCompleteAndroidOAuthCredentials,
 	hasPersistableAndroidCredentials,
+	hasPersistableSessionCredentials,
 	mergeSessionCredentials
 } from './session-credentials.js'
 import { clearProfileVault } from '../user/profile-vault.js'
@@ -23,13 +29,14 @@ let principal = null
 let browserLegacyCleared = false
 
 function clearBrowserLegacyOnce() {
-	if (browserLegacyCleared || clientPlatform() !== 'H5') return
+	if (browserLegacyCleared || clientPlatform() !== ClientPlatform.H5) return
 	clearLegacyBrowserSession()
 	browserLegacyCleared = true
 }
 
 export function currentSession() {
-	if (clientPlatform() === 'H5') {
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.H5) {
 		clearBrowserLegacyOnce()
 		return {
 			...emptySessionCredentials(),
@@ -37,16 +44,38 @@ export function currentSession() {
 			principal
 		}
 	}
-	return { ...loadAndroidSessionCredentials(), principal }
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+		return {
+			...emptySessionCredentials(),
+			...loadWechatSessionCredentials(),
+			principal
+		}
+	}
+	if (platform === ClientPlatform.ANDROID) {
+		return { ...loadAndroidSessionCredentials(), principal }
+	}
+	return { ...emptySessionCredentials(), principal }
 }
 
 export function saveSession(response) {
 	if (!response) return
 	updatePrincipal(response)
-	if (clientPlatform() === 'H5') {
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.H5) {
 		clearBrowserLegacyOnce()
 		return
 	}
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) {
+		if (!containsSessionCredentialUpdate(response)) return
+		const credentials = mergeSessionCredentials(loadWechatSessionCredentials(), response)
+		if (hasPersistableSessionCredentials(credentials)) {
+			saveWechatSessionCredentials(credentials)
+		} else {
+			clearWechatSessionCredentials()
+		}
+		return
+	}
+	if (platform !== ClientPlatform.ANDROID) return
 	if (!containsSessionCredentialUpdate(response)) return
 	const credentials = mergeSessionCredentials(loadAndroidSessionCredentials(), response)
 	if (hasPersistableAndroidCredentials(credentials)) {
@@ -79,7 +108,7 @@ function updatePrincipal(response) {
  * 原生 OAuth 完成的凭据提交边界；校验通过后一次写入四个字段，任何缺失都不会覆盖旧会话。
  */
 export function commitAndroidOAuthSession(response) {
-	if (clientPlatform() !== 'ANDROID'
+	if (clientPlatform() !== ClientPlatform.ANDROID
 		|| !hasCompleteAndroidOAuthCredentials(response)) {
 		const error = new Error('OAuth 登录响应缺少完整会话凭据。')
 		error.code = 'SESSION_RESPONSE_INVALID'
@@ -97,13 +126,17 @@ export function commitAndroidOAuthSession(response) {
 }
 
 export function loadAccessToken() {
-	return clientPlatform() === 'ANDROID'
-		? loadAndroidSessionCredentials().accessToken : ''
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.ANDROID) return loadAndroidSessionCredentials().accessToken
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) return loadWechatSessionCredentials().accessToken
+	return ''
 }
 
 export function loadRefreshToken() {
-	return clientPlatform() === 'ANDROID'
-		? loadAndroidSessionCredentials().refreshToken : ''
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.ANDROID) return loadAndroidSessionCredentials().refreshToken
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) return loadWechatSessionCredentials().refreshToken
+	return ''
 }
 
 export function clearSession() {
@@ -115,6 +148,8 @@ export function clearSession() {
 	clearGenerationManager()
 	// 全局会话出口统一清理，覆盖 API Key 页面从未挂载时的退出登录与会话失效场景。
 	clearApiKeyCreateIntent()
-	if (clientPlatform() === 'ANDROID') clearAndroidSessionCredentials()
-	else clearBrowserLegacyOnce()
+	const platform = clientPlatform()
+	if (platform === ClientPlatform.ANDROID) clearAndroidSessionCredentials()
+	if (platform === ClientPlatform.WECHAT_MINI_PROGRAM) clearWechatSessionCredentials()
+	if (platform === ClientPlatform.H5) clearBrowserLegacyOnce()
 }

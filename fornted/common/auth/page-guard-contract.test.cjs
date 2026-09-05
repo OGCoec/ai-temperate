@@ -36,6 +36,8 @@ function createNavigationGuardHarness({ authenticated = false, allowed = true } 
 	const context = vm.createContext({
 		uni,
 		isRuntimeSessionAuthenticated: () => authenticated,
+		isRuntimeTerminalSessionActive: () => false,
+		runtimeSessionRequestGeneration: () => 0,
 		isProtectedRoute: (route) => route === '/pages/user/user-workspace',
 		normalizeRoutePath: (url) => String(url || '').split(/[?#]/, 1)[0],
 		requireAuthenticatedPage: (route) => {
@@ -65,13 +67,13 @@ test('page guard verifies protected routes through the backend-backed session fl
 	assert.match(source, /isRuntimeSessionAuthenticated/)
 	assert.match(source, /markRuntimeSessionAuthenticated/)
 	assert.match(source, /clearSession\(\)/)
-	assert.match(source, /uni\.reLaunch\(\{[\s\S]*url:\s*AUTH_ROUTES\.login/)
+	assert.match(source, /redirectTerminalSessionToLogin/)
 	assert.match(source, /authenticationInFlight/)
 	assert.match(source, /isProtectedRoute/)
 	assert.match(source, /beginRuntimeTerminalSessionTransition/)
-	assert.match(source, /claimRuntimeTerminalSessionRedirect/)
+	assert.match(source, /isRuntimeTerminalSessionActive/)
 	assert.match(sessionGate, /beginRuntimeTerminalSessionTransition/)
-	assert.match(sessionGate, /claimRuntimeTerminalSessionRedirect/)
+	assert.match(sessionGate, /redirectTerminalSessionToLogin/)
 })
 
 test('clearing a session also removes runtime state and pending API Key create intent', () => {
@@ -98,7 +100,7 @@ test('authenticated page lifecycle reuses the confirmed runtime session and dedu
 
 	assert.match(source, /runtimeAuthenticationVersion/)
 	assert.match(source, /__aitAuthenticationInFlight/)
-	assert.match(source, /if \(this\.authReady && this\.__aitAuthenticationVersion === version\)/)
+	assert.match(source, /!isRuntimeTerminalSessionActive\(\) && this\.authReady && this\.__aitAuthenticationVersion === version/)
 	assert.match(source, /onLoad\(\)/)
 	assert.match(source, /onShow\(\)/)
 })

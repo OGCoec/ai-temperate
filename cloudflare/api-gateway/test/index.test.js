@@ -17,8 +17,11 @@ const ENV = {
 	CF_VERSION_METADATA: { id: 'worker-version-test' },
 	EDGE_PROXY_HMAC_SECRET_BASE64: Buffer
 		.from('worker-edge-test-secret-0123456789abcdef')
-		.toString('base64')
+		.toString('base64'),
+	WECHAT_MINI_PROGRAM_APP_ID: 'wx2f435e781c126339'
 }
+const WECHAT_APP_ID = 'wx2f435e781c126339'
+const WECHAT_REFERER = `https://servicewechat.com/${WECHAT_APP_ID}/15/page-frame.html`
 const AUTH_DIAGNOSTIC_ENV = {
 	...ENV,
 	AUTH_EDGE_DIAGNOSTICS_ENABLED: 'true'
@@ -3722,4 +3725,134 @@ test('sampled SSE logs use a route template and never contain the Job ID', async
 	assert.equal(entries.length, 1)
 	assert.match(entries[0], /\/jobs\/\{jobId\}\/events/)
 	assert.doesNotMatch(entries[0], new RegExp(jobId))
+})
+
+test('WeChat Mini Program HTTP uses root host without Cookie Scope and preserves explicit tokens', async () => {
+	let captured
+	const response = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth?attempt=1', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'WECHAT_MINI_PROGRAM',
+				Referer: WECHAT_REFERER,
+				Authorization: 'Bearer wechat-access-token',
+				'X-Refresh-Token': 'wechat-refresh-token',
+				'X-CSRF-Token': 'wechat-csrf-token',
+				'X-AIT-PreAuth': 'wechat-pre-auth-token',
+				Cookie: 'captured_proxy_cookie=must-not-pass',
+				Origin: 'https://servicewechat.com',
+				'Sec-Fetch-Mode': 'cors',
+				'Sec-Fetch-Site': 'cross-site'
+			}
+		}),
+		ENV,
+		runtime(upstream => {
+			captured = upstream
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(response.status, 204)
+	assert.equal(
+		captured.url,
+		'https://api.niko000o.site/api/_edge/pre-auth?attempt=1'
+	)
+	assert.equal(captured.headers.get('X-Client-Platform'), 'WECHAT_MINI_PROGRAM')
+	assert.equal(captured.headers.get('Origin'), null)
+	assert.equal(captured.headers.get('Cookie'), null)
+	assert.equal(captured.headers.get('Referer'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Mode'), null)
+	assert.equal(captured.headers.get('Sec-Fetch-Site'), null)
+	assert.equal(captured.headers.get('Authorization'), 'Bearer wechat-access-token')
+	assert.equal(captured.headers.get('X-Refresh-Token'), 'wechat-refresh-token')
+	assert.equal(captured.headers.get('X-CSRF-Token'), 'wechat-csrf-token')
+	assert.equal(captured.headers.get('X-AIT-PreAuth'), 'wechat-pre-auth-token')
+})
+
+test('WeChat Mini Program rejects invalid, spoofed, or missing Referer headers', async () => {
+	const invalidReferers = [
+		undefined,
+		'',
+		'https://evil.com/page-frame.html',
+		'https://servicewechat.com/wx1111111111111111/15/page-frame.html',
+		`https://servicewechat.com/${WECHAT_APP_ID}/15/index.html`,
+		`https://servicewechat.com/${WECHAT_APP_ID}/page-frame.html`
+	]
+
+	for (const referer of invalidReferers) {
+		const headers = {
+			'X-Client-Platform': 'WECHAT_MINI_PROGRAM'
+		}
+		if (referer !== undefined) {
+			headers.Referer = referer
+		}
+
+		let upstreamCalled = false
+		const response = await handleRequest(
+			request('niko000o.site', '/api/_edge/pre-auth', {
+				method: 'POST',
+				migrated: false,
+				headers
+			}),
+			ENV,
+			runtime(() => {
+				upstreamCalled = true
+				return new Response(null, { status: 204 })
+			})
+		)
+
+		assert.equal(upstreamCalled, false, `Upstream should not be called for referer: ${referer}`)
+		assert.equal(response.status, 403, `Should return 403 for referer: ${referer}`)
+		const body = await response.json()
+		assert.equal(body.code, 'EDGE_CLIENT_TRANSPORT_INVALID')
+	}
+})
+
+test('WeChat Mini Program rejects non-root host requests', async () => {
+	let upstreamCalled = false
+	const response = await handleRequest(
+		request('admin.niko000o.site', '/api/admin/_edge/pre-auth', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'WECHAT_MINI_PROGRAM',
+				Referer: WECHAT_REFERER
+			}
+		}),
+		ENV,
+		runtime(() => {
+			upstreamCalled = true
+			return new Response(null, { status: 204 })
+		})
+	)
+
+	assert.equal(upstreamCalled, false)
+	assert.equal(response.status, 403)
+	const body = await response.json()
+	assert.equal(body.code, 'EDGE_CLIENT_TRANSPORT_INVALID')
+})
+
+test('WeChat Mini Program responses reject upstream Set-Cookie header', async () => {
+	const response = await handleRequest(
+		request('niko000o.site', '/api/_edge/pre-auth', {
+			method: 'POST',
+			migrated: false,
+			headers: {
+				'X-Client-Platform': 'WECHAT_MINI_PROGRAM',
+				Referer: WECHAT_REFERER
+			}
+		}),
+		ENV,
+		runtime(() => new Response(null, {
+			status: 204,
+			headers: {
+				'Set-Cookie': '__Host-ait-preauth=unexpected; Path=/; Secure; HttpOnly'
+			}
+		}))
+	)
+
+	assert.equal(response.status, 502)
+	assert.equal((await response.json()).code,
+		'EDGE_WECHAT_COOKIE_POLICY_VIOLATION')
 })
